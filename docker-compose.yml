@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: psychoanalyst_app
+    volumes:
+      # Mount the data volume for SQLite and vector DB persistence
+      - ./src/data:/app/data
+    env_file:
+      # Pass environment variables from a .env file
+      - .env
+    stdin_open: true
+    tty: true
