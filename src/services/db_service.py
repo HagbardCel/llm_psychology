@@ -3,7 +3,7 @@ import json
 import uuid
 from typing import Optional, List
 from datetime import datetime
-from utils.data_models import Session, Message, TherapyPlan
+from utils.data_models import Session, Message, TherapyPlan, UserProfile
 
 class DatabaseService:
     """Service for handling all SQLite database operations."""
@@ -42,6 +42,18 @@ class DatabaseService:
                 updated_at TEXT NOT NULL,
                 plan_details TEXT NOT NULL,
                 version INTEGER NOT NULL
+            )
+        ''')
+        
+        # Create user_profiles table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                birthdate TEXT,
+                profession TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
         ''')
         
@@ -267,3 +279,74 @@ class DatabaseService:
         except Exception as e:
             print(f"Error retrieving sessions: {e}")
             return []
+    
+    def save_user_profile(self, profile: UserProfile) -> bool:
+        """
+        Save a user profile to the database.
+        
+        Args:
+            profile (UserProfile): The user profile to save.
+            
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO user_profiles 
+                (user_id, name, birthdate, profession, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                profile.user_id,
+                profile.name,
+                self._datetime_to_iso(profile.birthdate) if profile.birthdate else None,
+                profile.profession,
+                self._datetime_to_iso(profile.created_at),
+                self._datetime_to_iso(profile.updated_at)
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error saving user profile: {e}")
+            return False
+    
+    def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+        """
+        Retrieve a user profile from the database.
+        
+        Args:
+            user_id (str): The ID of the user.
+            
+        Returns:
+            Optional[UserProfile]: The user profile if found, None otherwise.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT user_id, name, birthdate, profession, created_at, updated_at
+                FROM user_profiles
+                WHERE user_id = ?
+            ''', (user_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return UserProfile(
+                    user_id=row[0],
+                    name=row[1],
+                    birthdate=self._iso_to_datetime(row[2]) if row[2] else None,
+                    profession=row[3],
+                    created_at=self._iso_to_datetime(row[4]),
+                    updated_at=self._iso_to_datetime(row[5])
+                )
+            return None
+        except Exception as e:
+            print(f"Error retrieving user profile: {e}")
+            return None

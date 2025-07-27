@@ -4,7 +4,7 @@ from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
-from utils.data_models import Session, Message, TherapyPlan
+from utils.data_models import Session, Message, TherapyPlan, UserProfile
 
 class PsychoanalystAgent:
     """Agent responsible for conducting the main conversational sessions based on the therapy plan."""
@@ -33,7 +33,11 @@ class PsychoanalystAgent:
         Returns:
             Session: The completed therapy session.
         """
-        print("Starting therapy session...")
+        # Retrieve user profile to get the name
+        user_profile = self.db_service.get_user_profile(self.user_id)
+        user_name = user_profile.name if user_profile else "Client"
+        
+        print(f"Starting therapy session for {user_name}...")
         print(f"Session Focus: {therapy_plan.plan_details.get('focus', 'Exploring your thoughts and feelings')}")
         print("Please share what's on your mind today.\n")
         
@@ -63,16 +67,16 @@ class PsychoanalystAgent:
         for i, knowledge in enumerate(relevant_knowledge, 1):
             plan_context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
-        # Initial greeting
+        # Initial greeting with personalized touch
         initial_prompt = f"""
-        You are a skilled psychoanalyst conducting a therapy session. Here is your guidance:
+        You are a skilled psychoanalyst conducting a therapy session with {user_name}. Here is your guidance:
         
         {plan_context}
         
         Your task is to:
-        1. Welcome the client back to the session
+        1. Welcome {user_name} back to the session by name
         2. Briefly acknowledge the focus areas from the therapy plan
-        3. Invite the client to share what's on their mind today
+        3. Invite {user_name} to share what's on their mind today
         4. Use the psychological knowledge to inform your approach, but don't explicitly mention the sources
         5. Maintain a professional, empathetic, and non-judgmental tone
         

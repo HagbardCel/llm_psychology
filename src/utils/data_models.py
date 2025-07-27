@@ -2,6 +2,15 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+class UserProfile(BaseModel):
+    """Represents a user's personal information."""
+    user_id: str
+    name: str
+    birthdate: Optional[datetime] = None
+    profession: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
 class Message(BaseModel):
     """Represents a single message in a conversation."""
     role: str  # "user" or "assistant"
