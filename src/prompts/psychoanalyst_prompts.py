@@ -26,6 +26,8 @@ Therapy Plan Context:
 Additional Relevant Knowledge:
 {additional_knowledge}
 
+{time_prompt}
+
 Continue the session with empathy and professional insight. Ask thoughtful follow-up questions.
 Help the client explore their thoughts and feelings in depth.
 """
@@ -41,4 +43,11 @@ Please:
 2. Acknowledge the client's openness and participation
 3. Provide a gentle transition to end the session
 4. Mention that this session will be reflected upon for future sessions
+"""
+
+# Prompt to inject when session time is running out
+TIME_CHECK_PROMPT = """
+(System Note: There are approximately {remaining_minutes} minutes left in the session. 
+Start guiding the conversation towards a natural conclusion. 
+You might begin summarizing or reflecting on the key points of the discussion.)
 """

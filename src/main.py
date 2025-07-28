@@ -50,22 +50,15 @@ def main():
         print("Existing therapy plan found. Loading...")
         initial_plan = latest_plan
     
-    # Main session loop
+    # Initialize agents
     psychoanalyst_agent = PsychoanalystAgent(llm_service, db_service, rag_service)
     reflection_agent = ReflectionAgent(llm_service, db_service, rag_service)
     
-    while True:
-        # Conduct session
-        session_transcript = psychoanalyst_agent.conduct_session(initial_plan)
-        
-        # Reflection agent updates plan
-        updated_plan = reflection_agent.update_plan(session_transcript, initial_plan)
-        initial_plan = updated_plan
-        
-        # Ask if user wants another session
-        continue_session = input("\nWould you like to continue with another session? (y/n): ").strip().lower()
-        if continue_session != 'y':
-            break
+    # Conduct a single session
+    session_transcript = psychoanalyst_agent.conduct_session(initial_plan)
+    
+    # Reflection agent updates plan
+    reflection_agent.update_plan(session_transcript, initial_plan)
     
     print("Thank you for using the Virtual LLM-Driven Psychoanalyst. Goodbye!")
 
