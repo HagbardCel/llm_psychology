@@ -45,6 +45,15 @@ Core functionality is encapsulated in reusable services:
 ### Separation of Concerns
 Each module has a single responsibility, making the system modular and maintainable.
 
+### UI Abstraction Architecture
+The application uses an abstract UI layer to decouple the presentation logic from the core application logic. This design allows for multiple UI implementations while maintaining a consistent interface:
+
+- **`BaseUI`**: Abstract base class defining the UI interface contract
+- **`TextualUI`**: Concrete implementation using the Textual framework for enhanced terminal interaction
+- **Future UIs**: New implementations can be added by inheriting from `BaseUI`
+
+This abstraction enables swapping UI implementations without modifying agent or service code.
+
 ## Project Structure
 
 ```
@@ -61,6 +70,10 @@ psychoanalyst_app/
 │   │   ├── llm_service.py         # LLM abstraction
 │   │   ├── db_service.py          # Database operations
 │   │   └── rag_service.py         # RAG system management
+│   ├── ui/                        # User interface implementations
+│   │   ├── __init__.py            # UI package init
+│   │   ├── base_ui.py             # Abstract UI base class
+│   │   └── textual_ui.py          # Textual TUI implementation
 │   ├── utils/                     # Utility functions and models
 │   │   ├── data_models.py         # Pydantic data models
 │   │   └── embedding_utils.py     # Text embedding utilities
@@ -290,6 +303,7 @@ SQLite-based persistence layer with the following tables:
 3. **Data Models**: Add to `src/utils/data_models.py` with proper typing
 4. **Configuration**: Use `src/config.py` for new settings
 5. **Domain Knowledge**: Add markdown files to `src/data/domain_knowledge/`
+6. **New UI Implementations**: Create in `src/ui/` following the `BaseUI` interface
 
 ## Testing
 
@@ -378,6 +392,12 @@ python -m pytest tests/
 2. Add new embedding models in `embedding_utils.py`
 3. Implement advanced retrieval algorithms
 4. Add user session history to RAG context
+
+### Creating New UI Implementations
+1. Create new UI class in `src/ui/` that inherits from `BaseUI`
+2. Implement all abstract methods (`display_message`, `get_user_input`, `display_system_status`, `run`)
+3. Update `src/main.py` to use the new UI implementation
+4. Maintain the async interface for consistency with the TextualUI
 
 ## Best Practices
 
