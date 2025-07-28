@@ -54,8 +54,8 @@ def main():
     psychoanalyst_agent = PsychoanalystAgent(llm_service, db_service, rag_service)
     reflection_agent = ReflectionAgent(llm_service, db_service, rag_service)
     
-    # Conduct a single session
-    session_transcript = psychoanalyst_agent.conduct_session(initial_plan)
+    # Conduct a single session with configurable duration
+    session_transcript = psychoanalyst_agent.conduct_session(initial_plan, Config.SESSION_DURATION_MINUTES)
     
     # Reflection agent updates plan
     reflection_agent.update_plan(session_transcript, initial_plan)

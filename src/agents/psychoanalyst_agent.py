@@ -25,7 +25,7 @@ class PsychoanalystAgent:
         self.rag_service = rag_service
         self.user_id = "default_user"  # In a real implementation, this would be dynamic
     
-    def conduct_session(self, therapy_plan: TherapyPlan, session_duration_minutes: int = 45) -> Session:
+    def conduct_session(self, therapy_plan: TherapyPlan, session_duration_minutes: int) -> Session:
         """
         Conduct a therapy session based on the provided therapy plan.
         

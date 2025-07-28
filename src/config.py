@@ -19,6 +19,9 @@ class Config:
     # Domain Knowledge Configuration
     DOMAIN_KNOWLEDGE_PATH = os.path.join(os.path.dirname(__file__), "data", "domain_knowledge")
     
+    # Session Configuration
+    SESSION_DURATION_MINUTES = int(os.getenv("SESSION_DURATION_MINUTES", 45))
+    
     # Application Configuration
     APP_NAME = "Virtual LLM-Driven Psychoanalyst"
     VERSION = "0.1.0"
