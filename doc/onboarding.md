@@ -65,7 +65,7 @@ psychoanalyst_app/
 │   │   ├── data_models.py         # Pydantic data models
 │   │   └── embedding_utils.py     # Text embedding utilities
 │   └── data/                      # Data storage
-│       ├── domain_knowledge/      # Psychological theory texts
+│       ├── domain_knowledge/      # Psychological theory markdown files
 │       ├── vector_db/             # ChromaDB vector database
 │       └── psychoanalyst.db       # SQLite session database
 ├── tests/                         # Unit and integration tests
@@ -289,7 +289,7 @@ SQLite-based persistence layer with the following tables:
 2. **New Services**: Implement in `src/services/` for reusable functionality
 3. **Data Models**: Add to `src/utils/data_models.py` with proper typing
 4. **Configuration**: Use `src/config.py` for new settings
-5. **Domain Knowledge**: Add text files to `src/data/domain_knowledge/`
+5. **Domain Knowledge**: Add markdown files to `src/data/domain_knowledge/`
 
 ## Testing
 
@@ -346,12 +346,12 @@ python -m pytest tests/
 - **API Key**: Required for LLM functionality
 - **Model Selection**: Configurable in `LLMService`
 - **Database Paths**: Defined in `Config` class
-- **Domain Knowledge**: Text files in `domain_knowledge/`
+- **Domain Knowledge**: Markdown files in `domain_knowledge/`
 
 ## Extending the Application
 
 ### Adding New Domain Knowledge
-1. Add text files to `src/data/domain_knowledge/`
+1. Add markdown files to `src/data/domain_knowledge/`
 2. The RAG service automatically loads new content
 3. Content is chunked and embedded for retrieval
 

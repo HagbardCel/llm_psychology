@@ -43,7 +43,7 @@ class RAGService:
         
         # Iterate through domain knowledge files
         for filename in os.listdir(self.domain_knowledge_path):
-            if filename.endswith(".txt"):
+            if filename.endswith(".md"):
                 file_path = os.path.join(self.domain_knowledge_path, filename)
                 
                 with open(file_path, "r", encoding="utf-8") as file:

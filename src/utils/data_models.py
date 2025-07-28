@@ -37,5 +37,5 @@ class DomainKnowledgeChunk(BaseModel):
     """Represents a chunk of domain knowledge for RAG."""
     id: str
     content: str
-    source: str  # e.g., "freud.txt", "jung.txt"
+    source: str  # e.g., "freud.md", "jung.md"
     embedding: Optional[List[float]] = None
