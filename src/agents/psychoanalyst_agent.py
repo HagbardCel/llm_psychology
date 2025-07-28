@@ -5,6 +5,7 @@ from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from utils.data_models import Session, Message, TherapyPlan, UserProfile
+from prompts.psychoanalyst_prompts import INITIAL_SESSION_PROMPT, CONTINUE_SESSION_PROMPT, CLOSING_SESSION_PROMPT
 
 class PsychoanalystAgent:
     """Agent responsible for conducting the main conversational sessions based on the therapy plan."""
@@ -68,20 +69,10 @@ class PsychoanalystAgent:
             plan_context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
         # Initial greeting with personalized touch
-        initial_prompt = f"""
-        You are a skilled psychoanalyst conducting a therapy session with {user_name}. Here is your guidance:
-        
-        {plan_context}
-        
-        Your task is to:
-        1. Welcome {user_name} back to the session by name
-        2. Briefly acknowledge the focus areas from the therapy plan
-        3. Invite {user_name} to share what's on their mind today
-        4. Use the psychological knowledge to inform your approach, but don't explicitly mention the sources
-        5. Maintain a professional, empathetic, and non-judgmental tone
-        
-        Begin the session now.
-        """
+        initial_prompt = INITIAL_SESSION_PROMPT.format(
+            user_name=user_name,
+            plan_context=plan_context
+        )
         
         initial_response = self.llm_service.generate_response(initial_prompt)
         print(f"Psychoanalyst: {initial_response}\n")
@@ -115,18 +106,10 @@ class PsychoanalystAgent:
                 # Generate response using context, therapy plan, and domain knowledge
                 context_messages = [{"role": msg.role, "content": msg.content} for msg in session.transcript]
                 
-                response_prompt = f"""
-                You are a skilled psychoanalyst conducting a therapy session. Continue the conversation naturally.
-                
-                Therapy Plan Context:
-                {plan_context}
-                
-                Additional Relevant Knowledge:
-                {context_knowledge[0]['content'] if context_knowledge else 'None'}
-                
-                Continue the session with empathy and professional insight. Ask thoughtful follow-up questions.
-                Help the client explore their thoughts and feelings in depth.
-                """
+                response_prompt = CONTINUE_SESSION_PROMPT.format(
+                    plan_context=plan_context,
+                    additional_knowledge=context_knowledge[0]['content'] if context_knowledge else 'None'
+                )
                 
                 response = self.llm_service.generate_response(response_prompt, context_messages)
                 
@@ -140,17 +123,7 @@ class PsychoanalystAgent:
                 ))
         
         # End session
-        closing_prompt = f"""
-        You are concluding today's therapy session. Based on the therapy plan and conversation:
-        
-        {plan_context}
-        
-        Please:
-        1. Summarize key insights or themes that emerged
-        2. Acknowledge the client's openness and participation
-        3. Provide a gentle transition to end the session
-        4. Mention that this session will be reflected upon for future sessions
-        """
+        closing_prompt = CLOSING_SESSION_PROMPT.format(plan_context=plan_context)
         
         closing_response = self.llm_service.generate_response(closing_prompt)
         print(f"Psychoanalyst: {closing_response}\n")

@@ -5,6 +5,7 @@ from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from utils.data_models import Session, TherapyPlan
+from prompts.reflection_prompts import CREATE_INITIAL_PLAN_PROMPT, UPDATE_PLAN_PROMPT, SESSION_SUMMARY_PROMPT
 
 class ReflectionAgent:
     """Agent responsible for analyzing conversations and creating/refining therapy plans."""
@@ -55,26 +56,7 @@ class ReflectionAgent:
             context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
         # Generate initial therapy plan
-        plan_prompt = f"""
-        You are an experienced psychotherapist tasked with creating an initial therapy plan 
-        based on the intake session transcript and relevant psychological knowledge.
-        
-        {context}
-        
-        Please create a structured therapy plan that includes:
-        1. Primary focus areas for therapy
-        2. Initial therapeutic goals
-        3. Suggested techniques or approaches
-        4. Potential themes to explore
-        
-        Provide your response in JSON format with the following structure:
-        {{
-            "focus": "Main areas of focus for therapy",
-            "goals": "Specific therapeutic goals",
-            "techniques": "Suggested therapeutic techniques",
-            "themes": "Key themes to explore"
-        }}
-        """
+        plan_prompt = CREATE_INITIAL_PLAN_PROMPT.format(context=context)
         
         structured_response = self.llm_service.generate_structured_response(
             plan_prompt, 
@@ -162,26 +144,7 @@ class ReflectionAgent:
             context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
         # Generate updated therapy plan
-        update_prompt = f"""
-        You are an experienced psychotherapist tasked with updating a therapy plan 
-        based on the latest session and overall therapeutic progress.
-        
-        {context}
-        
-        Please update the therapy plan considering:
-        1. What new insights emerged from the latest session?
-        2. How has the client's presentation evolved?
-        3. What should be the focus for future sessions?
-        4. Are there any adjustments needed to goals or techniques?
-        
-        Provide your response in JSON format with the following structure:
-        {{
-            "focus": "Updated main areas of focus for therapy",
-            "goals": "Updated therapeutic goals",
-            "techniques": "Updated suggested techniques",
-            "themes": "Emerging themes to explore"
-        }}
-        """
+        update_prompt = UPDATE_PLAN_PROMPT.format(context=context)
         
         structured_response = self.llm_service.generate_structured_response(
             update_prompt,
@@ -228,17 +191,7 @@ class ReflectionAgent:
         """
         session_text = "\n".join([f"{msg.role}: {msg.content}" for msg in session.transcript])
         
-        summary_prompt = f"""
-        Please provide a concise summary of this therapy session:
-        
-        {session_text}
-        
-        Include:
-        1. Key themes discussed
-        2. Important insights or revelations
-        3. Client's emotional state
-        4. Progress made toward therapeutic goals
-        """
+        summary_prompt = SESSION_SUMMARY_PROMPT.format(session_text=session_text)
         
         summary = self.llm_service.generate_response(summary_prompt)
         
