@@ -5,6 +5,7 @@ from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from utils.data_models import Session, Message, UserProfile
 from prompts.intake_prompts import INITIAL_GREETING_PROMPT, CONTINUE_CONVERSATION_PROMPT, CLOSING_PROMPT
+from ui.base_ui import BaseUI
 
 class IntakeAgent:
     """Agent responsible for handling the initial user interaction and context retrieval."""
@@ -21,30 +22,36 @@ class IntakeAgent:
         self.db_service = db_service
         self.user_id = "default_user"  # In a real implementation, this would be dynamic
     
-    def _collect_user_profile(self) -> UserProfile:
+    async def _collect_user_profile(self, ui: BaseUI) -> UserProfile:
         """
         Collect user profile information at the beginning of the session.
         
+        Args:
+            ui (BaseUI): The UI interface to use for interaction.
+            
         Returns:
             UserProfile: The collected user profile information.
         """
-        print("Before we begin, I'd like to get to know you better.")
-        print("This information will help me provide you with a more personalized experience.\n")
+        await ui.display_system_status("Before we begin, I'd like to get to know you better.")
+        await ui.display_system_status("This information will help me provide you with a more personalized experience.\n")
         
         # Collect user information
-        name = input("What is your name? ").strip()
+        name = await ui.get_user_input("What is your name? ")
+        name = name.strip()
         if not name:
             name = "Anonymous User"
         
-        birthdate_str = input("What is your birthdate? (YYYY-MM-DD, optional): ").strip()
+        birthdate_str = await ui.get_user_input("What is your birthdate? (YYYY-MM-DD, optional): ")
+        birthdate_str = birthdate_str.strip()
         birthdate = None
         if birthdate_str:
             try:
                 birthdate = datetime.strptime(birthdate_str, "%Y-%m-%d")
             except ValueError:
-                print("Invalid date format. Birthdate will not be recorded.")
+                await ui.display_system_status("Invalid date format. Birthdate will not be recorded.")
         
-        profession = input("What is your profession? (optional): ").strip()
+        profession = await ui.get_user_input("What is your profession? (optional): ")
+        profession = profession.strip()
         if not profession:
             profession = None
         
@@ -60,23 +67,26 @@ class IntakeAgent:
         
         # Save to database
         self.db_service.save_user_profile(profile)
-        print(f"Thank you, {name}. Your information has been recorded.\n")
+        await ui.display_system_status(f"Thank you, {name}. Your information has been recorded.\n")
         
         return profile
     
-    def conduct_intake(self) -> Session:
+    async def conduct_intake(self, ui: BaseUI) -> Session:
         """
         Conduct the initial intake conversation with the user.
         
+        Args:
+            ui (BaseUI): The UI interface to use for interaction.
+            
         Returns:
             Session: The completed intake session.
         """
-        print("Welcome to your virtual psychoanalysis session.")
-        print("I'm here to help you explore your thoughts and feelings.")
-        print("Please feel free to share whatever is on your mind.\n")
+        await ui.display_system_status("Welcome to your virtual psychoanalysis session.")
+        await ui.display_system_status("I'm here to help you explore your thoughts and feelings.")
+        await ui.display_system_status("Please feel free to share whatever is on your mind.\n")
         
         # Collect user profile information
-        user_profile = self._collect_user_profile()
+        user_profile = await self._collect_user_profile(ui)
         
         # Initialize session
         session_id = str(uuid.uuid4())
@@ -91,7 +101,7 @@ class IntakeAgent:
         initial_prompt = INITIAL_GREETING_PROMPT.format(user_name=user_profile.name)
         
         initial_response = self.llm_service.generate_response(initial_prompt)
-        print(f"Psychoanalyst: {initial_response}\n")
+        await ui.display_message("therapist", initial_response)
         
         # Add to transcript
         session.transcript.append(Message(
@@ -102,7 +112,7 @@ class IntakeAgent:
         
         # Conversation loop
         while True:
-            user_input = input("You: ").strip()
+            user_input = await ui.get_user_input()
             
             if user_input.lower() in ['quit', 'exit', 'bye', 'goodbye']:
                 break
@@ -122,7 +132,7 @@ class IntakeAgent:
                     context
                 )
                 
-                print(f"Psychoanalyst: {response}\n")
+                await ui.display_message("therapist", response)
                 
                 # Add assistant response to transcript
                 session.transcript.append(Message(
@@ -135,7 +145,7 @@ class IntakeAgent:
         closing_prompt = CLOSING_PROMPT
         
         closing_response = self.llm_service.generate_response(closing_prompt)
-        print(f"Psychoanalyst: {closing_response}\n")
+        await ui.display_message("therapist", closing_response)
         
         # Add closing to transcript
         session.transcript.append(Message(
@@ -146,6 +156,6 @@ class IntakeAgent:
         
         # Save session to database
         self.db_service.save_session(session)
-        print("Intake session completed and saved.\n")
+        await ui.display_system_status("Intake session completed and saved.\n")
         
         return session

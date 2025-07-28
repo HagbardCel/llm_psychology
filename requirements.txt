@@ -11,5 +11,8 @@ sentence-transformers
 python-dotenv
 pydantic
 
+# Terminal UI
+textual
+
 # Testing
 pytest
