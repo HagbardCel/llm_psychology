@@ -11,13 +11,13 @@ class Config:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     
     # Database Configuration
-    DATABASE_PATH = os.path.join(os.path.dirname(__file__), "data", "psychoanalyst.db")
+    DATABASE_PATH = os.path.join("/app", "data", "psychoanalyst.db")
     
     # Vector Database Configuration
-    VECTOR_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "vector_db")
+    VECTOR_DB_PATH = os.path.join("/app", "data", "vector_db")
     
     # Domain Knowledge Configuration
-    DOMAIN_KNOWLEDGE_PATH = os.path.join(os.path.dirname(__file__), "data", "domain_knowledge")
+    DOMAIN_KNOWLEDGE_PATH = os.path.join("/app", "data", "domain_knowledge")
     
     # Session Configuration
     SESSION_DURATION_MINUTES = int(os.getenv("SESSION_DURATION_MINUTES", 45))

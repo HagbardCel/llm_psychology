@@ -92,8 +92,9 @@ class PsychoanalystAgent:
             timestamp=datetime.now()
         ))
         
-        # Conversation loop
-        while time.time() < session_end_time:
+        # Conversation loop with session management
+        session_active = True
+        while session_active and time.time() < session_end_time:
             # Check remaining time
             remaining_time = session_end_time - time.time()
             
@@ -102,6 +103,7 @@ class PsychoanalystAgent:
             
             if user_input.lower() in ['quit', 'exit', 'bye', 'goodbye']:
                 await ui.display_system_status("You've chosen to end the session.")
+                session_active = False
                 break
             
             if user_input:
@@ -143,25 +145,22 @@ class PsychoanalystAgent:
                 ))
         
         # Handle session end due to time
-        if time.time() >= session_end_time:
+        if time.time() >= session_end_time and session_active:
             await ui.display_system_status("\nOur session time is now up.")
-            while True:
+            extend_session = None
+            while extend_session not in ['y', 'n']:
                 extend_session = await ui.get_user_input("Would you like to continue for another 5 minutes to wrap up? (y/n): ")
                 extend_session = extend_session.strip().lower()
                 if extend_session == 'y':
                     session_end_time += timedelta(minutes=5).total_seconds()
                     await ui.display_system_status("Okay, let's continue for another 5 minutes.")
-                    # This will break the inner loop and continue the outer conversation loop
-                    break
+                    # Continue the session
+                    session_active = True
                 elif extend_session == 'n':
                     # End the session
-                    break
+                    session_active = False
                 else:
                     await ui.display_system_status("Invalid input. Please enter 'y' or 'n'.")
-            
-            # If user chose not to extend, the main loop will terminate
-            if extend_session != 'y':
-                pass # The loop will naturally exit
 
         # End session
         closing_prompt = CLOSING_SESSION_PROMPT.format(plan_context=plan_context)

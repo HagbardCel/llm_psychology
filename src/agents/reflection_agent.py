@@ -75,13 +75,33 @@ class ReflectionAgent:
         # Try to parse the LLM response
         if "raw_response" in structured_response:
             try:
-                # In a real implementation, you'd parse the JSON properly
-                # For now, we'll use the raw response as a string
-                raw_response = structured_response["raw_response"]
-                # Simple extraction of key information (this would be more sophisticated in practice)
-                if "focus" in raw_response.lower():
-                    plan_details["focus"] = raw_response.split("focus")[1].split(":")[1].split('"')[1] if '"' in raw_response.split("focus")[1].split(":")[1] else plan_details["focus"]
-            except:
+                import json
+                # Extract JSON from the raw response
+                raw_response = structured_response["raw_response"].strip()
+                
+                # Remove any markdown code block markers if present
+                if raw_response.startswith("```json"):
+                    raw_response = raw_response[7:]  # Remove ```json
+                if raw_response.startswith("```"):
+                    raw_response = raw_response[3:]  # Remove ```
+                if raw_response.endswith("```"):
+                    raw_response = raw_response[:-3]  # Remove ```
+                
+                # Parse the JSON
+                parsed_response = json.loads(raw_response)
+                
+                # Update plan details with parsed response
+                if "focus" in parsed_response:
+                    plan_details["focus"] = parsed_response["focus"]
+                if "goals" in parsed_response:
+                    plan_details["goals"] = parsed_response["goals"]
+                if "techniques" in parsed_response:
+                    plan_details["techniques"] = parsed_response["techniques"]
+                if "themes" in parsed_response:
+                    plan_details["themes"] = parsed_response["themes"]
+            except Exception as e:
+                print(f"Error parsing LLM response: {e}")
+                # Fall back to default plan_details
                 pass
         
         therapy_plan = TherapyPlan(
@@ -158,10 +178,36 @@ class ReflectionAgent:
         # Try to update with LLM response
         if "raw_response" in structured_response:
             try:
-                # In a real implementation, you'd parse the JSON properly
-                raw_response = structured_response["raw_response"]
+                import json
+                # Extract JSON from the raw response
+                raw_response = structured_response["raw_response"].strip()
+                
+                # Remove any markdown code block markers if present
+                if raw_response.startswith("```json"):
+                    raw_response = raw_response[7:]  # Remove ```json
+                if raw_response.startswith("```"):
+                    raw_response = raw_response[3:]  # Remove ```
+                if raw_response.endswith("```"):
+                    raw_response = raw_response[:-3]  # Remove ```
+                
+                # Parse the JSON
+                parsed_response = json.loads(raw_response)
+                
+                # Update plan details with parsed response
+                if "focus" in parsed_response:
+                    updated_plan_details["focus"] = parsed_response["focus"]
+                if "goals" in parsed_response:
+                    updated_plan_details["goals"] = parsed_response["goals"]
+                if "techniques" in parsed_response:
+                    updated_plan_details["techniques"] = parsed_response["techniques"]
+                if "themes" in parsed_response:
+                    updated_plan_details["themes"] = parsed_response["themes"]
+                    
                 updated_plan_details["updated_from_session"] = session.session_id
-            except:
+            except Exception as e:
+                print(f"Error parsing LLM response in update_plan: {e}")
+                # Fall back to default updated_plan_details
+                updated_plan_details["updated_from_session"] = session.session_id
                 pass
         
         updated_plan = TherapyPlan(
