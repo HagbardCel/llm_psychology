@@ -22,6 +22,22 @@ class Config:
     # Session Configuration
     SESSION_DURATION_MINUTES = int(os.getenv("SESSION_DURATION_MINUTES", 45))
     
+    # Intake Session Topics
+    INTAKE_TOPICS = [
+        "Presenting Problem",
+        "Current Symptoms", 
+        "Personal History",
+        "Family Background",
+        "Relationships",
+        "Work/School",
+        "Physical Health",
+        "Mental Health History",
+        "Substance Use",
+        "Coping Mechanisms",
+        "Support System",
+        "Goals for Therapy"
+    ]
+    
     # Application Configuration
     APP_NAME = "Virtual LLM-Driven Psychoanalyst"
     VERSION = "0.1.0"

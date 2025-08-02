@@ -3,7 +3,7 @@ import json
 import uuid
 from typing import Optional, List
 from datetime import datetime
-from utils.data_models import Session, Message, TherapyPlan, UserProfile
+from utils.data_models import Session, Message, TherapyPlan, UserProfile, Topic
 
 class DatabaseService:
     """Service for handling all SQLite database operations."""
@@ -93,14 +93,32 @@ class DatabaseService:
             
             transcript_json = json.dumps(transcript_data)
             
+            # Convert topics to JSON string
+            topics_data = []
+            for topic in session.topics:
+                topics_data.append({
+                    "name": topic.name,
+                    "status": topic.status
+                })
+            
+            topics_json = json.dumps(topics_data)
+            
+            # Add topics column if it doesn't exist
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN topics TEXT")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+            
             cursor.execute('''
-                INSERT INTO sessions (session_id, user_id, timestamp, transcript)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO sessions (session_id, user_id, timestamp, transcript, topics)
+                VALUES (?, ?, ?, ?, ?)
             ''', (
                 session.session_id, 
                 session.user_id, 
                 self._datetime_to_iso(session.timestamp), 
-                transcript_json
+                transcript_json,
+                topics_json
             ))
             
             conn.commit()
@@ -124,11 +142,20 @@ class DatabaseService:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT session_id, user_id, timestamp, transcript
-                FROM sessions
-                WHERE session_id = ?
-            ''', (session_id,))
+            # Try to get topics column, fall back to old schema if it doesn't exist
+            try:
+                cursor.execute('''
+                    SELECT session_id, user_id, timestamp, transcript, topics
+                    FROM sessions
+                    WHERE session_id = ?
+                ''', (session_id,))
+            except sqlite3.OperationalError:
+                # Old schema without topics column
+                cursor.execute('''
+                    SELECT session_id, user_id, timestamp, transcript
+                    FROM sessions
+                    WHERE session_id = ?
+                ''', (session_id,))
             
             row = cursor.fetchone()
             conn.close()
@@ -144,11 +171,23 @@ class DatabaseService:
                         timestamp=self._iso_to_datetime(msg_data["timestamp"])
                     ))
                 
+                # Parse topics JSON if available
+                topics = []
+                if len(row) > 4 and row[4]:  # topics column exists and has data
+                    try:
+                        topics_data = json.loads(row[4])
+                        topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
+                                 for topic_data in topics_data]
+                    except (json.JSONDecodeError, KeyError):
+                        # Handle malformed topics data
+                        topics = []
+                
                 return Session(
                     session_id=row[0],
                     user_id=row[1],
                     timestamp=self._iso_to_datetime(row[2]),
-                    transcript=transcript
+                    transcript=transcript,
+                    topics=topics
                 )
             return None
         except Exception as e:
@@ -246,12 +285,22 @@ class DatabaseService:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT session_id, user_id, timestamp, transcript
-                FROM sessions
-                WHERE user_id = ?
-                ORDER BY timestamp ASC
-            ''', (user_id,))
+            # Try to get topics column, fall back to old schema if it doesn't exist
+            try:
+                cursor.execute('''
+                    SELECT session_id, user_id, timestamp, transcript, topics
+                    FROM sessions
+                    WHERE user_id = ?
+                    ORDER BY timestamp ASC
+                ''', (user_id,))
+            except sqlite3.OperationalError:
+                # Old schema without topics column
+                cursor.execute('''
+                    SELECT session_id, user_id, timestamp, transcript
+                    FROM sessions
+                    WHERE user_id = ?
+                    ORDER BY timestamp ASC
+                ''', (user_id,))
             
             rows = cursor.fetchall()
             conn.close()
@@ -268,11 +317,23 @@ class DatabaseService:
                         timestamp=self._iso_to_datetime(msg_data["timestamp"])
                     ))
                 
+                # Parse topics JSON if available
+                topics = []
+                if len(row) > 4 and row[4]:  # topics column exists and has data
+                    try:
+                        topics_data = json.loads(row[4])
+                        topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
+                                 for topic_data in topics_data]
+                    except (json.JSONDecodeError, KeyError):
+                        # Handle malformed topics data
+                        topics = []
+                
                 sessions.append(Session(
                     session_id=row[0],
                     user_id=row[1],
                     timestamp=self._iso_to_datetime(row[2]),
-                    transcript=transcript
+                    transcript=transcript,
+                    topics=topics
                 ))
             
             return sessions

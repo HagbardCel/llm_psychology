@@ -1,11 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
-from utils.data_models import Session, Message, UserProfile
+from utils.data_models import Session, Message, UserProfile, Topic
 from prompts.intake_prompts import INITIAL_GREETING_PROMPT, CONTINUE_CONVERSATION_PROMPT, CLOSING_PROMPT
 from ui.base_ui import BaseUI
+from config import Config
 
 class IntakeAgent:
     """Agent responsible for handling the initial user interaction and context retrieval."""
@@ -21,6 +22,7 @@ class IntakeAgent:
         self.llm_service = llm_service
         self.db_service = db_service
         self.user_id = "default_user"  # In a real implementation, this would be dynamic
+        self.session_duration = Config.SESSION_DURATION_MINUTES
     
     async def _collect_user_profile(self, ui: BaseUI) -> UserProfile:
         """
@@ -71,6 +73,21 @@ class IntakeAgent:
         
         return profile
     
+    def _get_pending_topics(self, session: Session) -> List[str]:
+        """Get list of pending topics."""
+        return [topic.name for topic in session.topics if topic.status == "pending"]
+    
+    def _get_covered_topics(self, session: Session) -> List[str]:
+        """Get list of covered topics."""
+        return [topic.name for topic in session.topics if topic.status in ["covered", "partially_covered"]]
+    
+    def _update_topic_status(self, session: Session, topic_name: str, status: str):
+        """Update the status of a topic."""
+        for topic in session.topics:
+            if topic.name == topic_name:
+                topic.status = status
+                break
+    
     async def conduct_intake(self, ui: BaseUI) -> Session:
         """
         Conduct the initial intake conversation with the user.
@@ -88,17 +105,26 @@ class IntakeAgent:
         # Collect user profile information
         user_profile = await self._collect_user_profile(ui)
         
-        # Initialize session
+        # Initialize session with topics
         session_id = str(uuid.uuid4())
+        topics = [Topic(name=topic_name) for topic_name in Config.INTAKE_TOPICS]
         session = Session(
             session_id=session_id,
             user_id=self.user_id,
             timestamp=datetime.now(),
-            transcript=[]
+            transcript=[],
+            topics=topics
         )
         
+        # Start session timer
+        session_start_time = datetime.now()
+        session_end_time = session_start_time + timedelta(minutes=self.session_duration)
+        
         # Initial greeting with personalized touch
-        initial_prompt = INITIAL_GREETING_PROMPT.format(user_name=user_profile.name)
+        initial_prompt = INITIAL_GREETING_PROMPT.format(
+            user_name=user_profile.name,
+            session_duration=self.session_duration
+        )
         
         initial_response = self.llm_service.generate_response(initial_prompt)
         await ui.display_message("therapist", initial_response)
@@ -110,8 +136,24 @@ class IntakeAgent:
             timestamp=datetime.now()
         ))
         
-        # Conversation loop
+        # Conversation loop with time and topic awareness
         while True:
+            # Check remaining time
+            current_time = datetime.now()
+            remaining_time = session_end_time - current_time
+            remaining_minutes = max(0, int(remaining_time.total_seconds() / 60))
+            
+            # Check if session should end
+            if remaining_minutes <= 0:
+                await ui.display_system_status("Session time has expired. Wrapping up the assessment.")
+                break
+            
+            # Check if all topics are covered
+            pending_topics = self._get_pending_topics(session)
+            if not pending_topics:
+                await ui.display_system_status("All assessment topics have been covered.")
+                break
+            
             user_input = await ui.get_user_input()
             
             if user_input.lower() in ['quit', 'exit', 'bye', 'goodbye']:
@@ -125,10 +167,21 @@ class IntakeAgent:
                     timestamp=datetime.now()
                 ))
                 
-                # Generate response using context
+                # Generate response using context with time and topic awareness
+                covered_topics = self._get_covered_topics(session)
+                pending_topics = self._get_pending_topics(session)
+                
+                # Format the continuation prompt with time and topic information
+                formatted_prompt = CONTINUE_CONVERSATION_PROMPT.format(
+                    remaining_minutes=remaining_minutes,
+                    session_duration=self.session_duration,
+                    covered_topics=", ".join(covered_topics) if covered_topics else "None",
+                    pending_topics=", ".join(pending_topics)
+                )
+                
                 context = [{"role": msg.role, "content": msg.content} for msg in session.transcript]
                 response = self.llm_service.generate_response(
-                    CONTINUE_CONVERSATION_PROMPT,
+                    formatted_prompt,
                     context
                 )
                 
