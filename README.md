@@ -82,15 +82,20 @@ psychoanalyst_app/
 
 ## Development
 
-This project is still under active development. See `llm_psychologist.md` for the detailed implementation plan and roadmap.
+This project follows modern Python development practices with structured guidelines and tooling.
 
-### Running Tests
+### Modern Development Workflow
 
-```bash
-docker-compose run --rm app python -m pytest tests/
-```
+The project now includes comprehensive development tooling:
 
-### Local Development (without Docker)
+- **Dependency Management**: Uses `pip-tools` with `requirements.in` and `requirements-dev.in`
+- **Code Formatting**: `black` for automatic code formatting
+- **Linting**: `ruff` for fast, comprehensive linting
+- **Type Checking**: `mypy` for static type checking
+- **Testing**: `pytest` with proper fixtures and mocking strategies
+- **Configuration**: `pydantic-settings` for robust configuration management
+
+### Development Setup
 
 1.  **Create a virtual environment:**
     ```bash
@@ -98,18 +103,101 @@ docker-compose run --rm app python -m pytest tests/
     source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
-2.  **Install dependencies:**
+2.  **Install development dependencies:**
     ```bash
-    pip install -r requirements.txt
+    # Install pip-tools first
+    pip install pip-tools
+    
+    # Install locked dependencies
+    pip-sync requirements.txt requirements-dev.txt
+    
+    # Or generate and install from .in files
+    make requirements
+    make sync
     ```
 
 3.  **Set up environment variables:**
     Create a `.env` file with your API key.
 
-4.  **Run the application:**
+4.  **Development Commands:**
     ```bash
-    python src/main.py
+    # Format code
+    make format
+    
+    # Lint code
+    make lint
+    
+    # Run tests
+    make test
+    
+    # Run the application
+    make run
     ```
+
+### Running Tests
+
+```bash
+# Run tests with pytest
+make test
+
+# Or directly
+docker-compose run --rm app python -m pytest tests/
+```
+
+### Code Quality
+
+The project enforces code quality through:
+
+- **Structured Logging**: Using Python's `logging` module instead of `print()`
+- **Custom Exceptions**: Specific exception classes for different error types
+- **Type Hints**: Comprehensive type annotations throughout the codebase
+- **Modular Architecture**: Clear separation of concerns with dedicated modules
+- **Prompt Engineering Guidelines**: Standardized approach to LLM prompt management
+
+### Project Structure
+
+```
+psychoanalyst_app/
+├── src/
+│   ├── main.py                     # Main application entry point
+│   ├── config.py                   # Configuration settings (pydantic-settings)
+│   ├── exceptions.py               # Custom exception classes
+│   ├── models/                     # Data models (moved from utils)
+│   ├── agents/                     # Core agent logic
+│   │   ├── intake_agent.py         
+│   │   ├── assessment_agent.py     
+│   │   ├── psychoanalyst_agent.py  
+│   │   └── reflection_agent.py     
+│   ├── services/                   # Service layer
+│   │   ├── llm_service.py          
+│   │   ├── db_service.py           
+│   │   ├── rag_service.py          
+│   │   └── style_service.py        
+│   ├── styles/                     # Therapy style configurations
+│   ├── ui/                         # User interface
+│   └── data/                       # Persistent data storage
+├── tests/                          # Test suite
+├── .clinerules/                    # AI collaboration guidelines
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.in                 # Direct dependencies
+├── requirements-dev.in             # Development dependencies
+├── requirements.txt                # Locked production dependencies
+├── requirements-dev.txt            # Locked development dependencies
+├── pyproject.toml                  # Tool configuration
+├── Makefile                        # Development commands
+└── .env
+```
+
+### AI Collaboration Guidelines
+
+The project includes `.clinerules/` directory with guidelines for AI-assisted development:
+
+- **rules.md**: General project architecture and Docker usage guidelines
+- **prompt-engineering.md**: LLM prompt development best practices
+- **python-style-guide.md**: Code formatting, linting, and style conventions
+
+This ensures consistent, high-quality contributions whether working alone or with AI assistance.
 
 ## Troubleshooting
 

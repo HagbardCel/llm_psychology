@@ -3,7 +3,7 @@ import uuid
 from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
-from utils.data_models import Session, Message, UserProfile, Topic
+from models.data_models import Session, Message, UserProfile, Topic
 from prompts.intake_prompts import INITIAL_GREETING_PROMPT, CONTINUE_CONVERSATION_PROMPT, CLOSING_PROMPT
 from ui.base_ui import BaseUI
 from config import Config

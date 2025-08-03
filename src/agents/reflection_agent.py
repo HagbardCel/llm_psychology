@@ -5,7 +5,7 @@ from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from services.style_service import style_service
-from utils.data_models import Session, TherapyPlan
+from models.data_models import Session, TherapyPlan
 from prompts.reflection_prompts import CREATE_INITIAL_PLAN_PROMPT, UPDATE_PLAN_PROMPT, SESSION_SUMMARY_PROMPT
 
 class ReflectionAgent:

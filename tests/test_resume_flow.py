@@ -25,7 +25,7 @@ from agents.intake_agent import IntakeAgent
 from agents.assessment_agent import AssessmentAgent
 from agents.reflection_agent import ReflectionAgent
 from agents.psychoanalyst_agent import PsychoanalystAgent
-from utils.data_models import Session, Message, TherapyPlan, UserProfile
+from models.data_models import Session, Message, TherapyPlan, UserProfile
 from ui.textual_ui import ConsoleUI
 
 class TestResumeFlow(unittest.TestCase):

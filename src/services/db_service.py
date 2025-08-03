@@ -1,9 +1,13 @@
 import sqlite3
 import json
 import uuid
+import logging
 from typing import Optional, List
 from datetime import datetime
-from utils.data_models import Session, Message, TherapyPlan, UserProfile, Topic
+from models.data_models import Session, Message, TherapyPlan, UserProfile, Topic
+from exceptions import DatabaseError
+
+logger = logging.getLogger(__name__)
 
 class UserStatus:
     """Represents the user's current status in the therapy process."""
@@ -144,9 +148,10 @@ class DatabaseService:
             
             conn.commit()
             conn.close()
+            logger.info(f"Session {session.session_id} saved successfully")
             return True
         except Exception as e:
-            print(f"Error saving session: {e}")
+            logger.error(f"Error saving session {session.session_id}: {e}")
             return False
     
     def get_session(self, session_id: str) -> Optional[Session]:

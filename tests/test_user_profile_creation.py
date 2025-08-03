@@ -17,7 +17,7 @@ from config import Config
 from services.db_service import DatabaseService
 from services.llm_service import LLMService
 from agents.intake_agent import IntakeAgent
-from utils.data_models import UserProfile
+from models.data_models import UserProfile
 
 class MockUI:
     """Mock UI class to simulate user input for testing."""

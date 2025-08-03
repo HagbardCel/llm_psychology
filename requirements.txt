@@ -1,18 +1,25 @@
 # LLM Abstraction & Interaction
-langchain
-langchain-google-genai
-langchain-community
+langchain==0.2.5
+langchain-google-genai==1.0.7
+langchain-community==0.2.5
 
 # RAG System (Local Vector Database)
-chromadb
-sentence-transformers
+chromadb==0.5.0
+sentence-transformers==2.2.2
 
 # Utilities
-python-dotenv
-pydantic
+python-dotenv==1.0.1
+pydantic==2.7.1
+pydantic-settings==2.2.1
 
 # Terminal UI
-textual
+textual==0.71.0
 
 # Testing
-pytest
+pytest==8.2.0
+
+# Dependencies
+numpy==1.24.3
+protobuf==4.25.3
+requests==2.31.0
+urllib3==2.2.1

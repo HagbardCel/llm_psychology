@@ -6,7 +6,7 @@ from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from services.style_service import style_service
-from utils.data_models import Session, Message, TherapyPlan, UserProfile
+from models.data_models import Session, Message, TherapyPlan, UserProfile
 from prompts.psychoanalyst_prompts import INITIAL_SESSION_PROMPT, CONTINUE_SESSION_PROMPT, CLOSING_SESSION_PROMPT, TIME_CHECK_PROMPT
 from ui.base_ui import BaseUI
 

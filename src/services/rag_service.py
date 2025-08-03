@@ -3,7 +3,7 @@ import uuid
 from typing import List, Dict, Optional
 import chromadb
 from chromadb import Collection
-from utils.data_models import DomainKnowledgeChunk
+from models.data_models import DomainKnowledgeChunk
 from utils.embedding_utils import EmbeddingUtils
 
 class RAGService:

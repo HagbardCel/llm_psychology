@@ -7,6 +7,7 @@ Implements resumable sessions functionality.
 import sys
 import os
 import asyncio
+import logging
 
 # Add the src directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -20,10 +21,18 @@ from agents.assessment_agent import AssessmentAgent
 from agents.reflection_agent import ReflectionAgent
 from agents.psychoanalyst_agent import PsychoanalystAgent
 from ui.textual_ui import ConsoleUI
+from exceptions import ConfigurationError
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 async def main():
     """Main application entry point with resumable sessions."""
-    print(f"Starting {Config.APP_NAME} v{Config.VERSION}")
+    logger.info(f"Starting {Config.APP_NAME} v{Config.VERSION}")
     
     # Initialize UI
     ui = ConsoleUI()
@@ -35,17 +44,21 @@ async def main():
         
         # Check if API key is provided
         if not Config.GOOGLE_API_KEY or Config.GOOGLE_API_KEY == "your_actual_google_gemini_api_key_here":
-            await ui.display_system_status("ERROR: Please configure your Google Gemini API key in the .env file.")
+            error_msg = "ERROR: Please configure your Google Gemini API key in the .env file."
+            logger.error(error_msg)
+            await ui.display_system_status(error_msg)
             await ui.display_system_status("See README.md for setup instructions.")
             return
         
         # Initialize services
+        logger.info("Initializing services...")
         db_service = DatabaseService(Config.DATABASE_PATH)
         rag_service = RAGService(Config.DOMAIN_KNOWLEDGE_PATH, Config.VECTOR_DB_PATH)
         llm_service = LLMService(Config.GOOGLE_API_KEY)
         
         # Check user status to determine workflow
         user_status = db_service.get_user_status()
+        logger.info(f"User status: {user_status}")
         await ui.display_system_status(f"User status: {user_status}")
         
         therapy_plan = None
@@ -54,6 +67,12 @@ async def main():
             # Resume from existing therapy plan
             await ui.display_system_status("Resuming from existing therapy plan...")
             therapy_plan = db_service.get_latest_therapy_plan()
+            
+            if therapy_plan is None:
+                error_msg = "Error: No therapy plan found despite status indicating plan completion."
+                logger.error(error_msg)
+                await ui.display_system_status(error_msg)
+                return
             
             # Use reflection agent to provide context to psychoanalyst
             reflection_agent = ReflectionAgent(llm_service, db_service, rag_service)

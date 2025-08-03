@@ -11,7 +11,7 @@ from datetime import datetime
 # Add the src directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from utils.data_models import Session, Message, TherapyPlan, UserProfile
+from models.data_models import Session, Message, TherapyPlan, UserProfile
 from services.db_service import DatabaseService
 
 def test_database_writing():

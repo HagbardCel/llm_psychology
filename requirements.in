@@ -1,0 +1,23 @@
+# LLM Abstraction & Interaction
+langchain
+langchain-google-genai
+langchain-community
+
+# RAG System (Local Vector Database)
+chromadb
+sentence-transformers
+
+# Utilities
+python-dotenv
+pydantic
+pydantic-settings
+
+# Terminal UI
+textual
+
+# Testing
+pytest
+
+# Development tools
+black
+ruff

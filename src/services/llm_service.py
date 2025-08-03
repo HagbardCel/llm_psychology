@@ -3,6 +3,10 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from typing import List, Dict, Any, Optional
+import logging
+from exceptions import LLMServiceError
+
+logger = logging.getLogger(__name__)
 
 class LLMService:
     """Service for handling LLM API calls."""
@@ -51,13 +55,15 @@ class LLMService:
                 
                 # Generate response
                 response = self.llm.invoke(messages)
+                logger.info(f"Generated LLM response for prompt: {prompt[:100]}...")
                 return response.content
             else:
                 # Simple prompt without context
                 response = self.llm.invoke([HumanMessage(content=prompt)])
+                logger.info(f"Generated LLM response for simple prompt: {prompt[:100]}...")
                 return response.content
         except Exception as e:
-            print(f"Error generating LLM response: {e}")
+            logger.error(f"Error generating LLM response: {e}")
             return "I apologize, but I'm having trouble processing your request right now."
     
     def generate_structured_response(self, prompt: str, output_format: str) -> Dict[str, Any]:
