@@ -138,13 +138,13 @@ class IntakeAgent:
         
         # Conversation loop with time and topic awareness
         while True:
-            # Check remaining time
+            # Check remaining time with higher precision
             current_time = datetime.now()
             remaining_time = session_end_time - current_time
-            remaining_minutes = max(0, int(remaining_time.total_seconds() / 60))
+            remaining_seconds = max(0, int(remaining_time.total_seconds()))
             
             # Check if session should end
-            if remaining_minutes <= 0:
+            if remaining_seconds <= 0:
                 await ui.display_system_status("Session time has expired. Wrapping up the assessment.")
                 break
             
@@ -166,6 +166,9 @@ class IntakeAgent:
                     content=user_input,
                     timestamp=datetime.now()
                 ))
+                
+                # Calculate remaining minutes for the prompt
+                remaining_minutes = max(0, int(remaining_time.total_seconds() / 60))
                 
                 # Generate response using context with time and topic awareness
                 covered_topics = self._get_covered_topics(session)

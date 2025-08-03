@@ -5,6 +5,13 @@ from typing import Optional, List
 from datetime import datetime
 from utils.data_models import Session, Message, TherapyPlan, UserProfile, Topic
 
+class UserStatus:
+    """Represents the user's current status in the therapy process."""
+    NO_DATA = "no_data"
+    PROFILE_ONLY = "profile_only"
+    INTAKE_COMPLETE = "intake_complete"
+    PLAN_COMPLETE = "plan_complete"
+
 class DatabaseService:
     """Service for handling all SQLite database operations."""
     
@@ -45,6 +52,13 @@ class DatabaseService:
             )
         ''')
         
+        # Add selected_therapy_style column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE therapy_plans ADD COLUMN selected_therapy_style TEXT")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+        
         # Create user_profiles table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_profiles (
@@ -56,6 +70,13 @@ class DatabaseService:
                 updated_at TEXT NOT NULL
             )
         ''')
+        
+        # Add topics column to sessions table if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN topics TEXT")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         
         conn.commit()
         conn.close()
@@ -212,15 +233,16 @@ class DatabaseService:
             plan_details_json = json.dumps(plan.plan_details)
             
             cursor.execute('''
-                INSERT INTO therapy_plans (plan_id, user_id, created_at, updated_at, plan_details, version)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO therapy_plans (plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plan.plan_id,
                 plan.user_id,
                 self._datetime_to_iso(plan.created_at),
                 self._datetime_to_iso(plan.updated_at),
                 plan_details_json,
-                plan.version
+                plan.version,
+                plan.selected_therapy_style
             ))
             
             conn.commit()
@@ -245,7 +267,7 @@ class DatabaseService:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT plan_id, user_id, created_at, updated_at, plan_details, version
+                SELECT plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style
                 FROM therapy_plans
                 WHERE user_id = ?
                 ORDER BY updated_at DESC
@@ -264,7 +286,8 @@ class DatabaseService:
                     created_at=self._iso_to_datetime(row[2]),
                     updated_at=self._iso_to_datetime(row[3]),
                     plan_details=plan_details_data,
-                    version=row[5]
+                    version=row[5],
+                    selected_therapy_style=row[6]
                 )
             return None
         except Exception as e:
@@ -411,3 +434,53 @@ class DatabaseService:
         except Exception as e:
             print(f"Error retrieving user profile: {e}")
             return None
+    
+    def clear_all_data(self) -> bool:
+        """
+        Clear all data from all tables in the database.
+        
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear all tables
+            cursor.execute("DELETE FROM sessions")
+            cursor.execute("DELETE FROM therapy_plans")
+            cursor.execute("DELETE FROM user_profiles")
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error clearing database: {e}")
+            return False
+    
+    def get_user_status(self, user_id: str = "default_user") -> str:
+        """
+        Determine the user's current status in the therapy process.
+        
+        Args:
+            user_id (str): The ID of the user.
+            
+        Returns:
+            str: The user's status (NO_DATA, PROFILE_ONLY, INTAKE_COMPLETE, PLAN_COMPLETE).
+        """
+        # Check if user profile exists
+        user_profile = self.get_user_profile(user_id)
+        if not user_profile:
+            return UserStatus.NO_DATA
+        
+        # Check if any sessions exist (indicating intake completion)
+        sessions = self.get_all_sessions_for_user(user_id)
+        if not sessions:
+            return UserStatus.PROFILE_ONLY
+        
+        # Check if therapy plan exists
+        therapy_plan = self.get_latest_therapy_plan(user_id)
+        if not therapy_plan:
+            return UserStatus.INTAKE_COMPLETE
+        
+        return UserStatus.PLAN_COMPLETE

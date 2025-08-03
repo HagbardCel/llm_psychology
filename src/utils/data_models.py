@@ -38,6 +38,7 @@ class TherapyPlan(BaseModel):
     updated_at: datetime
     plan_details: Dict[str, Any]  # Flexible structure for plan details
     version: int
+    selected_therapy_style: Optional[str] = None  # e.g., "freud", "jung", "cbt"
 
 class DomainKnowledgeChunk(BaseModel):
     """Represents a chunk of domain knowledge for RAG."""

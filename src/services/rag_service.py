@@ -41,25 +41,48 @@ class RAGService:
         
         chunk_id = 0
         
-        # Iterate through domain knowledge files
-        for filename in os.listdir(self.domain_knowledge_path):
-            if filename.endswith(".md"):
-                file_path = os.path.join(self.domain_knowledge_path, filename)
-                
-                with open(file_path, "r", encoding="utf-8") as file:
-                    content = file.read()
+        # First, load from the old domain_knowledge_path for backward compatibility
+        if os.path.exists(self.domain_knowledge_path):
+            for filename in os.listdir(self.domain_knowledge_path):
+                if filename.endswith(".md"):
+                    file_path = os.path.join(self.domain_knowledge_path, filename)
                     
-                    # Split content into chunks (simple splitting for now)
-                    # In a real implementation, you'd use a more sophisticated chunking strategy
-                    paragraphs = content.split("\n\n")
-                    
-                    for paragraph in paragraphs:
-                        paragraph = paragraph.strip()
-                        if paragraph:
-                            documents.append(paragraph)
-                            metadatas.append({"source": filename})
-                            ids.append(f"chunk_{chunk_id}")
-                            chunk_id += 1
+                    with open(file_path, "r", encoding="utf-8") as file:
+                        content = file.read()
+                        
+                        # Split content into chunks (simple splitting for now)
+                        # In a real implementation, you'd use a more sophisticated chunking strategy
+                        paragraphs = content.split("\n\n")
+                        
+                        for paragraph in paragraphs:
+                            paragraph = paragraph.strip()
+                            if paragraph:
+                                documents.append(paragraph)
+                                metadatas.append({"source": filename})
+                                ids.append(f"chunk_{chunk_id}")
+                                chunk_id += 1
+        
+        # Then, load from the new styles directory
+        styles_dir = "src/styles"
+        if os.path.exists(styles_dir):
+            for style_dir in os.listdir(styles_dir):
+                style_path = os.path.join(styles_dir, style_dir)
+                if os.path.isdir(style_path):
+                    knowledge_file = os.path.join(style_path, "knowledge.md")
+                    if os.path.exists(knowledge_file):
+                        with open(knowledge_file, "r", encoding="utf-8") as file:
+                            content = file.read()
+                            
+                            # Split content into chunks
+                            paragraphs = content.split("\n\n")
+                            
+                            for paragraph in paragraphs:
+                                paragraph = paragraph.strip()
+                                if paragraph:
+                                    documents.append(paragraph)
+                                    metadatas.append({"source": f"{style_dir}.md"})  # Use style_dir.md as source for consistency
+                                    ids.append(f"chunk_{chunk_id}")
+                                    chunk_id += 1
         
         # Add chunks to vector database
         if documents:
@@ -71,23 +94,31 @@ class RAGService:
             
             print(f"Loaded {len(documents)} chunks into vector database.")
     
-    def retrieve_relevant_knowledge(self, query: str, n_results: int = 3) -> List[Dict[str, any]]:
+    def retrieve_relevant_knowledge(self, query: str, n_results: int = 3, filter_source: Optional[str] = None) -> List[Dict[str, any]]:
         """
         Retrieve relevant domain knowledge based on a query.
         
         Args:
             query (str): The query to search for relevant knowledge.
             n_results (int): Number of results to return.
+            filter_source (Optional[str]): Optional source filter (e.g., "freud.md").
             
         Returns:
             List[Dict[str, any]]: List of relevant knowledge chunks with their metadata.
         """
         try:
+            # Prepare query parameters
+            query_params = {
+                "query_texts": [query],
+                "n_results": n_results
+            }
+            
+            # Add source filter if specified
+            if filter_source:
+                query_params["where"] = {"source": filter_source}
+            
             # Search the vector database
-            results = self.domain_collection.query(
-                query_texts=[query],
-                n_results=n_results
-            )
+            results = self.domain_collection.query(**query_params)
             
             # Format results
             relevant_knowledge = []

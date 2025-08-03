@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
+from services.style_service import style_service
 from utils.data_models import Session, TherapyPlan
 from prompts.reflection_prompts import CREATE_INITIAL_PLAN_PROMPT, UPDATE_PLAN_PROMPT, SESSION_SUMMARY_PROMPT
 
@@ -119,6 +120,125 @@ class ReflectionAgent:
         
         return therapy_plan
     
+    def create_initial_plan_with_style(self, intake_session: Session, selected_style: str) -> TherapyPlan:
+        """
+        Create the initial therapy plan based on the intake session and selected therapy style.
+        
+        Args:
+            intake_session (Session): The completed intake session.
+            selected_style (str): The selected therapy style.
+            
+        Returns:
+            TherapyPlan: The initial therapy plan with selected style.
+        """
+        print(f"Reflection Agent: Analyzing intake session and creating initial {selected_style.upper()} therapy plan...")
+        
+        # Get style-specific reflection prompt
+        if style_service.get_style_pack(selected_style):
+            reflection_prompt = style_service.get_reflection_prompt(selected_style)
+            knowledge_source = style_service.get_knowledge_source(selected_style)
+        else:
+            reflection_prompt = ""
+            knowledge_source = None
+        
+        # Prepare session transcript for analysis
+        session_text = "\n".join([f"{msg.role}: {msg.content}" for msg in intake_session.transcript])
+        
+        # Get relevant domain knowledge filtered by style
+        if knowledge_source:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(
+                session_text, 
+                n_results=3, 
+                filter_source=knowledge_source
+            )
+        else:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(session_text, n_results=3)
+        
+        # Create context for LLM
+        context = f"""
+        Intake Session Transcript:
+        {session_text}
+        
+        Relevant Psychological Knowledge:
+        """
+        for i, knowledge in enumerate(relevant_knowledge, 1):
+            context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
+        
+        # Use style-specific prompt if available
+        if reflection_prompt:
+            plan_prompt = f"""
+{reflection_prompt}
+
+Context for analysis:
+{context}
+
+Please create an initial therapy plan based on this {selected_style.upper()} approach.
+"""
+        else:
+            plan_prompt = CREATE_INITIAL_PLAN_PROMPT.format(context=context)
+        
+        structured_response = self.llm_service.generate_structured_response(
+            plan_prompt, 
+            '{"focus": "string", "goals": "string", "techniques": "string", "themes": "string"}'
+        )
+        
+        # Create therapy plan object
+        plan_id = str(uuid.uuid4())
+        plan_details = {
+            "focus": f"Initial {selected_style.upper()} approach",
+            "goals": "Build therapeutic relationship and identify key concerns",
+            "techniques": f"Approach appropriate for {selected_style.upper()}",
+            "themes": "Initial concerns and background"
+        }
+        
+        # Try to parse the LLM response
+        if "raw_response" in structured_response:
+            try:
+                import json
+                # Extract JSON from the raw response
+                raw_response = structured_response["raw_response"].strip()
+                
+                # Remove any markdown code block markers if present
+                if raw_response.startswith("```json"):
+                    raw_response = raw_response[7:]  # Remove ```json
+                if raw_response.startswith("```"):
+                    raw_response = raw_response[3:]  # Remove ```
+                if raw_response.endswith("```"):
+                    raw_response = raw_response[:-3]  # Remove ```
+                
+                # Parse the JSON
+                parsed_response = json.loads(raw_response)
+                
+                # Update plan details with parsed response
+                if "focus" in parsed_response:
+                    plan_details["focus"] = parsed_response["focus"]
+                if "goals" in parsed_response:
+                    plan_details["goals"] = parsed_response["goals"]
+                if "techniques" in parsed_response:
+                    plan_details["techniques"] = parsed_response["techniques"]
+                if "themes" in parsed_response:
+                    plan_details["themes"] = parsed_response["themes"]
+            except Exception as e:
+                print(f"Error parsing LLM response: {e}")
+                # Fall back to default plan_details
+                pass
+        
+        therapy_plan = TherapyPlan(
+            plan_id=plan_id,
+            user_id=self.user_id,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            plan_details=plan_details,
+            version=1,
+            selected_therapy_style=selected_style
+        )
+        
+        # Save plan to database
+        self.db_service.save_therapy_plan(therapy_plan)
+        print(f"Initial {selected_style.upper()} therapy plan created and saved.\n")
+        
+        return therapy_plan
+    
     def update_plan(self, session: Session, current_plan: TherapyPlan) -> TherapyPlan:
         """
         Update the therapy plan based on a completed session.
@@ -132,6 +252,15 @@ class ReflectionAgent:
         """
         print("Reflection Agent: Analyzing session and updating therapy plan...")
         
+        # Get the selected therapy style from the current plan
+        selected_style = current_plan.selected_therapy_style
+        if selected_style and style_service.get_style_pack(selected_style):
+            reflection_prompt = style_service.get_reflection_prompt(selected_style)
+            knowledge_source = style_service.get_knowledge_source(selected_style)
+        else:
+            reflection_prompt = ""
+            knowledge_source = None
+        
         # Get all sessions for comprehensive analysis
         all_sessions = self.db_service.get_all_sessions_for_user(self.user_id)
         
@@ -144,8 +273,15 @@ class ReflectionAgent:
             sess_text = "\n".join([f"{msg.role}: {msg.content}" for msg in sess.transcript])
             all_sessions_text += f"\n\nSession {i}:\n{sess_text}"
         
-        # Get relevant domain knowledge
-        relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(session_text, n_results=2)
+        # Get relevant domain knowledge filtered by style
+        if knowledge_source:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(
+                session_text, 
+                n_results=2, 
+                filter_source=knowledge_source
+            )
+        else:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(session_text, n_results=2)
         
         # Create context for LLM
         context = f"""
@@ -163,8 +299,18 @@ class ReflectionAgent:
         for i, knowledge in enumerate(relevant_knowledge, 1):
             context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
-        # Generate updated therapy plan
-        update_prompt = UPDATE_PLAN_PROMPT.format(context=context)
+        # Use style-specific prompt if available
+        if reflection_prompt:
+            update_prompt = f"""
+{reflection_prompt}
+
+Context for analysis:
+{context}
+
+Please update the therapy plan based on this {selected_style.upper()} approach.
+"""
+        else:
+            update_prompt = UPDATE_PLAN_PROMPT.format(context=context)
         
         structured_response = self.llm_service.generate_structured_response(
             update_prompt,
@@ -216,7 +362,8 @@ class ReflectionAgent:
             created_at=current_plan.created_at,
             updated_at=datetime.now(),
             plan_details=updated_plan_details,
-            version=current_plan.version + 1
+            version=current_plan.version + 1,
+            selected_therapy_style=current_plan.selected_therapy_style
         )
         
         # Save updated plan to database

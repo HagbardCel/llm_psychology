@@ -5,6 +5,7 @@ from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
+from services.style_service import style_service
 from utils.data_models import Session, Message, TherapyPlan, UserProfile
 from prompts.psychoanalyst_prompts import INITIAL_SESSION_PROMPT, CONTINUE_SESSION_PROMPT, CLOSING_SESSION_PROMPT, TIME_CHECK_PROMPT
 from ui.base_ui import BaseUI
@@ -38,11 +39,24 @@ class PsychoanalystAgent:
         Returns:
             Session: The completed therapy session.
         """
+        # Get the selected therapy style
+        selected_style = therapy_plan.selected_therapy_style
+        if selected_style and style_service.get_style_pack(selected_style):
+            # Use style-specific prompt
+            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
+            knowledge_source = style_service.get_knowledge_source(selected_style)
+        else:
+            # Fallback to default behavior
+            therapist_prompt = ""
+            knowledge_source = None
+        
         # Retrieve user profile to get the name
         user_profile = self.db_service.get_user_profile(self.user_id)
         user_name = user_profile.name if user_profile else "Client"
         
         await ui.display_system_status(f"Starting therapy session for {user_name}...")
+        if selected_style:
+            await ui.display_system_status(f"Therapy Style: {selected_style.upper()}")
         await ui.display_system_status(f"Session Focus: {therapy_plan.plan_details.get('focus', 'Exploring your thoughts and feelings')}")
         await ui.display_system_status(f"Session will last for approximately {session_duration_minutes} minutes.")
         await ui.display_system_status("You can end the session at any time by typing 'quit', 'exit', or 'bye'.")
@@ -59,9 +73,18 @@ class PsychoanalystAgent:
             transcript=[]
         )
         
-        # Get relevant domain knowledge based on the therapy plan
+        # Get relevant domain knowledge based on the therapy plan and style
         plan_focus = therapy_plan.plan_details.get('focus', '')
-        relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(plan_focus, n_results=2)
+        
+        # Retrieve knowledge filtered by style if applicable
+        if knowledge_source:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(
+                plan_focus, 
+                n_results=2, 
+                filter_source=knowledge_source
+            )
+        else:
+            relevant_knowledge = self.rag_service.retrieve_relevant_knowledge(plan_focus, n_results=2)
         
         # Create context with therapy plan and domain knowledge
         plan_context = f"""
@@ -76,11 +99,23 @@ class PsychoanalystAgent:
         for i, knowledge in enumerate(relevant_knowledge, 1):
             plan_context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
         
-        # Initial greeting with personalized touch
-        initial_prompt = INITIAL_SESSION_PROMPT.format(
-            user_name=user_name,
-            plan_context=plan_context
-        )
+        # Initial greeting with personalized touch and style awareness
+        if therapist_prompt:
+            initial_prompt = f"""
+{therapist_prompt}
+
+Context for this session:
+{plan_context}
+
+User's name: {user_name}
+
+Please provide an appropriate initial greeting for the session.
+"""
+        else:
+            initial_prompt = INITIAL_SESSION_PROMPT.format(
+                user_name=user_name,
+                plan_context=plan_context
+            )
         
         initial_response = self.llm_service.generate_response(initial_prompt)
         await ui.display_message("therapist", initial_response)
@@ -114,9 +149,16 @@ class PsychoanalystAgent:
                     timestamp=datetime.now()
                 ))
                 
-                # Get relevant knowledge based on current conversation
+                # Get relevant knowledge based on current conversation, filtered by style if applicable
                 recent_context = " ".join([msg.content for msg in session.transcript[-3:]])  # Last 3 messages
-                context_knowledge = self.rag_service.retrieve_relevant_knowledge(recent_context, n_results=1)
+                if knowledge_source:
+                    context_knowledge = self.rag_service.retrieve_relevant_knowledge(
+                        recent_context, 
+                        n_results=1, 
+                        filter_source=knowledge_source
+                    )
+                else:
+                    context_knowledge = self.rag_service.retrieve_relevant_knowledge(recent_context, n_results=1)
                 
                 # Generate response using context, therapy plan, and domain knowledge
                 context_messages = [{"role": msg.role, "content": msg.content} for msg in session.transcript]
@@ -127,11 +169,27 @@ class PsychoanalystAgent:
                         remaining_minutes=int(remaining_time / 60)
                     )
 
-                response_prompt = CONTINUE_SESSION_PROMPT.format(
-                    plan_context=plan_context,
-                    additional_knowledge=context_knowledge[0]['content'] if context_knowledge else 'None',
-                    time_prompt=time_prompt_section
-                )
+                # Use style-specific prompt if available
+                if therapist_prompt:
+                    response_prompt = f"""
+{therapist_prompt}
+
+Context for this session:
+{plan_context}
+
+Additional relevant knowledge:
+{context_knowledge[0]['content'] if context_knowledge else 'None'}
+
+{time_prompt_section}
+
+Please continue the session based on the conversation history and maintain your therapeutic approach.
+"""
+                else:
+                    response_prompt = CONTINUE_SESSION_PROMPT.format(
+                        plan_context=plan_context,
+                        additional_knowledge=context_knowledge[0]['content'] if context_knowledge else 'None',
+                        time_prompt=time_prompt_section
+                    )
                 
                 response = self.llm_service.generate_response(response_prompt, context_messages)
                 
@@ -162,8 +220,18 @@ class PsychoanalystAgent:
                 else:
                     await ui.display_system_status("Invalid input. Please enter 'y' or 'n'.")
 
-        # End session
-        closing_prompt = CLOSING_SESSION_PROMPT.format(plan_context=plan_context)
+        # End session with style awareness
+        if therapist_prompt:
+            closing_prompt = f"""
+{therapist_prompt}
+
+Context for this session:
+{plan_context}
+
+Please provide an appropriate closing for the session.
+"""
+        else:
+            closing_prompt = CLOSING_SESSION_PROMPT.format(plan_context=plan_context)
         
         closing_response = self.llm_service.generate_response(closing_prompt)
         await ui.display_message("therapist", closing_response)

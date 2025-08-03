@@ -21,7 +21,9 @@ The Virtual LLM-Driven Psychoanalyst is a sophisticated application that simulat
 - **Multi-Agent Architecture**: Distinct agents handle different phases of the therapeutic process
 - **Personalized Experience**: User profiles with name, birthdate, and profession for tailored interactions
 - **Persistent Memory**: SQLite database stores session history and therapy plans
-- **Domain Knowledge Integration**: RAG system incorporates psychological theories (Freud, Jung)
+- **Domain Knowledge Integration**: RAG system incorporates psychological theories (Freud, Jung, CBT)
+- **Therapy Style Selection**: Users can choose from multiple therapeutic approaches (Freud, Jung, CBT)
+- **Modular Style Architecture**: Easy to extend with new therapy styles
 - **Local & Private**: All data remains on the user's machine
 - **Dockerized Deployment**: Consistent environment across development and production
 
@@ -86,7 +88,27 @@ psychoanalyst_app/
 ├── docker-compose.yml             # Docker orchestration
 ├── requirements.txt               # Python dependencies
 └── .env                           # Environment variables
-```
+
+../src/                            # Shared services and styles (outside psychoanalyst_app)
+└── styles/                        # Therapy style packs
+    ├── freud/                     # Freudian psychoanalysis style
+    │   ├── knowledge.md           # Domain knowledge for RAG
+    │   ├── description.txt        # Patient-friendly description
+    │   ├── psychoanalyst_prompt.txt # Psychoanalyst agent prompt
+    │   ├── reflection_prompt.txt  # Reflection agent prompt
+    │   └── assessment_prompt.txt  # Assessment agent prompt
+    ├── jung/                      # Jungian analytical psychology style
+    │   ├── knowledge.md           # Domain knowledge for RAG
+    │   ├── description.txt        # Patient-friendly description
+    │   ├── psychoanalyst_prompt.txt # Psychoanalyst agent prompt
+    │   ├── reflection_prompt.txt  # Reflection agent prompt
+    │   └── assessment_prompt.txt  # Assessment agent prompt
+    └── cbt/                       # Cognitive Behavioral Therapy style
+        ├── knowledge.md           # Domain knowledge for RAG
+        ├── description.txt        # Patient-friendly description
+        ├── psychoanalyst_prompt.txt # Psychoanalyst agent prompt
+        ├── reflection_prompt.txt  # Reflection agent prompt
+        └── assessment_prompt.txt  # Assessment agent prompt
 
 ## Core Components
 
@@ -398,6 +420,18 @@ python -m pytest tests/
 2. Implement all abstract methods (`display_message`, `get_user_input`, `display_system_status`, `run`)
 3. Update `src/main.py` to use the new UI implementation
 4. Maintain the async interface for consistency with the TextualUI
+
+### Adding New Therapy Styles
+1. Create a new style directory in `../src/styles/` with the style name (e.g., `../src/styles/ifs/`)
+2. Add the required style files:
+   - `knowledge.md`: Domain knowledge for RAG system
+   - `description.txt`: Patient-friendly description for UI selection
+   - `psychoanalyst_prompt.txt`: Detailed prompt for psychoanalyst agent
+   - `reflection_prompt.txt`: Detailed prompt for reflection agent
+   - `assessment_prompt.txt`: Prompt for assessing patient suitability
+3. The `StyleService` will automatically detect and load the new style
+4. Update `doc/long_list_of_styles.md` to document the new style
+5. The assessment agent will automatically include the new style in recommendations
 
 ## Best Practices
 

@@ -43,6 +43,18 @@ class BaseUI(ABC):
         pass
 
     @abstractmethod
+    async def present_therapy_style_selection(self, recommendations: list) -> str:
+        """Present therapy style recommendations and get user selection.
+        
+        Args:
+            recommendations: List of therapy style recommendations with descriptions
+            
+        Returns:
+            The selected therapy style ID
+        """
+        pass
+
+    @abstractmethod
     async def run(self) -> None:
         """Run the UI event loop.
         

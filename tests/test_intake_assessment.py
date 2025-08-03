@@ -7,8 +7,8 @@ import sys
 import os
 import asyncio
 
-# Add the current directory to the Python path
-sys.path.append(os.path.dirname(__file__))
+# Add the src directory to the Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from config import Config
 from services.db_service import DatabaseService
