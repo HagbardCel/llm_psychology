@@ -4,6 +4,7 @@ from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from models.data_models import Session, Message, UserProfile, Topic
+from context.user_context import UserContext
 from prompts.intake_prompts import INITIAL_GREETING_PROMPT, CONTINUE_CONVERSATION_PROMPT, CLOSING_PROMPT
 from ui.base_ui import BaseUI
 from config import Config
@@ -11,17 +12,18 @@ from config import Config
 class IntakeAgent:
     """Agent responsible for handling the initial user interaction and context retrieval."""
     
-    def __init__(self, llm_service: LLMService, db_service: DatabaseService):
+    def __init__(self, llm_service: LLMService, db_service: DatabaseService, user_context: UserContext):
         """
         Initialize the Intake Agent.
         
         Args:
             llm_service (LLMService): The LLM service for generating responses.
             db_service (DatabaseService): The database service for storing sessions.
+            user_context (UserContext): User context for this intake session.
         """
         self.llm_service = llm_service
         self.db_service = db_service
-        self.user_id = "default_user"  # In a real implementation, this would be dynamic
+        self.user_context = user_context
         self.session_duration = Config.SESSION_DURATION_MINUTES
     
     async def _collect_user_profile(self, ui: BaseUI) -> UserProfile:
@@ -59,7 +61,7 @@ class IntakeAgent:
         
         # Create user profile
         profile = UserProfile(
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             name=name,
             birthdate=birthdate,
             profession=profession,
@@ -110,7 +112,7 @@ class IntakeAgent:
         topics = [Topic(name=topic_name) for topic_name in Config.INTAKE_TOPICS]
         session = Session(
             session_id=session_id,
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             timestamp=datetime.now(),
             transcript=[],
             topics=topics

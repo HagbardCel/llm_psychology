@@ -5,7 +5,7 @@ import logging
 from typing import Optional, List
 from datetime import datetime
 from models.data_models import Session, Message, TherapyPlan, UserProfile, Topic
-from exceptions import DatabaseError
+from exceptions import DatabaseError, SessionNotFoundError, TherapyPlanCreationError
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,7 @@ class DatabaseService:
                 )
             return None
         except Exception as e:
-            print(f"Error retrieving session: {e}")
+            logger.error(f"Error retrieving session: {e}", exc_info=True)
             return None
     
     def save_therapy_plan(self, plan: TherapyPlan) -> bool:
@@ -254,7 +254,7 @@ class DatabaseService:
             conn.close()
             return True
         except Exception as e:
-            print(f"Error saving therapy plan: {e}")
+            logger.error(f"Error saving therapy plan: {e}", exc_info=True)
             return False
     
     def get_latest_therapy_plan(self, user_id: str = "default_user") -> Optional[TherapyPlan]:
@@ -296,7 +296,7 @@ class DatabaseService:
                 )
             return None
         except Exception as e:
-            print(f"Error retrieving therapy plan: {e}")
+            logger.error(f"Error retrieving therapy plan: {e}", exc_info=True)
             return None
     
     def get_all_sessions_for_user(self, user_id: str = "default_user") -> List[Session]:
@@ -366,7 +366,7 @@ class DatabaseService:
             
             return sessions
         except Exception as e:
-            print(f"Error retrieving sessions: {e}")
+            logger.error(f"Error retrieving sessions: {e}", exc_info=True)
             return []
     
     def save_user_profile(self, profile: UserProfile) -> bool:
@@ -400,7 +400,7 @@ class DatabaseService:
             conn.close()
             return True
         except Exception as e:
-            print(f"Error saving user profile: {e}")
+            logger.error(f"Error saving user profile: {e}", exc_info=True)
             return False
     
     def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
@@ -437,7 +437,7 @@ class DatabaseService:
                 )
             return None
         except Exception as e:
-            print(f"Error retrieving user profile: {e}")
+            logger.error(f"Error retrieving user profile: {e}", exc_info=True)
             return None
     
     def clear_all_data(self) -> bool:
@@ -460,7 +460,7 @@ class DatabaseService:
             conn.close()
             return True
         except Exception as e:
-            print(f"Error clearing database: {e}")
+            logger.error(f"Error clearing database: {e}", exc_info=True)
             return False
     
     def get_user_status(self, user_id: str = "default_user") -> str:

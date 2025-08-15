@@ -97,6 +97,24 @@ The project now includes comprehensive development tooling:
 
 ### Development Setup
 
+This project includes a devcontainer configuration for consistent development environment. See [.devcontainer/README.md](.devcontainer/README.md) for setup instructions.
+
+#### Devcontainer Improvements
+
+The devcontainer has been optimized to prevent crashes:
+
+- **Memory Management**: Removed memory limits that were causing container termination
+- **Security**: Uses a non-root user (`appuser`) instead of root
+- **Performance**: Includes a `.dockerignore` file to optimize build context
+- **Startup Optimization**: Eliminated redundant dependency installation on every startup
+- **Separation of Concerns**: Uses a dedicated `dev` service that stays running for development, separate from the application runtime
+
+To use the improved devcontainer:
+
+1. Open the project in VS Code with Remote - Containers extension installed
+2. Run "Remote-Containers: Reopen in Container" from the Command Palette
+3. The container will build and start with the optimized configuration
+
 1.  **Create a virtual environment:**
     ```bash
     python -m venv venv
@@ -204,3 +222,8 @@ This ensures consistent, high-quality contributions whether working alone or wit
 - **API Key Error:** Make sure you have a valid Google Gemini API key in your `.env` file.
 - **Docker Permission Issues:** Make sure you have proper permissions to run Docker commands.
 - **Port Conflicts:** If you see port conflicts, modify the `docker-compose.yml` file.
+- **Devcontainer Crashes:** If the devcontainer crashes during startup:
+  - Ensure you're using the latest configuration with optimized memory settings
+  - Check that Docker has sufficient resources allocated (at least 4GB RAM recommended)
+  - Try rebuilding the container with "Remote-Containers: Rebuild Container" command
+  - Clear Docker cache if issues persist: `docker system prune -a`

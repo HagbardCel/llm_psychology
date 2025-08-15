@@ -7,13 +7,14 @@ from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from services.style_service import style_service
 from models.data_models import Session, Message, TherapyPlan, UserProfile
+from context.user_context import UserContext
 from prompts.psychoanalyst_prompts import INITIAL_SESSION_PROMPT, CONTINUE_SESSION_PROMPT, CLOSING_SESSION_PROMPT, TIME_CHECK_PROMPT
 from ui.base_ui import BaseUI
 
 class PsychoanalystAgent:
     """Agent responsible for conducting the main conversational sessions based on the therapy plan."""
     
-    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService):
+    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService, user_context: UserContext):
         """
         Initialize the Psychoanalyst Agent.
         
@@ -21,11 +22,12 @@ class PsychoanalystAgent:
             llm_service (LLMService): The LLM service for generating responses.
             db_service (DatabaseService): The database service for storing sessions.
             rag_service (RAGService): The RAG service for retrieving domain knowledge.
+            user_context (UserContext): User context for this therapy session.
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
-        self.user_id = "default_user"  # In a real implementation, this would be dynamic
+        self.user_context = user_context
     
     async def conduct_session(self, therapy_plan: TherapyPlan, session_duration_minutes: int, ui: BaseUI) -> Session:
         """
@@ -38,7 +40,15 @@ class PsychoanalystAgent:
             
         Returns:
             Session: The completed therapy session.
+            
+        Raises:
+            PsychoanalystAgentError: If therapy_plan is None or invalid.
         """
+        # Validate that therapy_plan is provided
+        if therapy_plan is None:
+            from exceptions import PsychoanalystAgentError
+            raise PsychoanalystAgentError("Therapy plan is required to conduct a session")
+        
         # Get the selected therapy style
         selected_style = therapy_plan.selected_therapy_style
         if selected_style and style_service.get_style_pack(selected_style):
@@ -51,7 +61,7 @@ class PsychoanalystAgent:
             knowledge_source = None
         
         # Retrieve user profile to get the name
-        user_profile = self.db_service.get_user_profile(self.user_id)
+        user_profile = self.db_service.get_user_profile(self.user_context.user_id)
         user_name = user_profile.name if user_profile else "Client"
         
         await ui.display_system_status(f"Starting therapy session for {user_name}...")
@@ -68,7 +78,7 @@ class PsychoanalystAgent:
         session_end_time = start_time + timedelta(minutes=session_duration_minutes).total_seconds()
         session = Session(
             session_id=session_id,
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             timestamp=datetime.now(),
             transcript=[]
         )

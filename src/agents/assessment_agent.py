@@ -4,13 +4,14 @@ from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from services.style_service import style_service
 from models.data_models import Session, TherapyPlan
+from context.user_context import UserContext
 from datetime import datetime
 import uuid
 
 class AssessmentAgent:
     """Agent responsible for assessing user needs and recommending therapy styles."""
     
-    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService):
+    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService, user_context: UserContext, reflection_agent=None):
         """
         Initialize the Assessment Agent.
         
@@ -18,11 +19,14 @@ class AssessmentAgent:
             llm_service (LLMService): The LLM service for generating responses.
             db_service (DatabaseService): The database service for storing therapy plans.
             rag_service (RAGService): The RAG service for retrieving domain knowledge.
+            user_context (UserContext): User context for this assessment session.
+            reflection_agent: Optional ReflectionAgent for dependency injection.
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
-        self.user_id = "default_user"  # In a real implementation, this would be dynamic
+        self.user_context = user_context
+        self.reflection_agent = reflection_agent
     
     def _generate_recommendations(self, intake_session: Session) -> List[Dict[str, str]]:
         """
@@ -105,9 +109,12 @@ Please provide a brief assessment of why this patient might or might not be suit
         Returns:
             TherapyPlan: The initial therapy plan with selected style.
         """
-        # Use the ReflectionAgent's style-aware method
-        from agents.reflection_agent import ReflectionAgent
-        # Note: In a real implementation, this would be injected as a dependency
-        # For now, we'll create a temporary instance with the stored RAG service
-        reflection_agent = ReflectionAgent(self.llm_service, self.db_service, self.rag_service)
+        # Use the injected ReflectionAgent dependency
+        if self.reflection_agent is None:
+            # Fallback: create temporary instance if not injected
+            from agents.reflection_agent import ReflectionAgent
+            reflection_agent = ReflectionAgent(self.llm_service, self.db_service, self.rag_service)
+        else:
+            reflection_agent = self.reflection_agent
+        
         return reflection_agent.create_initial_plan_with_style(intake_session, selected_style)

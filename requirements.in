@@ -6,6 +6,7 @@ langchain-community
 # RAG System (Local Vector Database)
 chromadb
 sentence-transformers
+huggingface-hub==0.20.3
 
 # Utilities
 python-dotenv

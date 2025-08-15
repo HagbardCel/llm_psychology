@@ -8,6 +8,14 @@ class DatabaseError(PsychoanalystError):
     """Raised when database operations fail."""
     pass
 
+class SessionNotFoundError(DatabaseError):
+    """Raised when a session cannot be found."""
+    pass
+
+class TherapyPlanCreationError(DatabaseError):
+    """Raised when therapy plan creation fails."""
+    pass
+
 class LLMServiceError(PsychoanalystError):
     """Raised when LLM service calls fail."""
     pass

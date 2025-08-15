@@ -23,7 +23,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -87,7 +86,7 @@ ipython_config.py
 #   However, in case of collaboration, if having platform-specific dependencies or dependencies
 #   having no cross-platform support, pipenv may install dependencies that don't work, or not
 #   install all needed dependencies.
-Pipfile.lock
+#Pipfile.lock
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow
 __pypackages__/
@@ -105,8 +104,8 @@ celerybeat.pid
 env/
 venv/
 ENV/
-env.bak
-venv.bak
+env.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -126,27 +125,19 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# IDEs
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Data directories
-data/vector_db/
-data/psychoanalyst.db
-src/data/vector_db/
-src/data/psychoanalyst.db
-src/data/psychoanalyst_test.db
+# Data files that shouldn't be in the image
+data/
 
-# Log files
-logs/
-*.log
-
-# Cache directories
-.root/.cache/
+# Test files
+tests/

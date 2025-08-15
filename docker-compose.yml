@@ -4,10 +4,15 @@ services:
     container_name: psychoanalyst_app
     volumes:
       # Mount the data volume for SQLite and vector DB persistence
-      - ./src/data:/app/data
+      - ./data:/app/data
+      # Mount the source code for development
+      - ./src:/app/src
+      # Mount the tests directory for development
+      - ./tests:/app/tests
     env_file:
       # Pass environment variables from a .env file
       - .env
+    # mem_limit: 4g  # Removed to prevent container termination due to memory constraints
     stdin_open: true
     tty: true
 
@@ -16,12 +21,34 @@ services:
     container_name: psychoanalyst_app_test
     volumes:
       # Mount the data volume for SQLite and vector DB persistence
-      - ./src/data:/app/data
+      - ./data:/app/data
+      # Mount the source code for development
+      - ./src:/app/src
+      # Mount the tests directory for development
+      - ./tests:/app/tests
     environment:
       # Set test environment
       - APP_ENV=testing
     env_file:
       # Pass environment variables from a .env file
       - .env
+    # mem_limit: 4g  # Removed to prevent container termination due to memory constraints
     stdin_open: true
     tty: true
+
+  dev:
+    build: .
+    volumes:
+      # Mount the data volume for SQLite and vector DB persistence
+      - ./data:/app/data
+      # Mount the source code for development
+      - ./src:/app/src
+      # Mount the tests directory for development
+      - ./tests:/app/tests
+    env_file:
+      # Pass environment variables from a .env file
+      - .env
+    # Keep the container running for development
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null

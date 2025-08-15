@@ -127,7 +127,7 @@ Centralized configuration management using environment variables:
 
 ## Data Models & Persistence
 
-### Pydantic Models (`src/utils/data_models.py`)
+### Pydantic Models (`src/models/data_models.py`)
 Strongly-typed data structures ensure data integrity:
 
 #### UserProfile
@@ -322,9 +322,9 @@ SQLite-based persistence layer with the following tables:
 
 1. **New Agents**: Create in `src/agents/` with clear responsibility boundaries
 2. **New Services**: Implement in `src/services/` for reusable functionality
-3. **Data Models**: Add to `src/utils/data_models.py` with proper typing
+3. **Data Models**: Add to `src/models/data_models.py` with proper typing
 4. **Configuration**: Use `src/config.py` for new settings
-5. **Domain Knowledge**: Add markdown files to `src/data/domain_knowledge/`
+5. **Domain Knowledge**: Add markdown files to `data/domain_knowledge/`
 6. **New UI Implementations**: Create in `src/ui/` following the `BaseUI` interface
 
 ## Testing
@@ -374,8 +374,8 @@ python -m pytest tests/
    ```
 
 3. **Data Persistence**:
-   - SQLite database: `src/data/psychoanalyst.db`
-   - Vector database: `src/data/vector_db/`
+   - SQLite database: `data/psychoanalyst.db`
+   - Vector database: `data/vector_db/`
    - Both are mounted as volumes for persistence
 
 ### Configuration Options
@@ -387,7 +387,7 @@ python -m pytest tests/
 ## Extending the Application
 
 ### Adding New Domain Knowledge
-1. Add markdown files to `src/data/domain_knowledge/`
+1. Add markdown files to `data/domain_knowledge/`
 2. The RAG service automatically loads new content
 3. Content is chunked and embedded for retrieval
 

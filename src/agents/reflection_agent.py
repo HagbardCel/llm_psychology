@@ -1,17 +1,22 @@
 from datetime import datetime
 import uuid
+import logging
 from typing import List, Dict, Any
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
 from services.style_service import style_service
 from models.data_models import Session, TherapyPlan
+from context.user_context import UserContext
 from prompts.reflection_prompts import CREATE_INITIAL_PLAN_PROMPT, UPDATE_PLAN_PROMPT, SESSION_SUMMARY_PROMPT
+from exceptions import ReflectionError
+
+logger = logging.getLogger(__name__)
 
 class ReflectionAgent:
     """Agent responsible for analyzing conversations and creating/refining therapy plans."""
     
-    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService):
+    def __init__(self, llm_service: LLMService, db_service: DatabaseService, rag_service: RAGService, user_context: UserContext):
         """
         Initialize the Reflection Agent.
         
@@ -19,11 +24,12 @@ class ReflectionAgent:
             llm_service (LLMService): The LLM service for generating responses.
             db_service (DatabaseService): The database service for storing plans.
             rag_service (RAGService): The RAG service for retrieving domain knowledge.
+            user_context (UserContext): User context for this reflection session.
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
-        self.user_id = "default_user"  # In a real implementation, this would be dynamic
+        self.user_context = user_context
     
     def create_initial_plan(self, intake_session: Session) -> TherapyPlan:
         """
@@ -35,10 +41,10 @@ class ReflectionAgent:
         Returns:
             TherapyPlan: The initial therapy plan.
         """
-        print("Reflection Agent: Analyzing intake session and creating initial therapy plan...")
+        logger.info("Reflection Agent: Analyzing intake session and creating initial therapy plan...")
         
         # Get all previous sessions for this user to understand history
-        previous_sessions = self.db_service.get_all_sessions_for_user(self.user_id)
+        previous_sessions = self.db_service.get_all_sessions_for_user(self.user_context.user_id)
         
         # Prepare session transcript for analysis
         session_text = "\n".join([f"{msg.role}: {msg.content}" for msg in intake_session.transcript])
@@ -101,13 +107,13 @@ class ReflectionAgent:
                 if "themes" in parsed_response:
                     plan_details["themes"] = parsed_response["themes"]
             except Exception as e:
-                print(f"Error parsing LLM response: {e}")
+                logger.error(f"Error parsing LLM response: {e}", exc_info=True)
                 # Fall back to default plan_details
                 pass
         
         therapy_plan = TherapyPlan(
             plan_id=plan_id,
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             created_at=datetime.now(),
             updated_at=datetime.now(),
             plan_details=plan_details,
@@ -116,7 +122,7 @@ class ReflectionAgent:
         
         # Save plan to database
         self.db_service.save_therapy_plan(therapy_plan)
-        print("Initial therapy plan created and saved.\n")
+        logger.info("Initial therapy plan created and saved.")
         
         return therapy_plan
     
@@ -131,7 +137,7 @@ class ReflectionAgent:
         Returns:
             TherapyPlan: The initial therapy plan with selected style.
         """
-        print(f"Reflection Agent: Analyzing intake session and creating initial {selected_style.upper()} therapy plan...")
+        logger.info(f"Reflection Agent: Analyzing intake session and creating initial {selected_style.upper()} therapy plan...")
         
         # Get style-specific reflection prompt
         if style_service.get_style_pack(selected_style):
@@ -219,13 +225,13 @@ Please create an initial therapy plan based on this {selected_style.upper()} app
                 if "themes" in parsed_response:
                     plan_details["themes"] = parsed_response["themes"]
             except Exception as e:
-                print(f"Error parsing LLM response: {e}")
+                logger.error(f"Error parsing LLM response: {e}", exc_info=True)
                 # Fall back to default plan_details
                 pass
         
         therapy_plan = TherapyPlan(
             plan_id=plan_id,
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             created_at=datetime.now(),
             updated_at=datetime.now(),
             plan_details=plan_details,
@@ -235,7 +241,7 @@ Please create an initial therapy plan based on this {selected_style.upper()} app
         
         # Save plan to database
         self.db_service.save_therapy_plan(therapy_plan)
-        print(f"Initial {selected_style.upper()} therapy plan created and saved.\n")
+        logger.info(f"Initial {selected_style.upper()} therapy plan created and saved.")
         
         return therapy_plan
     
@@ -250,7 +256,39 @@ Please create an initial therapy plan based on this {selected_style.upper()} app
         Returns:
             TherapyPlan: The updated therapy plan.
         """
-        print("Reflection Agent: Analyzing session and updating therapy plan...")
+        logger.info("Reflection Agent: Analyzing session and updating therapy plan...")
+        
+        # Handle None plan gracefully
+        if current_plan is None:
+            logger.warning("No current plan provided. Creating default plan.")
+            # Create a default plan when no current plan exists
+            plan_id = str(uuid.uuid4())
+            default_plan_details = {
+                "focus": "Initial assessment",
+                "goals": "Establish baseline and identify key concerns",
+                "techniques": "Assessment and evaluation",
+                "themes": "Initial consultation"
+            }
+            
+            default_plan = TherapyPlan(
+                plan_id=plan_id,
+                user_id=self.user_context.user_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                plan_details=default_plan_details,
+                version=1,
+                selected_therapy_style="cbt"  # Default style
+            )
+            
+            # Save default plan to database
+            self.db_service.save_therapy_plan(default_plan)
+            logger.info("Default therapy plan created and saved.")
+            return default_plan
+        
+        # Handle None session gracefully
+        if session is None:
+            logger.warning("No session provided. Returning current plan unchanged.")
+            return current_plan
         
         # Get the selected therapy style from the current plan
         selected_style = current_plan.selected_therapy_style
@@ -262,7 +300,7 @@ Please create an initial therapy plan based on this {selected_style.upper()} app
             knowledge_source = None
         
         # Get all sessions for comprehensive analysis
-        all_sessions = self.db_service.get_all_sessions_for_user(self.user_id)
+        all_sessions = self.db_service.get_all_sessions_for_user(self.user_context.user_id)
         
         # Prepare session transcript for analysis
         session_text = "\n".join([f"{msg.role}: {msg.content}" for msg in session.transcript])
@@ -351,14 +389,14 @@ Please update the therapy plan based on this {selected_style.upper()} approach.
                     
                 updated_plan_details["updated_from_session"] = session.session_id
             except Exception as e:
-                print(f"Error parsing LLM response in update_plan: {e}")
+                logger.error(f"Error parsing LLM response in update_plan: {e}", exc_info=True)
                 # Fall back to default updated_plan_details
                 updated_plan_details["updated_from_session"] = session.session_id
                 pass
         
         updated_plan = TherapyPlan(
             plan_id=plan_id,
-            user_id=self.user_id,
+            user_id=self.user_context.user_id,
             created_at=current_plan.created_at,
             updated_at=datetime.now(),
             plan_details=updated_plan_details,
@@ -368,7 +406,7 @@ Please update the therapy plan based on this {selected_style.upper()} approach.
         
         # Save updated plan to database
         self.db_service.save_therapy_plan(updated_plan)
-        print(f"Therapy plan updated to version {updated_plan.version} and saved.\n")
+        logger.info(f"Therapy plan updated to version {updated_plan.version} and saved.")
         
         return updated_plan
     

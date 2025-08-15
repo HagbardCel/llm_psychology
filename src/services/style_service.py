@@ -35,7 +35,13 @@ class StylePack:
     
     def is_valid(self) -> bool:
         """Check if this style pack has the minimum required components."""
-        return bool(self.knowledge and self.description and self.psychoanalyst_prompt)
+        # Check if required files exist (even if empty)
+        required_files = [
+            self.path / "knowledge.md",
+            self.path / "description.txt",
+            self.path / "psychoanalyst_prompt.txt"
+        ]
+        return all(file_path.exists() for file_path in required_files)
 
 class StyleService:
     """Service for managing therapy style packs."""

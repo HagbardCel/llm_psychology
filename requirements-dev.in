@@ -2,4 +2,5 @@
 black
 ruff
 pytest
+pytest-asyncio
 mypy

@@ -1,34 +1,42 @@
 import os
+import logging
+import sys
 from pathlib import Path
-from typing import List
-from pydantic_settings import BaseSettings
+from typing import List, ClassVar
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 class Settings(BaseSettings):
     """Application configuration settings using pydantic-settings."""
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # Ignore extra fields from environment variables
+    )
     
     # Application Configuration
     APP_NAME: str = "Virtual LLM-Driven Psychoanalyst"
     VERSION: str = "0.1.0"
     
     # LLM Configuration
-    GOOGLE_API_KEY: str = Field(default="", env="GOOGLE_API_KEY")
+    GOOGLE_API_KEY: str = Field(default="")
     
     # Database Configuration
-    DATABASE_PATH: str = Field(default="src/data/psychoanalyst.db", env="DATABASE_PATH")
+    DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
     
     # Vector Database Configuration
-    VECTOR_DB_PATH: str = Field(default="src/data/vector_db", env="VECTOR_DB_PATH")
+    VECTOR_DB_PATH: str = Field(default="data/vector_db")
     
     # Domain Knowledge Configuration
-    DOMAIN_KNOWLEDGE_PATH: str = Field(default="src/data/domain_knowledge", env="DOMAIN_KNOWLEDGE_PATH")
+    DOMAIN_KNOWLEDGE_PATH: str = Field(default="data/domain_knowledge")
     
     # Session Configuration
-    SESSION_DURATION_MINUTES: int = Field(default=45, env="SESSION_DURATION_MINUTES")
+    SESSION_DURATION_MINUTES: int = Field(default=45)
     
     # Test Configuration
-    TEST_DATABASE_PATH: str = Field(default="src/data/psychoanalyst_test.db", env="TEST_DATABASE_PATH")
-    TEST_SESSION_DURATION_MINUTES: int = Field(default=1, env="TEST_SESSION_DURATION_MINUTES")
+    TEST_DATABASE_PATH: str = Field(default="data/psychoanalyst_test.db")
+    TEST_SESSION_DURATION_MINUTES: int = Field(default=1)
     
     # Intake Session Topics
     INTAKE_TOPICS: List[str] = [
@@ -47,11 +55,11 @@ class Settings(BaseSettings):
     ]
     
     # Environment
-    APP_ENV: str = Field(default="production", env="APP_ENV")
+    APP_ENV: str = Field(default="production")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # Logging Configuration
+    LOG_LEVEL: str = Field(default="INFO")
+    LOG_FORMAT: str = Field(default="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 # Create global settings instance
 settings = Settings()
@@ -66,3 +74,37 @@ class Config:
     DOMAIN_KNOWLEDGE_PATH = settings.DOMAIN_KNOWLEDGE_PATH
     SESSION_DURATION_MINUTES = settings.TEST_SESSION_DURATION_MINUTES if settings.APP_ENV == "testing" else settings.SESSION_DURATION_MINUTES
     INTAKE_TOPICS = settings.INTAKE_TOPICS
+    TEST_DATABASE_PATH = settings.TEST_DATABASE_PATH
+    TEST_SESSION_DURATION_MINUTES = settings.TEST_SESSION_DURATION_MINUTES
+    APP_ENV = settings.APP_ENV
+    LOG_LEVEL = settings.LOG_LEVEL
+    LOG_FORMAT = settings.LOG_FORMAT
+
+
+def setup_logging(log_level: str = None) -> None:
+    """
+    Configure application-wide logging.
+    
+    Args:
+        log_level: Optional log level override
+    """
+    if log_level is None:
+        log_level = settings.LOG_LEVEL
+    
+    # Create logs directory if it doesn't exist
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Configure logging
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format=settings.LOG_FORMAT,
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(logs_dir / "app.log", mode="a")
+        ]
+    )
+    
+    # Set specific loggers to appropriate levels
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)

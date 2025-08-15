@@ -95,7 +95,7 @@ class LLMService:
             # For now, we'll return the raw text
             return {"raw_response": response_text}
         except Exception as e:
-            print(f"Error generating structured LLM response: {e}")
+            logger.error(f"Error generating structured LLM response: {e}", exc_info=True)
             return {"error": "Failed to generate structured response"}
     
     def create_prompt_template(self, template: str, input_variables: List[str]) -> PromptTemplate:
@@ -130,5 +130,5 @@ class LLMService:
             response = chain.run(**inputs)
             return response
         except Exception as e:
-            print(f"Error running prompt chain: {e}")
+            logger.error(f"Error running prompt chain: {e}", exc_info=True)
             return "I apologize, but I'm having trouble processing your request right now."

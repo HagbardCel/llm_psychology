@@ -67,5 +67,5 @@ def check_database(db_path):
         print(f"Error checking database: {e}")
 
 if __name__ == "__main__":
-    db_path = "src/data/psychoanalyst.db"
+    db_path = "data/psychoanalyst.db"
     check_database(db_path)

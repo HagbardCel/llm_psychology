@@ -1,10 +1,14 @@
 import os
 import uuid
+import logging
 from typing import List, Dict, Optional
 import chromadb
 from chromadb import Collection
 from models.data_models import DomainKnowledgeChunk
 from utils.embedding_utils import EmbeddingUtils
+from exceptions import RAGServiceError
+
+logger = logging.getLogger(__name__)
 
 class RAGService:
     """Service for handling the Retrieval-Augmented Generation system."""
@@ -33,7 +37,7 @@ class RAGService:
     
     def _load_domain_knowledge(self):
         """Load domain knowledge from text files into the vector database."""
-        print("Loading domain knowledge into vector database...")
+        logger.info("Loading domain knowledge into vector database...")
         
         documents = []
         metadatas = []
@@ -92,7 +96,7 @@ class RAGService:
                 ids=ids
             )
             
-            print(f"Loaded {len(documents)} chunks into vector database.")
+            logger.info(f"Loaded {len(documents)} chunks into vector database.")
     
     def retrieve_relevant_knowledge(self, query: str, n_results: int = 3, filter_source: Optional[str] = None) -> List[Dict[str, any]]:
         """
@@ -133,7 +137,7 @@ class RAGService:
             
             return relevant_knowledge
         except Exception as e:
-            print(f"Error retrieving relevant knowledge: {e}")
+            logger.error(f"Error retrieving relevant knowledge: {e}", exc_info=True)
             return []
     
     def get_knowledge_by_source(self, source: str) -> List[Dict[str, any]]:
@@ -162,7 +166,7 @@ class RAGService:
             
             return knowledge_chunks
         except Exception as e:
-            print(f"Error retrieving knowledge by source: {e}")
+            logger.error(f"Error retrieving knowledge by source: {e}", exc_info=True)
             return []
     
     def add_user_session_to_rag(self, session_summary: str, keywords: List[str], session_id: str):

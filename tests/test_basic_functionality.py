@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from config import Config
-from utils.data_models import Session, Message, TherapyPlan
+from models.data_models import Session, Message, TherapyPlan
 from utils.embedding_utils import EmbeddingUtils
 from services.db_service import DatabaseService
 from services.rag_service import RAGService
@@ -42,8 +42,11 @@ class TestBasicFunctionality(unittest.TestCase):
         config = Config()
         self.assertIsNotNone(config.APP_NAME)
         self.assertIsNotNone(config.VERSION)
-        # API key will be the placeholder value from .env file
-        self.assertEqual(config.GOOGLE_API_KEY, "your_api_key_here")
+        # API key should be loaded from .env file (real or placeholder)
+        self.assertIsNotNone(config.GOOGLE_API_KEY)
+        # Test that it's a non-empty string (could be real key or placeholder)
+        self.assertIsInstance(config.GOOGLE_API_KEY, str)
+        self.assertGreater(len(config.GOOGLE_API_KEY), 0)
     
     def test_data_models(self):
         """Test that data models can be created."""
