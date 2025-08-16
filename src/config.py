@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # Logging Configuration
     LOG_LEVEL: str = Field(default="INFO")
     LOG_FORMAT: str = Field(default="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    
+    # Database Configuration
+    DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=20)
+    DATABASE_POOL_TIMEOUT: int = Field(default=30)
+    
+    # Performance Configuration
+    MAX_CONCURRENT_SESSIONS: int = Field(default=10)
+    SESSION_TIMEOUT_MINUTES: int = Field(default=60)
 
 # Create global settings instance
 settings = Settings()
@@ -79,6 +87,10 @@ class Config:
     APP_ENV = settings.APP_ENV
     LOG_LEVEL = settings.LOG_LEVEL
     LOG_FORMAT = settings.LOG_FORMAT
+    DATABASE_POOL_SIZE = settings.DATABASE_POOL_SIZE
+    DATABASE_POOL_TIMEOUT = settings.DATABASE_POOL_TIMEOUT
+    MAX_CONCURRENT_SESSIONS = settings.MAX_CONCURRENT_SESSIONS
+    SESSION_TIMEOUT_MINUTES = settings.SESSION_TIMEOUT_MINUTES
 
 
 def setup_logging(log_level: str = None) -> None:

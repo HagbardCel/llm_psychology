@@ -48,6 +48,14 @@ class ReflectionError(AgentError):
     """Raised when reflection agent operations fail."""
     pass
 
+class MemoryError(AgentError):
+    """Raised when memory agent operations fail."""
+    pass
+
+class PlanningError(AgentError):
+    """Raised when planning agent operations fail."""
+    pass
+
 class StyleServiceError(PsychoanalystError):
     """Raised when style service operations fail."""
     pass

@@ -2,8 +2,11 @@ import sqlite3
 import json
 import uuid
 import logging
+import threading
 from typing import Optional, List
 from datetime import datetime
+from contextlib import contextmanager
+from queue import Queue, Empty
 from models.data_models import Session, Message, TherapyPlan, UserProfile, Topic
 from exceptions import DatabaseError, SessionNotFoundError, TherapyPlanCreationError
 
@@ -17,17 +20,28 @@ class UserStatus:
     PLAN_COMPLETE = "plan_complete"
 
 class DatabaseService:
-    """Service for handling all SQLite database operations."""
+    """Service for handling all SQLite database operations with connection pooling."""
     
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, pool_size: int = 5):
         """
-        Initialize the database service.
+        Initialize the database service with connection pooling.
         
         Args:
             db_path (str): Path to the SQLite database file.
+            pool_size (int): Number of connections to maintain in the pool.
         """
         self.db_path = db_path
+        self.pool_size = pool_size
+        self._pool = Queue(maxsize=pool_size)
+        self._lock = threading.Lock()
+        
+        # Initialize database schema first
         self._initialize_database()
+        
+        # Then initialize the connection pool
+        self._initialize_pool()
+        
+        logger.info(f"DatabaseService initialized with {pool_size} connections")
     
     def _initialize_database(self):
         """Create the necessary tables if they don't exist."""
@@ -85,6 +99,91 @@ class DatabaseService:
         conn.commit()
         conn.close()
     
+    def _initialize_pool(self) -> None:
+        """Initialize connection pool with configured number of connections."""
+        logger.debug(f"Initializing connection pool with {self.pool_size} connections")
+        
+        for i in range(self.pool_size):
+            try:
+                conn = sqlite3.connect(
+                    self.db_path,
+                    check_same_thread=False,  # Allow cross-thread usage
+                    timeout=30.0,  # Connection timeout
+                    isolation_level=None  # Enable autocommit mode
+                )
+                # Set connection properties for better performance
+                conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
+                conn.execute("PRAGMA journal_mode=WAL")  # Enable WAL mode for better concurrency
+                conn.execute("PRAGMA foreign_keys=ON")  # Enable foreign key support
+                
+                self._pool.put(conn)
+                logger.debug(f"Created connection {i+1}/{self.pool_size}")
+                
+            except Exception as e:
+                logger.error(f"Failed to create connection {i+1}: {e}")
+                raise DatabaseError(f"Failed to initialize connection pool: {e}")
+        
+        logger.info(f"Connection pool initialized with {self.pool_size} connections")
+    
+    @contextmanager
+    def get_connection(self):
+        """
+        Get connection from pool with timeout and automatic return.
+        
+        Usage:
+            with db_service.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM sessions")
+                results = cursor.fetchall()
+        
+        Yields:
+            sqlite3.Connection: Database connection from the pool
+            
+        Raises:
+            DatabaseError: If no connection available within timeout
+        """
+        conn = None
+        try:
+            # Get connection from pool with timeout
+            conn = self._pool.get(timeout=10.0)
+            logger.debug("Retrieved connection from pool")
+            yield conn
+            
+        except Empty:
+            error_msg = "Connection pool exhausted - no connections available"
+            logger.error(error_msg)
+            raise DatabaseError(error_msg)
+            
+        except Exception as e:
+            logger.error(f"Error using database connection: {e}", exc_info=True)
+            raise DatabaseError(f"Database operation failed: {e}")
+            
+        finally:
+            # Always return connection to pool
+            if conn:
+                try:
+                    # Rollback any uncommitted transaction
+                    conn.rollback()
+                    self._pool.put(conn)
+                    logger.debug("Returned connection to pool")
+                except Exception as e:
+                    logger.error(f"Error returning connection to pool: {e}")
+                    # Create a new connection to replace the broken one
+                    try:
+                        new_conn = sqlite3.connect(
+                            self.db_path,
+                            check_same_thread=False,
+                            timeout=30.0,
+                            isolation_level=None
+                        )
+                        new_conn.row_factory = sqlite3.Row
+                        new_conn.execute("PRAGMA journal_mode=WAL")
+                        new_conn.execute("PRAGMA foreign_keys=ON")
+                        self._pool.put(new_conn)
+                        logger.info("Replaced broken connection with new one")
+                    except Exception as replace_error:
+                        logger.error(f"Failed to replace broken connection: {replace_error}")
+    
     def _datetime_to_iso(self, dt: datetime) -> str:
         """Convert datetime to ISO format string."""
         return dt.isoformat()
@@ -104,52 +203,51 @@ class DatabaseService:
             bool: True if successful, False otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Convert transcript to JSON string with proper datetime serialization
-            transcript_data = []
-            for msg in session.transcript:
-                transcript_data.append({
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": self._datetime_to_iso(msg.timestamp)
-                })
-            
-            transcript_json = json.dumps(transcript_data)
-            
-            # Convert topics to JSON string
-            topics_data = []
-            for topic in session.topics:
-                topics_data.append({
-                    "name": topic.name,
-                    "status": topic.status
-                })
-            
-            topics_json = json.dumps(topics_data)
-            
-            # Add topics column if it doesn't exist
-            try:
-                cursor.execute("ALTER TABLE sessions ADD COLUMN topics TEXT")
-            except sqlite3.OperationalError:
-                # Column already exists
-                pass
-            
-            cursor.execute('''
-                INSERT INTO sessions (session_id, user_id, timestamp, transcript, topics)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                session.session_id, 
-                session.user_id, 
-                self._datetime_to_iso(session.timestamp), 
-                transcript_json,
-                topics_json
-            ))
-            
-            conn.commit()
-            conn.close()
-            logger.info(f"Session {session.session_id} saved successfully")
-            return True
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Convert transcript to JSON string with proper datetime serialization
+                transcript_data = []
+                for msg in session.transcript:
+                    transcript_data.append({
+                        "role": msg.role,
+                        "content": msg.content,
+                        "timestamp": self._datetime_to_iso(msg.timestamp)
+                    })
+                
+                transcript_json = json.dumps(transcript_data)
+                
+                # Convert topics to JSON string
+                topics_data = []
+                for topic in session.topics:
+                    topics_data.append({
+                        "name": topic.name,
+                        "status": topic.status
+                    })
+                
+                topics_json = json.dumps(topics_data)
+                
+                # Add topics column if it doesn't exist
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN topics TEXT")
+                except sqlite3.OperationalError:
+                    # Column already exists
+                    pass
+                
+                cursor.execute('''
+                    INSERT INTO sessions (session_id, user_id, timestamp, transcript, topics)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    session.session_id, 
+                    session.user_id, 
+                    self._datetime_to_iso(session.timestamp), 
+                    transcript_json,
+                    topics_json
+                ))
+                
+                conn.commit()
+                logger.info(f"Session {session.session_id} saved successfully")
+                return True
         except Exception as e:
             logger.error(f"Error saving session {session.session_id}: {e}")
             return False
@@ -165,57 +263,56 @@ class DatabaseService:
             Optional[Session]: The session if found, None otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Try to get topics column, fall back to old schema if it doesn't exist
-            try:
-                cursor.execute('''
-                    SELECT session_id, user_id, timestamp, transcript, topics
-                    FROM sessions
-                    WHERE session_id = ?
-                ''', (session_id,))
-            except sqlite3.OperationalError:
-                # Old schema without topics column
-                cursor.execute('''
-                    SELECT session_id, user_id, timestamp, transcript
-                    FROM sessions
-                    WHERE session_id = ?
-                ''', (session_id,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                # Parse transcript JSON
-                transcript_data = json.loads(row[3])
-                transcript = []
-                for msg_data in transcript_data:
-                    transcript.append(Message(
-                        role=msg_data["role"],
-                        content=msg_data["content"],
-                        timestamp=self._iso_to_datetime(msg_data["timestamp"])
-                    ))
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
                 
-                # Parse topics JSON if available
-                topics = []
-                if len(row) > 4 and row[4]:  # topics column exists and has data
-                    try:
-                        topics_data = json.loads(row[4])
-                        topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
-                                 for topic_data in topics_data]
-                    except (json.JSONDecodeError, KeyError):
-                        # Handle malformed topics data
-                        topics = []
+                # Try to get topics column, fall back to old schema if it doesn't exist
+                try:
+                    cursor.execute('''
+                        SELECT session_id, user_id, timestamp, transcript, topics
+                        FROM sessions
+                        WHERE session_id = ?
+                    ''', (session_id,))
+                except sqlite3.OperationalError:
+                    # Old schema without topics column
+                    cursor.execute('''
+                        SELECT session_id, user_id, timestamp, transcript
+                        FROM sessions
+                        WHERE session_id = ?
+                    ''', (session_id,))
                 
-                return Session(
-                    session_id=row[0],
-                    user_id=row[1],
-                    timestamp=self._iso_to_datetime(row[2]),
-                    transcript=transcript,
-                    topics=topics
-                )
-            return None
+                row = cursor.fetchone()
+                
+                if row:
+                    # Parse transcript JSON
+                    transcript_data = json.loads(row[3])
+                    transcript = []
+                    for msg_data in transcript_data:
+                        transcript.append(Message(
+                            role=msg_data["role"],
+                            content=msg_data["content"],
+                            timestamp=self._iso_to_datetime(msg_data["timestamp"])
+                        ))
+                    
+                    # Parse topics JSON if available
+                    topics = []
+                    if len(row) > 4 and row[4]:  # topics column exists and has data
+                        try:
+                            topics_data = json.loads(row[4])
+                            topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
+                                     for topic_data in topics_data]
+                        except (json.JSONDecodeError, KeyError):
+                            # Handle malformed topics data
+                            topics = []
+                    
+                    return Session(
+                        session_id=row[0],
+                        user_id=row[1],
+                        timestamp=self._iso_to_datetime(row[2]),
+                        transcript=transcript,
+                        topics=topics
+                    )
+                return None
         except Exception as e:
             logger.error(f"Error retrieving session: {e}", exc_info=True)
             return None
@@ -231,28 +328,27 @@ class DatabaseService:
             bool: True if successful, False otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Convert plan_details to JSON string
-            plan_details_json = json.dumps(plan.plan_details)
-            
-            cursor.execute('''
-                INSERT INTO therapy_plans (plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                plan.plan_id,
-                plan.user_id,
-                self._datetime_to_iso(plan.created_at),
-                self._datetime_to_iso(plan.updated_at),
-                plan_details_json,
-                plan.version,
-                plan.selected_therapy_style
-            ))
-            
-            conn.commit()
-            conn.close()
-            return True
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Convert plan_details to JSON string
+                plan_details_json = json.dumps(plan.plan_details)
+                
+                cursor.execute('''
+                    INSERT INTO therapy_plans (plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    plan.plan_id,
+                    plan.user_id,
+                    self._datetime_to_iso(plan.created_at),
+                    self._datetime_to_iso(plan.updated_at),
+                    plan_details_json,
+                    plan.version,
+                    plan.selected_therapy_style
+                ))
+                
+                conn.commit()
+                return True
         except Exception as e:
             logger.error(f"Error saving therapy plan: {e}", exc_info=True)
             return False
@@ -268,33 +364,32 @@ class DatabaseService:
             Optional[TherapyPlan]: The latest therapy plan if found, None otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style
-                FROM therapy_plans
-                WHERE user_id = ?
-                ORDER BY updated_at DESC
-                LIMIT 1
-            ''', (user_id,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                plan_details_data = json.loads(row[4])
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
                 
-                return TherapyPlan(
-                    plan_id=row[0],
-                    user_id=row[1],
-                    created_at=self._iso_to_datetime(row[2]),
-                    updated_at=self._iso_to_datetime(row[3]),
-                    plan_details=plan_details_data,
-                    version=row[5],
-                    selected_therapy_style=row[6]
-                )
-            return None
+                cursor.execute('''
+                    SELECT plan_id, user_id, created_at, updated_at, plan_details, version, selected_therapy_style
+                    FROM therapy_plans
+                    WHERE user_id = ?
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ''', (user_id,))
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    plan_details_data = json.loads(row[4])
+                    
+                    return TherapyPlan(
+                        plan_id=row[0],
+                        user_id=row[1],
+                        created_at=self._iso_to_datetime(row[2]),
+                        updated_at=self._iso_to_datetime(row[3]),
+                        plan_details=plan_details_data,
+                        version=row[5],
+                        selected_therapy_style=row[6]
+                    )
+                return None
         except Exception as e:
             logger.error(f"Error retrieving therapy plan: {e}", exc_info=True)
             return None
@@ -310,61 +405,60 @@ class DatabaseService:
             List[Session]: List of all sessions for the user.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Try to get topics column, fall back to old schema if it doesn't exist
-            try:
-                cursor.execute('''
-                    SELECT session_id, user_id, timestamp, transcript, topics
-                    FROM sessions
-                    WHERE user_id = ?
-                    ORDER BY timestamp ASC
-                ''', (user_id,))
-            except sqlite3.OperationalError:
-                # Old schema without topics column
-                cursor.execute('''
-                    SELECT session_id, user_id, timestamp, transcript
-                    FROM sessions
-                    WHERE user_id = ?
-                    ORDER BY timestamp ASC
-                ''', (user_id,))
-            
-            rows = cursor.fetchall()
-            conn.close()
-            
-            sessions = []
-            for row in rows:
-                # Parse transcript JSON
-                transcript_data = json.loads(row[3])
-                transcript = []
-                for msg_data in transcript_data:
-                    transcript.append(Message(
-                        role=msg_data["role"],
-                        content=msg_data["content"],
-                        timestamp=self._iso_to_datetime(msg_data["timestamp"])
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Try to get topics column, fall back to old schema if it doesn't exist
+                try:
+                    cursor.execute('''
+                        SELECT session_id, user_id, timestamp, transcript, topics
+                        FROM sessions
+                        WHERE user_id = ?
+                        ORDER BY timestamp ASC
+                    ''', (user_id,))
+                except sqlite3.OperationalError:
+                    # Old schema without topics column
+                    cursor.execute('''
+                        SELECT session_id, user_id, timestamp, transcript
+                        FROM sessions
+                        WHERE user_id = ?
+                        ORDER BY timestamp ASC
+                    ''', (user_id,))
+                
+                rows = cursor.fetchall()
+                
+                sessions = []
+                for row in rows:
+                    # Parse transcript JSON
+                    transcript_data = json.loads(row[3])
+                    transcript = []
+                    for msg_data in transcript_data:
+                        transcript.append(Message(
+                            role=msg_data["role"],
+                            content=msg_data["content"],
+                            timestamp=self._iso_to_datetime(msg_data["timestamp"])
+                        ))
+                    
+                    # Parse topics JSON if available
+                    topics = []
+                    if len(row) > 4 and row[4]:  # topics column exists and has data
+                        try:
+                            topics_data = json.loads(row[4])
+                            topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
+                                     for topic_data in topics_data]
+                        except (json.JSONDecodeError, KeyError):
+                            # Handle malformed topics data
+                            topics = []
+                    
+                    sessions.append(Session(
+                        session_id=row[0],
+                        user_id=row[1],
+                        timestamp=self._iso_to_datetime(row[2]),
+                        transcript=transcript,
+                        topics=topics
                     ))
                 
-                # Parse topics JSON if available
-                topics = []
-                if len(row) > 4 and row[4]:  # topics column exists and has data
-                    try:
-                        topics_data = json.loads(row[4])
-                        topics = [Topic(name=topic_data["name"], status=topic_data["status"]) 
-                                 for topic_data in topics_data]
-                    except (json.JSONDecodeError, KeyError):
-                        # Handle malformed topics data
-                        topics = []
-                
-                sessions.append(Session(
-                    session_id=row[0],
-                    user_id=row[1],
-                    timestamp=self._iso_to_datetime(row[2]),
-                    transcript=transcript,
-                    topics=topics
-                ))
-            
-            return sessions
+                return sessions
         except Exception as e:
             logger.error(f"Error retrieving sessions: {e}", exc_info=True)
             return []
@@ -380,25 +474,24 @@ class DatabaseService:
             bool: True if successful, False otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT OR REPLACE INTO user_profiles 
-                (user_id, name, birthdate, profession, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                profile.user_id,
-                profile.name,
-                self._datetime_to_iso(profile.birthdate) if profile.birthdate else None,
-                profile.profession,
-                self._datetime_to_iso(profile.created_at),
-                self._datetime_to_iso(profile.updated_at)
-            ))
-            
-            conn.commit()
-            conn.close()
-            return True
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    INSERT OR REPLACE INTO user_profiles 
+                    (user_id, name, birthdate, profession, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    profile.user_id,
+                    profile.name,
+                    self._datetime_to_iso(profile.birthdate) if profile.birthdate else None,
+                    profile.profession,
+                    self._datetime_to_iso(profile.created_at),
+                    self._datetime_to_iso(profile.updated_at)
+                ))
+                
+                conn.commit()
+                return True
         except Exception as e:
             logger.error(f"Error saving user profile: {e}", exc_info=True)
             return False
@@ -414,28 +507,27 @@ class DatabaseService:
             Optional[UserProfile]: The user profile if found, None otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT user_id, name, birthdate, profession, created_at, updated_at
-                FROM user_profiles
-                WHERE user_id = ?
-            ''', (user_id,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                return UserProfile(
-                    user_id=row[0],
-                    name=row[1],
-                    birthdate=self._iso_to_datetime(row[2]) if row[2] else None,
-                    profession=row[3],
-                    created_at=self._iso_to_datetime(row[4]),
-                    updated_at=self._iso_to_datetime(row[5])
-                )
-            return None
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT user_id, name, birthdate, profession, created_at, updated_at
+                    FROM user_profiles
+                    WHERE user_id = ?
+                ''', (user_id,))
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    return UserProfile(
+                        user_id=row[0],
+                        name=row[1],
+                        birthdate=self._iso_to_datetime(row[2]) if row[2] else None,
+                        profession=row[3],
+                        created_at=self._iso_to_datetime(row[4]),
+                        updated_at=self._iso_to_datetime(row[5])
+                    )
+                return None
         except Exception as e:
             logger.error(f"Error retrieving user profile: {e}", exc_info=True)
             return None
@@ -448,17 +540,16 @@ class DatabaseService:
             bool: True if successful, False otherwise.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Clear all tables
-            cursor.execute("DELETE FROM sessions")
-            cursor.execute("DELETE FROM therapy_plans")
-            cursor.execute("DELETE FROM user_profiles")
-            
-            conn.commit()
-            conn.close()
-            return True
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Clear all tables
+                cursor.execute("DELETE FROM sessions")
+                cursor.execute("DELETE FROM therapy_plans")
+                cursor.execute("DELETE FROM user_profiles")
+                
+                conn.commit()
+                return True
         except Exception as e:
             logger.error(f"Error clearing database: {e}", exc_info=True)
             return False
@@ -489,3 +580,20 @@ class DatabaseService:
             return UserStatus.INTAKE_COMPLETE
         
         return UserStatus.PLAN_COMPLETE
+    
+    def health_check(self) -> bool:
+        """
+        Perform health check on database connection pool.
+        
+        Returns:
+            bool: True if database is healthy, False otherwise.
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
+                return result is not None
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
