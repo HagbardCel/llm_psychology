@@ -24,12 +24,14 @@
     "@emotion/styled": "^11.11.0",
     "@mui/lab": "^5.0.0-alpha.140",
     "axios": "^1.5.0",
-    "date-fns": "^2.30.0"
+    "date-fns": "^2.30.0",
+    "socket.io-client": "^4.7.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@types/jest": "^29.5.0",
+    "@types/socket.io-client": "^3.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitejs/plugin-react": "^4.0.0",

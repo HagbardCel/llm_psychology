@@ -8,7 +8,10 @@ import {
 import { SessionHeader } from './SessionHeader';
 import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';
+import { ConnectionStatus } from './ConnectionStatus';
 import { useAppContext } from '../contexts/AppContext';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { useTypingIndicator } from '../hooks/useTypingIndicator';
 import { Message, Session, AgentType, SessionStatus } from '../types';
 
 interface TherapySessionProps {
@@ -23,11 +26,78 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   const currentSession = state.currentSession;
   const messages = currentSession?.messages || [];
 
+  // WebSocket integration
+  const {
+    connectionStatus,
+    lastMessage,
+    sendChatMessage,
+    startTyping,
+    stopTyping,
+    requestSession,
+    isConnected
+  } = useWebSocket({
+    userId: state.user?.id || 'default_user',
+    authToken: 'temp_token', // TODO: Use real auth token
+    autoConnect: true
+  });
+
+  // Typing indicator
+  const typingIndicator = useTypingIndicator({
+    onTypingStart: startTyping,
+    onTypingStop: stopTyping,
+    typingTimeout: 1000
+  });
+
+  // Handle WebSocket messages
+  useEffect(() => {
+    if (lastMessage) {
+      handleWebSocketMessage(lastMessage);
+    }
+  }, [lastMessage]);
+
   useEffect(() => {
     if (sessionId && sessionId !== currentSession?.id) {
       loadSession(sessionId);
     }
   }, [sessionId, currentSession?.id]);
+
+  // Request therapy session when connected
+  useEffect(() => {
+    if (isConnected && currentSession?.agentType === AgentType.PSYCHOANALYST) {
+      requestSession('therapy');
+    }
+  }, [isConnected, currentSession?.agentType]);
+
+  const handleWebSocketMessage = (message: any) => {
+    try {
+      if (message.type === 'chat_response' && currentSession) {
+        const agentMessage: Message = {
+          id: generateMessageId(),
+          content: message.message,
+          sender: 'agent',
+          timestamp: new Date(message.timestamp),
+          sessionId: currentSession.id,
+        };
+
+        const updatedSession: Session = {
+          ...currentSession,
+          messages: [...currentSession.messages, agentMessage],
+        };
+
+        actions.updateSession(updatedSession);
+        setIsLoading(false);
+      } else if (message.type === 'session_started') {
+        console.log('Therapy session started:', message);
+      } else if (message.error) {
+        setError(message.error);
+        setIsLoading(false);
+      }
+    } catch (err) {
+      console.error('Error handling WebSocket message:', err);
+      setError('Failed to process server response');
+      setIsLoading(false);
+    }
+  };
 
   const loadSession = async (id: string) => {
     try {
@@ -55,7 +125,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
       setIsLoading(true);
 
       // Create user message
-      const _userMessage: Message = {
+      const userMessage: Message = {
         id: generateMessageId(),
         content,
         sender: 'user',
@@ -63,33 +133,37 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         sessionId: currentSession.id,
       };
 
-      // Update session with user message
+      // Update session with user message immediately
       const updatedSession: Session = {
         ...currentSession,
-        messages: [...currentSession.messages, _userMessage],
+        messages: [...currentSession.messages, userMessage],
       };
 
       actions.updateSession(updatedSession);
 
-      // TODO: Send message to backend API and get agent response
-      // For now, simulate agent response
-      setTimeout(() => {
-        const agentMessage: Message = {
-          id: generateMessageId(),
-          content: getSimulatedResponse(currentSession.agentType, content),
-          sender: 'agent',
-          timestamp: new Date(),
-          sessionId: currentSession.id,
-        };
+      // Send message via WebSocket if connected
+      if (isConnected) {
+        sendChatMessage(content);
+      } else {
+        // Fallback to simulated response if not connected
+        setTimeout(() => {
+          const agentMessage: Message = {
+            id: generateMessageId(),
+            content: getSimulatedResponse(currentSession.agentType, content),
+            sender: 'agent',
+            timestamp: new Date(),
+            sessionId: currentSession.id,
+          };
 
-        const finalSession: Session = {
-          ...updatedSession,
-          messages: [...updatedSession.messages, agentMessage],
-        };
+          const finalSession: Session = {
+            ...updatedSession,
+            messages: [...updatedSession.messages, agentMessage],
+          };
 
-        actions.updateSession(finalSession);
-        setIsLoading(false);
-      }, 1500);
+          actions.updateSession(finalSession);
+          setIsLoading(false);
+        }, 1500);
+      }
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
@@ -134,6 +208,11 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         onEndSession={handleEndSession}
       />
 
+      {/* Connection Status */}
+      <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <ConnectionStatus status={connectionStatus} variant="chip" />
+      </Box>
+
       <Container 
         maxWidth="md" 
         sx={{ 
@@ -153,9 +232,10 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
 
         <MessageInput
           onSendMessage={handleSendMessage}
-          disabled={!currentSession || currentSession.status !== SessionStatus.ACTIVE}
+          disabled={!currentSession || currentSession.status !== SessionStatus.ACTIVE || !isConnected}
           isLoading={isLoading}
           placeholder={getInputPlaceholder(currentSession?.agentType)}
+          onTypingChange={typingIndicator.handleInputChange}
         />
       </Container>
 

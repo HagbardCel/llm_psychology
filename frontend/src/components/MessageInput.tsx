@@ -15,6 +15,7 @@ interface MessageInputProps {
   disabled?: boolean;
   isLoading?: boolean;
   placeholder?: string;
+  onTypingChange?: (value: string) => void;
 }
 
 export function MessageInput({
@@ -22,6 +23,7 @@ export function MessageInput({
   disabled = false,
   isLoading = false,
   placeholder = "Type your message...",
+  onTypingChange,
 }: MessageInputProps) {
   const [message, setMessage] = useState('');
   const textFieldRef = useRef<HTMLInputElement>(null);
@@ -77,7 +79,10 @@ export function MessageInput({
           variant="outlined"
           placeholder={placeholder}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            setMessage(e.target.value);
+            onTypingChange?.(e.target.value);
+          }}
           onKeyPress={handleKeyPress}
           disabled={disabled || isLoading}
           sx={{
