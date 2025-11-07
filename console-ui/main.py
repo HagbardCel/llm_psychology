@@ -11,9 +11,7 @@ import logging
 import json
 from typing import Optional
 
-# Add the src directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-
+# Import directly from the package
 from src.console_client import ConsoleClient
 
 

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Pre-commit hook to run tests before committing
+# This ensures all tests pass before code is committed
+
+set -e  # Exit on any error
+
+echo "🔍 Pre-commit hook: Running tests..."
+echo ""
+
+# Change to the project directory (psychoanalyst_app)
+cd "$(dirname "$0")/../../psychoanalyst_app" || exit 1
+
+# Run tests in isolated Docker environment
+echo "Running tests in isolated Docker environment..."
+echo "This ensures clean state and prevents test pollution."
+echo ""
+
+if make docker-test; then
+    echo ""
+    echo "✅ All tests passed! Proceeding with commit."
+    echo ""
+    exit 0
+else
+    echo ""
+    echo "❌ Tests failed! Commit aborted."
+    echo ""
+    echo "To fix:"
+    echo "  1. Review the test failures above"
+    echo "  2. Fix the issues in your code"
+    echo "  3. Run 'make test' in devContainer to verify fixes"
+    echo "  4. Try committing again"
+    echo ""
+    echo "To skip this hook (not recommended):"
+    echo "  git commit --no-verify"
+    echo ""
+    exit 1
+fi

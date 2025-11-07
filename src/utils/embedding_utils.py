@@ -1,18 +1,38 @@
 from sentence_transformers import SentenceTransformer
 from typing import List, Union
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class EmbeddingUtils:
     """Utility class for generating text embeddings."""
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", use_onnx: bool = True):
         """
         Initialize the embedding utility.
         
         Args:
             model_name (str): Name of the sentence transformer model to use.
+            use_onnx (bool): Whether to use ONNX backend for faster inference.
         """
-        self.model = SentenceTransformer(model_name)
+        self.model_name = model_name
+        self.use_onnx = use_onnx
+        
+        try:
+            # Initialize model with ONNX backend if requested and available
+            if use_onnx:
+                logger.info(f"Loading {model_name} with ONNX backend for optimized performance")
+                self.model = SentenceTransformer(model_name, backend="onnx")
+            else:
+                logger.info(f"Loading {model_name} with default PyTorch backend")
+                self.model = SentenceTransformer(model_name)
+                
+        except Exception as e:
+            # Fallback to PyTorch backend if ONNX fails
+            logger.warning(f"Failed to load with ONNX backend, falling back to PyTorch: {e}")
+            self.model = SentenceTransformer(model_name)
+            self.use_onnx = False
     
     def generate_embedding(self, text: str) -> List[float]:
         """

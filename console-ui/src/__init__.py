@@ -2,5 +2,6 @@
 
 from .base_ui import BaseUI
 from .textual_ui import ConsoleUI
+from .console_client import ConsoleClient
 
-__all__ = ["BaseUI", "ConsoleUI"]
+__all__ = ["BaseUI", "ConsoleUI", "ConsoleClient"]

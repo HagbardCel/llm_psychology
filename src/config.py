@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Domain Knowledge Configuration
     DOMAIN_KNOWLEDGE_PATH: str = Field(default="data/domain_knowledge")
     
+    # Embedding Configuration
+    USE_ONNX_EMBEDDINGS: bool = Field(default=True, description="Use ONNX backend for faster embedding inference")
+    EMBEDDING_MODEL_NAME: str = Field(default="all-MiniLM-L6-v2", description="Sentence transformer model name")
+    
     # Session Configuration
     SESSION_DURATION_MINUTES: int = Field(default=45)
     
@@ -59,6 +63,7 @@ class Settings(BaseSettings):
     
     # Logging Configuration
     LOG_LEVEL: str = Field(default="INFO")
+    CONSOLE_LOG_LEVEL: str = Field(default="CRITICAL")
     LOG_FORMAT: str = Field(default="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
     # Database Configuration
@@ -80,6 +85,8 @@ class Config:
     DATABASE_PATH = settings.TEST_DATABASE_PATH if settings.APP_ENV == "testing" else settings.DATABASE_PATH
     VECTOR_DB_PATH = settings.VECTOR_DB_PATH
     DOMAIN_KNOWLEDGE_PATH = settings.DOMAIN_KNOWLEDGE_PATH
+    USE_ONNX_EMBEDDINGS = settings.USE_ONNX_EMBEDDINGS
+    EMBEDDING_MODEL_NAME = settings.EMBEDDING_MODEL_NAME
     SESSION_DURATION_MINUTES = settings.TEST_SESSION_DURATION_MINUTES if settings.APP_ENV == "testing" else settings.SESSION_DURATION_MINUTES
     INTAKE_TOPICS = settings.INTAKE_TOPICS
     TEST_DATABASE_PATH = settings.TEST_DATABASE_PATH
@@ -93,29 +100,46 @@ class Config:
     SESSION_TIMEOUT_MINUTES = settings.SESSION_TIMEOUT_MINUTES
 
 
-def setup_logging(log_level: str = None) -> None:
+def setup_logging(log_level: str = None, console_log_level: str = None) -> None:
     """
-    Configure application-wide logging.
+    Configure application-wide logging with separate console and file logging.
     
     Args:
-        log_level: Optional log level override
+        log_level: Optional log level override for file logging
+        console_log_level: Log level for console output (uses config default: CRITICAL)
     """
     if log_level is None:
         log_level = settings.LOG_LEVEL
+    if console_log_level is None:
+        console_log_level = settings.CONSOLE_LOG_LEVEL
     
     # Create logs directory if it doesn't exist
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
     
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format=settings.LOG_FORMAT,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(logs_dir / "app.log", mode="a")
-        ]
-    )
+    # Create formatters
+    file_formatter = logging.Formatter(settings.LOG_FORMAT)
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    
+    # Create handlers
+    file_handler = logging.FileHandler(logs_dir / "app.log", mode="a")
+    file_handler.setLevel(getattr(logging, log_level.upper()))
+    file_handler.setFormatter(file_formatter)
+    
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, console_log_level.upper()))
+    console_handler.setFormatter(console_formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level.upper()))
+    
+    # Remove any existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+    
+    # Add our handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
     
     # Set specific loggers to appropriate levels
     logging.getLogger("urllib3").setLevel(logging.WARNING)

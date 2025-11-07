@@ -138,6 +138,84 @@ Thumbs.db
 
 # Data files that shouldn't be in the image
 data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
 
-# Test files
-tests/
+# Test files (include in dev builds, exclude in prod)
+# tests/
+
+# Git directory and files
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (keep essential architecture docs)
+*.md
+!ARCHITECTURE.md
+!README.md
+
+# Docker files
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Environment files
+.env*
+!.env.example
+
+# Frontend build artifacts (if building backend only)
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Console UI cache
+console-ui/__pycache__
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python virtual environments
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+logs/
+
+# Coverage and test reports
+htmlcov/
+.coverage
+coverage.xml
+.pytest_cache/
+
+# Type checking cache
+.mypy_cache/
+.pytype/
+
+# Temporary and backup files
+tmp/
+temp/
+*.tmp
+*.bak
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Project management
+todos/
+PHASE_*.md
+IMPROVEMENT_*.md
+FUTURE_*.md

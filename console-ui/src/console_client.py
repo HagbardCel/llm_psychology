@@ -128,7 +128,7 @@ class ConsoleClient:
     async def _get_user_input(self, prompt: Optional[str] = None) -> str:
         """Get input from the user via console."""
         if prompt:
-            print(f"\033[93mSYSTEM\033[0m: {prompt}")
+            print(f"{prompt}")
         
         user_input = input("\nYour response: ").strip()
         return user_input

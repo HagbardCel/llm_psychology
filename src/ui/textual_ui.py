@@ -1,6 +1,7 @@
 """Console-based UI implementation for the Virtual LLM-Driven Psychoanalyst application."""
 
 import asyncio
+import logging
 from typing import Optional
 from ui.base_ui import BaseUI
 from services.style_service import style_service
@@ -10,6 +11,7 @@ class ConsoleUI(BaseUI):
     
     def __init__(self) -> None:
         self._input_queue: asyncio.Queue = asyncio.Queue()
+        self.logger = logging.getLogger(f"{__name__}.system_ui")
         
     async def display_message(self, role: str, text: str) -> None:
         """Display a message in the console."""
@@ -24,37 +26,41 @@ class ConsoleUI(BaseUI):
     async def get_user_input(self, prompt: Optional[str] = None) -> str:
         """Get input from the user via console."""
         if prompt:
-            print(f"\033[93mSYSTEM\033[0m: {prompt}")
+            print(f"{prompt}")
         
         user_input = input("\nYour response: ").strip()
         return user_input
         
     async def display_system_status(self, status: str) -> None:
-        """Display a system status message."""
-        print(f"\033[93mSYSTEM\033[0m: {status}")
+        """Log a technical system status message (file only)."""
+        self.logger.info(f"SYSTEM: {status}")
+    
+    async def display_user_message(self, message: str) -> None:
+        """Display a user-facing message in console (clean, no colors)."""
+        print(f"{message}")
         
     async def present_therapy_style_selection(self, recommendations: list) -> str:
         """Present therapy style recommendations and get user selection."""
         # Limit to top 3 recommendations
         top_recommendations = recommendations[:3]
         
-        print(f"\033[93mSYSTEM\033[0m: Based on our conversation, I recommend the following therapy approaches:")
+        print("Based on our conversation, I recommend the following therapy approaches:")
         print()
         
         # Display recommendations
         for i, rec in enumerate(top_recommendations, 1):
-            print(f"\033[1m{i}. {rec['name']}\033[0m")
+            print(f"{i}. {rec['name']}")
             print(f"   {rec['description']}")
             print()
         
         # Add "Other" option
-        print(f"\033[1m{len(top_recommendations) + 1}. Other (See all available styles)\033[0m")
+        print(f"{len(top_recommendations) + 1}. Other (See all available styles)")
         print()
         
         # Get user selection for recommendations
         while True:
             try:
-                choice = input(f"\033[93mSYSTEM\033[0m: Please select a therapy style (1-{len(top_recommendations) + 1}): ").strip()
+                choice = input(f"Please select a therapy style (1-{len(top_recommendations) + 1}): ").strip()
                 choice_num = int(choice)
                 if 1 <= choice_num <= len(top_recommendations):
                     return top_recommendations[choice_num - 1]['style_id']
@@ -70,7 +76,7 @@ class ConsoleUI(BaseUI):
         """Allow user to select from all available therapy styles."""
         available_styles = style_service.get_available_styles()
         
-        print(f"\033[93mSYSTEM\033[0m: Here are all available therapy styles:")
+        print("Here are all available therapy styles:")
         print()
         
         # Display all styles with descriptions
@@ -80,14 +86,14 @@ class ConsoleUI(BaseUI):
             style_options.append({"style_id": style_id, "name": style_id.upper(), "description": description})
         
         for i, style in enumerate(style_options, 1):
-            print(f"\033[1m{i}. {style['name']}\033[0m")
+            print(f"{i}. {style['name']}")
             print(f"   {style['description']}")
             print()
         
         # Get user selection
         while True:
             try:
-                choice = input(f"\033[93mSYSTEM\033[0m: Please select a therapy style (1-{len(style_options)}): ").strip()
+                choice = input(f"Please select a therapy style (1-{len(style_options)}): ").strip()
                 choice_num = int(choice)
                 if 1 <= choice_num <= len(style_options):
                     return style_options[choice_num - 1]['style_id']

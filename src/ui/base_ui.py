@@ -35,10 +35,19 @@ class BaseUI(ABC):
 
     @abstractmethod
     async def display_system_status(self, status: str) -> None:
-        """Display a system status message.
+        """Log a technical system status message (file only).
         
         Args:
-            status: The status message to display
+            status: The status message to log
+        """
+        pass
+
+    @abstractmethod
+    async def display_user_message(self, message: str) -> None:
+        """Display a user-facing message in console.
+        
+        Args:
+            message: The message to display to the user
         """
         pass
 

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import uuid
+import logging
 from typing import List
 from services.llm_service import LLMService
 from services.db_service import DatabaseService
@@ -25,6 +26,7 @@ class IntakeAgent:
         self.db_service = db_service
         self.user_context = user_context
         self.session_duration = Config.SESSION_DURATION_MINUTES
+        self.logger = logging.getLogger(__name__)
     
     async def _collect_user_profile(self, ui: BaseUI) -> UserProfile:
         """
@@ -36,8 +38,8 @@ class IntakeAgent:
         Returns:
             UserProfile: The collected user profile information.
         """
-        await ui.display_system_status("Before we begin, I'd like to get to know you better.")
-        await ui.display_system_status("This information will help me provide you with a more personalized experience.\n")
+        await ui.display_user_message("Before we begin, I'd like to get to know you better.")
+        await ui.display_user_message("This information will help me provide you with a more personalized experience.\n")
         
         # Collect user information
         name = await ui.get_user_input("What is your name? ")
@@ -100,9 +102,9 @@ class IntakeAgent:
         Returns:
             Session: The completed intake session.
         """
-        await ui.display_system_status("Welcome to your virtual psychoanalysis session.")
-        await ui.display_system_status("I'm here to help you explore your thoughts and feelings.")
-        await ui.display_system_status("Please feel free to share whatever is on your mind.\n")
+        await ui.display_user_message("Welcome to your virtual psychoanalysis session.")
+        await ui.display_user_message("I'm here to help you explore your thoughts and feelings.")
+        await ui.display_user_message("Please feel free to share whatever is on your mind.\n")
         
         # Collect user profile information
         user_profile = await self._collect_user_profile(ui)
@@ -160,6 +162,9 @@ class IntakeAgent:
             
             if user_input.lower() in ['quit', 'exit', 'bye', 'goodbye']:
                 break
+            
+            if not user_input.strip():
+                self.logger.warning("User provided empty response during intake session")
             
             if user_input:
                 # Add user message to transcript

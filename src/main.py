@@ -92,29 +92,7 @@ async def main():
             await ui.display_system_status(error_msg)
             return
         
-        # Run database migrations
-        try:
-            logger.info("Running database migrations...")
-            await ui.display_system_status("Checking database migrations...")
-            
-            migration_service = container.get('migration_service')
-            migration_status = migration_service.get_migration_status()
-            
-            if migration_status['pending_count'] > 0:
-                await ui.display_system_status(f"Applying {migration_status['pending_count']} pending migrations...")
-                applied_migrations = migration_service.run_migrations()
-                await ui.display_system_status(f"Successfully applied {len(applied_migrations)} migrations")
-                for migration in applied_migrations:
-                    logger.info(f"Applied migration: {migration}")
-            else:
-                await ui.display_system_status("Database is up to date")
-                
-        except Exception as e:
-            error_msg = f"Migration failed: {e}"
-            logger.error(error_msg)
-            await ui.display_system_status(error_msg)
-            await ui.display_system_status("Application startup aborted due to migration failure")
-            return
+        # Database is initialized automatically by DatabaseService
         
         # Create user context (using default user for now, will be dynamic in multi-user setup)
         user_context = UserContext("default_user")

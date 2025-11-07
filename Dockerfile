@@ -1,32 +1,74 @@
-# Use a slim Python image
-FROM python:3.10-slim
+# Multi-stage build for optimized development and production images
+# Uses UV package manager for 10-100x faster dependency installation
 
-# Set working directory
+# ============================================
+# Base stage: System dependencies + UV
+# ============================================
+FROM python:3.11-slim as base
+
 WORKDIR /app
 
-# Create a non-root user
-RUN useradd --create-home --shell /bin/bash appuser
+# Install system dependencies and UV
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
-COPY requirements-dev.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -r requirements-dev.txt
+# ============================================
+# Dependencies stage: Install Python packages
+# ============================================
+FROM base as dependencies
+
+# Copy requirements files
+COPY requirements.txt ./
+
+# Install CPU-only PyTorch + torchvision + torchaudio from PyTorch CPU index first
+# Use uv to install; pinning is omitted so the index provides compatible builds.
+RUN uv pip install --system --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining production dependencies with UV
+RUN uv pip install --system -r requirements.txt
+
+# ============================================
+# Development stage: Add dev dependencies
+# ============================================
+FROM dependencies as development
+
+# Copy dev requirements and install
+COPY requirements-dev.txt ./
+RUN uv pip install --system -r requirements-dev.txt
 
 # Copy configuration files
 COPY pyproject.toml pytest.ini ./
 
+# Set environment for development
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Declare a volume for persistent data
+VOLUME /app/data
+
+# Command to run the application
+CMD ["python", "src/main.py"]
+
+# ============================================
+# Production stage: Minimal final image
+# ============================================
+FROM dependencies as production
+
+# Copy configuration files
+COPY pyproject.toml ./
+
 # Copy the application code
-COPY . .
+COPY src/ ./src/
+COPY data/ ./data/
 
-# Install cline
-RUN pip install --no-cache-dir cline
-
-# Change ownership of the app directory to the non-root user
-RUN chown -R appuser:appuser /app
-
-# Switch to the non-root user
-USER appuser
+# Set environment for production
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Declare a volume for persistent data
 VOLUME /app/data

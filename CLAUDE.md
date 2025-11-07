@@ -19,12 +19,19 @@ make sync                 # Sync environment with locked requirements
 make format               # Format code with black
 make lint                 # Lint code with ruff
 
-# Testing
-make test                 # Run all tests
+# Testing (Hybrid Approach)
+# DevContainer testing (90% of development)
+make test-dev             # Quick tests in devContainer (RECOMMENDED)
+make test                 # Run all tests in devContainer
 make test-unit            # Run unit tests only
 make test-integration     # Run integration tests only
 pytest -v                 # Run tests with verbose output
 pytest tests/unit/test_db_service.py  # Run specific test file
+
+# Docker isolated testing (pre-commit & CI/CD)
+make test-validate        # Full isolated test suite before committing
+make docker-test          # Same as test-validate
+make install-hooks        # Install pre-commit hook for automated testing
 
 # Running the application
 make run                  # Run locally with Python
@@ -90,6 +97,38 @@ The project follows strict code quality standards defined in `.clinerules/`:
 - **Type Checking**: mypy with strict settings
 - **Testing**: pytest with fixtures and mocking
 - **Documentation**: Google-style docstrings
+
+## Testing Philosophy
+
+This project uses a **hybrid testing approach**:
+
+### DevContainer Testing (Primary)
+- **Purpose**: Fast iteration during active development
+- **Environment**: VSCode devContainer with pytest
+- **Usage**: TDD workflows, debugging, quick validation
+- **Benefits**: Instant feedback, IDE integration, debugger support
+- **Commands**: `make test-dev`, `make test`, `pytest`
+
+### Docker Isolated Testing (Validation)
+- **Purpose**: Pre-commit validation and CI/CD
+- **Environment**: Isolated Docker container with read-only mounts
+- **Usage**: Before commits, CI/CD pipelines, clean-room testing
+- **Benefits**: Complete isolation, guaranteed clean state, prevents test pollution
+- **Commands**: `make test-validate`, `make docker-test`
+
+### Recommended Workflow
+1. **Development**: Run tests in devContainer (`make test-dev`) for instant feedback
+2. **Debugging**: Use VSCode Test Explorer and debugger
+3. **Before Commit**: Run isolated tests (`make test-validate`)
+4. **Automation**: Install pre-commit hooks (`make install-hooks`)
+
+### Pre-Commit Hooks
+Install automated testing that runs before every commit:
+```bash
+make install-hooks
+```
+
+This runs the full test suite in isolated Docker before allowing commits, ensuring code quality.
 
 ## User Status Flow
 

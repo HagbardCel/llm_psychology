@@ -61,7 +61,6 @@ class ServiceContainer:
             'db_service': self._create_db_service,
             'llm_service': self._create_llm_service,
             'rag_service': self._create_rag_service,
-            'migration_service': self._create_migration_service,
         })
         logger.debug(f"Registered {len(self._factories)} service factories")
     
@@ -221,40 +220,21 @@ class ServiceContainer:
         logger.debug("Creating RAGService")
         
         try:
+            use_onnx = getattr(self.config, 'USE_ONNX_EMBEDDINGS', True)
+            model_name = getattr(self.config, 'EMBEDDING_MODEL_NAME', 'all-MiniLM-L6-v2')
+            
             rag_service = RAGService(
                 domain_knowledge_path=self.config.DOMAIN_KNOWLEDGE_PATH,
-                vector_db_path=self.config.VECTOR_DB_PATH
+                vector_db_path=self.config.VECTOR_DB_PATH,
+                use_onnx=use_onnx,
+                model_name=model_name
             )
-            logger.info("Created RAGService")
+            logger.info(f"Created FAISS-based RAGService with ONNX={use_onnx}, model={model_name}")
             return rag_service
         except Exception as e:
             logger.error(f"Failed to create RAGService: {e}")
             raise
     
-    def _create_migration_service(self):
-        """
-        Create migration service.
-        
-        Returns:
-            Configured MigrationService instance
-        """
-        from services.migration_service import MigrationService
-        
-        logger.debug("Creating MigrationService")
-        
-        try:
-            # Get migrations directory from config with default
-            migrations_dir = getattr(self.config, 'MIGRATIONS_DIR', 'migrations')
-            
-            migration_service = MigrationService(
-                db_service=self.get('db_service'),
-                migrations_dir=migrations_dir
-            )
-            logger.info(f"Created MigrationService with directory {migrations_dir}")
-            return migration_service
-        except Exception as e:
-            logger.error(f"Failed to create MigrationService: {e}")
-            raise
     
     def __str__(self) -> str:
         """String representation of the container."""

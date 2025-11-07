@@ -5,24 +5,26 @@ from unittest.mock import Mock, patch, MagicMock
 from services.rag_service import RAGService
 
 class TestRAGService:
-    """Unit tests for RAGService."""
+    """Unit tests for FAISS-based RAGService."""
     
     def test_init(self, mock_rag_service):
         """Test RAGService initialization."""
         assert mock_rag_service is not None
-        assert hasattr(mock_rag_service, 'get_relevant_context')
+        assert hasattr(mock_rag_service, 'retrieve_relevant_knowledge')
+        assert hasattr(mock_rag_service, 'get_knowledge_by_source')
     
     def test_retrieve_relevant_knowledge(self, mock_rag_service):
         """Test retrieving relevant knowledge."""
         mock_results = [
-            {"id": "1", "content": "Test content 1", "source": "test.md"},
-            {"id": "2", "content": "Test content 2", "source": "test.md"}
+            {"id": "1", "content": "Test content 1", "source": "test.md", "distance": 0.1},
+            {"id": "2", "content": "Test content 2", "source": "test.md", "distance": 0.2}
         ]
         mock_rag_service.retrieve_relevant_knowledge.return_value = mock_results
         
         results = mock_rag_service.retrieve_relevant_knowledge("test query")
         assert len(results) == 2
         assert results[0]["content"] == "Test content 1"
+        assert results[0]["distance"] == 0.1
     
     def test_get_knowledge_by_source(self, mock_rag_service):
         """Test retrieving knowledge by source."""
@@ -38,7 +40,7 @@ class TestRAGService:
     def test_retrieve_relevant_knowledge_with_filter(self, mock_rag_service):
         """Test retrieving relevant knowledge with source filter."""
         mock_results = [
-            {"id": "1", "content": "Filtered content", "source": "cbt.md"}
+            {"id": "1", "content": "Filtered content", "source": "cbt.md", "distance": 0.15}
         ]
         mock_rag_service.retrieve_relevant_knowledge.return_value = mock_results
         
