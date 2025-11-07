@@ -1,24 +1,16 @@
-"""
-Reflection Agent for analyzing therapy sessions and updating plans.
-
-This agent coordinates memory and planning functionality to provide
-comprehensive therapy session analysis and plan management.
-"""
-
 from datetime import datetime
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, Any, Optional, List
 
+from services.llm_service import LLMService
+from services.db_service import DatabaseService
+from services.rag_service import RAGService
+from models.data_models import Session, TherapyPlan
+from context.user_context import UserContext
 from agents.memory_agent import MemoryAgent
 from agents.planning_agent import PlanningAgent
-from context.user_context import UserContext
-from exceptions import ReflectionError
-from models.data_models import Session, TherapyPlan
 from prompts.reflection_prompts import SESSION_SUMMARY_PROMPT
-from services.db_service import DatabaseService
-from services.llm_service import LLMService
-from services.rag_service import RAGService
-from src.orchestration.models import AgentResponse, ConversationContext, WorkflowState
+from exceptions import ReflectionError
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +18,11 @@ logger = logging.getLogger(__name__)
 class ReflectionAgent:
     """
     Coordination agent for therapeutic reflection and planning.
-
-    This agent has two modes:
-    1. Legacy mode: Direct method calls (for backward compatibility)
-    2. Orchestrator mode: Returns AgentResponse for orchestration layer
+    
+    This agent coordinates memory and planning functionality to provide
+    comprehensive therapy session analysis and plan management. It serves
+    as the orchestrator between specialized agents rather than duplicating
+    their functionality.
     """
     
     def __init__(self, llm_service: LLMService, db_service: DatabaseService, 
@@ -54,99 +47,7 @@ class ReflectionAgent:
         self.planning_agent = planning_agent
         
         logger.info(f"ReflectionAgent initialized for user {user_context.user_id}")
-
-    # ===== NEW ORCHESTRATOR INTERFACE =====
-
-    async def process_reflection(
-        self, session: Session, context: ConversationContext
-    ) -> AgentResponse:
-        """
-        Process reflection on completed therapy session (orchestrator interface).
-
-        This is the new interface for use with the orchestration layer.
-        It updates the therapy plan and returns summary information.
-
-        Args:
-            session: Completed therapy session
-            context: Conversation context
-
-        Returns:
-            AgentResponse with reflection summary
-        """
-        try:
-            logger.info(
-                f"Processing reflection for session {session.session_id}"
-            )
-
-            # Update therapy plan
-            current_plan = context.therapy_plan
-            updated_plan = self.update_plan(session, current_plan)
-
-            # Generate reflection summary
-            reflection = self.generate_comprehensive_reflection(session, updated_plan)
-
-            # Build response content
-            content = self._format_reflection_summary(reflection)
-
-            return AgentResponse(
-                content=content,
-                next_action="transition",
-                next_state=WorkflowState.PLAN_COMPLETE,
-                metadata={
-                    "plan_id": updated_plan.plan_id,
-                    "plan_version": updated_plan.version,
-                    "session_id": session.session_id,
-                    "reflection": reflection,
-                },
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing reflection: {e}", exc_info=True)
-            return AgentResponse(
-                content=f"I encountered an error while reflecting on this session: {str(e)}",
-                next_action="continue",
-                next_state=None,
-                metadata={"error": str(e)},
-            )
-
-    def _format_reflection_summary(self, reflection: Dict[str, Any]) -> str:
-        """
-        Format reflection data into a readable summary.
-
-        Args:
-            reflection: Reflection data dictionary
-
-        Returns:
-            Formatted summary string
-        """
-        summary_parts = []
-
-        # Session context
-        if "session_context" in reflection:
-            ctx = reflection["session_context"]
-            summary_parts.append("## Session Reflection\n")
-            summary_parts.append(f"Key themes: {', '.join(ctx.get('key_themes', []))}")
-            summary_parts.append(f"Emotional state: {ctx.get('emotional_state', 'N/A')}")
-
-        # Memory insights
-        if "therapeutic_memory" in reflection:
-            mem = reflection["therapeutic_memory"]
-            summary_parts.append("\n## Progress Overview")
-            summary_parts.append(f"Total sessions: {mem.get('total_sessions', 0)}")
-            summary_parts.append(
-                f"Relationship quality: {mem.get('relationship_quality', 'developing')}"
-            )
-
-        # Plan recommendations
-        if "plan_recommendations" in reflection and reflection["plan_recommendations"]:
-            summary_parts.append("\n## Recommendations")
-            for rec in reflection["plan_recommendations"][:3]:
-                summary_parts.append(f"- {rec.get('description', '')}")
-
-        return "\n".join(summary_parts)
-
-    # ===== LEGACY INTERFACE (for backward compatibility) =====
-
+    
     def create_initial_plan(self, intake_session: Session, 
                           selected_style: Optional[str] = None) -> TherapyPlan:
         """
