@@ -63,3 +63,7 @@ class StyleServiceError(PsychoanalystError):
 class UIError(PsychoanalystError):
     """Raised when UI operations fail."""
     pass
+
+class InvalidStateTransitionError(PsychoanalystError):
+    """Raised when an invalid workflow state transition is attempted."""
+    pass
