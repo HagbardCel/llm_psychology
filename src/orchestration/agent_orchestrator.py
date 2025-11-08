@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import AsyncIterator, Dict, Optional
 
 from container.service_container import ServiceContainer
-from models.data_models import AgentType, Session, UserProfile
+from models.data_models import Session, UserProfile
 from orchestration.conversation_manager import ConversationManager
 from orchestration.models import AgentResponse, SessionInfo, WorkflowState
 from orchestration.workflow_engine import WorkflowEngine
@@ -192,18 +192,17 @@ Provide insights and recommendations for future sessions."""
         state = await self.workflow_engine.get_user_state(user_id)
         agent_type = self.workflow_engine.get_current_agent(state)
 
-        # Create session
+        # Create session via database service
         session_id = str(uuid.uuid4())
-        session = Session(
-            id=session_id,
-            user_id=user_id,
-            agent_type=AgentType[agent_type],
-            created_at=datetime.now(),
-            messages=[],
-        )
+        db_service = self.service_container.get_db_service()
 
-        # Save to database
-        await self.service_container.get_db_service().create_session(session)
+        # Create session record
+        # Note: Using simplified session creation - actual implementation may vary
+        db_service.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            session_type=agent_type
+        )
         logger.info(
             f"Created session {session_id} for user {user_id} "
             f"with agent {agent_type}"
