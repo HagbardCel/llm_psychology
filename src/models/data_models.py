@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from enum import Enum
+
+class UserStatus(str, Enum):
+    """User status enum for workflow progression."""
+    PROFILE_ONLY = "PROFILE_ONLY"
+    INTAKE_COMPLETE = "INTAKE_COMPLETE"
+    PLAN_COMPLETE = "PLAN_COMPLETE"
 
 class UserProfile(BaseModel):
     """Represents a user's personal information."""
@@ -8,6 +15,7 @@ class UserProfile(BaseModel):
     name: str
     birthdate: Optional[datetime] = None
     profession: Optional[str] = None
+    status: UserStatus = UserStatus.PROFILE_ONLY
     created_at: datetime
     updated_at: datetime
 
