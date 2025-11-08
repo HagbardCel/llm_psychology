@@ -19,6 +19,10 @@ from websocket_server.message_handler import MessageHandler
 from websocket_server.typing_manager import TypingManager
 from container.service_container import ServiceContainer
 from config import Config
+from src.orchestration.agent_orchestrator import AgentOrchestrator
+from src.orchestration.conversation_manager import ConversationManager
+from src.orchestration.workflow_engine import WorkflowEngine
+from src.gateways.websocket_gateway import WebSocketGateway
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +49,6 @@ class UnifiedServer:
             )
         })
 
-        # Initialize WebSocket components
-        self.connection_manager = ConnectionManager()
-        self.message_handler = MessageHandler(self.connection_manager)
-        self.typing_manager = TypingManager()
-
         # Initialize Socket.IO server
         self.sio = socketio.AsyncServer(
             cors_allowed_origins="*",
@@ -61,11 +60,32 @@ class UnifiedServer:
         # Attach Socket.IO to aiohttp app
         self.sio.attach(self.app)
 
+        # Initialize orchestration layer
+        db_service = container.get_db_service()
+        llm_service = container.get_llm_service()
+        rag_service = container.get_rag_service()
+
+        workflow_engine = WorkflowEngine(db_service)
+        conversation_manager = ConversationManager(llm_service, rag_service, db_service)
+        self.orchestrator = AgentOrchestrator(
+            container, workflow_engine, conversation_manager
+        )
+
+        # Initialize WebSocket components
+        self.connection_manager = ConnectionManager()
+        self.typing_manager = TypingManager()
+        self.websocket_gateway = WebSocketGateway(
+            self.sio, self.orchestrator, self.connection_manager
+        )
+        self.message_handler = MessageHandler(
+            self.connection_manager, self.websocket_gateway
+        )
+
         # Setup routes and handlers
         self._setup_http_routes()
         self._setup_websocket_handlers()
 
-        logger.info("Unified server initialized")
+        logger.info("Unified server initialized with orchestration layer")
 
     @middleware
     async def _error_middleware(self, request: web.Request, handler):
