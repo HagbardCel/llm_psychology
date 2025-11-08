@@ -10,9 +10,9 @@ from typing import Optional
 
 import socketio
 
-from src.orchestration.agent_orchestrator import AgentOrchestrator
-from src.orchestration.models import WorkflowState
-from src.websocket_server.connection_manager import ConnectionManager
+from orchestration.agent_orchestrator import AgentOrchestrator
+from orchestration.models import WorkflowState
+from websocket_server.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 

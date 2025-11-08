@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from src.models.data_models import Message, TherapyPlan, UserProfile
+from models.data_models import Message, TherapyPlan, UserProfile
 
 
 class WorkflowState(Enum):
