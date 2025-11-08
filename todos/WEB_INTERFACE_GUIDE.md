@@ -60,7 +60,7 @@ Once running, you can access:
 - **Web Interface (Dev):** http://localhost:5173
 - **Web Interface (Prod):** http://localhost:3000  
 - **API Server:** http://localhost:8000
-- **WebSocket Server:** http://localhost:8765
+- **WebSocket Server:** http://localhost:8000
 
 ## Architecture
 
@@ -99,7 +99,7 @@ GOOGLE_API_KEY=your_api_key_here
 
 This starts:
 - Backend API server on port 8000
-- WebSocket server on port 8765  
+- WebSocket server on port 8000  
 - Frontend dev server on port 5173 with hot reload
 
 ### 3. Development Features
@@ -129,7 +129,7 @@ This starts:
 docker info
 
 # Check port availability
-netstat -tulpn | grep -E ':(3000|5173|8000|8765)'
+netstat -tulpn | grep -E ':(3000|5173|8000|8000)'
 
 # View service logs
 make -f todos/Makefile.web web-logs
@@ -150,7 +150,7 @@ docker ps
 curl http://localhost:8000/health
 
 # Test WebSocket
-curl http://localhost:8765
+curl http://localhost:8000
 ```
 
 ### Frontend Build Issues

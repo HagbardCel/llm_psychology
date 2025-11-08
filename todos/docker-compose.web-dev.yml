@@ -1,12 +1,12 @@
 version: '3.8'
 
 services:
-  # Backend API server for web interface
-  backend:
+  # Unified server (REST API + WebSocket)
+  unified-server:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: psychoanalyst_backend_dev
+    container_name: psychoanalyst_unified_server_dev
     ports:
       - "8000:8000"
     volumes:
@@ -16,30 +16,10 @@ services:
     env_file:
       - .env
     environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
+      - HOST=0.0.0.0
+      - PORT=8000
       - APP_ENV=development
-    command: python src/api_server.py
-    restart: unless-stopped
-
-  # WebSocket server for real-time communication
-  websocket:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: psychoanalyst_websocket_dev
-    ports:
-      - "8765:8765"
-    volumes:
-      - ./data:/app/data
-      - ./src:/app/src
-    env_file:
-      - .env
-    environment:
-      - WEBSOCKET_HOST=0.0.0.0
-      - WEBSOCKET_PORT=8765
-      - APP_ENV=development
-    command: python src/websocket_server/local_websocket.py
+    command: python src/unified_server.py
     restart: unless-stopped
 
   # React frontend (development with hot reload)
@@ -58,12 +38,11 @@ services:
       - ./frontend/tsconfig.json:/app/tsconfig.json
       - ./frontend/vite.config.ts:/app/vite.config.ts
     depends_on:
-      - backend
-      - websocket
+      - unified-server
     restart: unless-stopped
     environment:
       - VITE_API_URL=http://localhost:8000
-      - VITE_WEBSOCKET_URL=http://localhost:8765
+      - VITE_WEBSOCKET_URL=http://localhost:8000
 
 networks:
   default:

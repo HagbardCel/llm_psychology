@@ -274,7 +274,7 @@ docker-compose -f todos/docker-compose.web.yml up --build
 - **Frontend (Dev)**: http://localhost:5173 - React development server with hot reload
 - **Frontend (Prod)**: http://localhost:3000 - Nginx-served optimized build
 - **API Server**: http://localhost:8000 - REST endpoints for session management
-- **WebSocket Server**: http://localhost:8765 - Real-time communication
+- **Unified Server**: http://localhost:8000 - REST API + WebSocket real-time communication
 
 ### Web Architecture
 - **Frontend**: React 18 + TypeScript + Vite + Material-UI
@@ -553,7 +553,7 @@ Style selection occurs during assessment phase and can be updated through reflec
 docker info
 
 # Check port availability  
-netstat -tulpn | grep -E ':(3000|5173|8000|8765)'
+netstat -tulpn | grep -E ':(3000|5173|8000)'
 
 # View service logs
 make -f todos/Makefile.web web-logs

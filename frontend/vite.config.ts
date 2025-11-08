@@ -40,7 +40,7 @@ export default defineConfig({
         changeOrigin: true
       },
       '/socket.io': {
-        target: process.env.VITE_WEBSOCKET_URL || 'http://localhost:8765',
+        target: process.env.VITE_WEBSOCKET_URL || 'http://localhost:8000',
         changeOrigin: true,
         ws: true
       }

@@ -13,7 +13,7 @@ web-help:
 	@echo "Services:"
 	@echo "  Frontend:    http://localhost:3000 (prod) / http://localhost:5173 (dev)"
 	@echo "  API Server:  http://localhost:8000"
-	@echo "  WebSocket:   http://localhost:8765"
+	@echo "  WebSocket:   http://localhost:8000"
 
 web-prod:
 	@echo "🚀 Starting web interface in production mode..."

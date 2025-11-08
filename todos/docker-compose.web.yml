@@ -1,12 +1,12 @@
 version: '3.8'
 
 services:
-  # Backend API server for web interface
-  backend:
+  # Unified server (REST API + WebSocket)
+  unified-server:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: psychoanalyst_backend
+    container_name: psychoanalyst_unified_server
     ports:
       - "8000:8000"
     volumes:
@@ -15,37 +15,12 @@ services:
     env_file:
       - .env
     environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-    command: python src/api_server.py
+      - HOST=0.0.0.0
+      - PORT=8000
+    command: python src/unified_server.py
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # WebSocket server for real-time communication
-  websocket:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: psychoanalyst_websocket
-    ports:
-      - "8765:8765"
-    volumes:
-      - ./data:/app/data
-      - ./src:/app/src
-    env_file:
-      - .env
-    environment:
-      - WEBSOCKET_HOST=0.0.0.0
-      - WEBSOCKET_PORT=8765
-    command: python src/websocket_server/local_websocket.py
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -60,8 +35,7 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
-      - websocket
+      - unified-server
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]

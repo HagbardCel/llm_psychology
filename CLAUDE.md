@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## General Guidance
+
+- Follow a test-driven development approach
+- Focus on lean and maintable code
+- Do NOT keep any legacy code. When implementing changes fully focus on the new structure and do not care about comptabibility with older interfaces.
+- Before every git commit, ensure that all new compontents have proper units and where applicable integration tests and that they run succesfully.
+
 ## Project Overview
 
 This is a Virtual LLM-Driven Psychoanalyst application that provides a terminal-based therapeutic experience using Large Language Models and Retrieval-Augmented Generation (RAG). The main application is located in the `psychoanalyst_app/` directory.

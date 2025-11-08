@@ -22,7 +22,7 @@ Then visit: http://localhost:3000
 
 ✅ **Automatically starts:**
 - Backend API server (port 8000)
-- WebSocket server (port 8765)  
+- WebSocket server (port 8000)  
 - React frontend (port 5173 dev / 3000 prod)
 
 ✅ **Provides:**
@@ -35,7 +35,7 @@ Then visit: http://localhost:3000
 
 - Docker and Docker Compose installed
 - `.env` file with `GOOGLE_API_KEY=your_key`
-- Ports 3000, 5173, 8000, 8765 available
+- Ports 3000, 5173, 8000, 8000 available
 
 ### Stopping Services
 
