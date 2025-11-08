@@ -29,7 +29,7 @@ async def main():
     
     # Configuration
     backend_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
-    websocket_url = os.getenv('WEBSOCKET_URL', 'http://localhost:8765')
+    websocket_url = os.getenv('WEBSOCKET_URL', 'http://localhost:8000')  # Unified server on same port
     user_id = os.getenv('USER_ID', 'console_user')
     auth_token = os.getenv('AUTH_TOKEN', 'console_token')
     

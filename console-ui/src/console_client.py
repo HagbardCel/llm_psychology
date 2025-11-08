@@ -17,60 +17,96 @@ logger = logging.getLogger(__name__)
 
 class ConsoleClient:
     """Console client that connects to backend therapy service via API and WebSocket."""
-    
+
     def __init__(self, backend_url: str, websocket_url: str, user_id: str, auth_token: str):
         self.backend_url = backend_url.rstrip('/')
         self.websocket_url = websocket_url
         self.user_id = user_id
         self.auth_token = auth_token
-        
+
         # HTTP session for API calls
         self.session: Optional[aiohttp.ClientSession] = None
-        
+
         # Socket.IO client for real-time communication
         self.sio = socketio.AsyncClient()
         self.connected = False
-        
+
+        # Streaming state
+        self.current_message = ""
+        self.is_streaming = False
+
         # Setup Socket.IO event handlers
         self._setup_socketio_handlers()
     
     def _setup_socketio_handlers(self):
         """Setup Socket.IO event handlers."""
-        
+
         @self.sio.event
         async def connect():
             self.connected = True
             logger.info("Connected to WebSocket server")
             print("✅ Connected to therapy session server")
-        
+
         @self.sio.event
         async def disconnect():
             self.connected = False
             logger.info("Disconnected from WebSocket server")
             print("❌ Disconnected from therapy session server")
-        
+
         @self.sio.event
-        async def response(data):
-            """Handle responses from the therapy backend."""
+        async def chat_response_chunk(data):
+            """Handle streaming response chunks from therapist."""
             try:
-                if data.get('type') == 'chat_response':
-                    await self._display_message('therapist', data.get('message', ''))
-                elif data.get('type') == 'session_started':
-                    print(f"✅ {data.get('message', 'Session started')}")
-                elif data.get('error'):
-                    print(f"❌ Error: {data['error']}")
+                chunk = data.get('chunk', '')
+                is_complete = data.get('is_complete', False)
+
+                if not is_complete:
+                    # Accumulate and display chunk
+                    if not self.is_streaming:
+                        # First chunk - start new message
+                        print("\n\033[94mTHERAPIST\033[0m: ", end='', flush=True)
+                        self.is_streaming = True
+                        self.current_message = ""
+
+                    # Display chunk in real-time
+                    print(chunk, end='', flush=True)
+                    self.current_message += chunk
+                else:
+                    # Streaming complete
+                    if self.is_streaming:
+                        print()  # New line after complete message
+                        self.is_streaming = False
+                        self.current_message = ""
+
             except Exception as e:
-                logger.error(f"Error handling WebSocket response: {e}")
-        
+                logger.error(f"Error handling streaming chunk: {e}")
+
+        @self.sio.event
+        async def session_started(data):
+            """Handle session started confirmation."""
+            print(f"\n✅ Your therapy session has begun. {data.get('message', '')}")
+
         @self.sio.event
         async def connected(data):
             """Handle connection confirmation."""
             print(f"🔐 Authenticated as user: {data.get('user_id', 'unknown')}")
-        
+
+        @self.sio.event
+        async def typing_start():
+            """Handle therapist typing indicator."""
+            if not self.is_streaming:
+                print("\n💭 Therapist is typing...", end='\r')
+
+        @self.sio.event
+        async def typing_stop():
+            """Handle therapist stopped typing."""
+            if not self.is_streaming:
+                print(" " * 30, end='\r')  # Clear typing indicator
+
         @self.sio.event
         async def error(data):
             """Handle WebSocket errors."""
-            print(f"❌ WebSocket Error: {data}")
+            print(f"\n❌ Error: {data.get('message', data)}")
     
     async def _initialize_session(self):
         """Initialize HTTP session and WebSocket connection."""
