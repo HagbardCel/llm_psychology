@@ -61,9 +61,9 @@ class UnifiedServer:
         self.sio.attach(self.app)
 
         # Initialize orchestration layer
-        db_service = container.get_db_service()
-        llm_service = container.get_llm_service()
-        rag_service = container.get_rag_service()
+        db_service = container.get('db_service')
+        llm_service = container.get('llm_service')
+        rag_service = container.get('rag_service')
 
         workflow_engine = WorkflowEngine(db_service)
         conversation_manager = ConversationManager(llm_service, rag_service, db_service)
@@ -322,7 +322,7 @@ class UnifiedServer:
         """Get specific session with full transcript."""
         try:
             session_id = request.match_info['session_id']
-            db_service = self.container.get_db_service()
+            db_service = self.container.get('db_service')
 
             session = db_service.get_session(session_id)
             if not session:
@@ -444,7 +444,7 @@ class UnifiedServer:
             # TODO: Extract user_id from authentication
             user_id = request.query.get('user_id', 'default_user')
 
-            db_service = self.container.get_db_service()
+            db_service = self.container.get('db_service')
             therapy_plan = db_service.get_therapy_plan(user_id)
 
             if not therapy_plan:
@@ -492,7 +492,7 @@ class UnifiedServer:
                     status=400
                 )
 
-            db_service = self.container.get_db_service()
+            db_service = self.container.get('db_service')
 
             # Check if plan exists
             existing_plan = db_service.get_therapy_plan(user_id)

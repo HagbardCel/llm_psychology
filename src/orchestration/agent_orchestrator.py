@@ -194,7 +194,7 @@ Provide insights and recommendations for future sessions."""
 
         # Create session via database service
         session_id = str(uuid.uuid4())
-        db_service = self.service_container.get_db_service()
+        db_service = self.service_container.get('db_service')
 
         # Create session record
         # Note: Using simplified session creation - actual implementation may vary
@@ -278,29 +278,13 @@ Provide insights and recommendations for future sessions."""
             user_id: User identifier
 
         Returns:
-            Agent instance
+            Agent instance (currently None as agents are not used yet)
         """
         # TODO: Implement agent caching and lifecycle management
-        # For now, return a placeholder
-        cache_key = f"{agent_type}_{user_id}"
-
-        if cache_key not in self.agents:
-            # Create agent based on type
-            if agent_type == "INTAKE":
-                agent = self.service_container.get_intake_agent()
-            elif agent_type == "ASSESSMENT":
-                agent = self.service_container.get_assessment_agent()
-            elif agent_type == "PSYCHOANALYST":
-                agent = self.service_container.get_psychoanalyst_agent()
-            elif agent_type == "REFLECTION":
-                agent = self.service_container.get_reflection_agent()
-            else:
-                raise ValueError(f"Unknown agent type: {agent_type}")
-
-            self.agents[cache_key] = agent
-            logger.info(f"Created agent: {agent_type} for user {user_id}")
-
-        return self.agents[cache_key]
+        # For now, agents are not being used - conversation manager handles everything
+        # This will be implemented in Phase 3 when agents are refactored
+        logger.debug(f"Agent {agent_type} requested for user {user_id} (not yet implemented)")
+        return None
 
     async def create_user_profile(
         self, name: str, birthdate: str, profession: str
@@ -324,7 +308,7 @@ Provide insights and recommendations for future sessions."""
             profession=profession,
         )
 
-        await self.service_container.get_db_service().create_user_profile(profile)
+        await self.service_container.get('db_service').create_user_profile(profile)
         logger.info(f"Created user profile: {user_id}")
 
         return profile
