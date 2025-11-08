@@ -1,37 +1,63 @@
 # Virtual LLM-Driven Psychoanalyst
 
-A sophisticated therapeutic application that provides both terminal-based and web-based psychoanalytic experiences using Large Language Models and Retrieval-Augmented Generation (RAG). The system offers personalized therapy sessions with multiple therapeutic approaches including Freudian, Jungian, and Cognitive Behavioral Therapy styles.
+A sophisticated therapeutic application that provides terminal-based and web-based psychoanalytic experiences using Large Language Models and Retrieval-Augmented Generation (RAG). Built on a clean **orchestration-based architecture** with **real-time streaming** responses, the system offers personalized therapy sessions with multiple therapeutic approaches including Freudian, Jungian, and Cognitive Behavioral Therapy styles.
+
+## ✨ What's New (v2.0 - Orchestration Architecture)
+
+The system has been completely redesigned with a clean architecture that separates business logic from I/O concerns:
+
+- **🚀 Real-Time Streaming**: LLM responses stream chunk-by-chunk for immediate feedback
+- **🎯 Orchestration Layer**: Central coordination of all therapy workflows
+- **🔄 State Machine**: Explicit workflow states with validated transitions
+- **🌐 Unified API**: All clients (web, console, local) use the same backend
+- **📦 Pure Business Logic**: Agents are now testable, reusable components
+- **🧪 Comprehensive Tests**: 1,900+ lines of unit and integration tests
+- **📚 Complete Documentation**: Architecture guide, quick start, and API reference
 
 ## 🎯 Features
 
 - **Triple Interface Support**: Choose between standalone terminal, networked console, or modern React web interface
+- **Streaming Responses**: Real-time word-by-word responses for natural conversation flow
 - **Agent-Based Workflow**: Sequential therapeutic process (Intake → Assessment → Sessions → Reflection)
 - **RAG-Enhanced Responses**: Context-aware therapy using domain knowledge and ChromaDB vector storage
 - **Multiple Therapy Styles**: Freudian, Jungian, and CBT approaches with style-specific prompts
 - **Session Continuity**: Resume sessions across different interfaces with shared database
-- **Real-Time Communication**: WebSocket-based live interaction in web interface
+- **WebSocket + REST API**: Real-time bidirectional communication with HTTP fallback
 - **Secure Data Persistence**: SQLite database with immutable session records
 - **Local & Private**: All data stored locally on your machine
 
-## 🏗️ Architecture
+## 🏗️ Architecture (v2.0)
 
-### Core Components
+### Orchestration Layer
+- **WorkflowEngine**: State machine managing therapy workflow transitions
+- **ConversationManager**: Handles streaming, context, and RAG integration
+- **AgentOrchestrator**: Coordinates agents and routes messages
+
+### Gateway Layer
+- **WebSocketGateway**: Real-time bidirectional communication with streaming
+- **REST API**: HTTP endpoints for session management and user operations
+
+### Agent Layer (Pure Business Logic)
 - **IntakeAgent**: Gathers initial user information and preferences
 - **AssessmentAgent**: Analyzes intake data and recommends optimal therapy styles
 - **PsychoanalystAgent**: Conducts main conversational therapeutic sessions
 - **ReflectionAgent**: Updates therapy plans based on session outcomes and progress
 
-### Services Layer
+### Service Layer
 - **DatabaseService**: SQLite-based persistence for sessions and user profiles
-- **LLMService**: Google Gemini API integration with error handling and retry logic
+- **LLMService**: Google Gemini API integration with streaming support
 - **RAGService**: ChromaDB-powered knowledge retrieval for contextual responses
 - **StyleService**: Manages therapy style configurations and prompts
 
-### Data Flow
-1. User status determines entry point (new user → intake, existing → assessment/session)
-2. All interactions stored as immutable session records
-3. RAG system provides therapeutic context from domain knowledge base
-4. Dual interfaces share same database and user state
+### Workflow States
+```
+NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
+  → ASSESSMENT_IN_PROGRESS → ASSESSMENT_COMPLETE
+  → THERAPY_IN_PROGRESS → REFLECTION_IN_PROGRESS
+  → PLAN_COMPLETE → THERAPY_IN_PROGRESS (cycle)
+```
+
+**See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation**
 
 ## 📋 Prerequisites
 
@@ -573,6 +599,24 @@ make docker-usertest
 3. **Explore Styles**: Try different therapeutic approaches during assessment
 4. **Integration Testing**: Switch between interfaces during active sessions
 5. **Production Deployment**: Use production web mode for stable hosting
+
+## 📚 Documentation
+
+Comprehensive documentation is available in the `docs/` directory:
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)**: Deep dive into system design, orchestration layer, agents, and data flow
+- **[Quick Start Guide](docs/QUICKSTART.md)**: Get up and running in minutes with step-by-step instructions
+- **[Development Guide](CLAUDE.md)**: Contributing, testing, and development workflows
+- **API Reference**: REST and WebSocket API documentation (see Architecture Guide)
+
+### Key Topics
+
+- **Orchestration Architecture**: How the workflow engine, conversation manager, and agent orchestrator work together
+- **Streaming Responses**: Real-time LLM output delivery
+- **State Machine**: Workflow states and valid transitions
+- **RAG Integration**: How domain knowledge enhances therapy sessions
+- **Testing**: Comprehensive test suite with 1,900+ lines of tests
+- **Deployment**: Production setup and scaling considerations
 
 ## 🆘 Support
 
