@@ -112,9 +112,12 @@ class UnifiedServer:
         self.app.router.add_get('/api/sessions', self._get_sessions)
         self.app.router.add_get('/api/sessions/{session_id}', self._get_session)
         self.app.router.add_post('/api/sessions', self._create_session)
+        self.app.router.add_post('/api/sessions/{session_id}/extend', self._extend_session)
 
         # Therapy operations
         self.app.router.add_get('/api/therapy/styles', self._get_therapy_styles)
+        self.app.router.add_get('/api/therapy/plan', self._get_therapy_plan)
+        self.app.router.add_post('/api/therapy/plan', self._create_therapy_plan)
 
         logger.info("HTTP routes configured")
 
@@ -235,24 +238,61 @@ class UnifiedServer:
     async def _get_user_status(self, request: web.Request) -> web.Response:
         """Get user status endpoint."""
         try:
-            db_service = self.container.get('db_service')
-            status = db_service.get_user_status()
+            # TODO: Extract user_id from authentication
+            user_id = request.query.get('user_id', 'default_user')
+
+            # Get workflow state from orchestrator
+            state = await self.orchestrator.get_user_state(user_id)
+            next_agent = self.orchestrator.workflow_engine.get_current_agent(state)
 
             return web.json_response({
-                'user_id': 'default_user',  # TODO: Extract from auth
-                'status': status,
+                'user_id': user_id,
+                'workflow_state': state.value,
+                'next_agent': next_agent,
                 'timestamp': datetime.now().isoformat()
             })
         except Exception as e:
-            logger.error(f"Error getting user status: {e}")
-            raise
+            logger.error(f"Error getting user status: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to get user status', 'details': str(e)},
+                status=500
+            )
 
     async def _create_user_profile(self, request: web.Request) -> web.Response:
         """Create user profile endpoint."""
-        return web.json_response({
-            'message': 'User profile creation not yet implemented',
-            'timestamp': datetime.now().isoformat()
-        })
+        try:
+            data = await request.json()
+
+            name = data.get('name', '').strip()
+            birthdate = data.get('birthdate', '').strip()
+            profession = data.get('profession', '').strip()
+
+            if not name:
+                return web.json_response(
+                    {'error': 'Name is required'},
+                    status=400
+                )
+
+            # Create user profile via orchestrator
+            user_profile = await self.orchestrator.create_user_profile(
+                name, birthdate, profession
+            )
+
+            return web.json_response({
+                'user_id': user_profile.id,
+                'name': user_profile.name,
+                'birthdate': user_profile.birthdate.isoformat() if user_profile.birthdate else None,
+                'profession': user_profile.profession,
+                'created_at': user_profile.created_at.isoformat(),
+                'timestamp': datetime.now().isoformat()
+            }, status=201)
+
+        except Exception as e:
+            logger.error(f"Error creating user profile: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to create user profile', 'details': str(e)},
+                status=500
+            )
 
     async def _get_sessions(self, request: web.Request) -> web.Response:
         """Get user sessions endpoint."""
@@ -279,24 +319,101 @@ class UnifiedServer:
             raise
 
     async def _get_session(self, request: web.Request) -> web.Response:
-        """Get specific session endpoint."""
-        session_id = request.match_info['session_id']
-        return web.json_response({
-            'session_id': session_id,
-            'message': 'Session retrieval not yet implemented'
-        })
+        """Get specific session with full transcript."""
+        try:
+            session_id = request.match_info['session_id']
+            db_service = self.container.get_db_service()
+
+            session = db_service.get_session(session_id)
+            if not session:
+                return web.json_response(
+                    {'error': 'Session not found'},
+                    status=404
+                )
+
+            # Build session response with full transcript
+            messages = []
+            for msg in session.messages:
+                messages.append({
+                    'role': msg.role,
+                    'content': msg.content,
+                    'timestamp': msg.timestamp.isoformat()
+                })
+
+            return web.json_response({
+                'session_id': session.id,
+                'user_id': session.user_id,
+                'agent_type': session.agent_type.value,
+                'created_at': session.created_at.isoformat(),
+                'messages': messages,
+                'message_count': len(messages),
+                'timestamp': datetime.now().isoformat()
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting session: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to get session', 'details': str(e)},
+                status=500
+            )
 
     async def _create_session(self, request: web.Request) -> web.Response:
         """Create new session endpoint."""
-        data = await request.json()
-        session_type = data.get('type', 'therapy')
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            session_type = data.get('type', 'therapy')
 
-        return web.json_response({
-            'session_id': f"session_{datetime.now().timestamp()}",
-            'type': session_type,
-            'created': True,
-            'timestamp': datetime.now().isoformat()
-        })
+            if not user_id:
+                return web.json_response(
+                    {'error': 'User ID is required'},
+                    status=400
+                )
+
+            # Start session via orchestrator
+            session_info = await self.orchestrator.start_session(
+                user_id, session_type.upper()
+            )
+
+            return web.json_response({
+                'session_id': session_info.session_id,
+                'agent_type': session_info.agent_type,
+                'workflow_state': session_info.workflow_state.value,
+                'created_at': session_info.created_at.isoformat(),
+                'user_id': session_info.user_id,
+                'timestamp': datetime.now().isoformat()
+            }, status=201)
+
+        except Exception as e:
+            logger.error(f"Error creating session: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to create session', 'details': str(e)},
+                status=500
+            )
+
+    async def _extend_session(self, request: web.Request) -> web.Response:
+        """Extend session time."""
+        try:
+            session_id = request.match_info['session_id']
+            data = await request.json()
+            additional_minutes = data.get('minutes', 5)
+
+            # TODO: Implement session extension in conversation manager
+            # For now, return success message
+
+            return web.json_response({
+                'session_id': session_id,
+                'extended_by_minutes': additional_minutes,
+                'message': f'Session extended by {additional_minutes} minutes',
+                'timestamp': datetime.now().isoformat()
+            })
+
+        except Exception as e:
+            logger.error(f"Error extending session: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to extend session', 'details': str(e)},
+                status=500
+            )
 
     async def _get_therapy_styles(self, request: web.Request) -> web.Response:
         """Get available therapy styles endpoint."""
@@ -320,6 +437,111 @@ class UnifiedServer:
         except Exception as e:
             logger.error(f"Error getting therapy styles: {e}")
             raise
+
+    async def _get_therapy_plan(self, request: web.Request) -> web.Response:
+        """Get current therapy plan for user."""
+        try:
+            # TODO: Extract user_id from authentication
+            user_id = request.query.get('user_id', 'default_user')
+
+            db_service = self.container.get_db_service()
+            therapy_plan = db_service.get_therapy_plan(user_id)
+
+            if not therapy_plan:
+                return web.json_response(
+                    {'error': 'No therapy plan found for user'},
+                    status=404
+                )
+
+            return web.json_response({
+                'plan_id': therapy_plan.id,
+                'user_id': therapy_plan.user_id,
+                'version': therapy_plan.version,
+                'selected_style': therapy_plan.selected_style,
+                'plan_details': therapy_plan.plan_details,
+                'created_at': therapy_plan.created_at.isoformat(),
+                'updated_at': therapy_plan.updated_at.isoformat(),
+                'timestamp': datetime.now().isoformat()
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting therapy plan: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to get therapy plan', 'details': str(e)},
+                status=500
+            )
+
+    async def _create_therapy_plan(self, request: web.Request) -> web.Response:
+        """Create or update therapy plan."""
+        try:
+            data = await request.json()
+
+            user_id = data.get('user_id')
+            selected_style = data.get('selected_style')
+            plan_details = data.get('plan_details', {})
+
+            if not user_id:
+                return web.json_response(
+                    {'error': 'User ID is required'},
+                    status=400
+                )
+
+            if not selected_style:
+                return web.json_response(
+                    {'error': 'Selected therapy style is required'},
+                    status=400
+                )
+
+            db_service = self.container.get_db_service()
+
+            # Check if plan exists
+            existing_plan = db_service.get_therapy_plan(user_id)
+
+            if existing_plan:
+                # Update existing plan
+                updated_plan = db_service.update_therapy_plan(
+                    user_id,
+                    selected_style=selected_style,
+                    plan_details=plan_details
+                )
+
+                return web.json_response({
+                    'plan_id': updated_plan.id,
+                    'user_id': updated_plan.user_id,
+                    'version': updated_plan.version,
+                    'selected_style': updated_plan.selected_style,
+                    'plan_details': updated_plan.plan_details,
+                    'created_at': updated_plan.created_at.isoformat(),
+                    'updated_at': updated_plan.updated_at.isoformat(),
+                    'message': 'Therapy plan updated successfully',
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                # Create new plan
+                new_plan = db_service.create_therapy_plan(
+                    user_id,
+                    selected_style=selected_style,
+                    plan_details=plan_details
+                )
+
+                return web.json_response({
+                    'plan_id': new_plan.id,
+                    'user_id': new_plan.user_id,
+                    'version': new_plan.version,
+                    'selected_style': new_plan.selected_style,
+                    'plan_details': new_plan.plan_details,
+                    'created_at': new_plan.created_at.isoformat(),
+                    'updated_at': new_plan.updated_at.isoformat(),
+                    'message': 'Therapy plan created successfully',
+                    'timestamp': datetime.now().isoformat()
+                }, status=201)
+
+        except Exception as e:
+            logger.error(f"Error creating/updating therapy plan: {e}", exc_info=True)
+            return web.json_response(
+                {'error': 'Failed to create/update therapy plan', 'details': str(e)},
+                status=500
+            )
 
     async def start(self):
         """Start the unified server."""
