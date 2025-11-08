@@ -19,10 +19,10 @@ from websocket_server.message_handler import MessageHandler
 from websocket_server.typing_manager import TypingManager
 from container.service_container import ServiceContainer
 from config import Config
-from src.orchestration.agent_orchestrator import AgentOrchestrator
-from src.orchestration.conversation_manager import ConversationManager
-from src.orchestration.workflow_engine import WorkflowEngine
-from src.gateways.websocket_gateway import WebSocketGateway
+from orchestration.agent_orchestrator import AgentOrchestrator
+from orchestration.conversation_manager import ConversationManager
+from orchestration.workflow_engine import WorkflowEngine
+from gateways.websocket_gateway import WebSocketGateway
 
 logger = logging.getLogger(__name__)
 
