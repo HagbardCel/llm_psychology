@@ -67,3 +67,39 @@ export interface ConnectionEvent {
   timestamp: number;
   error?: string;
 }
+
+// Streaming response types
+export interface ChatResponseChunk {
+  chunk: string;
+  is_complete: boolean;
+  full_response?: string;
+}
+
+export interface SessionStartedEvent {
+  session_id: string;
+  agent_type: string;
+  workflow_state: string;
+  created_at: string;
+}
+
+export interface UserStatusEvent {
+  user_id: string;
+  workflow_state: string;
+  next_agent: string;
+}
+
+export interface StyleSelectedEvent {
+  selected_style: string;
+  message: string;
+}
+
+export interface SessionExtendedEvent {
+  session_id: string;
+  additional_minutes: number;
+  message: string;
+}
+
+// Callback types
+export type StreamingChunkCallback = (chunk: string, isComplete: boolean, fullResponse?: string) => void;
+export type SessionStartedCallback = (event: SessionStartedEvent) => void;
+export type UserStatusCallback = (event: UserStatusEvent) => void;

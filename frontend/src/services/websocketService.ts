@@ -8,7 +8,13 @@ import {
   WebSocketMessage,
   WebSocketResponse,
   ConnectionStatus,
-  ConnectionEvent
+  ConnectionEvent,
+  ChatResponseChunk,
+  SessionStartedEvent,
+  UserStatusEvent,
+  StreamingChunkCallback,
+  SessionStartedCallback,
+  UserStatusCallback
 } from '../types/websocket';
 
 export class WebSocketService {
@@ -18,10 +24,13 @@ export class WebSocketService {
   private currentReconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
-  
+
   // Event callbacks
   private onConnectionChange: ((status: ConnectionStatus) => void) | null = null;
   private onMessage: ((message: WebSocketResponse) => void) | null = null;
+  private onStreamingChunk: StreamingChunkCallback | null = null;
+  private onSessionStartedEvent: SessionStartedCallback | null = null;
+  private onUserStatusEvent: UserStatusCallback | null = null;
 
   constructor(config: WebSocketConfig) {
     this.config = config;
@@ -174,6 +183,26 @@ export class WebSocketService {
     this.onMessage = callback;
   }
 
+  /**
+   * Set streaming chunk callback
+   */
+  onStreamingChunkReceived(callback: StreamingChunkCallback): void {
+    this.onStreamingChunk = callback;
+  }
+
+  /**
+   * Set session started event callback
+   */
+  onSessionStarted(callback: SessionStartedCallback): void {
+    this.onSessionStartedEvent = callback;
+  }
+
+  /**
+   * Set user status event callback
+   */
+  onUserStatus(callback: UserStatusCallback): void {
+    this.onUserStatusEvent = callback;
+  }
 
   /**
    * Get current connection status
@@ -192,13 +221,13 @@ export class WebSocketService {
     this.socket.on('disconnect', (reason) => {
       console.log('Disconnected from WebSocket server:', reason);
       this.updateConnectionStatus({ isConnected: false, isConnecting: false });
-      
+
       // Attempt to reconnect if disconnection was not intentional
       if (reason === 'io server disconnect') {
         // Server initiated disconnect, don't reconnect
         return;
       }
-      
+
       this.attemptReconnect();
     });
 
@@ -210,8 +239,8 @@ export class WebSocketService {
 
     this.socket.on('error', (error: any) => {
       console.error('WebSocket error:', error);
-      this.updateConnectionStatus({ 
-        isConnected: false, 
+      this.updateConnectionStatus({
+        isConnected: false,
         isConnecting: false,
         connectionError: error.message || 'WebSocket error'
       });
@@ -223,6 +252,48 @@ export class WebSocketService {
 
     this.socket.on('pong', (data: any) => {
       console.log('Received pong:', data);
+    });
+
+    // Streaming response handler
+    this.socket.on('chat_response_chunk', (data: ChatResponseChunk) => {
+      if (this.onStreamingChunk) {
+        this.onStreamingChunk(data.chunk, data.is_complete, data.full_response);
+      }
+    });
+
+    // Session started handler
+    this.socket.on('session_started', (data: SessionStartedEvent) => {
+      console.log('Session started:', data);
+      if (this.onSessionStartedEvent) {
+        this.onSessionStartedEvent(data);
+      }
+    });
+
+    // User status handler
+    this.socket.on('user_status', (data: UserStatusEvent) => {
+      console.log('User status received:', data);
+      if (this.onUserStatusEvent) {
+        this.onUserStatusEvent(data);
+      }
+    });
+
+    // Style selected handler
+    this.socket.on('style_selected', (data: any) => {
+      console.log('Style selected:', data);
+    });
+
+    // Session extended handler
+    this.socket.on('session_extended', (data: any) => {
+      console.log('Session extended:', data);
+    });
+
+    // Typing indicators from server
+    this.socket.on('typing_start', () => {
+      console.log('Therapist is typing...');
+    });
+
+    this.socket.on('typing_stop', () => {
+      console.log('Therapist stopped typing');
     });
   }
 

@@ -15,9 +15,16 @@ import PsychologyIcon from '@mui/icons-material/Psychology';
 interface MessageHistoryProps {
   messages: Message[];
   isLoading?: boolean;
+  streamingMessage?: string;
+  isStreaming?: boolean;
 }
 
-export function MessageHistory({ messages, isLoading = false }: MessageHistoryProps) {
+export function MessageHistory({
+  messages,
+  isLoading = false,
+  streamingMessage = '',
+  isStreaming = false
+}: MessageHistoryProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -26,7 +33,7 @@ export function MessageHistory({ messages, isLoading = false }: MessageHistoryPr
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, streamingMessage]);
 
   return (
     <Box
@@ -41,18 +48,23 @@ export function MessageHistory({ messages, isLoading = false }: MessageHistoryPr
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
-        
-        {isLoading && (
+
+        {/* Show streaming message in real-time */}
+        {isStreaming && streamingMessage && (
+          <StreamingMessageBubble content={streamingMessage} />
+        )}
+
+        {isLoading && !isStreaming && (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
-            <Chip 
-              label="Agent is typing..." 
-              variant="outlined" 
+            <Chip
+              label="Agent is typing..."
+              variant="outlined"
               color="primary"
               sx={{ animation: 'pulse 2s infinite' }}
             />
           </Box>
         )}
-        
+
         <div ref={messagesEndRef} />
       </Stack>
     </Box>
@@ -92,7 +104,7 @@ function MessageBubble({ message }: MessageBubbleProps) {
         >
           {isUser ? <PersonIcon /> : <PsychologyIcon />}
         </Avatar>
-        
+
         <Paper
           elevation={1}
           sx={{
@@ -113,7 +125,7 @@ function MessageBubble({ message }: MessageBubbleProps) {
           >
             {message.content}
           </Typography>
-          
+
           <Typography
             variant="caption"
             sx={{
@@ -124,6 +136,92 @@ function MessageBubble({ message }: MessageBubbleProps) {
             }}
           >
             {format(new Date(message.timestamp), 'HH:mm')}
+          </Typography>
+        </Paper>
+      </Box>
+    </Box>
+  );
+}
+
+interface StreamingMessageBubbleProps {
+  content: string;
+}
+
+function StreamingMessageBubble({ content }: StreamingMessageBubbleProps) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        justifyContent: 'flex-start',
+        mb: 1,
+      }}
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          maxWidth: '70%',
+          gap: 1,
+        }}
+      >
+        <Avatar
+          sx={{
+            width: 32,
+            height: 32,
+            bgcolor: 'secondary.main',
+          }}
+        >
+          <PsychologyIcon />
+        </Avatar>
+
+        <Paper
+          elevation={1}
+          sx={{
+            p: 2,
+            backgroundColor: 'white',
+            color: 'text.primary',
+            borderRadius: 2,
+            borderTopLeftRadius: 0.5,
+            borderTopRightRadius: 2,
+            position: 'relative',
+            '&::after': {
+              content: '""',
+              position: 'absolute',
+              right: 8,
+              bottom: 8,
+              width: 8,
+              height: 8,
+              backgroundColor: 'secondary.main',
+              borderRadius: '50%',
+              animation: 'blink 1s infinite',
+            },
+            '@keyframes blink': {
+              '0%, 100%': { opacity: 1 },
+              '50%': { opacity: 0.3 },
+            },
+          }}
+        >
+          <Typography
+            variant="body1"
+            sx={{
+              whiteSpace: 'pre-wrap',
+              wordWrap: 'break-word',
+            }}
+          >
+            {content}
+          </Typography>
+
+          <Typography
+            variant="caption"
+            sx={{
+              display: 'block',
+              mt: 1,
+              opacity: 0.7,
+              fontStyle: 'italic',
+            }}
+          >
+            Streaming...
           </Typography>
         </Paper>
       </Box>

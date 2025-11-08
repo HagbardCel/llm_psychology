@@ -22,9 +22,51 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   const { state, actions } = useAppContext();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [streamingMessage, setStreamingMessage] = useState<string>('');
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const currentSession = state.currentSession;
   const messages = currentSession?.messages || [];
+
+  // Callback for handling streaming chunks
+  const handleStreamingChunk = (chunk: string, isComplete: boolean, fullResponse?: string) => {
+    if (!currentSession) return;
+
+    if (!isComplete) {
+      // Accumulate chunks
+      setStreamingMessage(prev => prev + chunk);
+      setIsStreaming(true);
+    } else {
+      // Streaming complete - create final message
+      const finalContent = fullResponse || streamingMessage;
+
+      const agentMessage: Message = {
+        id: generateMessageId(),
+        content: finalContent,
+        sender: 'agent',
+        timestamp: new Date(),
+        sessionId: currentSession.id,
+      };
+
+      const updatedSession: Session = {
+        ...currentSession,
+        messages: [...currentSession.messages, agentMessage],
+      };
+
+      actions.updateSession(updatedSession);
+
+      // Reset streaming state
+      setStreamingMessage('');
+      setIsStreaming(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Callback for session started event
+  const handleSessionStarted = (event: any) => {
+    console.log('Therapy session started:', event);
+    // TODO: Update session state with session_id from event
+  };
 
   // WebSocket integration
   const {
@@ -38,7 +80,9 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   } = useWebSocket({
     userId: state.user?.id || 'default_user',
     authToken: 'temp_token', // TODO: Use real auth token
-    autoConnect: true
+    autoConnect: true,
+    onStreamingChunk: handleStreamingChunk,
+    onSessionStarted: handleSessionStarted
   });
 
   // Typing indicator
@@ -224,9 +268,11 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         }}
       >
         <Box sx={{ flexGrow: 1, minHeight: 0 }}>
-          <MessageHistory 
-            messages={messages} 
+          <MessageHistory
+            messages={messages}
             isLoading={isLoading}
+            streamingMessage={streamingMessage}
+            isStreaming={isStreaming}
           />
         </Box>
 

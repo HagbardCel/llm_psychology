@@ -7,7 +7,12 @@ import { WebSocketService } from '../services/websocketService';
 import {
   ConnectionStatus,
   WebSocketResponse,
-  WebSocketConfig
+  WebSocketConfig,
+  SessionStartedEvent,
+  UserStatusEvent,
+  StreamingChunkCallback,
+  SessionStartedCallback,
+  UserStatusCallback
 } from '../types/websocket';
 
 interface UseWebSocketOptions {
@@ -17,6 +22,9 @@ interface UseWebSocketOptions {
   autoConnect?: boolean;
   reconnectAttempts?: number;
   reconnectDelay?: number;
+  onStreamingChunk?: StreamingChunkCallback;
+  onSessionStarted?: SessionStartedCallback;
+  onUserStatus?: UserStatusCallback;
 }
 
 interface UseWebSocketReturn {
@@ -40,14 +48,17 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     authToken,
     autoConnect = true,
     reconnectAttempts = 5,
-    reconnectDelay = 1000
+    reconnectDelay = 1000,
+    onStreamingChunk,
+    onSessionStarted,
+    onUserStatus
   } = options;
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
     isConnected: false,
     isConnecting: false
   });
-  
+
   const [lastMessage, setLastMessage] = useState<WebSocketResponse | null>(null);
   const serviceRef = useRef<WebSocketService | null>(null);
 
@@ -67,13 +78,24 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     serviceRef.current.onConnectionStatusChange(setConnectionStatus);
     serviceRef.current.onMessageReceived(setLastMessage);
 
+    // Set up streaming event handlers
+    if (onStreamingChunk) {
+      serviceRef.current.onStreamingChunkReceived(onStreamingChunk);
+    }
+    if (onSessionStarted) {
+      serviceRef.current.onSessionStarted(onSessionStarted);
+    }
+    if (onUserStatus) {
+      serviceRef.current.onUserStatus(onUserStatus);
+    }
+
     return () => {
       if (serviceRef.current) {
         serviceRef.current.disconnect();
         serviceRef.current = null;
       }
     };
-  }, [url, userId, authToken, reconnectAttempts, reconnectDelay]);
+  }, [url, userId, authToken, reconnectAttempts, reconnectDelay, onStreamingChunk, onSessionStarted, onUserStatus]);
 
   // Auto-connect if enabled
   useEffect(() => {
