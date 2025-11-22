@@ -8,8 +8,6 @@ import {
   ConnectionStatus,
   WebSocketResponse,
   WebSocketConfig,
-  SessionStartedEvent,
-  UserStatusEvent,
   StreamingChunkCallback,
   SessionStartedCallback,
   UserStatusCallback

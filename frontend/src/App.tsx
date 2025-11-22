@@ -8,6 +8,7 @@ import { AppProvider } from './contexts/AppContext';
 import { Navigation } from './components/Navigation';
 import { HomePage } from './pages/HomePage';
 import { SessionPage } from './pages/SessionPage';
+import { SessionHistoryPage } from './pages/SessionHistoryPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 // Create Material-UI theme
@@ -61,7 +62,7 @@ function App() {
                 <Route path="/" element={<HomePage />} />
                 <Route path="/session" element={<SessionPage />} />
                 <Route path="/session/:sessionId" element={<SessionPage />} />
-                <Route path="/history" element={<div>Session History (Coming Soon)</div>} />
+                <Route path="/history" element={<SessionHistoryPage />} />
                 <Route path="/settings" element={<div>Settings (Coming Soon)</div>} />
                 <Route path="/about" element={<div>About (Coming Soon)</div>} />
                 <Route path="/profile" element={<div>Profile Setup (Coming Soon)</div>} />

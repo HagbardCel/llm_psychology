@@ -28,10 +28,6 @@ class TrioIntakeAgent:
     """
     Trio-native agent responsible for conducting intake assessments.
 
-    This agent has two modes:
-    1. Legacy mode: Direct UI interaction (for backward compatibility)
-    2. Orchestrator mode: Pure business logic, returns prompts
-
     Uses Trio's structured concurrency for all async operations.
     """
 
@@ -47,7 +43,7 @@ class TrioIntakeAgent:
         Args:
             llm_service: The LLM service for generating responses (synchronous)
             db_service: The Trio database service for storing sessions
-            user_context: User context (optional, for legacy mode)
+            user_context: User context
         """
         self.llm_service = llm_service
         self.db_service = db_service

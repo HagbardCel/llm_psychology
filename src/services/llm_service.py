@@ -211,3 +211,35 @@ class LLMService:
             raise LLMServiceError(
                 f"Prompt chain failed: {type(e).__name__}: {str(e)}\n\nSTACKTRACE:\n{tb_str}"
             ) from e
+
+    async def generate_response_async(
+        self, prompt: str, context: list[dict[str, str]] | None = None
+    ) -> str:
+        """
+        Generate a response from the LLM asynchronously using Trio.
+
+        Args:
+            prompt (str): The prompt to send to the LLM.
+            context (Optional[List[Dict[str, str]]]): Optional conversation history.
+
+        Returns:
+            str: The LLM's response.
+        """
+        return await trio.to_thread.run_sync(self.generate_response, prompt, context)
+
+    async def generate_structured_response_async(
+        self, prompt: str, output_format: str
+    ) -> dict[str, Any]:
+        """
+        Generate a structured response from the LLM asynchronously using Trio.
+
+        Args:
+            prompt (str): The prompt to send to the LLM.
+            output_format (str): Description of the expected output format.
+
+        Returns:
+            Dict[str, Any]: The structured response.
+        """
+        return await trio.to_thread.run_sync(
+            self.generate_structured_response, prompt, output_format
+        )

@@ -239,8 +239,6 @@ Your personalized therapy plan has been created and we're ready to begin our the
 
         return "\n".join(parts)
 
-    # ===== LEGACY INTERFACE (for backward compatibility) =====
-
     async def _generate_recommendations(
         self, message_history: list
     ) -> list[dict[str, str]]:
@@ -266,11 +264,39 @@ Your personalized therapy plan has been created and we're ready to begin our the
         # For each style, use the assessment prompt to evaluate suitability
         style_assessments = {}
 
-        for style_id in available_styles:
-            assessment_prompt = style_service.get_assessment_prompt(style_id)
+        # Use a nursery to run assessments concurrently
+        async with trio.open_nursery() as nursery:
+            for style_id in available_styles:
+                nursery.start_soon(
+                    self._assess_style,
+                    style_id,
+                    session_summary,
+                    style_assessments,
+                )
 
-            # Create a prompt to evaluate the session against this style's criteria
-            evaluation_prompt = f"""
+        # Create recommendations with descriptions
+        recommendations = []
+        for style_id in available_styles:
+            if style_id in style_assessments:
+                recommendations.append(
+                    {
+                        "style_id": style_id,
+                        "name": style_id.upper(),
+                        "description": style_service.get_style_description(style_id),
+                        "assessment": style_assessments[style_id],
+                    }
+                )
+
+        # Sort recommendations by relevance
+        # (for now, we'll keep all but limit to 3 in the UI)
+        return recommendations
+
+    async def _assess_style(self, style_id: str, session_summary: str, results: dict):
+        """Helper to assess a single style asynchronously."""
+        assessment_prompt = style_service.get_assessment_prompt(style_id)
+
+        # Create a prompt to evaluate the session against this style's criteria
+        evaluation_prompt = f"""
 {assessment_prompt}
 
         Based on the following intake session transcript, assess whether this patient
@@ -284,27 +310,9 @@ Session Transcript:
         see in the transcript.
 """
 
-            # Generate assessment (run in thread)
-            assessment = await trio.to_thread.run_sync(
-                self.llm_service.generate_response, evaluation_prompt
-            )
-            style_assessments[style_id] = assessment
-
-        # Create recommendations with descriptions
-        recommendations = []
-        for style_id in available_styles:
-            recommendations.append(
-                {
-                    "style_id": style_id,
-                    "name": style_id.upper(),
-                    "description": style_service.get_style_description(style_id),
-                    "assessment": style_assessments[style_id],
-                }
-            )
-
-        # Sort recommendations by relevance
-        # (for now, we'll keep all but limit to 3 in the UI)
-        return recommendations
+        # Generate assessment
+        assessment = await self.llm_service.generate_response_async(evaluation_prompt)
+        results[style_id] = assessment
 
     async def create_initial_plan_with_style(
         self, intake_session: Session, selected_style: str

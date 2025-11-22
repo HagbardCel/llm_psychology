@@ -116,6 +116,19 @@ def mock_llm_service():
 
     llm_service.generate_response_stream = mock_stream_response
 
+    # Add async versions that wrap the sync mocks
+    async def mock_generate_response_async(prompt, context=None):
+        return llm_service.generate_response(prompt, context)
+
+    llm_service.generate_response_async = mock_generate_response_async
+
+    async def mock_generate_structured_response_async(prompt, output_format=None):
+        return llm_service.generate_structured_response(prompt, output_format)
+
+    llm_service.generate_structured_response_async = (
+        mock_generate_structured_response_async
+    )
+
     return llm_service
 
 
