@@ -15,6 +15,7 @@ torchaudio
 python-dotenv
 pydantic
 pydantic-settings
+ruff>=0.5.3
 typing-extensions==4.15.0
 
 # Terminal UI

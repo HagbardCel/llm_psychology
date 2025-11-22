@@ -63,11 +63,11 @@ install-uv:
 
 # Install production dependencies with UV
 install:
-	uv pip install -r requirements.txt
+	uv pip install --system -r requirements.txt
 
 # Install development dependencies with UV
 dev-install:
-	uv pip install -r requirements-dev.txt
+	uv pip install --system -r requirements-dev.txt
 
 # Format code with black
 format:
