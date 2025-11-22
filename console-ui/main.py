@@ -2,11 +2,12 @@
 """
 Console UI client for the Virtual LLM-Driven Psychoanalyst application.
 This service connects to the backend via API and WebSocket for therapy sessions.
+Trio-based implementation for structured concurrency.
 """
 
 import sys
 import os
-import asyncio
+import trio
 import logging
 import json
 from typing import Optional
@@ -64,4 +65,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(trio.run(main))

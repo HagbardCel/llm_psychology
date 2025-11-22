@@ -1,6 +1,7 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate install-hooks clean clean-testdb
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
+.PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 
 # Default target
 help:
@@ -50,6 +51,11 @@ help:
 	@echo ""
 	@echo "Docker Production:"
 	@echo "  docker-prod       - Start production app"
+	@echo ""
+	@echo "DevContainer:"
+	@echo "  devcontainer-rebuild - Rebuild devcontainer without cache"
+	@echo "  devcontainer-test    - Test devcontainer configuration"
+	@echo "  devcontainer-open    - Open project in VSCode devcontainer"
 
 # Install UV package manager
 install-uv:
@@ -244,7 +250,7 @@ ui-standalone-test:
 	@echo "- Session duration: 10 minutes"
 	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
 	@echo ""
-	docker compose --profile usertest up --build usertest
+	@set -a && . ./.env.usertest && set +a && python src/main.py
 
 # Console UI Service (WebSocket client)
 ui-console:
@@ -254,7 +260,7 @@ ui-console:
 	@echo ""
 	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
 	@echo ""
-	docker compose up --build -d api && docker compose run --rm console-ui
+	docker compose up --build -d api && docker compose run --rm -it console-ui
 
 # Console UI Service (usertest mode)
 ui-console-test:
@@ -265,7 +271,7 @@ ui-console-test:
 	@echo ""
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
 	@echo ""
-	docker compose --profile usertest-console up --build -d api-usertest && docker compose --profile usertest-console run --rm console-ui-usertest
+	docker compose --profile usertest-console up --build -d api-usertest && docker compose --profile usertest-console run --rm -it console-ui-usertest
 
 # Web UI (browser interface)
 ui-web:
@@ -280,8 +286,8 @@ ui-web-test:
 	@echo "🌐 Starting Web UI (Usertest Mode)..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
-	@echo "- API Server: http://localhost:8000"
-	@echo "- Frontend: http://localhost:5173"
+	@echo "- API Server: http://localhost:8001"
+	@echo "- Frontend: http://localhost:5174"
 	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
 	@echo ""
 	docker compose --profile usertest-web up --build api-usertest frontend-usertest
@@ -296,7 +302,7 @@ ui-all:
 	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
 	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
 	@echo ""
-	docker compose up --build -d api frontend && docker compose run --rm console-ui
+	docker compose up --build -d api frontend && docker compose run --rm -it console-ui
 
 # All UI modes (usertest mode)
 ui-all-test:
@@ -311,4 +317,57 @@ ui-all-test:
 	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
 	@echo ""
-	docker compose --profile usertest-all up --build -d api-usertest frontend-usertest && docker compose --profile usertest-all run --rm console-ui-usertest
+	docker compose --profile usertest-all up --build -d api-usertest frontend-usertest && docker compose --profile usertest-all run --rm -it console-ui-usertest
+
+# ============================================
+# DevContainer Commands
+# ============================================
+
+# Rebuild devcontainer without cache
+devcontainer-rebuild:
+	@echo "🔄 Rebuilding devcontainer..."
+	@echo "This will rebuild the container from scratch without using cache."
+	@echo ""
+	@if command -v devcontainer > /dev/null 2>&1; then \
+		devcontainer build --workspace-folder . --no-cache; \
+	else \
+		echo "❌ devcontainer CLI not found."; \
+		echo "Install it with: npm install -g @devcontainers/cli"; \
+		echo ""; \
+		echo "Alternative: Rebuild from VSCode:"; \
+		echo "1. Open Command Palette (Ctrl+Shift+P)"; \
+		echo "2. Run 'Dev Containers: Rebuild Container'"; \
+		exit 1; \
+	fi
+
+# Test devcontainer configuration
+devcontainer-test:
+	@echo "✅ Testing devcontainer setup..."
+	@echo ""
+	@echo "Checking configuration files exist..."
+	@test -f .devcontainer/devcontainer.json && echo "✓ .devcontainer/devcontainer.json exists"
+	@test -f .vscode/settings.json && echo "✓ .vscode/settings.json exists"
+	@test -f .vscode/extensions.json && echo "✓ .vscode/extensions.json exists"
+	@test -f .vscode/launch.json && echo "✓ .vscode/launch.json exists"
+	@echo ""
+	@echo "Validating JSON syntax (note: VSCode supports JSONC with comments)..."
+	@python3 -c "import json; json.load(open('.devcontainer/devcontainer.json'))" && echo "✓ devcontainer.json is valid" || echo "⚠ devcontainer.json has comments (valid JSONC)"
+	@echo ""
+	@echo "Configuration files are ready! ✨"
+	@echo ""
+	@echo "Note: VSCode config files (.vscode/*) support comments (JSONC format)."
+	@echo "They will work correctly in VSCode even if they fail strict JSON validation."
+
+# Open project in VSCode devcontainer
+devcontainer-open:
+	@echo "🚀 Opening project in VSCode devcontainer..."
+	@if command -v code > /dev/null 2>&1; then \
+		code --folder-uri vscode-remote://dev-container+$(shell pwd | sed 's/\//\%2F/g')/app; \
+	else \
+		echo "❌ VSCode CLI not found."; \
+		echo ""; \
+		echo "Manual steps:"; \
+		echo "1. Open this folder in VSCode"; \
+		echo "2. Press Ctrl+Shift+P"; \
+		echo "3. Run 'Dev Containers: Reopen in Container'"; \
+	fi

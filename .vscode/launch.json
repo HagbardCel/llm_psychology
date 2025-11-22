@@ -1,0 +1,154 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Trio Server",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/trio_server.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "development",
+        "SERVER_HOST": "0.0.0.0",
+        "SERVER_PORT": "8000"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Legacy Server (main.py)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "development"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Console Client",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/console-ui/main.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "BACKEND_URL": "http://localhost:8000",
+        "WEBSOCKET_URL": "http://localhost:8000",
+        "USER_ID": "debug_user",
+        "AUTH_TOKEN": "debug_token"
+      },
+      "cwd": "${workspaceFolder}/console-ui"
+    },
+    {
+      "name": "Python: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Pytest - Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "${file}",
+        "-v",
+        "--tb=short"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "testing"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Pytest - All Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "tests/",
+        "-v",
+        "--tb=short"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "testing"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Pytest - Unit Tests Only",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-m",
+        "unit",
+        "-v",
+        "--tb=short"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "testing"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Pytest - Integration Tests Only",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-m",
+        "integration",
+        "-v",
+        "--tb=short"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "testing"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Python: Pytest - Trio Tests Only",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-m",
+        "trio",
+        "-v",
+        "--tb=short"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "APP_ENV": "testing"
+      },
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

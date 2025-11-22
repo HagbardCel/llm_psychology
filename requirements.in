@@ -1,8 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
 
 # LLM Abstraction & Interaction
-langchain
+langchain==1.0.8
 langchain-google-genai
 langchain-community
 
@@ -10,22 +8,21 @@ langchain-community
 faiss-cpu>=1.7.4
 sentence-transformers[onnx]>=3.2.0
 huggingface-hub
+torchvision
+torchaudio
 
 # Utilities
 python-dotenv
 pydantic
 pydantic-settings
+typing-extensions==4.15.0
 
 # Terminal UI
 textual
 
-# Server & WebSocket
-python-socketio[asyncio]>=5.11.0
-aiohttp-cors>=0.7.0
-
-# Testing
-pytest
-
-# Development tools
-black
-ruff
+# Trio-based Server & WebSocket (structured concurrency)
+trio
+quart
+hypercorn
+trio-websocket
+quart-trio

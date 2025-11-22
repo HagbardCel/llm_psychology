@@ -9,7 +9,7 @@ conversation context.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from models.data_models import Message, TherapyPlan, UserProfile
 
@@ -62,8 +62,8 @@ class AgentResponse:
 
     content: str
     next_action: str  # "continue", "transition", "complete"
-    next_state: Optional[WorkflowState] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    next_state: WorkflowState | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -88,9 +88,9 @@ class ConversationContext:
 
     session_id: str
     user_profile: UserProfile
-    therapy_plan: Optional[TherapyPlan]
-    message_history: List[Message]
-    topics_covered: List[str]
+    therapy_plan: TherapyPlan | None
+    message_history: list[Message]
+    topics_covered: list[str]
     session_start_time: datetime
     duration_minutes: int
     extensions_used: int = 0
@@ -130,6 +130,7 @@ class SessionInfo:
         workflow_state: Current workflow state
         created_at: When session was created
         user_id: User this session belongs to
+        has_initial_message: Whether an initial message is being sent from the agent
     """
 
     session_id: str
@@ -137,6 +138,18 @@ class SessionInfo:
     workflow_state: WorkflowState
     created_at: datetime
     user_id: str
+    has_initial_message: bool = False
+
+    def to_dict(self):
+        """Convert dataclass to dictionary for JSON serialization."""
+        return {
+            "session_id": self.session_id,
+            "agent_type": self.agent_type,
+            "workflow_state": self.workflow_state.value,
+            "created_at": self.created_at.isoformat(),
+            "user_id": self.user_id,
+            "has_initial_message": self.has_initial_message,
+        }
 
 
 @dataclass
@@ -154,4 +167,4 @@ class TherapyStyleRecommendation:
     style_name: str
     score: float
     explanation: str
-    key_topics: List[str]
+    key_topics: list[str]

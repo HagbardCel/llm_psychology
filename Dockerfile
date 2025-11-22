@@ -4,7 +4,7 @@
 # ============================================
 # Base stage: System dependencies + UV
 # ============================================
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
@@ -19,30 +19,36 @@ RUN apt-get update && apt-get install -y \
 # ============================================
 # Dependencies stage: Install Python packages
 # ============================================
-FROM base as dependencies
+FROM base AS dependencies
 
 # Copy requirements files
 COPY requirements.txt ./
 
-# Install CPU-only PyTorch + torchvision + torchaudio from PyTorch CPU index first
-# Use uv to install; pinning is omitted so the index provides compatible builds.
-RUN uv pip install --system --no-cache-dir \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Install remaining production dependencies with UV
-RUN uv pip install --system -r requirements.txt
+# Install production dependencies with UV, using the PyTorch CPU index as an additional source.
+# This ensures that torch, torchvision, and torchaudio are fetched as CPU-only builds.
+RUN uv pip install --system --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
 
 # ============================================
 # Development stage: Add dev dependencies
 # ============================================
-FROM dependencies as development
+FROM dependencies AS development
 
 # Copy dev requirements and install
 COPY requirements-dev.txt ./
 RUN uv pip install --system -r requirements-dev.txt
 
+# Copy application source code
+COPY src/ ./src/
+
 # Copy configuration files
 COPY pyproject.toml pytest.ini ./
+
+# Copy tests and validation scripts
+COPY tests/ ./tests/
+COPY deployment_validation.py ./
+
+# Copy data directory
+COPY data/ ./data/
 
 # Set environment for development
 ENV PYTHONUNBUFFERED=1 \
@@ -57,7 +63,7 @@ CMD ["python", "src/main.py"]
 # ============================================
 # Production stage: Minimal final image
 # ============================================
-FROM dependencies as production
+FROM dependencies AS production
 
 # Copy configuration files
 COPY pyproject.toml ./

@@ -127,7 +127,7 @@ dmypy.json
 .pyre/
 
 # IDEs
-.vscode/
+# .vscode/ - NOT ignored, we share team settings
 .idea/
 *.swp
 *.swo

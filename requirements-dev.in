@@ -1,6 +1,13 @@
-# Development tools
+-r requirements.in
+
+# Code quality and formatting
 black
 ruff
-pytest
-pytest-asyncio
 mypy
+
+# Testing
+pytest
+pytest-trio
+
+# HTTP client for testing
+httpx

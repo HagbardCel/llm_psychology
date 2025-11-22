@@ -11,6 +11,7 @@ The system has been completely redesigned with a clean architecture that separat
 - **🔄 State Machine**: Explicit workflow states with validated transitions
 - **🌐 Unified API**: All clients (web, console, local) use the same backend
 - **📦 Pure Business Logic**: Agents are now testable, reusable components
+- **🔄 Robust Database**: Connection pooling and versioned schema migrations for stability and performance.
 - **🧪 Comprehensive Tests**: 1,900+ lines of unit and integration tests
 - **📚 Complete Documentation**: Architecture guide, quick start, and API reference
 
@@ -44,9 +45,10 @@ The system has been completely redesigned with a clean architecture that separat
 - **ReflectionAgent**: Updates therapy plans based on session outcomes and progress
 
 ### Service Layer
-- **DatabaseService**: SQLite-based persistence for sessions and user profiles
+- **TrioDatabaseService**: Trio-native SQLite persistence with connection pooling and versioned migrations
+- **MigrationService**: Manages database schema versioning and updates
 - **LLMService**: Google Gemini API integration with streaming support
-- **RAGService**: ChromaDB-powered knowledge retrieval for contextual responses
+- **RAGService**: FAISS-powered knowledge retrieval for contextual responses
 - **StyleService**: Manages therapy style configurations and prompts
 
 ### Workflow States

@@ -1,6 +1,14 @@
-# HTTP client for API requests
-aiohttp==3.9.0
+# Trio for structured concurrency
+trio>=0.32.0
 
-# Socket.IO client for real-time communication  
-python-socketio[asyncio]==5.11.0
-python-engineio==4.9.0
+# WebSocket client for Trio
+trio-websocket>=0.12.2
+
+# HTTP client for API requests
+httpx>=0.28.1
+
+# For async HTTP requests in textual_ui
+aiohttp>=3.9.0
+
+# Temporary comment to invalidate Docker cache
+

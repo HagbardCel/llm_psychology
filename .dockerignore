@@ -137,11 +137,14 @@ dmypy.json
 Thumbs.db
 
 # Data files that shouldn't be in the image
-data/
-*.db
-*.db-journal
-*.db-shm
-*.db-wal
+# Exclude database files but keep domain_knowledge
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/psychoanalyst*.db*
+data/vector_db*/
+!data/domain_knowledge/
 
 # Test files (include in dev builds, exclude in prod)
 # tests/

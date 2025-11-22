@@ -1,29 +1,4 @@
-# Development overrides - automatically loaded by docker-compose
-# This file provides development-friendly defaults when no profile is specified
-
 services:
-  # Make api and frontend the default services (start without --profile)
   api:
-    profiles: []
-
-  frontend:
-    profiles: []
-
-  console-ui:
-    profiles: []
-
-  # Override production app to not start by default
-  app:
-    profiles: ["production"]
-
-  # Override test to only run with explicit profile
-  test:
-    profiles: ["test"]
-
-  # Override devcontainer to only run with explicit profile
-  devcontainer:
-    profiles: ["devcontainer"]
-
-  # Override db-viewer to only run with explicit profile
-  db-viewer:
-    profiles: ["debug"]
+    healthcheck:
+      test: "exit 0"

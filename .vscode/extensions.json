@@ -1,0 +1,34 @@
+{
+  "recommendations": [
+    // Python core extensions
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.black-formatter",
+    "charliermarsh.ruff",
+
+    // Testing
+    "ms-python.pytest",
+
+    // Git
+    "eamodio.gitlens",
+
+    // Docker
+    "ms-azuretools.vscode-docker",
+
+    // Markdown
+    "yzhang.markdown-all-in-one",
+
+    // YAML for docker-compose
+    "redhat.vscode-yaml",
+
+    // Productivity
+    "usernamehw.errorlens",
+    "aaron-bond.better-comments",
+    "esbenp.prettier-vscode"
+  ],
+  "unwantedRecommendations": [
+    // Avoid conflicts with our stack
+    "ms-python.pylint",
+    "ms-python.flake8"
+  ]
+}
