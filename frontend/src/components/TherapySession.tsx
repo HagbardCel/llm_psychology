@@ -189,24 +189,8 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
       if (isConnected) {
         sendChatMessage(content);
       } else {
-        // Fallback to simulated response if not connected
-        setTimeout(() => {
-          const agentMessage: Message = {
-            id: generateMessageId(),
-            content: getSimulatedResponse(currentSession.agentType, content),
-            sender: 'agent',
-            timestamp: new Date(),
-            sessionId: currentSession.id,
-          };
-
-          const finalSession: Session = {
-            ...updatedSession,
-            messages: [...updatedSession.messages, agentMessage],
-          };
-
-          actions.updateSession(finalSession);
-          setIsLoading(false);
-        }, 1500);
+        setError('Not connected to server. Please try again.');
+        setIsLoading(false);
       }
 
     } catch (err) {
@@ -316,33 +300,4 @@ function getInputPlaceholder(agentType?: AgentType): string {
     default:
       return 'Type your message...';
   }
-}
-
-function getSimulatedResponse(agentType: AgentType, _userMessage: string): string {
-  // This is temporary simulation - will be replaced with actual API calls
-  const responses = {
-    [AgentType.INTAKE]: [
-      "Thank you for sharing that. Can you tell me more about what brought you here today?",
-      "I appreciate you opening up. What are your main concerns or goals?",
-      "That's helpful information. How long have you been experiencing this?",
-    ],
-    [AgentType.ASSESSMENT]: [
-      "Based on what you've shared, I'm getting a sense of your needs. What therapy approach resonates with you?",
-      "Your goals are clear. Have you had any previous therapy experience?",
-      "I'm hearing some important themes. What feels most urgent to address?",
-    ],
-    [AgentType.PSYCHOANALYST]: [
-      "That's a profound observation. What feelings come up when you think about that?",
-      "I notice you mentioned... Can we explore that deeper?",
-      "What associations come to mind when you reflect on that experience?",
-    ],
-    [AgentType.REFLECTION]: [
-      "Thank you for that feedback. What stood out most in our session today?",
-      "How are you feeling about the insights we explored?",
-      "What would you like to focus on in our next session?",
-    ],
-  };
-
-  const agentResponses = responses[agentType] || responses[AgentType.PSYCHOANALYST];
-  return agentResponses[Math.floor(Math.random() * agentResponses.length)];
 }

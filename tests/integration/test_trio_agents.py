@@ -25,7 +25,7 @@ from models.data_models import (
     UserProfile,
     UserStatus,
 )
-from orchestration.models import ConversationContext
+from orchestration.models import ConversationContext, WorkflowState
 
 
 @pytest.fixture
@@ -311,8 +311,13 @@ async def test_assessment_agent_initialization(service_container, user_context):
     trio_db_service = service_container.get("trio_db_service")
     rag_service = service_container.get("rag_service")
 
+    # Create a mock reflection agent
+    reflection_agent = TrioReflectionAgent(
+        llm_service, trio_db_service, rag_service, user_context, None, None
+    )
+
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context
+        llm_service, trio_db_service, rag_service, user_context, reflection_agent
     )
 
     assert assessment_agent is not None
@@ -328,8 +333,13 @@ async def test_assessment_agent_process_assessment(
     trio_db_service = service_container.get("trio_db_service")
     rag_service = service_container.get("rag_service")
 
+    # Create a mock reflection agent
+    reflection_agent = TrioReflectionAgent(
+        llm_service, trio_db_service, rag_service, user_context, None, None
+    )
+
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context
+        llm_service, trio_db_service, rag_service, user_context, reflection_agent
     )
 
     # Create context
@@ -461,3 +471,54 @@ async def test_concurrent_agent_operations(service_container, test_user, test_se
     assert any(r[0] == "analyze" for r in results)
     assert any(r[0] == "memory" for r in results)
     assert any(r[0] == "plan" for r in results)
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_assessment_agent_process_selection(
+    service_container, user_context, test_session
+):
+    """Test processing selection via orchestrator interface."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    # Setup dependencies for reflection agent
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+    planning_agent = TrioPlanningAgent(
+        llm_service, trio_db_service, rag_service, user_context, memory_agent
+    )
+    reflection_agent = TrioReflectionAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        planning_agent,
+    )
+
+    assessment_agent = TrioAssessmentAgent(
+        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+    )
+
+    # Create context
+    user_profile = await trio_db_service.get_user_profile(user_context.user_id)
+    context = ConversationContext(
+        session_id=test_session.session_id,
+        user_profile=user_profile,
+        therapy_plan=None,
+        message_history=test_session.transcript,
+        topics_covered=[t.name for t in test_session.topics],
+        session_start_time=datetime.now(),
+        duration_minutes=60,
+    )
+
+    # Process selection
+    response = await assessment_agent.process_selection("cbt", context)
+
+    assert response is not None
+    assert response.next_action == "transition"
+    assert response.next_state == WorkflowState.ASSESSMENT_COMPLETE
+    assert "plan_id" in response.metadata

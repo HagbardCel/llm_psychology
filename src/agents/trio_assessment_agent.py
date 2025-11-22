@@ -52,12 +52,14 @@ class TrioAssessmentAgent:
             db_service: The Trio database service for storing therapy plans
             rag_service: The RAG service for retrieving domain knowledge (synchronous)
             user_context: User context (optional, for legacy mode)
-            reflection_agent: Optional TrioReflectionAgent for dependency injection
+            reflection_agent: TrioReflectionAgent for dependency injection
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
         self.user_context = user_context
+        if reflection_agent is None:
+            raise ValueError("reflection_agent is required")
         self.reflection_agent = reflection_agent
 
     # ===== NEW ORCHESTRATOR INTERFACE =====
@@ -328,10 +330,6 @@ Session Transcript:
             TherapyPlan: The initial therapy plan with selected style
         """
         # Use the injected TrioReflectionAgent dependency
-        # Use the injected TrioReflectionAgent dependency
-        if self.reflection_agent is None:
-            raise ValueError("Reflection agent is required but not injected")
-
         reflection_agent = self.reflection_agent
 
         # FIXED: Added await to async method call

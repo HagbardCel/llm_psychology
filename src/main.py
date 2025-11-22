@@ -119,9 +119,16 @@ class TerminalUI(BaseUI):
         try:
             # Register mock websocket for async messages (like initial greeting)
             ws = TerminalWebSocket()
+            # Register with user_id initially (though orchestrator uses session_id for greeting)
             self.orchestrator.conversation_manager.register_websocket(self.user_id, ws)
 
             session_info = await self.orchestrator.start_session(self.user_id)
+
+            # CRITICAL FIX: Register websocket with session_id so initial greeting (sent to session_id)
+            # can be received. The orchestrator sends to session_id, not user_id.
+            self.orchestrator.conversation_manager.register_websocket(
+                session_info.session_id, ws
+            )
 
             # If initial greeting is being sent, wait for it
             if session_info.has_initial_message:

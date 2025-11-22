@@ -384,8 +384,13 @@ STACKTRACE:
         rag_service = self.service_container.get("rag_service")
         user_context = UserContext(user_id=user_id)
 
+        # Create reflection agent first as it's a dependency
+        reflection_agent = await self._create_reflection_agent(user_id)
+
         logger.info(f"Creating TrioAssessmentAgent for user {user_id}")
-        return TrioAssessmentAgent(llm_service, db_service, rag_service, user_context)
+        return TrioAssessmentAgent(
+            llm_service, db_service, rag_service, user_context, reflection_agent
+        )
 
     async def _create_psychoanalyst_agent(self, user_id: str):
         """
@@ -498,30 +503,27 @@ STACKTRACE:
             user_id: User identifier
             session_id: Session identifier
         """
-        try:
-            # Small delay to ensure session is fully initialized
-            await trio.sleep(0.1)
+        # Small delay to ensure session is fully initialized
+        await trio.sleep(0.1)
 
-            # Send typing start
-            await self.conversation_manager.send_typing_indicator(session_id, True)
+        # Send typing start
+        await self.conversation_manager.send_typing_indicator(session_id, True)
 
-            # Process empty message to trigger initial greeting
-            async for chunk in self.process_message(user_id, "", session_id):
-                await self.conversation_manager.send_stream_chunk(
-                    session_id, chunk, is_complete=False
-                )
-
-            # Send completion
+        # Process empty message to trigger initial greeting
+        async for chunk in self.process_message(user_id, "", session_id):
             await self.conversation_manager.send_stream_chunk(
-                session_id, "", is_complete=True
+                session_id, chunk, is_complete=False
             )
 
-            # Send typing stop
-            await self.conversation_manager.send_typing_indicator(session_id, False)
+        # Send completion
+        await self.conversation_manager.send_stream_chunk(
+            session_id, "", is_complete=True
+        )
 
-            logger.info(f"Initial greeting sent for session {session_id}")
-        except Exception as e:
-            logger.error(f"Error sending initial greeting: {e}", exc_info=True)
+        # Send typing stop
+        await self.conversation_manager.send_typing_indicator(session_id, False)
+
+        logger.info(f"Initial greeting sent for session {session_id}")
 
     async def _handle_agent_response(self, user_id: str, agent_response: AgentResponse):
         """
