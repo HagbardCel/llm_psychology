@@ -256,3 +256,175 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
     assert has_column is True, (
         "session_briefing column should exist in therapy_plans table"
     )
+
+
+# Authentication Tests
+
+
+@pytest.fixture
+def sample_user_credentials():
+    """Create sample user credentials for testing."""
+    from models.auth_models import UserCredentials
+
+    return UserCredentials(
+        user_id="test_user_auth_123",
+        username="testuser",
+        password_hash="$2b$12$hashedpassword123",
+        created_at=datetime.now(),
+        last_login=None,
+    )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_create_user_credentials(test_db_service, sample_user_credentials):
+    """Test creating user credentials in database."""
+    success = await test_db_service.create_user_credentials(sample_user_credentials)
+    assert success is True, "Failed to create user credentials"
+
+    # Verify credentials can be retrieved
+    retrieved = await test_db_service.get_user_credentials(
+        sample_user_credentials.username
+    )
+    assert retrieved is not None
+    assert retrieved.user_id == sample_user_credentials.user_id
+    assert retrieved.username == sample_user_credentials.username
+    assert retrieved.password_hash == sample_user_credentials.password_hash
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_create_duplicate_username(test_db_service, sample_user_credentials):
+    """Test that duplicate usernames are rejected."""
+    # Create first user
+    success = await test_db_service.create_user_credentials(sample_user_credentials)
+    assert success is True
+
+    # Try to create second user with same username
+    from models.auth_models import UserCredentials
+
+    duplicate = UserCredentials(
+        user_id="different_user_id",
+        username=sample_user_credentials.username,  # Same username
+        password_hash="different_hash",
+        created_at=datetime.now(),
+        last_login=None,
+    )
+
+    success = await test_db_service.create_user_credentials(duplicate)
+    assert success is False, "Should reject duplicate username"
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_get_user_credentials_not_found(test_db_service):
+    """Test retrieving non-existent user credentials."""
+    retrieved = await test_db_service.get_user_credentials("nonexistent_user")
+    assert retrieved is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_update_last_login(test_db_service, sample_user_credentials):
+    """Test updating last login time."""
+    # Create user
+    success = await test_db_service.create_user_credentials(sample_user_credentials)
+    assert success is True
+
+    # Update last login
+    login_time = datetime.now()
+    success = await test_db_service.update_last_login(
+        sample_user_credentials.user_id, login_time
+    )
+    assert success is True
+
+    # Verify last login was updated
+    retrieved = await test_db_service.get_user_credentials(
+        sample_user_credentials.username
+    )
+    assert retrieved is not None
+    assert retrieved.last_login is not None
+    # Check within 1 second tolerance
+    time_diff = abs((retrieved.last_login - login_time).total_seconds())
+    assert time_diff < 1.0
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_get_user_by_username(test_db_service, sample_user_credentials):
+    """Test getting user profile by username."""
+    from models.data_models import UserProfile, UserStatus
+
+    # Create user credentials
+    success = await test_db_service.create_user_credentials(sample_user_credentials)
+    assert success is True
+
+    # Create user profile
+    profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="Test User",
+        birthdate=None,
+        profession=None,
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    success = await test_db_service.save_user_profile(profile)
+    assert success is True
+
+    # Get user by username
+    retrieved_profile = await test_db_service.get_user_by_username(
+        sample_user_credentials.username
+    )
+    assert retrieved_profile is not None
+    assert retrieved_profile.user_id == sample_user_credentials.user_id
+    assert retrieved_profile.name == "Test User"
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_get_user_by_username_no_profile(test_db_service, sample_user_credentials):
+    """Test getting user by username when profile doesn't exist."""
+    # Create credentials but no profile
+    success = await test_db_service.create_user_credentials(sample_user_credentials)
+    assert success is True
+
+    # Try to get profile by username
+    retrieved_profile = await test_db_service.get_user_by_username(
+        sample_user_credentials.username
+    )
+    assert retrieved_profile is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_auth_tables_migration(test_db_service):
+    """Test that authentication tables are created by migration."""
+
+    async def check_auth_tables_exist():
+        """Check if user_credentials table exists."""
+
+        def _check():
+            conn = test_db_service._create_connection()
+            try:
+                cursor = conn.cursor()
+                # Check for user_credentials table
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='user_credentials'"
+                )
+                table_exists = cursor.fetchone() is not None
+
+                # Check for username index
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_user_credentials_username'"
+                )
+                index_exists = cursor.fetchone() is not None
+
+                return table_exists and index_exists
+            finally:
+                conn.close()
+
+        return await trio.to_thread.run_sync(_check)
+
+    tables_exist = await check_auth_tables_exist()
+    assert tables_exist is True, "user_credentials table and index should exist"

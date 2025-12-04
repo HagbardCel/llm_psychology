@@ -1,78 +1,47 @@
-import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { AppState, User, Session, TherapyPlan } from '../types';
-import { useLocalStorage } from '../hooks/useLocalStorage';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { useAuth } from './AuthContext';
+import type { User, Session, TherapyPlan } from '../types';
 
-type AppAction =
-  | { type: 'SET_USER'; payload: User | null }
-  | { type: 'SET_CURRENT_SESSION'; payload: Session | null }
-  | { type: 'ADD_SESSION'; payload: Session }
-  | { type: 'UPDATE_SESSION'; payload: Session }
-  | { type: 'SET_SESSIONS'; payload: Session[] }
-  | { type: 'SET_THERAPY_PLAN'; payload: TherapyPlan | null }
-  | { type: 'SET_LOADING'; payload: boolean }
-  | { type: 'SET_ERROR'; payload: string | null }
-  | { type: 'CLEAR_ERROR' };
-
-const initialState: AppState = {
-  user: null,
-  currentSession: null,
-  sessions: [],
-  therapyPlan: null,
-  isLoading: false,
-  error: null,
-};
-
-function appReducer(state: AppState, action: AppAction): AppState {
-  switch (action.type) {
-    case 'SET_USER':
-      return { ...state, user: action.payload };
-    case 'SET_CURRENT_SESSION':
-      return { ...state, currentSession: action.payload };
-    case 'ADD_SESSION':
-      return { 
-        ...state, 
-        sessions: [...state.sessions, action.payload],
-        currentSession: action.payload
-      };
-    case 'UPDATE_SESSION':
-      return {
-        ...state,
-        sessions: state.sessions.map(session =>
-          session.id === action.payload.id ? action.payload : session
-        ),
-        currentSession: state.currentSession?.id === action.payload.id 
-          ? action.payload 
-          : state.currentSession
-      };
-    case 'SET_SESSIONS':
-      return { ...state, sessions: action.payload };
-    case 'SET_THERAPY_PLAN':
-      return { ...state, therapyPlan: action.payload };
-    case 'SET_LOADING':
-      return { ...state, isLoading: action.payload };
-    case 'SET_ERROR':
-      return { ...state, error: action.payload, isLoading: false };
-    case 'CLEAR_ERROR':
-      return { ...state, error: null };
-    default:
-      return state;
-  }
+/**
+ * DEPRECATED: Legacy state interface for backward compatibility
+ * New components should use React Query hooks instead
+ */
+interface LegacyAppState {
+  user: User | null;
+  currentSession: Session | null;
+  sessions: Session[];
+  therapyPlan: TherapyPlan | null;
 }
 
+/**
+ * DEPRECATED: Legacy actions interface for backward compatibility
+ * New components should use React Query mutations instead
+ */
+interface LegacyAppActions {
+  updateSession: (session: Session) => void;
+  setCurrentSession: (session: Session | null) => void;
+}
+
+/**
+ * UI-only state for the application
+ * Business data (user, sessions, therapy plan) now managed by React Query
+ */
 interface AppContextType {
-  state: AppState;
-  dispatch: React.Dispatch<AppAction>;
-  actions: {
-    setUser: (user: User | null) => void;
-    setCurrentSession: (session: Session | null) => void;
-    addSession: (session: Session) => void;
-    updateSession: (session: Session) => void;
-    setSessions: (sessions: Session[]) => void;
-    setTherapyPlan: (plan: TherapyPlan | null) => void;
-    setLoading: (loading: boolean) => void;
-    setError: (error: string | null) => void;
-    clearError: () => void;
-  };
+  // UI Preferences (persisted in localStorage)
+  theme: 'light' | 'dark';
+  setTheme: (theme: 'light' | 'dark') => void;
+
+  sidebarOpen: boolean;
+  setSidebarOpen: (open: boolean) => void;
+
+  // Current user ID (stored in sessionStorage for session-only persistence)
+  currentUserId: string | null;
+  setCurrentUserId: (userId: string | null) => void;
+
+  // DEPRECATED: Legacy compatibility layer for components not yet refactored
+  // These will be removed in a future release
+  state: LegacyAppState;
+  actions: LegacyAppActions;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -81,89 +50,128 @@ interface AppProviderProps {
   children: ReactNode;
 }
 
+/**
+ * Simplified AppProvider - only manages UI state
+ * All business data (user profiles, sessions, therapy plans) is now
+ * managed by React Query hooks in individual components
+ */
 export function AppProvider({ children }: AppProviderProps) {
-  const [state, dispatch] = useReducer(appReducer, initialState);
-  const { getItem, setItem } = useLocalStorage();
+  const auth = useAuth();
 
-  // Load initial data from localStorage
+  // Theme preference (persisted in localStorage)
+  const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
+    const stored = localStorage.getItem('theme');
+    return (stored === 'light' || stored === 'dark') ? stored : 'light';
+  });
+
+  // Sidebar state (persisted in localStorage)
+  const [sidebarOpen, setSidebarOpenState] = useState(() => {
+    const stored = localStorage.getItem('sidebarOpen');
+    return stored !== null ? stored === 'true' : true;
+  });
+
+  // Current user ID (persisted in sessionStorage only)
+  const [currentUserId, setCurrentUserIdState] = useState<string | null>(() => {
+    return sessionStorage.getItem('current_user_id');
+  });
+
+  // Synchronize currentUserId with authenticated user
   useEffect(() => {
-    const loadStoredData = async () => {
-      try {
-        dispatch({ type: 'SET_LOADING', payload: true });
-        
-        const storedUser = getItem<User>('user');
-        const storedSessions = getItem<Session[]>('sessions') || [];
-        const storedTherapyPlan = getItem<TherapyPlan>('therapyPlan');
-
-        if (storedUser) {
-          dispatch({ type: 'SET_USER', payload: storedUser });
-        }
-        
-        dispatch({ type: 'SET_SESSIONS', payload: storedSessions });
-        
-        if (storedTherapyPlan) {
-          dispatch({ type: 'SET_THERAPY_PLAN', payload: storedTherapyPlan });
-        }
-
-        // Find most recent active session
-        const activeSession = storedSessions.find(s => s.status === 'ACTIVE');
-        if (activeSession) {
-          dispatch({ type: 'SET_CURRENT_SESSION', payload: activeSession });
-        }
-        
-      } catch (error) {
-        console.error('Error loading stored data:', error);
-        dispatch({ type: 'SET_ERROR', payload: 'Failed to load stored data' });
-      } finally {
-        dispatch({ type: 'SET_LOADING', payload: false });
-      }
-    };
-
-    loadStoredData();
-  }, [getItem]);
-
-  // Save data to localStorage when state changes
-  useEffect(() => {
-    if (state.user) {
-      setItem('user', state.user);
+    if (auth.user?.userId) {
+      setCurrentUserIdState(auth.user.userId);
+    } else if (!auth.isAuthenticated && !auth.isLoading) {
+      setCurrentUserIdState(null);
     }
-  }, [state.user, setItem]);
+  }, [auth.user?.userId, auth.isAuthenticated, auth.isLoading]);
 
+  // Persist theme changes
   useEffect(() => {
-    if (state.sessions.length > 0) {
-      setItem('sessions', state.sessions);
-    }
-  }, [state.sessions, setItem]);
+    localStorage.setItem('theme', theme);
+    // Apply theme to document for CSS variables
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
+  // Persist sidebar state changes
   useEffect(() => {
-    if (state.therapyPlan) {
-      setItem('therapyPlan', state.therapyPlan);
-    }
-  }, [state.therapyPlan, setItem]);
+    localStorage.setItem('sidebarOpen', sidebarOpen.toString());
+  }, [sidebarOpen]);
 
-  const actions = {
-    setUser: (user: User | null) => dispatch({ type: 'SET_USER', payload: user }),
-    setCurrentSession: (session: Session | null) => dispatch({ type: 'SET_CURRENT_SESSION', payload: session }),
-    addSession: (session: Session) => dispatch({ type: 'ADD_SESSION', payload: session }),
-    updateSession: (session: Session) => dispatch({ type: 'UPDATE_SESSION', payload: session }),
-    setSessions: (sessions: Session[]) => dispatch({ type: 'SET_SESSIONS', payload: sessions }),
-    setTherapyPlan: (plan: TherapyPlan | null) => dispatch({ type: 'SET_THERAPY_PLAN', payload: plan }),
-    setLoading: (loading: boolean) => dispatch({ type: 'SET_LOADING', payload: loading }),
-    setError: (error: string | null) => dispatch({ type: 'SET_ERROR', payload: error }),
-    clearError: () => dispatch({ type: 'CLEAR_ERROR' }),
+  // Persist current user ID changes (session-only)
+  useEffect(() => {
+    if (currentUserId) {
+      sessionStorage.setItem('current_user_id', currentUserId);
+    } else {
+      sessionStorage.removeItem('current_user_id');
+    }
+  }, [currentUserId]);
+
+  const setTheme = (newTheme: 'light' | 'dark') => {
+    setThemeState(newTheme);
+  };
+
+  const setSidebarOpen = (open: boolean) => {
+    setSidebarOpenState(open);
+  };
+
+  const setCurrentUserId = (userId: string | null) => {
+    setCurrentUserIdState(userId);
+  };
+
+  // DEPRECATED: Legacy state for backward compatibility
+  const legacyState: LegacyAppState = {
+    user: null, // Components should use useUserProfile hook instead
+    currentSession: null, // Components should manage session state locally
+    sessions: [], // Components should use useSessionHistory hook instead
+    therapyPlan: null, // Components should use useTherapyPlan hook instead
+  };
+
+  // DEPRECATED: Legacy actions for backward compatibility
+  const legacyActions: LegacyAppActions = {
+    updateSession: (_session: Session) => {
+      console.warn('DEPRECATED: updateSession called. Components should use React Query mutations.');
+      // No-op: This is a compatibility shim only
+    },
+    setCurrentSession: (_session: Session | null) => {
+      console.warn('DEPRECATED: setCurrentSession called. Components should manage local state.');
+      // No-op: This is a compatibility shim only
+    },
   };
 
   return (
-    <AppContext.Provider value={{ state, dispatch, actions }}>
+    <AppContext.Provider
+      value={{
+        theme,
+        setTheme,
+        sidebarOpen,
+        setSidebarOpen,
+        currentUserId,
+        setCurrentUserId,
+        state: legacyState,
+        actions: legacyActions,
+      }}
+    >
       {children}
     </AppContext.Provider>
   );
 }
 
+/**
+ * Hook to access app context
+ * @throws {Error} if used outside AppProvider
+ */
 export function useAppContext() {
   const context = useContext(AppContext);
   if (context === undefined) {
     throw new Error('useAppContext must be used within an AppProvider');
   }
   return context;
+}
+
+/**
+ * Utility hook to get current user ID
+ * Convenience wrapper around useAppContext
+ */
+export function useCurrentUserId(): string | null {
+  const { currentUserId } = useAppContext();
+  return currentUserId;
 }

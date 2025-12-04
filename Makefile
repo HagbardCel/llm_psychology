@@ -2,6 +2,7 @@
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
+.PHONY: generate-schemas validate-schemas
 
 # Default target
 help:
@@ -25,6 +26,8 @@ help:
 	@echo "  requirements      - Generate locked requirements from .in files"
 	@echo "  sync              - Sync environment with locked requirements"
 	@echo "  run               - Run application locally"
+	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models"
+	@echo "  validate-schemas  - Validate generated JSON schemas"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-standalone     - Run standalone terminal UI (local, no Docker)"
@@ -150,6 +153,15 @@ sync:
 # Run the application locally
 run:
 	python src/main.py
+
+# Generate JSON Schemas from Pydantic models
+generate-schemas:
+	@echo "🔧 Generating JSON schemas from Pydantic models..."
+	python scripts/generate_schemas.py
+
+# Validate generated schemas (comprehensive validation)
+validate-schemas:
+	python scripts/validate_schemas.py
 
 # ============================================
 # Docker Development Commands

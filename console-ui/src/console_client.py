@@ -11,6 +11,11 @@ from typing import Optional, Dict, Any
 import httpx
 
 from .base_ui import BaseUI
+from .websocket_protocol import (
+    ClientMessageTypes,
+    ServerMessageTypes,
+    WS_PROTOCOL_VERSION
+)
 
 
 logger = logging.getLogger(__name__)
@@ -71,17 +76,17 @@ class ConsoleClient:
 
         logger.debug(f"Received message type: {msg_type}")
 
-        if msg_type == 'chat_response_chunk':
+        if msg_type == ServerMessageTypes.CHAT_RESPONSE_CHUNK:
             await self._handle_chat_response_chunk(data)
-        elif msg_type == 'session_started':
+        elif msg_type == ServerMessageTypes.SESSION_STARTED:
             await self._handle_session_started(data)
-        elif msg_type == 'connected':
+        elif msg_type == ServerMessageTypes.CONNECTED:
             await self._handle_connected(data)
-        elif msg_type == 'typing_start':
+        elif msg_type == ServerMessageTypes.TYPING_START:
             await self._handle_typing_start()
-        elif msg_type == 'typing_stop':
+        elif msg_type == ServerMessageTypes.TYPING_STOP:
             await self._handle_typing_stop()
-        elif msg_type == 'error':
+        elif msg_type == ServerMessageTypes.ERROR:
             await self._handle_error(data)
         else:
             logger.warning(f"Unknown message type: {msg_type}")
@@ -214,7 +219,7 @@ class ConsoleClient:
 
         try:
             msg_data = {
-                'type': 'chat_message',
+                'type': ClientMessageTypes.CHAT_MESSAGE,
                 'data': {'message': message}
             }
             await ws.send_message(json.dumps(msg_data))
@@ -239,7 +244,7 @@ class ConsoleClient:
 
         print("🎯 Starting therapy session...", flush=True)
         msg_data = {
-            'type': 'session_request',
+            'type': ClientMessageTypes.SESSION_REQUEST,
             'data': {'session_type': 'therapy'}
         }
         await ws.send_message(json.dumps(msg_data))
@@ -254,9 +259,9 @@ class ConsoleClient:
             ws_url = self.websocket_url.replace('http://', 'ws://').replace('https://', 'wss://')
             if not ws_url.endswith('/ws'):
                 ws_url = f"{ws_url}/ws"
-            
-            # Add user_id as query parameter
-            ws_url = f"{ws_url}?user_id={self.user_id}"
+
+            # Add user_id and token as query parameters
+            ws_url = f"{ws_url}?user_id={self.user_id}&token={self.auth_token}"
 
             logger.info(f"Connecting to WebSocket: {ws_url}")
 

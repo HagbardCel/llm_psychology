@@ -204,8 +204,10 @@ class RAGService:
             return []
 
         try:
+            print(f"DEBUG: RAG retrieve query='{query[:50]}...'")
             # Generate query embedding
             query_embedding = self.embedding_utils.generate_embedding(query)
+            print("DEBUG: RAG generated embedding")
             query_vector = np.array([query_embedding], dtype=np.float32)
 
             # Normalize for cosine similarity
@@ -213,7 +215,9 @@ class RAGService:
 
             # Search FAISS index (get more results than needed for filtering)
             search_k = min(n_results * 3, len(self.documents))
+            print(f"DEBUG: RAG searching index k={search_k}")
             scores, indices = self.index.search(query_vector, search_k)
+            print("DEBUG: RAG search complete")
 
             # Format results
             relevant_knowledge = []
@@ -239,6 +243,7 @@ class RAGService:
                 if len(relevant_knowledge) >= n_results:
                     break
 
+            print(f"DEBUG: RAG found {len(relevant_knowledge)} results")
             return relevant_knowledge
 
         except Exception as e:

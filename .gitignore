@@ -150,3 +150,10 @@ logs/
 
 # Cache directories
 .root/.cache/
+
+data/psychoanalyst.db-shm
+data/psychoanalyst.db-wal
+
+# Generated schemas (auto-generated from backend models)
+schemas/*.json
+!schemas/.gitkeep

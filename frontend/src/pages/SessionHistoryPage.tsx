@@ -1,65 +1,49 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  Container, 
-  Typography, 
-  Paper, 
-  List, 
-  ListItem, 
-  ListItemText, 
+import React, { Fragment } from 'react';
+import {
+  Container,
+  Typography,
+  Paper,
+  List,
+  ListItem,
+  ListItemText,
   ListItemButton,
   Divider,
-  CircularProgress,
   Alert,
-  Box
+  Box,
+  CircularProgress
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { useAppContext } from '../contexts/AppContext';
+import { useCurrentUserId } from '../contexts/AppContext';
+import { useSessionHistory } from '../hooks/useSessionHistory';
 
-interface SessionData {
-  session_id: string;
-  user_id: string;
-  timestamp: string;
-  transcript: any[];
-  topics: any[];
-}
-
+/**
+ * SessionHistoryPage - Display user's past therapy sessions
+ * Refactored to use React Query for server state management
+ */
 export const SessionHistoryPage: React.FC = () => {
-  const [sessions, setSessions] = useState<SessionData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const { state: { user } } = useAppContext();
+  const userId = useCurrentUserId();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetchSessions = async () => {
-      if (!user) return;
-
-      try {
-        const response = await fetch(`/api/sessions?user_id=${user.id}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch sessions');
-        }
-        const data = await response.json();
-        setSessions(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An unknown error occurred');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchSessions();
-  }, [user]);
+  // Fetch sessions from backend via React Query
+  const { data: sessions, isLoading, error } = useSessionHistory(userId || '');
 
   const handleSessionClick = (sessionId: string) => {
     navigate(`/session/${sessionId}`);
   };
 
-  if (loading) {
+  // Loading state
+  if (isLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-        <CircularProgress />
-      </Box>
+      <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
+        <Typography variant="h4" gutterBottom>
+          Session History
+        </Typography>
+        <Paper elevation={3} sx={{ p: 3 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        </Paper>
+      </Container>
     );
   }
 
@@ -69,14 +53,15 @@ export const SessionHistoryPage: React.FC = () => {
         Session History
       </Typography>
 
+      {/* Error state */}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
+          Failed to load sessions. Please try refreshing the page.
         </Alert>
       )}
 
       <Paper elevation={3}>
-        {sessions.length === 0 ? (
+        {!sessions || sessions.length === 0 ? (
           <Box sx={{ p: 3, textAlign: 'center' }}>
             <Typography variant="body1" color="text.secondary">
               No sessions found. Start a new session to begin your journey.
@@ -85,17 +70,17 @@ export const SessionHistoryPage: React.FC = () => {
         ) : (
           <List>
             {sessions.map((session, index) => (
-              <React.Fragment key={session.session_id}>
+              <Fragment key={session.id}>
                 {index > 0 && <Divider />}
                 <ListItem disablePadding>
-                  <ListItemButton onClick={() => handleSessionClick(session.session_id)}>
+                  <ListItemButton onClick={() => handleSessionClick(session.id)}>
                     <ListItemText
-                      primary={`Session ${new Date(session.timestamp).toLocaleDateString()} ${new Date(session.timestamp).toLocaleTimeString()}`}
-                      secondary={`${session.transcript.length} messages • ${session.topics.length} topics`}
+                      primary={`Session ${session.startTime ? `${session.startTime.toLocaleDateString()} ${session.startTime.toLocaleTimeString()}` : 'Unknown date'}`}
+                      secondary={`${session.transcript.length} messages • ${session.topics?.length || 0} topics`}
                     />
                   </ListItemButton>
                 </ListItem>
-              </React.Fragment>
+              </Fragment>
             ))}
           </List>
         )}

@@ -16,7 +16,7 @@ import trio
 from config import settings
 from context.user_context import UserContext
 from models.briefing_models import BriefingStatus
-from models.data_models import Session, TherapyPlan, UserProfile
+from models.data_models import Session, TherapyPlan, UserProfile, UserStatus
 from orchestration.models import AgentResponse, ConversationContext, WorkflowState
 from prompts.psychoanalyst_prompts import (
     CLOSING_SESSION_PROMPT,
@@ -269,7 +269,15 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
                 )
 
             # Check if session should end
-            if context.is_time_up:
+            if context.user_profile.status == UserStatus.ASSESSMENT_COMPLETE:
+                # First message in therapy - transition to IN_PROGRESS
+                next_action = "transition"
+                next_state = WorkflowState.THERAPY_IN_PROGRESS
+            elif context.user_profile.status == UserStatus.PLAN_COMPLETE:
+                # Starting new session after plan update - transition to IN_PROGRESS
+                next_action = "transition"
+                next_state = WorkflowState.THERAPY_IN_PROGRESS
+            elif context.is_time_up:
                 next_action = "transition"
                 next_state = WorkflowState.REFLECTION_IN_PROGRESS
             elif self._should_offer_extension(context):
@@ -339,23 +347,16 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
         user_name = user_profile.name
         plan_context = await self._build_plan_context(therapy_plan)
 
-        # Use style-specific prompt if available
+        # Get style instructions
+        style_instructions = "Conduct a general psychoanalytic session."
         if selected_style and style_service.get_style_pack(selected_style):
-            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
-            return f"""
-{therapist_prompt}
+            style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
 
-Context for this session:
-{plan_context}
-
-User's name: {user_name}
-
-Please provide an appropriate initial greeting for the session.
-"""
-        else:
-            return INITIAL_SESSION_PROMPT.format(
-                user_name=user_name, plan_context=plan_context
-            )
+        return INITIAL_SESSION_PROMPT.format(
+            user_name=user_name,
+            plan_context=plan_context,
+            style_instructions=style_instructions,
+        )
 
     async def _build_continuation_prompt(
         self,
@@ -399,33 +400,21 @@ Please provide an appropriate initial greeting for the session.
         # Build plan context
         plan_context = await self._build_plan_context(therapy_plan)
 
-        # Use style-specific prompt if available
+        # Get style instructions
+        style_instructions = "Conduct a general psychoanalytic session."
         if selected_style and style_service.get_style_pack(selected_style):
-            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
-            knowledge_text = (
-                context_knowledge[0]["content"] if context_knowledge else "None"
-            )
+            style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
 
-            return f"""
-{therapist_prompt}
+        knowledge_text = (
+            context_knowledge[0]["content"] if context_knowledge else "None"
+        )
 
-Context for this session:
-{plan_context}
-
-Additional relevant knowledge:
-{knowledge_text}
-
-Please continue the session based on the conversation history and maintain your therapeutic approach.
-"""
-        else:
-            knowledge_text = (
-                context_knowledge[0]["content"] if context_knowledge else "None"
-            )
-            return CONTINUE_SESSION_PROMPT.format(
-                plan_context=plan_context,
-                additional_knowledge=knowledge_text,
-                time_prompt="",
-            )
+        return CONTINUE_SESSION_PROMPT.format(
+            plan_context=plan_context,
+            additional_knowledge=knowledge_text,
+            time_prompt="",
+            style_instructions=style_instructions,
+        )
 
     def _should_offer_extension(self, context: ConversationContext) -> bool:
         """
@@ -512,23 +501,16 @@ Please continue the session based on the conversation history and maintain your 
         # Get plan context
         plan_context = await self._build_plan_context(therapy_plan)
 
-        # Use style-specific prompt if available
+        # Get style instructions
+        style_instructions = "Conduct a general psychoanalytic session."
         if selected_style and style_service.get_style_pack(selected_style):
-            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
-            return f"""
-{therapist_prompt}
+            style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
 
-Context for this session:
-{plan_context}
-
-User's name: {user_name}
-
-Please provide an appropriate initial greeting for the session.
-"""
-        else:
-            return INITIAL_SESSION_PROMPT.format(
-                user_name=user_name, plan_context=plan_context
-            )
+        return INITIAL_SESSION_PROMPT.format(
+            user_name=user_name,
+            plan_context=plan_context,
+            style_instructions=style_instructions,
+        )
 
     async def handle_user_message(
         self, message: str, session: Session, therapy_plan: TherapyPlan
@@ -571,27 +553,21 @@ Please provide an appropriate initial greeting for the session.
             {"role": msg.role, "content": msg.content} for msg in session.transcript
         ]
 
+        # Get style instructions
+        style_instructions = "Conduct a general psychoanalytic session."
         if selected_style and style_service.get_style_pack(selected_style):
-            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
-            response_prompt = f"""
-{therapist_prompt}
+            style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
 
-Context for this session:
-{plan_context}
+        knowledge_text = (
+            context_knowledge[0]["content"] if context_knowledge else "None"
+        )
 
-Additional relevant knowledge:
-{context_knowledge[0]["content"] if context_knowledge else "None"}
-
-Please continue the session based on the conversation history and maintain your therapeutic approach.
-"""
-        else:
-            response_prompt = CONTINUE_SESSION_PROMPT.format(
-                plan_context=plan_context,
-                additional_knowledge=context_knowledge[0]["content"]
-                if context_knowledge
-                else "None",
-                time_prompt="",
-            )
+        response_prompt = CONTINUE_SESSION_PROMPT.format(
+            plan_context=plan_context,
+            additional_knowledge=knowledge_text,
+            time_prompt="",
+            style_instructions=style_instructions,
+        )
 
         # Generate response (run in thread)
         return await trio.to_thread.run_sync(
@@ -611,18 +587,14 @@ Please continue the session based on the conversation history and maintain your 
         selected_style = therapy_plan.selected_therapy_style if therapy_plan else None
         plan_context = await self._build_plan_context(therapy_plan)
 
+        # Get style instructions
+        style_instructions = "Conduct a general psychoanalytic session."
         if selected_style and style_service.get_style_pack(selected_style):
-            therapist_prompt = style_service.get_psychoanalyst_prompt(selected_style)
-            closing_prompt = f"""
-{therapist_prompt}
+            style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
 
-Context for this session:
-{plan_context}
-
-Please provide an appropriate closing for the session.
-"""
-        else:
-            closing_prompt = CLOSING_SESSION_PROMPT.format(plan_context=plan_context)
+        closing_prompt = CLOSING_SESSION_PROMPT.format(
+            plan_context=plan_context, style_instructions=style_instructions
+        )
 
         # Generate response (run in thread)
         return await trio.to_thread.run_sync(

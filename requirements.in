@@ -18,8 +18,10 @@ pydantic-settings
 ruff>=0.5.3
 typing-extensions==4.15.0
 
-# Terminal UI
-textual
+# Authentication
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
 
 # Trio-based Server & WebSocket (structured concurrency)
 trio
@@ -27,3 +29,4 @@ quart
 hypercorn
 trio-websocket
 quart-trio
+quart-cors

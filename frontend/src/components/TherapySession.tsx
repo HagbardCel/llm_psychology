@@ -10,9 +10,11 @@ import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';
 import { ConnectionStatus } from './ConnectionStatus';
 import { useAppContext } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useTypingIndicator } from '../hooks/useTypingIndicator';
-import { Message, Session, AgentType, SessionStatus } from '../types';
+import { Message, Session, AgentType, SessionStatus, TherapyStyle } from '../types';
+import type { SessionStartedEvent } from '../types/websocket';
 
 interface TherapySessionProps {
   sessionId?: string;
@@ -20,13 +22,16 @@ interface TherapySessionProps {
 
 export function TherapySession({ sessionId }: TherapySessionProps) {
   const { state, actions } = useAppContext();
+  const { token, user: authUser } = useAuth();
+  const user = state.user;
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamingMessage, setStreamingMessage] = useState<string>('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isSessionReady, setIsSessionReady] = useState(false);
 
   const currentSession = state.currentSession;
-  const messages = currentSession?.messages || [];
+  const messages = currentSession?.transcript || [];
 
   // Callback for handling streaming chunks
   const handleStreamingChunk = (chunk: string, isComplete: boolean, fullResponse?: string) => {
@@ -43,14 +48,14 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
       const agentMessage: Message = {
         id: generateMessageId(),
         content: finalContent,
-        sender: 'agent',
+        role: 'assistant',
         timestamp: new Date(),
         sessionId: currentSession.id,
       };
 
       const updatedSession: Session = {
         ...currentSession,
-        messages: [...currentSession.messages, agentMessage],
+        transcript: [...currentSession.transcript, agentMessage],
       };
 
       actions.updateSession(updatedSession);
@@ -63,9 +68,27 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   };
 
   // Callback for session started event
-  const handleSessionStarted = (event: any) => {
+  const handleSessionStarted = (event: SessionStartedEvent) => {
     console.log('Therapy session started:', event);
-    // TODO: Update session state with session_id from event
+
+    if (!currentSession) {
+      console.error('No current session to update with server session ID');
+      return;
+    }
+
+    // Update session with server-assigned ID
+    const updatedSession: Session = {
+      ...currentSession,
+      id: event.session_id,
+      agentType: event.agent_type as AgentType,
+      startTime: new Date(event.created_at),
+    };
+
+    actions.updateSession(updatedSession);
+    actions.setCurrentSession(updatedSession);
+    setIsSessionReady(true);
+
+    console.log(`Session synchronized: ${event.session_id} (${event.agent_type})`);
   };
 
   // WebSocket integration
@@ -78,8 +101,8 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     requestSession,
     isConnected
   } = useWebSocket({
-    userId: state.user?.id || 'default_user',
-    authToken: 'temp_token', // TODO: Use real auth token
+    userId: authUser?.userId || user?.id || 'guest',
+    authToken: token || '',
     autoConnect: true,
     onStreamingChunk: handleStreamingChunk,
     onSessionStarted: handleSessionStarted
@@ -108,9 +131,26 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   // Request therapy session when connected
   useEffect(() => {
     if (isConnected && currentSession?.agentType === AgentType.PSYCHOANALYST) {
+      setIsSessionReady(false);
       requestSession('therapy');
     }
   }, [isConnected, currentSession?.agentType]);
+
+  // Session initialization timeout
+  useEffect(() => {
+    if (!isConnected || isSessionReady) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!isSessionReady) {
+        setError('Session initialization timeout. Please refresh and try again.');
+        console.error('Session failed to initialize within 10 seconds');
+      }
+    }, 10000);
+
+    return () => clearTimeout(timeout);
+  }, [isConnected, isSessionReady]);
 
   const handleWebSocketMessage = (message: any) => {
     try {
@@ -118,14 +158,14 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         const agentMessage: Message = {
           id: generateMessageId(),
           content: message.message,
-          sender: 'agent',
+          role: 'assistant',
           timestamp: new Date(message.timestamp),
           sessionId: currentSession.id,
         };
 
         const updatedSession: Session = {
           ...currentSession,
-          messages: [...currentSession.messages, agentMessage],
+          transcript: [...currentSession.transcript, agentMessage],
         };
 
         actions.updateSession(updatedSession);
@@ -172,7 +212,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
       const userMessage: Message = {
         id: generateMessageId(),
         content,
-        sender: 'user',
+        role: 'user',
         timestamp: new Date(),
         sessionId: currentSession.id,
       };
@@ -180,7 +220,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
       // Update session with user message immediately
       const updatedSession: Session = {
         ...currentSession,
-        messages: [...currentSession.messages, userMessage],
+        transcript: [...currentSession.transcript, userMessage],
       };
 
       actions.updateSession(updatedSession);
@@ -230,7 +270,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <SessionHeader
         session={currentSession}
-        therapyStyle={state.therapyPlan?.therapyStyle}
+        therapyStyle={state.therapyPlan?.therapyStyle as TherapyStyle | undefined}
         onMenuClick={handleMenuClick}
         onSettingsClick={handleSettingsClick}
         onEndSession={handleEndSession}
@@ -262,7 +302,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
 
         <MessageInput
           onSendMessage={handleSendMessage}
-          disabled={!currentSession || currentSession.status !== SessionStatus.ACTIVE || !isConnected}
+          disabled={!currentSession || currentSession.status !== SessionStatus.ACTIVE || !isConnected || !isSessionReady}
           isLoading={isLoading}
           placeholder={getInputPlaceholder(currentSession?.agentType)}
           onTypingChange={typingIndicator.handleInputChange}
@@ -295,6 +335,8 @@ function getInputPlaceholder(agentType?: AgentType): string {
       return 'Tell me about your goals and preferences...';
     case AgentType.PSYCHOANALYST:
       return 'What would you like to explore today?';
+    case AgentType.PLANNING:
+      return 'Share your thoughts on the treatment plan...';
     case AgentType.REFLECTION:
       return 'How did this session feel for you?';
     default:

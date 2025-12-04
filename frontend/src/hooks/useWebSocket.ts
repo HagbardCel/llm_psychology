@@ -41,7 +41,7 @@ interface UseWebSocketReturn {
 
 export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn => {
   const {
-    url = 'http://localhost:8000',
+    url = 'ws://localhost:8000',
     userId,
     authToken,
     autoConnect = true,

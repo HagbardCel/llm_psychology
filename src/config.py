@@ -65,6 +65,19 @@ class Settings(BaseSettings):
     # Environment
     APP_ENV: str = Field(default="production")
 
+    # Authentication Configuration
+    JWT_SECRET_KEY: str = Field(
+        default="",
+        description="Secret key for JWT token encoding/decoding (MUST be set in production)",
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT algorithm")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=60, description="JWT token expiration in minutes"
+    )
+    REQUIRE_AUTHENTICATION: bool = Field(
+        default=True, description="Whether authentication is required"
+    )
+
     # Logging Configuration
     LOG_LEVEL: str = Field(default="INFO")
     CONSOLE_LOG_LEVEL: str = Field(default="CRITICAL")

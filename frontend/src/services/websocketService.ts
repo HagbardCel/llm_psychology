@@ -1,29 +1,28 @@
 /**
  * WebSocket service for real-time communication with therapy backend
+ * Uses native WebSocket API (not Socket.IO)
  */
 
-import { io, Socket } from 'socket.io-client';
 import {
   WebSocketConfig,
-  WebSocketMessage,
   WebSocketResponse,
   ConnectionStatus,
-  ConnectionEvent,
-  ChatResponseChunk,
   SessionStartedEvent,
   UserStatusEvent,
   StreamingChunkCallback,
   SessionStartedCallback,
-  UserStatusCallback
+  UserStatusCallback,
+  WS_MESSAGE_TYPES
 } from '../types/websocket';
 
 export class WebSocketService {
-  private socket: Socket | null = null;
+  private socket: WebSocket | null = null;
   private config: WebSocketConfig;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
+  private reconnectTimeout: number | null = null;
   private currentReconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private intentionalDisconnect = false;
 
   // Event callbacks
   private onConnectionChange: ((status: ConnectionStatus) => void) | null = null;
@@ -43,19 +42,19 @@ export class WebSocketService {
    */
   async connect(): Promise<boolean> {
     try {
+      this.intentionalDisconnect = false;
       this.updateConnectionStatus({ isConnected: false, isConnecting: true });
 
-      this.socket = io(this.config.url, {
-        auth: {
-          user_id: this.config.userId,
-          token: this.config.authToken
-        },
-        autoConnect: false,
-        reconnection: false // We'll handle reconnection manually
-      });
+      // Construct WebSocket URL with query parameters (user_id and token)
+      let wsUrl = `${this.config.url.replace(/^http/, 'ws')}/ws?user_id=${encodeURIComponent(this.config.userId)}`;
 
+      // Add token if available
+      if (this.config.authToken) {
+        wsUrl += `&token=${encodeURIComponent(this.config.authToken)}`;
+      }
+
+      this.socket = new WebSocket(wsUrl);
       this.setupEventHandlers();
-      this.socket.connect();
 
       return new Promise((resolve) => {
         if (!this.socket) {
@@ -63,29 +62,34 @@ export class WebSocketService {
           return;
         }
 
-        this.socket.on('connect', () => {
+        // Set up one-time handlers for connection result
+        const handleOpen = () => {
           this.currentReconnectAttempts = 0;
-          this.updateConnectionStatus({ 
-            isConnected: true, 
+          this.updateConnectionStatus({
+            isConnected: true,
             isConnecting: false,
             lastConnected: new Date()
           });
           resolve(true);
-        });
+        };
 
-        this.socket.on('connect_error', (error) => {
-          this.updateConnectionStatus({ 
-            isConnected: false, 
+        const handleError = () => {
+          this.updateConnectionStatus({
+            isConnected: false,
             isConnecting: false,
-            connectionError: error.message
+            connectionError: 'Connection failed'
           });
           resolve(false);
-        });
+        };
+
+        // Add temporary listeners
+        this.socket.addEventListener('open', handleOpen, { once: true });
+        this.socket.addEventListener('error', handleError, { once: true });
       });
     } catch (error) {
       console.error('Failed to connect:', error);
-      this.updateConnectionStatus({ 
-        isConnected: false, 
+      this.updateConnectionStatus({
+        isConnected: false,
         isConnecting: false,
         connectionError: error instanceof Error ? error.message : 'Connection failed'
       });
@@ -97,13 +101,15 @@ export class WebSocketService {
    * Disconnect from WebSocket server
    */
   disconnect(): void {
+    this.intentionalDisconnect = true;
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
 
     if (this.socket) {
-      this.socket.disconnect();
+      this.socket.close();
       this.socket = null;
     }
 
@@ -114,33 +120,32 @@ export class WebSocketService {
    * Send a message to the server
    */
   sendMessage(type: string, data: Record<string, any> = {}): void {
-    if (!this.socket || !this.socket.connected) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       console.warn('Cannot send message: not connected');
       return;
     }
 
-    const message: WebSocketMessage = {
+    const message = {
       type,
-      data,
-      timestamp: new Date().toISOString()
+      data
     };
 
-    this.socket.emit('message', message);
+    this.socket.send(JSON.stringify(message));
   }
 
   /**
    * Send a chat message
    */
   sendChatMessage(message: string): void {
-    this.sendMessage('chat_message', { message });
+    this.sendMessage(WS_MESSAGE_TYPES.CHAT_MESSAGE, { message });
   }
 
   /**
    * Send typing start indicator
    */
   startTyping(): void {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('typing_start', {});
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.sendMessage(WS_MESSAGE_TYPES.TYPING_START);
     }
   }
 
@@ -148,8 +153,8 @@ export class WebSocketService {
    * Send typing stop indicator
    */
   stopTyping(): void {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('typing_stop', {});
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.sendMessage(WS_MESSAGE_TYPES.TYPING_STOP);
     }
   }
 
@@ -157,8 +162,8 @@ export class WebSocketService {
    * Send ping for connection testing
    */
   ping(): void {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('ping', { timestamp: Date.now() });
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.sendMessage(WS_MESSAGE_TYPES.PING, { timestamp: Date.now() });
     }
   }
 
@@ -166,7 +171,7 @@ export class WebSocketService {
    * Request to start a therapy session
    */
   requestSession(sessionType: string = 'therapy'): void {
-    this.sendMessage('session_request', { session_type: sessionType });
+    this.sendMessage(WS_MESSAGE_TYPES.SESSION_REQUEST, { session_type: sessionType });
   }
 
   /**
@@ -208,93 +213,112 @@ export class WebSocketService {
    * Get current connection status
    */
   isConnected(): boolean {
-    return this.socket?.connected || false;
+    return this.socket?.readyState === WebSocket.OPEN;
   }
 
   private setupEventHandlers(): void {
     if (!this.socket) return;
 
-    this.socket.on('connect', () => {
-      console.log('Connected to WebSocket server');
-    });
+    this.socket.onopen = () => {
+      console.log('WebSocket connected');
+      this.updateConnectionStatus({
+        isConnected: true,
+        isConnecting: false,
+        lastConnected: new Date()
+      });
+    };
 
-    this.socket.on('disconnect', (reason) => {
-      console.log('Disconnected from WebSocket server:', reason);
+    this.socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        this.handleMessage(message);
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error);
+      }
+    };
+
+    this.socket.onclose = (event) => {
+      console.log('WebSocket disconnected:', event.code, event.reason);
       this.updateConnectionStatus({ isConnected: false, isConnecting: false });
 
       // Attempt to reconnect if disconnection was not intentional
-      if (reason === 'io server disconnect') {
-        // Server initiated disconnect, don't reconnect
-        return;
+      if (!this.intentionalDisconnect && event.code !== 1000) {
+        this.attemptReconnect();
       }
+    };
 
-      this.attemptReconnect();
-    });
-
-    this.socket.on('response', (data: WebSocketResponse) => {
-      if (this.onMessage) {
-        this.onMessage(data);
-      }
-    });
-
-    this.socket.on('error', (error: any) => {
+    this.socket.onerror = (error) => {
       console.error('WebSocket error:', error);
       this.updateConnectionStatus({
         isConnected: false,
         isConnecting: false,
-        connectionError: error.message || 'WebSocket error'
+        connectionError: 'WebSocket error'
       });
-    });
+    };
+  }
 
-    this.socket.on('connected', (data: ConnectionEvent) => {
-      console.log('Connection confirmed:', data);
-    });
+  private handleMessage(message: any): void {
+    if (!message.type) {
+      console.warn('Received message without type:', message);
+      return;
+    }
 
-    this.socket.on('pong', (data: any) => {
-      console.log('Received pong:', data);
-    });
+    // Handle specific message types
+    switch (message.type) {
+      case WS_MESSAGE_TYPES.CONNECTED:
+        console.log('Connection confirmed:', message.data);
+        break;
 
-    // Streaming response handler
-    this.socket.on('chat_response_chunk', (data: ChatResponseChunk) => {
-      if (this.onStreamingChunk) {
-        this.onStreamingChunk(data.chunk, data.is_complete, data.full_response);
-      }
-    });
+      case WS_MESSAGE_TYPES.CHAT_RESPONSE_CHUNK:
+        if (this.onStreamingChunk && message.data) {
+          this.onStreamingChunk(
+            message.data.chunk || '',
+            message.data.is_complete || false,
+            message.data.full_response
+          );
+        }
+        break;
 
-    // Session started handler
-    this.socket.on('session_started', (data: SessionStartedEvent) => {
-      console.log('Session started:', data);
-      if (this.onSessionStartedEvent) {
-        this.onSessionStartedEvent(data);
-      }
-    });
+      case WS_MESSAGE_TYPES.SESSION_STARTED:
+        console.log('Session started:', message.data);
+        if (this.onSessionStartedEvent && message.data) {
+          this.onSessionStartedEvent(message.data as SessionStartedEvent);
+        }
+        break;
 
-    // User status handler
-    this.socket.on('user_status', (data: UserStatusEvent) => {
-      console.log('User status received:', data);
-      if (this.onUserStatusEvent) {
-        this.onUserStatusEvent(data);
-      }
-    });
+      case WS_MESSAGE_TYPES.USER_STATUS:
+        console.log('User status received:', message.data);
+        if (this.onUserStatusEvent && message.data) {
+          this.onUserStatusEvent(message.data as UserStatusEvent);
+        }
+        break;
 
-    // Style selected handler
-    this.socket.on('style_selected', (data: any) => {
-      console.log('Style selected:', data);
-    });
+      case WS_MESSAGE_TYPES.TYPING_START:
+        console.log('Therapist is typing...');
+        break;
 
-    // Session extended handler
-    this.socket.on('session_extended', (data: any) => {
-      console.log('Session extended:', data);
-    });
+      case WS_MESSAGE_TYPES.TYPING_STOP:
+        console.log('Therapist stopped typing');
+        break;
 
-    // Typing indicators from server
-    this.socket.on('typing_start', () => {
-      console.log('Therapist is typing...');
-    });
+      case WS_MESSAGE_TYPES.STYLE_SELECTED:
+        console.log('Style selected:', message.data);
+        break;
 
-    this.socket.on('typing_stop', () => {
-      console.log('Therapist stopped typing');
-    });
+      case WS_MESSAGE_TYPES.SESSION_EXTENDED:
+        console.log('Session extended:', message.data);
+        break;
+
+      case WS_MESSAGE_TYPES.PONG:
+        console.log('Received pong:', message.data);
+        break;
+
+      default:
+        // Pass generic messages to the general message handler
+        if (this.onMessage) {
+          this.onMessage(message as WebSocketResponse);
+        }
+    }
   }
 
   private updateConnectionStatus(status: Partial<ConnectionStatus>): void {
@@ -312,8 +336,8 @@ export class WebSocketService {
   private attemptReconnect(): void {
     if (this.currentReconnectAttempts >= this.maxReconnectAttempts) {
       console.log('Max reconnection attempts reached');
-      this.updateConnectionStatus({ 
-        isConnected: false, 
+      this.updateConnectionStatus({
+        isConnected: false,
         isConnecting: false,
         connectionError: 'Max reconnection attempts reached'
       });
@@ -324,13 +348,11 @@ export class WebSocketService {
     const delay = this.reconnectDelay * Math.pow(2, this.currentReconnectAttempts - 1); // Exponential backoff
 
     console.log(`Attempting to reconnect in ${delay}ms (attempt ${this.currentReconnectAttempts}/${this.maxReconnectAttempts})`);
-    
+
     this.updateConnectionStatus({ isConnected: false, isConnecting: true });
 
-    this.reconnectTimeout = setTimeout(() => {
-      if (this.socket) {
-        this.socket.connect();
-      }
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.connect();
     }, delay);
   }
 }

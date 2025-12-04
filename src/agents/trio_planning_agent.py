@@ -117,6 +117,10 @@ class TrioPlanningAgent:
         """
         Create comprehensive initial therapy plan using Trio.
 
+        This operation is shielded from cancellation to ensure data integrity.
+        Even if the client disconnects, the plan creation will complete and
+        be saved to the database.
+
         Args:
             intake_session: The completed intake session
             selected_style: Optional therapy style preference
@@ -130,60 +134,70 @@ class TrioPlanningAgent:
         logger.info(f"Creating initial therapy plan for {self.user_context.user_id}")
 
         try:
-            # Analyze intake session with memory agent
-            session_context = await self.memory_agent.analyze_session_context(
-                intake_session
-            )
+            # Shield entire plan creation from cancellation for data integrity
+            with trio.CancelScope(shield=True):
+                print("DEBUG: TrioPlanningAgent.create_initial_plan started (shielded)")
+                # Analyze intake session with memory agent
+                session_context = await self.memory_agent.analyze_session_context(
+                    intake_session
+                )
+                print("DEBUG: TrioPlanningAgent analyzed session context")
 
-            # Get relevant domain knowledge (run in thread)
-            session_text = self._extract_session_text(intake_session)
-            relevant_knowledge = await self._get_relevant_knowledge(
-                session_text, selected_style
-            )
+                # Get relevant domain knowledge (run in thread)
+                session_text = self._extract_session_text(intake_session)
+                relevant_knowledge = await self._get_relevant_knowledge(
+                    session_text, selected_style
+                )
+                print("DEBUG: TrioPlanningAgent got relevant knowledge")
 
-            # Determine therapy style if not specified
-            if not selected_style:
-                selected_style = self._recommend_therapy_style(
-                    session_context, relevant_knowledge
+                # Determine therapy style if not specified
+                if not selected_style:
+                    selected_style = self._recommend_therapy_style(
+                        session_context, relevant_knowledge
+                    )
+
+                # Create planning strategy
+                strategy = self._create_planning_strategy(
+                    selected_style, session_context
+                )
+                self.current_strategy = strategy
+
+                # Generate plan using LLM (run in thread)
+                print("DEBUG: TrioPlanningAgent generating plan details via LLM")
+                plan_details = await self._generate_initial_plan_details(
+                    intake_session, session_context, strategy, relevant_knowledge
+                )
+                print("DEBUG: TrioPlanningAgent generated plan details")
+
+                # Create therapy plan object
+                plan_id = str(uuid.uuid4())
+                therapy_plan = TherapyPlan(
+                    plan_id=plan_id,
+                    user_id=self.user_context.user_id,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                    plan_details=plan_details,
+                    version=1,
+                    selected_therapy_style=selected_style,
                 )
 
-            # Create planning strategy
-            strategy = self._create_planning_strategy(selected_style, session_context)
-            self.current_strategy = strategy
+                # Save plan to database
+                success = await self.db_service.save_therapy_plan(therapy_plan)
+                if not success:
+                    raise PlanningError("Failed to save therapy plan to database")
 
-            # Generate plan using LLM (run in thread)
-            plan_details = await self._generate_initial_plan_details(
-                intake_session, session_context, strategy, relevant_knowledge
-            )
+                # Record plan creation
+                evolution = PlanEvolution(
+                    plan_id=plan_id,
+                    version=1,
+                    changes=["initial_plan_created"],
+                    rationale="Initial therapy plan based on intake session analysis",
+                )
+                self.plan_evolution.append(evolution)
 
-            # Create therapy plan object
-            plan_id = str(uuid.uuid4())
-            therapy_plan = TherapyPlan(
-                plan_id=plan_id,
-                user_id=self.user_context.user_id,
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-                plan_details=plan_details,
-                version=1,
-                selected_therapy_style=selected_style,
-            )
-
-            # Save plan to database
-            success = await self.db_service.save_therapy_plan(therapy_plan)
-            if not success:
-                raise PlanningError("Failed to save therapy plan to database")
-
-            # Record plan creation
-            evolution = PlanEvolution(
-                plan_id=plan_id,
-                version=1,
-                changes=["initial_plan_created"],
-                rationale="Initial therapy plan based on intake session analysis",
-            )
-            self.plan_evolution.append(evolution)
-
-            logger.info(f"Initial therapy plan created: {plan_id}")
-            return therapy_plan
+                logger.info(f"Initial therapy plan created: {plan_id}")
+                print(f"DEBUG: TrioPlanningAgent plan created {plan_id}")
+                return therapy_plan
 
         except Exception as e:
             logger.error(f"Failed to create initial therapy plan: {e}", exc_info=True)
@@ -434,12 +448,14 @@ class TrioPlanningAgent:
             "common_changes": [change for change, count in common_changes],
             "effectiveness_trend": effectiveness_trend,
             "current_strategy": {
-                "therapy_style": self.current_strategy.therapy_style
-                if self.current_strategy
-                else None,
-                "focus_areas": self.current_strategy.focus_areas
-                if self.current_strategy
-                else [],
+                "therapy_style": (
+                    self.current_strategy.therapy_style
+                    if self.current_strategy
+                    else None
+                ),
+                "focus_areas": (
+                    self.current_strategy.focus_areas if self.current_strategy else []
+                ),
             },
         }
 
@@ -453,21 +469,45 @@ class TrioPlanningAgent:
         self, session_text: str, therapy_style: str | None
     ) -> list[dict[str, Any]]:
         """Get relevant domain knowledge filtered by therapy style using Trio."""
-        if therapy_style and style_service.get_style_pack(therapy_style):
-            knowledge_source = style_service.get_knowledge_source(therapy_style)
-            if knowledge_source:
+        print(f"DEBUG: _get_relevant_knowledge style={therapy_style}")
+        print(f"DEBUG: self.rag_service type: {type(self.rag_service)}")
+
+        try:
+            with trio.move_on_after(30) as cancel_scope:
+                if therapy_style and style_service.get_style_pack(therapy_style):
+                    knowledge_source = f"{therapy_style.lower()}.md"
+                    print(f"DEBUG: knowledge_source={knowledge_source}")
+                    print(
+                        "DEBUG: calling rag_service.retrieve_relevant_knowledge with filter"
+                    )
+                    # Direct call to avoid Trio/Mock threading issues
+                    return await trio.to_thread.run_sync(
+                        self.rag_service.retrieve_relevant_knowledge,
+                        session_text,
+                        3,  # n_results
+                        knowledge_source,  # filter_source
+                    )
+
+                # Default retrieval without filter
+                print(
+                    "DEBUG: calling rag_service.retrieve_relevant_knowledge without filter"
+                )
                 return await trio.to_thread.run_sync(
                     self.rag_service.retrieve_relevant_knowledge,
                     session_text,
                     3,  # n_results
-                    knowledge_source,  # filter_source
                 )
+        except trio.Cancelled:
+            print("DEBUG: _get_relevant_knowledge CANCELLED")
+            raise
+        except Exception as e:
+            print(f"DEBUG: _get_relevant_knowledge EXCEPTION: {e}")
+            logger.error(f"Failed to get relevant knowledge: {e}")
+            if cancel_scope.cancelled_caught:
+                print("DEBUG: _get_relevant_knowledge TIMEOUT")
+                logger.warning("RAG retrieval timed out")
 
-        return await trio.to_thread.run_sync(
-            self.rag_service.retrieve_relevant_knowledge,
-            session_text,
-            3,  # n_results
-        )
+        return []
 
     def _recommend_therapy_style(self, session_context, relevant_knowledge) -> str:
         """Recommend appropriate therapy style based on session analysis."""

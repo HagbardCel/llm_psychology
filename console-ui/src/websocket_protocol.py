@@ -1,0 +1,68 @@
+"""
+WebSocket Protocol Constants for Console Client.
+
+This module defines the WebSocket protocol constants to ensure consistency
+with the backend implementation. All constants match the protocol specification
+in docs/WEBSOCKET_PROTOCOL.md.
+"""
+
+from typing import Final
+
+# Protocol Version
+WS_PROTOCOL_VERSION: Final[str] = "1.0"
+
+# Client → Server Message Types
+class ClientMessageTypes:
+    """Message types sent from client to server."""
+    SESSION_REQUEST: Final[str] = "session_request"
+    CHAT_MESSAGE: Final[str] = "chat_message"
+    PING: Final[str] = "ping"
+
+# Server → Client Message Types
+class ServerMessageTypes:
+    """Message types sent from server to client."""
+    CONNECTED: Final[str] = "connected"
+    SESSION_STARTED: Final[str] = "session_started"
+    CHAT_RESPONSE_CHUNK: Final[str] = "chat_response_chunk"
+    TYPING_START: Final[str] = "typing_start"
+    TYPING_STOP: Final[str] = "typing_stop"
+    USER_STATUS: Final[str] = "user_status"
+    STYLE_SELECTED: Final[str] = "style_selected"
+    SESSION_EXTENDED: Final[str] = "session_extended"
+    ERROR: Final[str] = "error"
+    PONG: Final[str] = "pong"
+
+# Connection States
+class ConnectionStates:
+    """WebSocket connection states."""
+    CONNECTING: Final[str] = "connecting"
+    CONNECTED: Final[str] = "connected"
+    DISCONNECTED: Final[str] = "disconnected"
+    RECONNECTING: Final[str] = "reconnecting"
+    ERROR: Final[str] = "error"
+
+# Error Codes
+class ErrorCodes:
+    """WebSocket error codes matching backend implementation."""
+    INVALID_MESSAGE_FORMAT: Final[str] = "invalid_message_format"
+    MISSING_REQUIRED_FIELD: Final[str] = "missing_required_field"
+    SESSION_NOT_FOUND: Final[str] = "session_not_found"
+    UNAUTHORIZED: Final[str] = "unauthorized"
+    INTERNAL_ERROR: Final[str] = "internal_error"
+    RATE_LIMIT_EXCEEDED: Final[str] = "rate_limit_exceeded"
+
+# Convenience aliases for backward compatibility and easier imports
+MSG_SESSION_REQUEST = ClientMessageTypes.SESSION_REQUEST
+MSG_CHAT_MESSAGE = ClientMessageTypes.CHAT_MESSAGE
+MSG_PING = ClientMessageTypes.PING
+
+MSG_CONNECTED = ServerMessageTypes.CONNECTED
+MSG_SESSION_STARTED = ServerMessageTypes.SESSION_STARTED
+MSG_CHAT_RESPONSE_CHUNK = ServerMessageTypes.CHAT_RESPONSE_CHUNK
+MSG_TYPING_START = ServerMessageTypes.TYPING_START
+MSG_TYPING_STOP = ServerMessageTypes.TYPING_STOP
+MSG_USER_STATUS = ServerMessageTypes.USER_STATUS
+MSG_STYLE_SELECTED = ServerMessageTypes.STYLE_SELECTED
+MSG_SESSION_EXTENDED = ServerMessageTypes.SESSION_EXTENDED
+MSG_ERROR = ServerMessageTypes.ERROR
+MSG_PONG = ServerMessageTypes.PONG

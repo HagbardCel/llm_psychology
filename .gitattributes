@@ -1,0 +1,31 @@
+# Git attributes for generated files
+
+# Mark generated schema files as generated
+schemas/*.json linguist-generated=true
+
+# Mark generated TypeScript types as generated
+frontend/src/types/generated/* linguist-generated=true
+
+# Mark documentation files
+*.md text
+
+# Line endings
+* text=auto
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

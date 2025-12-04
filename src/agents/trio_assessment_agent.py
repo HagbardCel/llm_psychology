@@ -78,22 +78,38 @@ class TrioAssessmentAgent:
             AgentResponse with recommendations or confirmation
         """
         try:
-            # Check if we are waiting for a selection
-            # We look at the last message from the assistant to see if it was the recommendations
-            last_assistant_msg = None
-            for msg in reversed(context.message_history):
-                if msg.role == "assistant":
-                    last_assistant_msg = msg.content
+            # Check if recommendations have been made recently (look back in history)
+            # The signature phrase is always present when recommendations are formatted
+            recommendation_signature = (
+                "Based on our intake session, I'd like to recommend the following"
+            )
+
+            recommendations_made = False
+            for msg in reversed(context.message_history[-5:]):  # Check last 5 messages
+                if msg.role == "assistant" and recommendation_signature in msg.content:
+                    recommendations_made = True
                     break
 
-            if (
-                last_assistant_msg
-                and "Which approach resonates most with you?" in last_assistant_msg
-            ):
-                # User is responding to recommendations
-                return await self.process_selection(message, context)
+            print(f"DEBUG: History length: {len(context.message_history)}")
+            print(f"DEBUG: Recommendations made: {recommendations_made}")
+
+            if recommendations_made:
+                # We have made recommendations, so any user message now is
+                # a selection attempt
+                selected_style = await self._parse_selection(message)
+
+                if selected_style:
+                    return await self.process_selection(selected_style, context)
+                else:
+                    # Could not identify style, ask for clarification
+                    # This keeps us in the selection loop
+                    return AgentResponse(
+                        content="I understood you want to proceed, but I'm not sure which therapy style you'd like to start with. Could you please specify one of the recommended approaches (e.g., Psychoanalysis, CBT)?",
+                        next_action="await_selection",
+                        next_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
+                    )
             else:
-                # We need to perform the assessment
+                # Recommendations not yet made, generate them
                 return await self.process_assessment(context)
 
         except Exception as e:
@@ -103,6 +119,32 @@ class TrioAssessmentAgent:
                 next_state=None,
                 metadata={"error": str(e)},
             )
+
+    async def _parse_selection(self, message: str) -> str | None:
+        """
+        Parse user message to identify selected therapy style.
+
+        Args:
+            message: User's message
+
+        Returns:
+            Selected style ID or None
+        """
+        message = message.lower()
+        available_styles = style_service.get_available_styles()
+        print(
+            f"DEBUG: _parse_selection message={repr(message)} styles={available_styles}"
+        )
+
+        # Simple keyword matching for now
+        # In a real system, we might use LLM to interpret intent
+        for style in available_styles:
+            if style.lower() in message:
+                print(f"DEBUG: Found style {style}")
+                return style
+
+        print("DEBUG: No style found")
+        return None
 
     async def process_assessment(self, context: ConversationContext) -> AgentResponse:
         """
@@ -137,7 +179,7 @@ class TrioAssessmentAgent:
             return AgentResponse(
                 content=content,
                 next_action="await_selection",  # Wait for user to select
-                next_state=None,  # Don't transition yet
+                next_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
                 metadata={
                     "recommendations": [
                         {
@@ -148,6 +190,7 @@ class TrioAssessmentAgent:
                         for rec in structured_recs
                     ],
                     "awaiting_selection": True,
+                    "is_direct_response": True,
                 },
             )
 
@@ -176,6 +219,7 @@ class TrioAssessmentAgent:
             AgentResponse with confirmation
         """
         try:
+            print(f"DEBUG: process_selection style={selected_style}")
             # Create therapy plan with selected style (FIXED: added await)
             # Construct a temporary session object for the plan creation
             # (ReflectionAgent expects a Session object)
@@ -190,6 +234,7 @@ class TrioAssessmentAgent:
             therapy_plan = await self.create_initial_plan_with_style(
                 temp_session, selected_style
             )
+            print(f"DEBUG: Plan created: {therapy_plan.plan_id}")
 
             # Format confirmation message
             content = f"""
@@ -206,10 +251,12 @@ Your personalized therapy plan has been created and we're ready to begin our the
                     "selected_style": selected_style,
                     "plan_id": therapy_plan.plan_id,
                     "plan_version": therapy_plan.version,
+                    "is_direct_response": True,
                 },
             )
 
         except Exception as e:
+            print(f"DEBUG: Error in process_selection: {e}")
             return AgentResponse(
                 content=f"I encountered an error creating your therapy plan: {str(e)}",
                 next_action="continue",

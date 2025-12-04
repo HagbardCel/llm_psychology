@@ -260,9 +260,27 @@ async def test_server_websocket(
     server = TrioServer(container, host="127.0.0.1", port=port)
 
     async with trio.open_nursery() as nursery:
-        nursery.start_soon(server.run)
-        await trio.sleep(0.1)  # Give server a moment to start
+        # Use nursery.start() to wait for server readiness signal
+        await nursery.start(server.run)
 
+        # Verify server is actually accepting connections via health check
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            for _ in range(20):  # 2 seconds max (20 * 0.1s)
+                try:
+                    response = await client.get(
+                        f"http://127.0.0.1:{port}/health", timeout=1.0
+                    )
+                    if response.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await trio.sleep(0.1)
+            else:
+                raise RuntimeError("Server failed to respond to health checks")
+
+        # Now orchestrator is guaranteed to exist and server is ready
         yield {
             "server": server,
             "host": "127.0.0.1",
@@ -366,7 +384,9 @@ async def test_complete_patient_journey_intake_to_therapy(
     logger.info("\n--- Phase 1: Connection & Name Collection ---")
 
     ws_url = f"{test_server_websocket['ws_url']}/ws?user_id={user_id}"
-    async with open_websocket_url(ws_url) as ws:
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://localhost:5173")]
+    ) as ws:
         # Start receiver in background
         async with trio.open_nursery() as nursery:
             nursery.start_soon(websocket_receiver, ws)
@@ -386,9 +406,9 @@ async def test_complete_patient_journey_intake_to_therapy(
 
             # Wait for session_started event
             await trio.sleep(0.3)
-            assert len(received_events["session_started"]) > 0, (
-                "Should receive session_started"
-            )
+            assert (
+                len(received_events["session_started"]) > 0
+            ), "Should receive session_started"
 
             session_data = received_events["session_started"][0]
             assert "session_id" in session_data["data"]
@@ -563,12 +583,12 @@ async def test_complete_patient_journey_intake_to_therapy(
                 m for m in session.transcript if m.role == "assistant"
             ]
 
-            assert len(user_messages) >= 3, (
-                f"Should have at least 3 user messages, got {len(user_messages)}"
-            )
-            assert len(assistant_messages) >= 3, (
-                f"Should have at least 3 assistant messages, got {len(assistant_messages)}"
-            )
+            assert (
+                len(user_messages) >= 3
+            ), f"Should have at least 3 user messages, got {len(user_messages)}"
+            assert (
+                len(assistant_messages) >= 3
+            ), f"Should have at least 3 assistant messages, got {len(assistant_messages)}"
             logger.info(
                 f"✓ Session transcript: {len(user_messages)} user msgs, {len(assistant_messages)} assistant msgs"
             )
@@ -601,9 +621,9 @@ async def test_complete_patient_journey_intake_to_therapy(
             await trio.sleep(0.3)
 
             # Verify assessment session started
-            assert len(received_events["session_started"]) > 0, (
-                "Should start assessment session"
-            )
+            assert (
+                len(received_events["session_started"]) > 0
+            ), "Should start assessment session"
             assessment_session_data = received_events["session_started"][0]
             assessment_session_id = assessment_session_data["data"]["session_id"]
             logger.info(f"✓ Assessment session started: {assessment_session_id}")
@@ -698,9 +718,9 @@ async def test_complete_patient_journey_intake_to_therapy(
             await trio.sleep(0.3)
 
             # Verify therapy session started
-            assert len(received_events["session_started"]) > 0, (
-                "Should start therapy session"
-            )
+            assert (
+                len(received_events["session_started"]) > 0
+            ), "Should start therapy session"
             therapy_session_data = received_events["session_started"][0]
             therapy_session_id = therapy_session_data["data"]["session_id"]
             logger.info(f"✓ Therapy session started: {therapy_session_id}")
@@ -793,12 +813,12 @@ async def test_complete_patient_journey_intake_to_therapy(
                 m for m in therapy_session.transcript if m.role == "assistant"
             ]
 
-            assert len(therapy_user_messages) >= 2, (
-                "Should have at least 2 therapy user messages"
-            )
-            assert len(therapy_assistant_messages) >= 2, (
-                "Should have at least 2 therapy assistant messages"
-            )
+            assert (
+                len(therapy_user_messages) >= 2
+            ), "Should have at least 2 therapy user messages"
+            assert (
+                len(therapy_assistant_messages) >= 2
+            ), "Should have at least 2 therapy assistant messages"
             logger.info(
                 f"✓ Therapy transcript: {len(therapy_user_messages)} user msgs, {len(therapy_assistant_messages)} assistant msgs"
             )
@@ -809,9 +829,9 @@ async def test_complete_patient_journey_intake_to_therapy(
             logger.info(f"✓ Final state: {final_state.value}")
 
             # Verify no errors occurred
-            assert len(received_events["error"]) == 0, (
-                f"Should have no errors, got: {received_events['error']}"
-            )
+            assert (
+                len(received_events["error"]) == 0
+            ), f"Should have no errors, got: {received_events['error']}"
             logger.info("✓ No errors throughout entire flow")
 
             logger.info("\n=== Complete Patient Journey Test PASSED ===")
@@ -911,7 +931,9 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
     logger.info("\n--- Phase 1: Connection & Name Collection ---")
 
     ws_url = f"{test_server_websocket['ws_url']}/ws?user_id={user_id}"
-    async with open_websocket_url(ws_url) as ws:
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://localhost:5173")]
+    ) as ws:
         # Start receiver in background
         async with trio.open_nursery() as nursery:
             nursery.start_soon(websocket_receiver, ws)
@@ -931,9 +953,9 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
 
             # Wait for session_started event
             await trio.sleep(0.3)
-            assert len(received_events["session_started"]) > 0, (
-                "Should receive session_started"
-            )
+            assert (
+                len(received_events["session_started"]) > 0
+            ), "Should receive session_started"
 
             session_data = received_events["session_started"][0]
             assert "session_id" in session_data["data"]
@@ -1108,20 +1130,20 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
                 m for m in session.transcript if m.role == "assistant"
             ]
 
-            assert len(user_messages) >= 3, (
-                f"Should have at least 3 user messages, got {len(user_messages)}"
-            )
-            assert len(assistant_messages) >= 3, (
-                f"Should have at least 3 assistant messages, got {len(assistant_messages)}"
-            )
+            assert (
+                len(user_messages) >= 3
+            ), f"Should have at least 3 user messages, got {len(user_messages)}"
+            assert (
+                len(assistant_messages) >= 3
+            ), f"Should have at least 3 assistant messages, got {len(assistant_messages)}"
             logger.info(
                 f"✓ Session transcript: {len(user_messages)} user msgs, {len(assistant_messages)} assistant msgs"
             )
 
             # Verify no errors occurred
-            assert len(received_events["error"]) == 0, (
-                f"Should have no errors, got: {received_events['error']}"
-            )
+            assert (
+                len(received_events["error"]) == 0
+            ), f"Should have no errors, got: {received_events['error']}"
             logger.info("✓ No errors throughout intake flow")
 
             logger.info("\n=== Intake Flow Test PASSED ===")

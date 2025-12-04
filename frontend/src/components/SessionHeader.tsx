@@ -1,4 +1,4 @@
-import React from 'react';
+import { useState, MouseEvent } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -35,9 +35,9 @@ export function SessionHeader({
   onSettingsClick,
   onEndSession,
 }: SessionHeaderProps) {
-  const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+  const handleMenuOpen = (event: MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
   };
 
@@ -92,7 +92,7 @@ export function SessionHeader({
 
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h6" component="div">
-            {session ? getAgentDisplayName(session.agentType) : 'Psychoanalyst'}
+            {session && session.agentType ? getAgentDisplayName(session.agentType) : 'Psychoanalyst'}
           </Typography>
           
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>

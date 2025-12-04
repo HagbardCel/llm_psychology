@@ -4,7 +4,6 @@ Standalone Terminal UI for the Virtual LLM-Driven Psychoanalyst.
 This is the main entry point for running the application locally without Docker.
 """
 
-import asyncio
 import json
 import logging
 import os

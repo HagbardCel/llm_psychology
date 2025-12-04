@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -19,7 +19,7 @@ interface MessageHistoryProps {
   isStreaming?: boolean;
 }
 
-export function MessageHistory({
+export const MessageHistory = memo(function MessageHistory({
   messages,
   isLoading = false,
   streamingMessage = '',
@@ -27,13 +27,13 @@ export function MessageHistory({
 }: MessageHistoryProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingMessage]);
+  }, [messages, streamingMessage, scrollToBottom]);
 
   return (
     <Box
@@ -69,14 +69,14 @@ export function MessageHistory({
       </Stack>
     </Box>
   );
-}
+});
 
 interface MessageBubbleProps {
   message: Message;
 }
 
-function MessageBubble({ message }: MessageBubbleProps) {
-  const isUser = message.sender === 'user';
+const MessageBubble = memo(function MessageBubble({ message }: MessageBubbleProps) {
+  const isUser = message.role === 'user';
 
   return (
     <Box
@@ -141,13 +141,17 @@ function MessageBubble({ message }: MessageBubbleProps) {
       </Box>
     </Box>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if message content or timestamp changes
+  return prevProps.message.id === nextProps.message.id &&
+         prevProps.message.content === nextProps.message.content;
+});
 
 interface StreamingMessageBubbleProps {
   content: string;
 }
 
-function StreamingMessageBubble({ content }: StreamingMessageBubbleProps) {
+const StreamingMessageBubble = memo(function StreamingMessageBubble({ content }: StreamingMessageBubbleProps) {
   return (
     <Box
       sx={{
@@ -227,4 +231,4 @@ function StreamingMessageBubble({ content }: StreamingMessageBubbleProps) {
       </Box>
     </Box>
   );
-}
+});

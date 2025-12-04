@@ -4,22 +4,6 @@ from unittest.mock import Mock
 
 import pytest
 
-# Try to import pytest_asyncio for legacy tests, but don't fail if not available
-try:
-    import pytest_asyncio
-
-    HAS_PYTEST_ASYNCIO = True
-except ImportError:
-    HAS_PYTEST_ASYNCIO = False
-
-    # Create a dummy decorator for pytest_asyncio.fixture
-    class DummyPytestAsyncio:
-        @staticmethod
-        def fixture(*args, **kwargs):
-            return pytest.fixture(*args, **kwargs)
-
-    pytest_asyncio = DummyPytestAsyncio()
-
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -136,9 +120,13 @@ def mock_llm_service():
 def mock_rag_service():
     """Create a mock RAGService for testing."""
     rag_service = Mock()
-    rag_service.retrieve_relevant_knowledge = Mock(
-        return_value=[{"content": "Mock knowledge", "source": "test.md"}]
-    )
+
+    def retrieve_relevant_knowledge(*args, **kwargs):
+        print("DEBUG: mock retrieve_relevant_knowledge called")
+        return [{"content": "Mock knowledge", "source": "test.md"}]
+
+    rag_service.retrieve_relevant_knowledge = retrieve_relevant_knowledge
+
     rag_service.get_knowledge_by_source = Mock(
         return_value=[{"content": "Mock knowledge", "source": "test.md"}]
     )
@@ -325,3 +313,19 @@ async def mock_service_container(app_config, mock_llm_service, mock_rag_service)
 
     # Cleanup
     await trio_db_service.clear_all_data()
+
+
+def pytest_addoption(parser):
+    """Add custom command line options."""
+    parser.addoption(
+        "--no-mocks",
+        action="store_true",
+        default=False,
+        help="Run tests with real LLM and RAG services (no mocks)",
+    )
+
+
+@pytest.fixture
+def use_real_llm(request):
+    """Fixture to check if real LLM should be used."""
+    return request.config.getoption("--no-mocks")

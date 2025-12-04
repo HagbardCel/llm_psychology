@@ -10,6 +10,7 @@ import {
   Box,
   Avatar,
   Chip,
+  CircularProgress,
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -21,7 +22,8 @@ import {
   Person as PersonIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useAppContext } from '../contexts/AppContext';
+import { useCurrentUserId } from '../contexts/AppContext';
+import { useUserProfile } from '../hooks/useUserProfile';
 import { UserStatus } from '../types';
 
 interface NavigationProps {
@@ -29,10 +31,17 @@ interface NavigationProps {
   onClose: () => void;
 }
 
+/**
+ * Navigation drawer component
+ * Refactored to use React Query for user data
+ */
 export function Navigation({ open, onClose }: NavigationProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { state } = useAppContext();
+  const userId = useCurrentUserId();
+
+  // Fetch user data from backend via React Query
+  const { data: user, isLoading } = useUserProfile(userId || '');
 
   const handleNavigation = (path: string) => {
     navigate(path);
@@ -76,7 +85,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
       text: 'New Session',
       icon: <PsychologyIcon />,
       path: '/session',
-      enabled: state.user?.status === UserStatus.PLAN_COMPLETE,
+      enabled: user?.status === UserStatus.PLAN_COMPLETE,
     },
     {
       text: 'Session History',
@@ -111,19 +120,23 @@ export function Navigation({ open, onClose }: NavigationProps) {
       }}
     >
       <Box sx={{ p: 2 }}>
-        {state.user ? (
+        {isLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+            <CircularProgress size={40} />
+          </Box>
+        ) : user ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Avatar sx={{ bgcolor: 'primary.main' }}>
               <PersonIcon />
             </Avatar>
             <Box sx={{ flexGrow: 1 }}>
               <Typography variant="h6" noWrap>
-                {state.user.name || 'User'}
+                {user.name || 'User'}
               </Typography>
               <Chip
-                label={getStatusText(state.user.status)}
+                label={getStatusText(user.status)}
                 size="small"
-                color={getStatusColor(state.user.status)}
+                color={getStatusColor(user.status)}
                 variant="outlined"
               />
             </Box>
@@ -153,7 +166,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
               <ListItemIcon>
                 {item.icon}
               </ListItemIcon>
-              <ListItemText 
+              <ListItemText
                 primary={item.text}
                 secondary={!item.enabled ? 'Complete setup first' : ''}
               />
@@ -164,7 +177,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
 
       <Divider />
 
-      {state.user && (
+      {user && (
         <List>
           <ListItem disablePadding>
             <ListItemButton

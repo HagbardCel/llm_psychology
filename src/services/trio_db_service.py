@@ -15,6 +15,7 @@ from datetime import datetime
 
 import trio
 
+from models.auth_models import UserCredentials
 from models.data_models import (
     Message,
     Session,
@@ -255,6 +256,7 @@ class TrioDatabaseService:
                     except (json.JSONDecodeError, KeyError):
                         topics = []
 
+                conn.commit()
                 return Session(
                     session_id=row["session_id"],
                     user_id=row["user_id"],
@@ -337,6 +339,7 @@ class TrioDatabaseService:
                     )
                 )
 
+            conn.commit()
             return sessions
 
         except Exception as e:
@@ -445,6 +448,7 @@ class TrioDatabaseService:
                             f"Failed to parse session_briefing for user {user_id}"
                         )
 
+                conn.commit()
                 return TherapyPlan(
                     plan_id=row["plan_id"],
                     user_id=row["user_id"],
@@ -506,6 +510,7 @@ class TrioDatabaseService:
                             f"Failed to parse session_briefing for plan {plan_id}"
                         )
 
+                conn.commit()
                 return TherapyPlan(
                     plan_id=row["plan_id"],
                     user_id=row["user_id"],
@@ -591,6 +596,7 @@ class TrioDatabaseService:
                     )
                 )
 
+            conn.commit()
             return sessions
 
         except Exception as e:
@@ -719,6 +725,7 @@ class TrioDatabaseService:
             row = cursor.fetchone()
 
             if row:
+                conn.commit()
                 return UserProfile(
                     user_id=row["user_id"],
                     name=row["name"],
@@ -789,8 +796,163 @@ class TrioDatabaseService:
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             result = cursor.fetchone()
+            conn.commit()
             return result is not None
 
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
+
+    # Authentication methods
+
+    async def create_user_credentials(self, credentials: UserCredentials) -> bool:
+        """
+        Create user credentials in the database.
+
+        Args:
+            credentials: UserCredentials object with username and password hash
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        async with self._acquire_connection() as conn:
+            return await trio.to_thread.run_sync(
+                self._sync_create_user_credentials, conn, credentials
+            )
+
+    def _sync_create_user_credentials(
+        self, conn, credentials: UserCredentials
+    ) -> bool:
+        """Synchronous user credentials creation (runs in worker thread)."""
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_credentials
+                (user_id, username, password_hash, created_at, last_login)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    credentials.user_id,
+                    credentials.username,
+                    credentials.password_hash,
+                    self._datetime_to_iso(credentials.created_at),
+                    (
+                        self._datetime_to_iso(credentials.last_login)
+                        if credentials.last_login
+                        else None
+                    ),
+                ),
+            )
+            conn.commit()
+            return True
+
+        except sqlite3.IntegrityError as e:
+            logger.error(f"Duplicate username or user_id: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error creating user credentials: {e}", exc_info=True)
+            return False
+
+    async def get_user_credentials(self, username: str) -> UserCredentials | None:
+        """
+        Retrieve user credentials by username.
+
+        Args:
+            username: Username to look up
+
+        Returns:
+            UserCredentials if found, None otherwise
+        """
+        async with self._acquire_connection(row_factory=sqlite3.Row) as conn:
+            return await trio.to_thread.run_sync(
+                self._sync_get_user_credentials, conn, username
+            )
+
+    def _sync_get_user_credentials(
+        self, conn, username: str
+    ) -> UserCredentials | None:
+        """Synchronous user credentials retrieval (runs in worker thread)."""
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id, username, password_hash, created_at, last_login
+                FROM user_credentials
+                WHERE username = ?
+                """,
+                (username,),
+            )
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            return UserCredentials(
+                user_id=row["user_id"],
+                username=row["username"],
+                password_hash=row["password_hash"],
+                created_at=self._iso_to_datetime(row["created_at"]),
+                last_login=(
+                    self._iso_to_datetime(row["last_login"])
+                    if row["last_login"]
+                    else None
+                ),
+            )
+
+        except Exception as e:
+            logger.error(f"Error retrieving user credentials: {e}", exc_info=True)
+            return None
+
+    async def update_last_login(self, user_id: str, login_time: datetime) -> bool:
+        """
+        Update the last login time for a user.
+
+        Args:
+            user_id: User ID
+            login_time: Datetime of login
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        async with self._acquire_connection() as conn:
+            return await trio.to_thread.run_sync(
+                self._sync_update_last_login, conn, user_id, login_time
+            )
+
+    def _sync_update_last_login(
+        self, conn, user_id: str, login_time: datetime
+    ) -> bool:
+        """Synchronous last login update (runs in worker thread)."""
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE user_credentials
+                SET last_login = ?
+                WHERE user_id = ?
+                """,
+                (self._datetime_to_iso(login_time), user_id),
+            )
+            conn.commit()
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating last login: {e}", exc_info=True)
+            return False
+
+    async def get_user_by_username(self, username: str) -> UserProfile | None:
+        """
+        Get user profile by username (convenience method).
+
+        Args:
+            username: Username to look up
+
+        Returns:
+            UserProfile if found, None otherwise
+        """
+        credentials = await self.get_user_credentials(username)
+        if not credentials:
+            return None
+
+        return await self.get_user_profile(credentials.user_id)

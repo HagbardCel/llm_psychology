@@ -36,3 +36,6 @@ coverage/
 # Logs
 logs/
 *.log
+
+# Generated types (auto-generated from backend schemas)
+src/types/generated/api.ts

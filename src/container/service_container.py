@@ -18,6 +18,7 @@ from exceptions import ConfigurationError
 from services.llm_service import LLMService
 from services.migration_service import MigrationService
 from services.rag_service import RAGService
+from services.style_service import StyleService
 from services.trio_db_service import TrioDatabaseService
 
 T = TypeVar("T")
@@ -65,6 +66,7 @@ class ServiceContainer:
                 "rag_service": self._create_rag_service,
                 "migration_service": self._create_migration_service,
                 "trio_db_service": self._create_trio_db_service,
+                "style_service": self._create_style_service,
             }
         )
         logger.debug(f"Registered {len(self._factories)} service factories")
@@ -261,6 +263,24 @@ class ServiceContainer:
             return rag_service
         except Exception as e:
             logger.error(f"Failed to create RAGService: {e}")
+            raise
+
+    def _create_style_service(self) -> StyleService:
+        """
+        Create style service.
+
+        Returns:
+            Configured StyleService instance
+        """
+        logger.debug("Creating StyleService")
+
+        try:
+            # StyleService uses default "src/styles" if no path provided
+            style_service = StyleService()
+            logger.info(f"Created StyleService with default styles directory")
+            return style_service
+        except Exception as e:
+            logger.error(f"Failed to create StyleService: {e}")
             raise
 
     def __str__(self) -> str:

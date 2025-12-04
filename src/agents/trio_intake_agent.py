@@ -12,10 +12,11 @@ from datetime import datetime
 
 from config import settings
 from context.user_context import UserContext
-from models.data_models import Message
+from models.data_models import Message, UserStatus
 from orchestration.models import AgentResponse, ConversationContext, WorkflowState
 from prompts.intake_prompts import (
     CONTINUE_CONVERSATION_PROMPT,
+    GUEST_WELCOME_PROMPT,
     INITIAL_GREETING_PROMPT,
 )
 from services.llm_service import LLMService
@@ -70,6 +71,10 @@ class TrioIntakeAgent:
             AgentResponse with prompt and next action
         """
         try:
+            logger.info(
+                f"Processing message for user {context.user_profile.user_id}. Name: '{context.user_profile.name}'"
+            )
+
             # Analyze message to identify covered topics
             covered_topics = self._identify_covered_topics(
                 message, context.message_history
@@ -80,33 +85,44 @@ class TrioIntakeAgent:
                 if topic not in context.topics_covered:
                     context.topics_covered.append(topic)
 
+            logger.info(
+                f"Topics covered so far: {context.topics_covered} ({len(context.topics_covered)}/{len(self.intake_topics)})"
+            )
+
             # Check if intake is complete
             is_complete = self._is_intake_complete(context)
 
+            # Determine next action and state
+            next_action = "continue"
+            next_state = None
+            prompt = ""
+
             # Handle Guest user (initial name collection)
-            if context.user_profile.name == "Guest":
+            # Check if name is Guest OR status is PROFILE_ONLY (new user)
+            is_guest = (
+                context.user_profile.name == "Guest"
+                or context.user_profile.status == UserStatus.PROFILE_ONLY
+                or context.user_profile.name == context.user_profile.user_id
+            )
+
+            if is_guest:
                 if not message.strip():
-                    # Initial trigger - ask for name
-                    prompt = (
-                        "You are a professional psychoanalyst conducting an intake assessment. "
-                        "Your first task is to establish a connection with the user.\n\n"
-                        "Start by warmly welcoming them and introducing yourself as their AI Psychoanalyst. "
-                        "Since you do not know their name yet, politely ask them to introduce themselves "
-                        "so you can address them properly.\n"
-                        "Be professional, welcoming, and concise."
-                    )
-                    next_action = "continue"
-                    next_state = None
+                    # Initial greeting for guest
+                    prompt = GUEST_WELCOME_PROMPT
                 else:
                     # User provided name - update profile and start intake
                     new_name = message.strip()
                     context.user_profile.name = new_name
+                    # Also update status to INTAKE_IN_PROGRESS in the profile object
+                    # so that subsequent logic (if any) sees the new status
+                    context.user_profile.status = UserStatus.INTAKE_IN_PROGRESS
+
                     await self.db_service.save_user_profile(context.user_profile)
 
                     # Build standard initial prompt with new name
                     prompt = self._build_initial_prompt(context)
-                    next_action = "continue"
-                    next_state = None
+                    next_action = "transition"
+                    next_state = WorkflowState.INTAKE_IN_PROGRESS
 
             # Standard intake flow
             elif len(context.message_history) == 0:
@@ -122,9 +138,24 @@ class TrioIntakeAgent:
                 if is_complete:
                     next_action = "transition"
                     next_state = WorkflowState.INTAKE_COMPLETE
+                elif context.is_time_up:
+                    # Time is up but intake is not complete.
+                    # We should NOT transition to INTAKE_COMPLETE.
+                    # Instead, we end the session but keep the state as INTAKE_IN_PROGRESS
+                    # so the next session continues intake.
+                    next_action = "continue"
+                    next_state = None
+                    prompt = (
+                        "Our time is up for today. We will continue this intake "
+                        "in our next session."
+                    )
                 else:
                     next_action = "continue"
                     next_state = None
+
+            logger.info(
+                f"Intake Agent returning: action={next_action}, state={next_state}"
+            )
 
             return AgentResponse(
                 content=prompt,
@@ -206,10 +237,9 @@ class TrioIntakeAgent:
         Returns:
             True if intake is complete, False otherwise
         """
-        # Time-based completion
-        if context.is_time_up:
-            logger.info("Intake complete: time is up")
-            return True
+        # Time-based completion is handled in process_message to ensure
+        # we don't transition to COMPLETE just because time is up.
+        # We only return True here if the intake objectives (topics) are met.
 
         # Topic-based completion (covered at least 80% of topics)
         topics_threshold = int(len(self.intake_topics) * 0.8)
@@ -250,6 +280,7 @@ class TrioIntakeAgent:
             Message(role="user", content=message, timestamp=datetime.now())
         ]
         combined_text = " ".join([msg.content.lower() for msg in recent_messages])
+        logger.info(f"Combined text for topic analysis: {combined_text}")
 
         covered = []
 
@@ -290,5 +321,6 @@ class TrioIntakeAgent:
         for topic, keywords in topic_keywords.items():
             if any(keyword in combined_text for keyword in keywords):
                 covered.append(topic)
+                logger.info(f"Matched topic: {topic}")
 
         return covered

@@ -243,6 +243,39 @@ STACKTRACE:
             # Save error message for debugging
             await self.add_message(context.session_id, "assistant", error_message)
 
+    async def stream_static_response(
+        self, content: str, context: ConversationContext
+    ) -> AsyncIterator[str]:
+        """
+        Stream static content as if it were an LLM response.
+
+        Args:
+            content: The static content to stream
+            context: Conversation context
+
+        Yields:
+            Content chunks
+        """
+        try:
+            # Split content into chunks (e.g., by words or small segments)
+            # For simplicity, we can just yield the whole thing or split by lines/spaces
+            # Let's simulate streaming for better UX
+            chunk_size = 10
+            for i in range(0, len(content), chunk_size):
+                chunk = content[i : i + chunk_size]
+                yield chunk
+                await trio.sleep(0.01)  # Small delay for effect
+
+            # Save assistant message to database
+            logger.info(
+                f"DEBUG: stream_static_response calling add_message for session {context.session_id}"
+            )
+            await self.add_message(context.session_id, "assistant", content)
+
+        except Exception as e:
+            logger.error(f"Error streaming static response: {e}", exc_info=True)
+            yield f"Error: {str(e)}"
+
     async def _stream_llm_response(
         self, prompt: str, conversation_history: list
     ) -> AsyncIterator[str]:
@@ -360,6 +393,7 @@ Based on the above context and your therapeutic approach, respond to:
             content: Message content
         """
         try:
+            logger.info(f"DEBUG: add_message called for {session_id} role={role}")
             # Create message
             message = Message(role=role, content=content, timestamp=datetime.now())
 

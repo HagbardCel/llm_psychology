@@ -92,6 +92,8 @@ class MigrationService:
         return [
             (1, self._migration_001_initial_schema),
             (2, self._migration_002_add_briefing),
+            (3, self._migration_003_add_auth_tables),
+            (4, self._migration_004_add_performance_indexes),
         ]
 
     def _migration_001_initial_schema(self, conn: sqlite3.Connection):
@@ -156,3 +158,76 @@ class MigrationService:
                 ADD COLUMN session_briefing TEXT
             """
             )
+
+    def _migration_003_add_auth_tables(self, conn: sqlite3.Connection):
+        """Add authentication tables for JWT-based auth."""
+        cursor = conn.cursor()
+
+        # Create user_credentials table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_credentials (
+                user_id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login TEXT,
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+            )
+        """
+        )
+
+        # Create index on username for faster lookups
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_credentials_username
+            ON user_credentials(username)
+        """
+        )
+
+    def _migration_004_add_performance_indexes(self, conn: sqlite3.Connection):
+        """Add performance indexes for frequently queried columns."""
+        cursor = conn.cursor()
+
+        # Index on user_profiles for status lookups
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_status
+            ON user_profiles(status)
+        """
+        )
+
+        # Index on sessions for user_id and timestamp lookups
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_timestamp
+            ON sessions(user_id, timestamp DESC)
+        """
+        )
+
+        # Index on sessions for session_id lookups (if not already primary key indexed)
+        # Note: Primary key already creates an index, but adding explicit index for joins
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+            ON sessions(user_id)
+        """
+        )
+
+        # Index on therapy_plans for user_id and created_at lookups
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_created
+            ON therapy_plans(user_id, created_at DESC)
+        """
+        )
+
+        # Index on therapy_plans for user_id alone (for faster user plan lookups)
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_id
+            ON therapy_plans(user_id)
+        """
+        )
+
+        logger.info("Performance indexes created successfully")

@@ -23,7 +23,10 @@ from exceptions import ReflectionError
 from models.briefing_models import SessionBriefing
 from models.data_models import Session, TherapyPlan
 from orchestration.models import AgentResponse, ConversationContext, WorkflowState
-from prompts.reflection_prompts import SESSION_SUMMARY_PROMPT
+from prompts.reflection_prompts import (
+    SESSION_BRIEFING_PROMPT,
+    SESSION_SUMMARY_PROMPT,
+)
 from services.llm_service import LLMService
 from services.rag_service import RAGService
 from services.trio_db_service import TrioDatabaseService
@@ -72,6 +75,34 @@ class TrioReflectionAgent:
         logger.info(f"TrioReflectionAgent initialized for user {user_context.user_id}")
 
     # ===== NEW ORCHESTRATOR INTERFACE =====
+
+    async def process_message(
+        self, message: str, context: ConversationContext
+    ) -> AgentResponse:
+        """
+        Process a message during the reflection phase.
+
+        In the reflection phase, we typically ignore the user's message
+        and instead process the completed session to generate a summary.
+
+        Args:
+            message: User's message (ignored)
+            context: Conversation context
+
+        Returns:
+            AgentResponse with reflection summary
+        """
+        # Reconstruct session from context
+        session = Session(
+            session_id=context.session_id,
+            user_id=context.user_profile.user_id,
+            timestamp=context.session_start_time,
+            transcript=context.message_history,
+            topics=[],  # Topics are tracked in context but Session expects list[Topic]
+        )
+
+        # Delegate to process_reflection
+        return await self.process_reflection(session, context)
 
     async def process_reflection(
         self, session: Session, context: ConversationContext
@@ -341,9 +372,11 @@ class TrioReflectionAgent:
                     "total_sessions": len(memory.session_contexts),
                     "relationship_quality": memory.relationship_quality,
                     "dominant_themes": list(memory.recurring_themes.keys())[:5],
-                    "emotional_progression": memory.emotional_patterns[-5:]
-                    if memory.emotional_patterns
-                    else [],
+                    "emotional_progression": (
+                        memory.emotional_patterns[-5:]
+                        if memory.emotional_patterns
+                        else []
+                    ),
                 },
                 "patterns": patterns,
                 "continuity_context": continuity_context,
@@ -446,112 +479,40 @@ class TrioReflectionAgent:
         )
 
         # Construct comprehensive analysis prompt
-        analysis_prompt = f"""You are a supervising psychoanalyst conducting a comprehensive review of a completed therapy session. Your role is to create a detailed "Session Briefing" that will be used by the therapist who conducts the next session with this patient.
-
-PATIENT CONTEXT:
-- Total Sessions Completed: {therapeutic_memory.get("total_sessions", 0)}
-- Therapeutic Relationship Quality: {therapeutic_memory.get("relationship_quality", "building")}
-- Therapy Style: {therapy_plan.selected_therapy_style if therapy_plan else "Not specified"}
-
-PREVIOUS SESSION DATA:
-Session Transcript:
-{session_transcript}
-
-Session Analysis (from Memory Agent):
-- Key Themes: {json.dumps(session_context.get("key_themes", []), indent=2)}
-- Emotional State: {session_context.get("emotional_state", "Not assessed")}
-- Insights: {json.dumps(session_context.get("insights", []), indent=2)}
-- Progress Indicators: {json.dumps(session_context.get("progress_indicators", []), indent=2)}
-
-Therapeutic Memory (Aggregated Across All Sessions):
-{json.dumps(therapeutic_memory, indent=2)}
-
-Treatment Plan Assessment (from Planning Agent):
-{json.dumps(plan_assessment if plan_assessment else {}, indent=2)}
-
-YOUR TASK:
-Generate a complete SessionBriefing JSON object with the following structure. Each field must be carefully synthesized from the above data:
-
-{{
-  "briefing_type": "resumption",
-  "generated_at": "{datetime.now().isoformat()}",
-  "session_count": {therapeutic_memory.get("total_sessions", 0)},
-  "last_session_id": "{session.session_id}",
-  "last_session_date": "{session.timestamp.date().isoformat()}",
-
-  "narrative_handoff": "<REQUIRED: 3-4 sentence narrative that captures the essence of the last session. What was the emotional arc? What core themes emerged? What progress or challenges occurred? This should read like a supervisor briefing the next therapist.>",
-
-  "patient_observations": "<REQUIRED: 2-3 sentences about HOW the patient communicated, not just WHAT they said. Note: communication style, openness level, defensiveness, engagement, any shifts in behavior or presentation compared to previous sessions.>",
-
-  "plan_progression_notes": "<REQUIRED: 2-3 sentences assessing how this session advanced the overall treatment plan. Did it move forward as expected? Were there deviations? Is the plan still appropriate?>",
-
-  "relationship_quality": "<One of: 'building', 'developing', 'established', 'strong'>",
-
-  "continuity_points": [
-    "<Most important topic/issue from last session that should be followed up on>",
-    "<Second most important continuity point>",
-    "<Additional points as needed - maximum {settings.MAX_CONTINUITY_POINTS} total>"
-  ],
-
-  "emotional_summary": {{
-    "last_session": "<Emotional state during the last session>",
-    "trend": "<One of: 'improving', 'stable', 'declining', 'fluctuating'>",
-    "note": "<Brief note explaining the emotional progression or context>"
-  }},
-
-  "key_themes": [
-    {{
-      "theme": "<Theme name>",
-      "status": "<One of: 'ongoing', 'newly introduced', 'underlying', 'emerging', 'resolved'>",
-      "priority": "<One of: 'high', 'medium', 'low'>",
-      "frequency": <number of sessions this theme has appeared>,
-      "first_appearance": "<session ID>",
-      "last_discussed": "<session ID>"
-    }}
-    // Include all relevant themes, maximum {settings.MAX_KEY_THEMES}
-  ],
-
-  "progress_highlights": [
-    "<Specific achievement or breakthrough from this or recent sessions>",
-    "<Additional progress point>",
-    // Maximum {settings.MAX_PROGRESS_HIGHLIGHTS} highlights
-  ],
-
-  "unresolved_issues": [
-    "<Issue or theme that remains unaddressed or needs further exploration>",
-    "<Additional unresolved issue>",
-    // Maximum {settings.MAX_UNRESOLVED_ISSUES} issues
-  ],
-
-  "recommended_approach": {{
-    "opening_tone": "<Warm and welcoming | Gentle and supportive | Direct and focused | Curious and exploratory>",
-    "opening_focus": "<1-2 sentences: What should the therapist focus on when opening the next session?>",
-    "things_to_avoid": "<1-2 sentences: What topics or approaches might not be helpful right now?>",
-    "suggested_questions": [
-      "<Specific open-ended question that would be good to start with>",
-      "<Second suggested question>",
-      "<Third suggested question - maximum {settings.MAX_SUGGESTED_QUESTIONS} total>"
-    ],
-    "therapeutic_goals_for_session": [
-      "<Concrete, achievable goal for the upcoming session>",
-      "<Second goal>",
-      "<Third goal - maximum {settings.MAX_SESSION_GOALS} total>"
-    ]
-  }}
-}}
-
-CRITICAL REQUIREMENTS:
-1. Output ONLY valid JSON - no markdown code blocks, no explanations
-2. All string fields must use double quotes
-3. narrative_handoff must be at least {settings.MIN_NARRATIVE_LENGTH} characters and no more than {settings.MAX_NARRATIVE_LENGTH}
-4. patient_observations must be no more than {settings.MAX_OBSERVATIONS_LENGTH} characters
-5. plan_progression_notes must be no more than {settings.MAX_PLAN_NOTES_LENGTH} characters
-6. At least one continuity_point and one key_theme are required
-7. Use specific, concrete language - avoid vague therapeutic jargon
-8. Base all analysis strictly on the provided session data
-9. Ensure all enum values match exactly (case-sensitive)
-
-Generate the complete JSON object now:"""
+        # Construct comprehensive analysis prompt
+        analysis_prompt = SESSION_BRIEFING_PROMPT.format(
+            total_sessions=therapeutic_memory.get("total_sessions", 0),
+            relationship_quality=therapeutic_memory.get(
+                "relationship_quality", "building"
+            ),
+            therapy_style=(
+                therapy_plan.selected_therapy_style if therapy_plan else "Not specified"
+            ),
+            session_transcript=session_transcript,
+            key_themes=json.dumps(session_context.get("key_themes", []), indent=2),
+            emotional_state=session_context.get("emotional_state", "Not assessed"),
+            insights=json.dumps(session_context.get("insights", []), indent=2),
+            progress_indicators=json.dumps(
+                session_context.get("progress_indicators", []), indent=2
+            ),
+            therapeutic_memory=json.dumps(therapeutic_memory, indent=2),
+            plan_assessment=json.dumps(
+                plan_assessment if plan_assessment else {}, indent=2
+            ),
+            generated_at=datetime.now().isoformat(),
+            last_session_id=session.session_id,
+            last_session_date=session.timestamp.date().isoformat(),
+            max_continuity_points=settings.MAX_CONTINUITY_POINTS,
+            max_key_themes=settings.MAX_KEY_THEMES,
+            max_progress_highlights=settings.MAX_PROGRESS_HIGHLIGHTS,
+            max_unresolved_issues=settings.MAX_UNRESOLVED_ISSUES,
+            max_suggested_questions=settings.MAX_SUGGESTED_QUESTIONS,
+            max_session_goals=settings.MAX_SESSION_GOALS,
+            min_narrative_length=settings.MIN_NARRATIVE_LENGTH,
+            max_narrative_length=settings.MAX_NARRATIVE_LENGTH,
+            max_observations_length=settings.MAX_OBSERVATIONS_LENGTH,
+            max_plan_notes_length=settings.MAX_PLAN_NOTES_LENGTH,
+        )
 
         # Call LLM to generate the structured JSON briefing using Trio
         briefing_json_str = await trio.to_thread.run_sync(
@@ -636,9 +597,9 @@ Generate the complete JSON object now:"""
                 # Planning insights
                 "planning_insights": {
                     "current_plan_id": current_plan.plan_id if current_plan else None,
-                    "current_plan_version": current_plan.version
-                    if current_plan
-                    else None,
+                    "current_plan_version": (
+                        current_plan.version if current_plan else None
+                    ),
                     "plan_effectiveness": plan_assessment,
                     "plan_evolution": plan_evolution,
                 },

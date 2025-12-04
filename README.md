@@ -61,6 +61,33 @@ NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
 
 **See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation**
 
+### Type System (Backend ↔ Frontend)
+
+The application uses **automated type generation** to maintain type safety between Python backend and TypeScript frontend:
+
+- **Single Source of Truth**: Backend Pydantic models define all data structures
+- **Auto-Generated Types**: TypeScript types generated from JSON Schema
+- **Zero Duplication**: No manual type definitions for API models
+- **Build Integration**: Types regenerate automatically during development and build
+- **Type Safety**: Compile-time validation prevents API contract violations
+
+```
+Backend Pydantic → JSON Schema → TypeScript Types → Frontend
+```
+
+**Commands**:
+```bash
+# Generate types
+make generate-schemas           # Backend: Pydantic → JSON Schema
+cd frontend && npm run generate:types  # Frontend: JSON Schema → TypeScript
+
+# Types auto-generate during:
+npm run dev    # Development
+npm run build  # Production build
+```
+
+**See [docs/TYPE_SYSTEM.md](docs/TYPE_SYSTEM.md) for detailed documentation**
+
 ## 📋 Prerequisites
 
 ### Environment Setup
