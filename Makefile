@@ -1,4 +1,4 @@
-.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate install-hooks clean clean-testdb
+.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
@@ -110,6 +110,14 @@ test-validate:
 	@echo ""
 	docker compose --profile test run --rm test
 
+# Full isolated Docker tests without mocks (uses real services)
+test-validate-no-mocks:
+	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
+	@echo "⚠️  Requires valid API keys in .env.test"
+	@echo ""
+	docker compose --profile usertest-all up -d --wait api-usertest
+	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
+
 # Install git hooks for automated testing
 install-hooks:
 	@echo "🔧 Installing git hooks..."
@@ -135,11 +143,17 @@ clean:
 
 # Clean test databases only
 clean-testdb:
-	rm -rf data/psychoanalyst_test.db \
+	@echo "Cleaning test databases..."
+	@rm -rf data/psychoanalyst_test.db \
 		data/psychoanalyst_usertest.db \
 		data/vector_db_usertest/ \
-		data/test_vector_db/
-	@echo "Test databases cleaned"
+		data/test_vector_db/ 2>/dev/null || true
+	@if [ -d "data/vector_db_usertest" ] || [ -d "data/test_vector_db" ]; then \
+		echo "⚠️  Some files require elevated permissions (created by Docker)."; \
+		echo "Run: sudo rm -rf data/vector_db_usertest/ data/test_vector_db/"; \
+	else \
+		echo "✓ Test databases cleaned"; \
+	fi
 
 # Generate locked requirements from .in files with UV
 requirements:
