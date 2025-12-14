@@ -13,7 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Virtual LLM-Driven Psychoanalyst application that provides a terminal-based therapeutic experience using Large Language Models and Retrieval-Augmented Generation (RAG). The main application is located in the `psychoanalyst_app/` directory.
+This is a Virtual LLM-Driven Psychoanalyst application that provides a terminal-based therapeutic experience using Large Language Models and Retrieval-Augmented Generation (RAG).
+
+**Documentation**: See [docs/README.md](docs/README.md) for comprehensive project documentation including architecture, tech stack, and design principles.
 
 ## Development Commands
 
@@ -171,6 +173,14 @@ pytest tests/integration/test_console_ui_patient_flow.py -v
 - **Vector DB**: ChromaDB at `data/vector_db/`
 - **Domain Knowledge**: Markdown files in `data/domain_knowledge/`
 
+### Multi-Model Configuration (Optional)
+
+Configure different LLM models for different agents via environment variables:
+- `INTAKE_MODEL`, `ASSESSMENT_MODEL`, `PSYCHOANALYST_MODEL`, etc.
+- See `.env.example` for recommended configurations
+- Defaults to `MODEL_NAME` if not specified
+- Enables cost optimization: use cheaper models for simple tasks, premium models for complex therapy
+
 ## Console Client
 
 The console client (`console-ui/`) provides a Trio-based terminal interface for patients to interact with the therapy system.
@@ -258,3 +268,25 @@ Therapy styles are modular and located in `src/styles/`. Each style contains:
 - `*_prompt.txt`: Agent-specific prompts
 
 Currently implemented: Freud, Jung, CBT.
+
+## Documentation Structure
+
+All project documentation is organized under [docs/](docs/):
+
+### Core Documentation
+- [docs/README.md](docs/README.md) - Main project overview and getting started
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture and design
+- [docs/TECH_STACK.md](docs/TECH_STACK.md) - Technologies, versions, and rationale
+- [docs/DESIGN_PRINCIPLES.md](docs/DESIGN_PRINCIPLES.md) - Architectural patterns and coding standards
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) - Step-by-step setup guide
+- [docs/TYPE_SYSTEM.md](docs/TYPE_SYSTEM.md) - Backend↔Frontend type generation
+- [docs/WEBSOCKET_PROTOCOL.md](docs/WEBSOCKET_PROTOCOL.md) - Real-time communication spec
+
+### Active Development
+- [docs/features/](docs/features/) - Ongoing feature implementation plans
+- [docs/assessments/](docs/assessments/) - Current implementation gaps and issues
+
+### Historical Context
+- [docs/legacy/](docs/legacy/) - Historical documentation and completed phases
+
+**Note**: Always consult docs/ for current information. CLAUDE.md provides quick reference for common development tasks.

@@ -17,6 +17,7 @@ class WorkflowNextActionRequest(BaseModel):
         user_id: The user's identifier
         current_route: Optional current frontend route for context
     """
+
     user_id: str = Field(..., description="User identifier")
     current_route: Optional[str] = Field(None, description="Current frontend route")
 
@@ -30,9 +31,12 @@ class WorkflowDisplayAction(BaseModel):
         description: Optional description text
         primary_action: Optional primary action button configuration
     """
+
     title: str = Field(..., description="Display title")
     description: Optional[str] = Field(None, description="Display description")
-    primary_action: Optional[dict] = Field(None, description="Primary action button config")
+    primary_action: Optional[dict] = Field(
+        None, description="Primary action button config"
+    )
 
 
 class WorkflowNextActionResponse(BaseModel):
@@ -46,38 +50,35 @@ class WorkflowNextActionResponse(BaseModel):
         display: Optional display information (for 'display' action)
         error: Optional error message (for 'error' action)
     """
-    action: Literal['navigate', 'wait', 'display', 'error'] = Field(
-        ...,
-        description="Action type to perform"
+
+    action: Literal["navigate", "wait", "display", "error"] = Field(
+        ..., description="Action type to perform"
     )
     route: Optional[str] = Field(None, description="Route to navigate to")
     reason: Optional[str] = Field(None, description="Reason for this action")
-    display: Optional[WorkflowDisplayAction] = Field(None, description="Display information")
+    display: Optional[WorkflowDisplayAction] = Field(
+        None, description="Display information"
+    )
     error: Optional[str] = Field(None, description="Error message")
 
     class Config:
         """Pydantic configuration."""
+
         json_schema_extra = {
             "examples": [
                 {
                     "action": "navigate",
                     "route": "/intake",
-                    "reason": "User needs to complete intake assessment"
+                    "reason": "User needs to complete intake assessment",
                 },
-                {
-                    "action": "wait",
-                    "reason": "Session in progress"
-                },
+                {"action": "wait", "reason": "Session in progress"},
                 {
                     "action": "display",
                     "display": {
                         "title": "Complete Your Profile",
-                        "description": "Please fill in your profile information to continue"
-                    }
+                        "description": "Please fill in your profile information to continue",
+                    },
                 },
-                {
-                    "action": "error",
-                    "error": "User not found"
-                }
+                {"action": "error", "error": "User not found"},
             ]
         }

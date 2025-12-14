@@ -383,11 +383,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                     }
                 )
             )
-            await wait_for_response_complete(timeout=30 if use_real_llm else 10)
-
-            # Rate limiting: delay between API calls for real LLM
-            if use_real_llm:
-                await trio.sleep(2)
+            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
             # 3. Intake - Cover Topics to trigger completion
             # We need to send enough messages to cover ~80% of topics or wait for time
@@ -434,11 +430,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 )
 
                 # Wait for response completion before sending next message
-                await wait_for_response_complete(timeout=30 if use_real_llm else 10)
-
-                # Rate limiting: delay between API calls for real LLM
-                if use_real_llm:
-                    await trio.sleep(2)
+                await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
                 # Check if we transitioned early
                 state = await test_server["orchestrator"].get_user_state(user_id)
@@ -486,11 +478,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                     }
                 )
             )
-            await wait_for_response_complete(timeout=30 if use_real_llm else 10)
-
-            # Rate limiting: delay between API calls for real LLM
-            if use_real_llm:
-                await trio.sleep(2)
+            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
             # Select a style (this triggers plan creation with RAG)
             await ws.send_message(
@@ -508,13 +496,9 @@ async def test_natural_patient_flow(test_server, use_real_llm):
             # Plan creation with RAG can take 20-30s with real LLM
             await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
-            # Rate limiting: delay between API calls for real LLM
-            if use_real_llm:
-                await trio.sleep(2)
-
             # 6. Check for Transition to Assessment Complete
             # After is_complete, state transition might take a moment
-            poll_timeout = 30 if use_real_llm else 10
+            poll_timeout = 60 if use_real_llm else 10
             with trio.move_on_after(poll_timeout):
                 while True:
                     state = await orchestrator.get_user_state(user_id)
@@ -549,11 +533,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 )
 
                 # Wait for response completion
-                await wait_for_response_complete(timeout=30 if use_real_llm else 10)
-
-                # Rate limiting: delay between API calls for real LLM
-                if use_real_llm:
-                    await trio.sleep(2)
+                await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
                 if i == 0:
                     # After first message, should be in THERAPY_IN_PROGRESS

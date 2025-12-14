@@ -275,7 +275,10 @@ services:
     volumes:
       # Read-only mounts for testing
       - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
+      - ./schemas:/app/schemas:ro
+      - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./pytest.ini:/app/pytest.ini:ro
       # Separate volume for test data (isolated from dev)
@@ -292,18 +295,23 @@ services:
 
   # ============================================
   # Database Viewer (for debugging)
+  # Usage:
+  #   make docker-db-view              # View production DB (default)
+  #   make docker-db-view DB=usertest  # View usertest DB
+  # Access at http://localhost:8080
+  # Note: Test databases use in-memory SQLite, not persistent files
   # ============================================
   db-viewer:
     image: coleifer/sqlite-web
     container_name: psychoanalyst_db_viewer
     profiles: ["debug"]
     volumes:
-      - ./data:/data
+      - ./data:/data:ro
     ports:
       - "8080:8080"
     networks:
       - app-network
-    command: ["/data/psychoanalyst.db"]
+    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-psychoanalyst.db}"]
 
   # ============================================
   # Devcontainer (VSCode Remote Development)

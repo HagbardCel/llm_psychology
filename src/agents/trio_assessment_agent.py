@@ -78,14 +78,55 @@ class TrioAssessmentAgent:
             AgentResponse with recommendations or confirmation
         """
         try:
-            # Check if recommendations have been made recently (look back in history)
-            # The signature phrase is always present when recommendations are formatted
+            # Check if we're waiting for a continuation choice
+            continuation_signature = "Would you like to:"
+            awaiting_continuation = False
+            for msg in reversed(context.message_history[-3:]):
+                if msg.role == "assistant" and continuation_signature in msg.content:
+                    awaiting_continuation = True
+                    break
+
+            if awaiting_continuation:
+                # Parse continuation choice
+                choice = await self._parse_continuation_choice(message)
+                if choice == "finish":
+                    return AgentResponse(
+                        content="That sounds like a good plan. Take your time to \
+reflect on what we've discussed today. I look forward to our first therapy session \
+together. Take care!",
+                        next_action="end_session",
+                        next_state=None,
+                        metadata={"is_direct_response": True, "session_ended": True},
+                    )
+                elif choice == "continue":
+                    return AgentResponse(
+                        content="Wonderful! Let's begin our first therapy session. \
+I'm here to support you.",
+                        next_action="start_therapy",
+                        next_state=WorkflowState.THERAPY_IN_PROGRESS,
+                        metadata={
+                            "is_direct_response": True,
+                            "new_session_required": True,
+                        },
+                    )
+                else:
+                    # Could not parse choice
+                    return AgentResponse(
+                        content="I'm not sure which option you'd prefer. Would you \
+like to finish for today (option 1) or continue with our first therapy session now \
+(option 2)?",
+                        next_action="await_continuation_choice",
+                        next_state=None,
+                        metadata={"is_direct_response": True},
+                    )
+
+            # Check if recommendations have been made recently
             recommendation_signature = (
                 "Based on our intake session, I'd like to recommend the following"
             )
 
             recommendations_made = False
-            for msg in reversed(context.message_history[-5:]):  # Check last 5 messages
+            for msg in reversed(context.message_history[-5:]):
                 if msg.role == "assistant" and recommendation_signature in msg.content:
                     recommendations_made = True
                     break
@@ -104,7 +145,9 @@ class TrioAssessmentAgent:
                     # Could not identify style, ask for clarification
                     # This keeps us in the selection loop
                     return AgentResponse(
-                        content="I understood you want to proceed, but I'm not sure which therapy style you'd like to start with. Could you please specify one of the recommended approaches (e.g., Psychoanalysis, CBT)?",
+                        content="I understood you want to proceed, but I'm not sure \
+which therapy style you'd like to start with. Could you please specify one of the \
+recommended approaches (e.g., Psychoanalysis, CBT)?",
                         next_action="await_selection",
                         next_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
                     )
@@ -119,6 +162,38 @@ class TrioAssessmentAgent:
                 next_state=None,
                 metadata={"error": str(e)},
             )
+
+    async def _parse_continuation_choice(self, message: str) -> str | None:
+        """
+        Parse user message to identify continuation choice.
+
+        Args:
+            message: User's message
+
+        Returns:
+            "finish", "continue", or None if unclear
+        """
+        message = message.lower()
+
+        # Check for finish indicators
+        finish_keywords = [
+            "finish", "stop", "end", "done", "later", "next time",
+            "option 1", "1", "first", "reflect"
+        ]
+        for keyword in finish_keywords:
+            if keyword in message:
+                return "finish"
+
+        # Check for continue indicators
+        continue_keywords = [
+            "continue", "start", "begin", "now", "yes", "go ahead",
+            "option 2", "2", "second", "therapy"
+        ]
+        for keyword in continue_keywords:
+            if keyword in message:
+                return "continue"
+
+        return None
 
     async def _parse_selection(self, message: str) -> str | None:
         """
@@ -236,22 +311,35 @@ class TrioAssessmentAgent:
             )
             print(f"DEBUG: Plan created: {therapy_plan.plan_id}")
 
-            # Format confirmation message
+            # Format confirmation message with suggestion to finish for the day
             content = f"""
-Excellent choice! I'll be using {selected_style.upper()} therapy approach for our sessions.
+Excellent choice! I'll be using {selected_style.upper()} therapy approach for \
+our sessions.
 
-Your personalized therapy plan has been created and we're ready to begin our therapeutic work together.
+Your personalized therapy plan has been created. We've covered a lot of ground \
+today through our intake and assessment process.
+
+I'd suggest we finish here for today to give you time to reflect on what we've \
+discussed. However, if you'd prefer, we could start our first therapy session \
+right now.
+
+Would you like to:
+1. Finish for today and begin therapy in our next session
+2. Continue with our first therapy session now
+
+What would you prefer?
 """
 
             return AgentResponse(
                 content=content,
-                next_action="transition",
+                next_action="await_continuation_choice",
                 next_state=WorkflowState.ASSESSMENT_COMPLETE,
                 metadata={
                     "selected_style": selected_style,
                     "plan_id": therapy_plan.plan_id,
                     "plan_version": therapy_plan.version,
                     "is_direct_response": True,
+                    "awaiting_continuation": True,
                 },
             )
 

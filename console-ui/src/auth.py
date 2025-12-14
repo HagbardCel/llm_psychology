@@ -120,7 +120,9 @@ async def _register_user(
         # Get password
         while True:
             password = await trio.to_thread.run_sync(
-                getpass.getpass, "Choose a password (min 8 characters): ", cancellable=True
+                getpass.getpass,
+                "Choose a password (min 8 characters): ",
+                cancellable=True,
             )
 
             if len(password) < 8:
@@ -174,7 +176,9 @@ async def _register_user(
             print(f"❌ Registration failed: {error_msg}")
 
             if "already exists" in error_msg.lower():
-                print("   That username is already taken. Please choose a different one.")
+                print(
+                    "   That username is already taken. Please choose a different one."
+                )
 
             return None, None, None
 

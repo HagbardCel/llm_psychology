@@ -168,6 +168,7 @@ class TrioDatabaseService:
                         "role": msg.role,
                         "content": msg.content,
                         "timestamp": self._datetime_to_iso(msg.timestamp),
+                        "agent": msg.agent,
                     }
                 )
             transcript_json = json.dumps(transcript_data)
@@ -241,6 +242,7 @@ class TrioDatabaseService:
                             role=msg_data["role"],
                             content=msg_data["content"],
                             timestamp=self._iso_to_datetime(msg_data["timestamp"]),
+                            agent=msg_data.get("agent"),
                         )
                     )
 
@@ -314,6 +316,7 @@ class TrioDatabaseService:
                             role=msg_data["role"],
                             content=msg_data["content"],
                             timestamp=self._iso_to_datetime(msg_data["timestamp"]),
+                            agent=msg_data.get("agent"),
                         )
                     )
 
@@ -571,6 +574,7 @@ class TrioDatabaseService:
                             role=msg_data["role"],
                             content=msg_data["content"],
                             timestamp=self._iso_to_datetime(msg_data["timestamp"]),
+                            agent=msg_data.get("agent"),
                         )
                     )
 
@@ -820,9 +824,7 @@ class TrioDatabaseService:
                 self._sync_create_user_credentials, conn, credentials
             )
 
-    def _sync_create_user_credentials(
-        self, conn, credentials: UserCredentials
-    ) -> bool:
+    def _sync_create_user_credentials(self, conn, credentials: UserCredentials) -> bool:
         """Synchronous user credentials creation (runs in worker thread)."""
         try:
             cursor = conn.cursor()
@@ -869,9 +871,7 @@ class TrioDatabaseService:
                 self._sync_get_user_credentials, conn, username
             )
 
-    def _sync_get_user_credentials(
-        self, conn, username: str
-    ) -> UserCredentials | None:
+    def _sync_get_user_credentials(self, conn, username: str) -> UserCredentials | None:
         """Synchronous user credentials retrieval (runs in worker thread)."""
         try:
             cursor = conn.cursor()
@@ -920,9 +920,7 @@ class TrioDatabaseService:
                 self._sync_update_last_login, conn, user_id, login_time
             )
 
-    def _sync_update_last_login(
-        self, conn, user_id: str, login_time: datetime
-    ) -> bool:
+    def _sync_update_last_login(self, conn, user_id: str, login_time: datetime) -> bool:
         """Synchronous last login update (runs in worker thread)."""
         try:
             cursor = conn.cursor()

@@ -54,7 +54,9 @@ def create_auth_middleware(auth_service: AuthService, require_authentication: bo
             # Check Bearer scheme
             parts = auth_header.split()
             if len(parts) != 2 or parts[0].lower() != "bearer":
-                logger.warning(f"Invalid Authorization header format for {request.path}")
+                logger.warning(
+                    f"Invalid Authorization header format for {request.path}: {auth_header}"
+                )
                 return (
                     jsonify(
                         {

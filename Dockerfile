@@ -40,6 +40,9 @@ RUN uv pip install --system -r requirements-dev.txt
 # Copy application source code
 COPY src/ ./src/
 
+# Copy scripts directory (needed for test_schema_generation.py)
+COPY scripts/ ./scripts/
+
 # Copy configuration files
 COPY pyproject.toml pytest.ini ./
 

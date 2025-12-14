@@ -9,6 +9,7 @@ import yaml
 import json
 from pathlib import Path
 
+
 def check_file_exists(filepath, description):
     """Check if a file exists and is readable."""
     if os.path.isfile(filepath):
@@ -18,62 +19,69 @@ def check_file_exists(filepath, description):
         print(f"❌ {description}: {filepath} - NOT FOUND")
         return False
 
+
 def check_docker_compose_file(filepath):
     """Validate docker-compose file syntax."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             data = yaml.safe_load(f)
-        
+
         # Check required sections
-        if 'services' not in data:
+        if "services" not in data:
             print(f"❌ {filepath}: Missing 'services' section")
             return False
-            
-        services = data['services']
-        required_services = ['backend', 'websocket', 'frontend'] if 'web.yml' in filepath else ['backend', 'websocket', 'frontend-dev']
-        
+
+        services = data["services"]
+        required_services = (
+            ["backend", "websocket", "frontend"]
+            if "web.yml" in filepath
+            else ["backend", "websocket", "frontend-dev"]
+        )
+
         for service in required_services:
             if service not in services:
                 print(f"❌ {filepath}: Missing service '{service}'")
                 return False
-        
+
         print(f"✅ {filepath}: Valid docker-compose file")
         return True
-        
+
     except Exception as e:
         print(f"❌ {filepath}: Invalid YAML - {e}")
         return False
+
 
 def check_package_json():
     """Check frontend package.json."""
     package_json_path = "/app/frontend/package.json"
     try:
-        with open(package_json_path, 'r') as f:
+        with open(package_json_path, "r") as f:
             data = json.load(f)
-        
+
         # Check required scripts
-        scripts = data.get('scripts', {})
-        required_scripts = ['dev', 'build']
-        
+        scripts = data.get("scripts", {})
+        required_scripts = ["dev", "build"]
+
         for script in required_scripts:
             if script not in scripts:
                 print(f"❌ package.json: Missing script '{script}'")
                 return False
-        
+
         print(f"✅ Frontend package.json: Valid configuration")
         return True
-        
+
     except Exception as e:
         print(f"❌ Frontend package.json: {e}")
         return False
+
 
 def main():
     """Main verification function."""
     print("🔍 Verifying Web Interface Setup")
     print("================================")
-    
+
     all_good = True
-    
+
     # Check core files
     files_to_check = [
         ("/app/frontend/Dockerfile", "Frontend Production Dockerfile"),
@@ -88,30 +96,30 @@ def main():
         ("/app/todos/Makefile.web", "Web Makefile"),
         ("/app/.env", "Environment File"),
     ]
-    
+
     for filepath, description in files_to_check:
         if not check_file_exists(filepath, description):
             all_good = False
-    
-    print("\n" + "="*50)
-    
+
+    print("\n" + "=" * 50)
+
     # Check Docker Compose files
     compose_files = [
         "/app/todos/docker-compose.web.yml",
-        "/app/todos/docker-compose.web-dev.yml"
+        "/app/todos/docker-compose.web-dev.yml",
     ]
-    
+
     for compose_file in compose_files:
         if os.path.isfile(compose_file):
             if not check_docker_compose_file(compose_file):
                 all_good = False
-    
+
     # Check package.json
     if not check_package_json():
         all_good = False
-    
-    print("\n" + "="*50)
-    
+
+    print("\n" + "=" * 50)
+
     if all_good:
         print("🎉 Setup verification PASSED!")
         print("\n📋 Next steps:")
@@ -123,6 +131,7 @@ def main():
         print("❌ Setup verification FAILED!")
         print("\n🔧 Please fix the issues above before proceeding.")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

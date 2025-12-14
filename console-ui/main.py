@@ -26,8 +26,7 @@ from src.version_check import (
 
 # Set up logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,11 @@ async def main():
     logger.info("Starting Console UI Client for Virtual LLM-Driven Psychoanalyst")
 
     # Configuration
-    backend_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
-    websocket_url = os.getenv('WEBSOCKET_URL', 'http://localhost:8000')  # Unified server on same port
-    require_auth = os.getenv('REQUIRE_AUTHENTICATION', 'false').lower() == 'true'
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    websocket_url = os.getenv(
+        "WEBSOCKET_URL", "http://localhost:8000"
+    )  # Unified server on same port
+    require_auth = os.getenv("REQUIRE_AUTHENTICATION", "false").lower() == "true"
 
     print("🧠 Virtual LLM-Driven Psychoanalyst - Console Interface")
     print("=" * 60)
@@ -62,7 +63,10 @@ async def main():
             else:
                 print("✅ Version check passed")
                 # Show warning if upgrade is recommended (message contains "outdated")
-                if "outdated" in message.lower() or "consider upgrading" in message.lower():
+                if (
+                    "outdated" in message.lower()
+                    or "consider upgrading" in message.lower()
+                ):
                     print_version_warning(message)
                 print()
         except VersionCheckError as e:
@@ -77,8 +81,8 @@ async def main():
             logger.info(f"Authenticated as {username} (user_id: {user_id})")
         else:
             # Development mode - use environment variables or defaults
-            user_id = os.getenv('USER_ID', 'console_user')
-            auth_token = os.getenv('AUTH_TOKEN', 'dev_token')
+            user_id = os.getenv("USER_ID", "console_user")
+            auth_token = os.getenv("AUTH_TOKEN", "dev_token")
             logger.info("Running in development mode (authentication disabled)")
             print("ℹ️  Running in development mode (authentication disabled)")
             print()
@@ -88,12 +92,12 @@ async def main():
             backend_url=backend_url,
             websocket_url=websocket_url,
             user_id=user_id,
-            auth_token=auth_token
+            auth_token=auth_token,
         )
 
         # Start the console interface
         await client.run()
-        
+
     except KeyboardInterrupt:
         print("\n\n👋 Goodbye! Take care of yourself.")
         logger.info("Console UI client terminated by user")
@@ -101,7 +105,7 @@ async def main():
         print(f"\n❌ Error: {e}")
         logger.error(f"Console UI client error: {e}", exc_info=True)
         return 1
-    
+
     return 0
 
 

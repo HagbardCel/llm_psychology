@@ -117,9 +117,7 @@ class AuthService:
             logger.warning(f"Invalid token: {e}")
             return None
 
-    def create_login_response(
-        self, user_id: str, username: str
-    ) -> LoginResponse:
+    def create_login_response(self, user_id: str, username: str) -> LoginResponse:
         """
         Create a login response with access token.
 

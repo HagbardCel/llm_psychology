@@ -93,6 +93,12 @@ class TrioConversationManager:
                 )
             except Exception as e:
                 logger.error(f"Error sending chunk to session {session_id}: {e}")
+        else:
+            logger.warning(
+                f"No WebSocket registered for session {session_id} "
+                f"when trying to send chunk. "
+                f"Registered sessions: {list(self.websockets.keys())}"
+            )
 
     async def send_typing_indicator(self, session_id: str, is_typing: bool):
         """
@@ -111,6 +117,12 @@ class TrioConversationManager:
                 logger.error(
                     f"Error sending typing indicator to session {session_id}: {e}"
                 )
+        else:
+            logger.warning(
+                f"No WebSocket registered for session {session_id} "
+                f"when trying to send typing indicator. "
+                f"Registered sessions: {list(self.websockets.keys())}"
+            )
 
     def stream_response_in_background(
         self, prompt: str, session_id: str, use_rag: bool = True
@@ -175,7 +187,12 @@ class TrioConversationManager:
                 await ws.send(json.dumps({"type": "typing_stop"}))
 
     async def stream_response(
-        self, prompt: str, context: ConversationContext, use_rag: bool = True
+        self,
+        prompt: str,
+        context: ConversationContext,
+        use_rag: bool = True,
+        agent: str | None = None,
+        llm_service: LLMService | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream LLM response chunks using Trio.
@@ -184,6 +201,9 @@ class TrioConversationManager:
             prompt: The prompt to send to LLM
             context: Conversation context
             use_rag: Whether to use RAG for enhanced responses
+            agent: Name of the agent generating the response
+            llm_service: Optional agent-specific LLM service
+                (defaults to self.llm_service)
 
         Yields:
             Response chunks as they're generated
@@ -209,8 +229,11 @@ class TrioConversationManager:
             full_response = ""
             chunk_count = 0
 
+            # Use provided llm_service or fall back to default
+            service = llm_service if llm_service is not None else self.llm_service
+
             async for chunk in self._stream_llm_response(
-                augmented_prompt, conversation_history
+                augmented_prompt, conversation_history, service
             ):
                 full_response += chunk
                 chunk_count += 1
@@ -222,7 +245,9 @@ class TrioConversationManager:
             )
 
             # Save assistant message to database
-            await self.add_message(context.session_id, "assistant", full_response)
+            await self.add_message(
+                context.session_id, "assistant", full_response, agent
+            )
 
         except Exception as e:
             import traceback
@@ -241,10 +266,12 @@ STACKTRACE:
 """
             yield error_message
             # Save error message for debugging
-            await self.add_message(context.session_id, "assistant", error_message)
+            await self.add_message(
+                context.session_id, "assistant", error_message, agent
+            )
 
     async def stream_static_response(
-        self, content: str, context: ConversationContext
+        self, content: str, context: ConversationContext, agent: str | None = None
     ) -> AsyncIterator[str]:
         """
         Stream static content as if it were an LLM response.
@@ -252,6 +279,7 @@ STACKTRACE:
         Args:
             content: The static content to stream
             context: Conversation context
+            agent: Name of the agent generating the response
 
         Yields:
             Content chunks
@@ -270,14 +298,14 @@ STACKTRACE:
             logger.info(
                 f"DEBUG: stream_static_response calling add_message for session {context.session_id}"
             )
-            await self.add_message(context.session_id, "assistant", content)
+            await self.add_message(context.session_id, "assistant", content, agent)
 
         except Exception as e:
             logger.error(f"Error streaming static response: {e}", exc_info=True)
             yield f"Error: {str(e)}"
 
     async def _stream_llm_response(
-        self, prompt: str, conversation_history: list
+        self, prompt: str, conversation_history: list, llm_service: LLMService
     ) -> AsyncIterator[str]:
         """
         Stream response from LLM service using Trio.
@@ -288,13 +316,14 @@ STACKTRACE:
         Args:
             prompt: The prompt to send
             conversation_history: Previous conversation messages
+            llm_service: LLM service to use for streaming
 
         Yields:
             Response chunks from LLM
         """
         try:
             # Get all chunks from LLM service (runs in thread pool)
-            chunks = await self.llm_service.generate_response_stream(
+            chunks = await llm_service.generate_response_stream(
                 prompt, conversation_history
             )
 
@@ -383,7 +412,9 @@ Based on the above context and your therapeutic approach, respond to:
             history.append({"role": msg.role, "content": msg.content})
         return history
 
-    async def add_message(self, session_id: str, role: str, content: str) -> None:
+    async def add_message(
+        self, session_id: str, role: str, content: str, agent: str | None = None
+    ) -> None:
         """
         Add message to conversation history and persist to database.
 
@@ -391,11 +422,16 @@ Based on the above context and your therapeutic approach, respond to:
             session_id: Session identifier
             role: Message role ("user" or "assistant")
             content: Message content
+            agent: Name of the agent that generated this message (optional)
         """
         try:
-            logger.info(f"DEBUG: add_message called for {session_id} role={role}")
+            logger.info(
+                f"DEBUG: add_message called for {session_id} role={role} agent={agent}"
+            )
             # Create message
-            message = Message(role=role, content=content, timestamp=datetime.now())
+            message = Message(
+                role=role, content=content, timestamp=datetime.now(), agent=agent
+            )
 
             # Update active context if exists
             if session_id in self.active_contexts:

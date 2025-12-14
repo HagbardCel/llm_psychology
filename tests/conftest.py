@@ -4,8 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
-# Add the src directory to the Python path
+# Add the src and scripts directories to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 # Import after path manipulation
 from context.user_context import UserContext
@@ -16,14 +17,17 @@ from models.data_models import Message, Session, TherapyPlan, UserProfile
 
 
 @pytest.fixture(autouse=True)
-def mock_google_api_key(monkeypatch):
+def mock_google_api_key(monkeypatch, request):
     """
     Automatically mock GOOGLE_API_KEY for all tests to prevent
-    configuration errors.
+    configuration errors, UNLESS --no-mocks is specified.
     """
+    if request.config.getoption("--no-mocks"):
+        return None
+
     monkeypatch.setenv("GOOGLE_API_KEY", "test_mock_api_key_for_testing")
     # Also set other optional env vars that might be checked
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-1.5-flash")
+    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("DATABASE_PATH", ":memory:")
     return "test_mock_api_key_for_testing"
 
@@ -121,11 +125,10 @@ def mock_rag_service():
     """Create a mock RAGService for testing."""
     rag_service = Mock()
 
-    def retrieve_relevant_knowledge(*args, **kwargs):
-        print("DEBUG: mock retrieve_relevant_knowledge called")
-        return [{"content": "Mock knowledge", "source": "test.md"}]
-
-    rag_service.retrieve_relevant_knowledge = retrieve_relevant_knowledge
+    # Use Mock for retrieve_relevant_knowledge so tests can set return_value
+    rag_service.retrieve_relevant_knowledge = Mock(
+        return_value=[{"content": "Mock knowledge", "source": "test.md"}]
+    )
 
     rag_service.get_knowledge_by_source = Mock(
         return_value=[{"content": "Mock knowledge", "source": "test.md"}]
@@ -313,6 +316,75 @@ async def mock_service_container(app_config, mock_llm_service, mock_rag_service)
 
     # Cleanup
     await trio_db_service.clear_all_data()
+
+
+@pytest.fixture
+def test_server_config(tmp_path):
+    """Create test server configuration."""
+    from config import settings
+
+    # Use temporary database
+    test_db_path = str(tmp_path / "test_server.db")
+
+    return settings.model_copy(
+        update={
+            "DATABASE_PATH": test_db_path,
+            "REQUIRE_AUTHENTICATION": False,  # Disable auth for most integration tests
+            "JWT_SECRET_KEY": "test_secret_key_for_integration_tests",
+            "CORS_ALLOWED_ORIGINS": [
+                "http://localhost",
+                "http://127.0.0.1",
+            ],  # Specific origins for auth support
+        }
+    )
+
+
+@pytest.fixture
+async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_service):
+    """Create a test server with WebSocket support for integration tests.
+
+    Returns a dict with:
+        - url: HTTP base URL (e.g., "http://127.0.0.1:8888")
+        - ws_url: WebSocket URL (e.g., "ws://127.0.0.1:8888/ws")
+        - db_service: TrioDatabaseService instance
+        - container: ServiceContainer instance
+    """
+    import trio
+
+    from config import settings
+    from container.service_container import ServiceContainer
+    from trio_server import TrioServer
+
+    # Create service container with mocked services
+    container = ServiceContainer(test_server_config)
+    container.register("llm_service", mock_llm_service)
+    container.register("rag_service", mock_rag_service)
+
+    # Initialize database
+    trio_db_service = container.get("trio_db_service")
+    await trio_db_service.initialize()
+
+    # Create server on a free port
+    server = TrioServer(container, host="127.0.0.1", port=8888)
+
+    # Start server in background
+    async with trio.open_nursery() as nursery:
+        # Start server
+        await nursery.start(server.run)
+
+        # Give server time to fully start
+        await trio.sleep(0.2)
+
+        # Provide server info to test
+        yield {
+            "url": f"http://{server.host}:{server.port}",
+            "ws_url": f"ws://{server.host}:{server.port}/ws",
+            "db_service": trio_db_service,
+            "container": container,
+        }
+
+        # Cleanup: cancel the nursery to stop the server
+        nursery.cancel_scope.cancel()
 
 
 def pytest_addoption(parser):

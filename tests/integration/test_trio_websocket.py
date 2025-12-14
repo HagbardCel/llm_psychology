@@ -29,7 +29,13 @@ def app_config(tmp_path):
     test_db_path = str(tmp_path / "test_trio_websocket.db")
 
     # Create a modified copy of settings
-    mock_settings = settings.model_copy(update={"DATABASE_PATH": test_db_path})
+    mock_settings = settings.model_copy(
+        update={
+            "DATABASE_PATH": test_db_path,
+            "REQUIRE_AUTHENTICATION": False,  # Disable auth for WebSocket tests
+            "CORS_ALLOWED_ORIGINS": ["http://127.0.0.1", "http://localhost"],
+        }
+    )
     return mock_settings
 
 
@@ -99,7 +105,9 @@ async def test_websocket_connection_and_session_request(trio_server, test_user):
         try:
             # Include user_id in WebSocket URL
             ws_url = f"{WEBSOCKET_URL}?user_id={test_user.user_id}"
-            async with open_websocket_url(ws_url) as ws:
+            async with open_websocket_url(
+                ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+            ) as ws:
                 # Receive connection confirmation
                 conn_message = await ws.get_message()
                 conn_data = json.loads(conn_message)
@@ -140,7 +148,9 @@ async def test_websocket_chat_message_flow(trio_server, test_user):
         try:
             # Include user_id in WebSocket URL
             ws_url = f"{WEBSOCKET_URL}?user_id={test_user.user_id}"
-            async with open_websocket_url(ws_url) as ws:
+            async with open_websocket_url(
+                ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+            ) as ws:
                 # Receive connection confirmation
                 conn_message = await ws.get_message()
                 conn_data = json.loads(conn_message)
@@ -201,7 +211,9 @@ async def test_websocket_missing_user_id(trio_server):
 
         # Test without user_id - should be rejected
         with pytest.raises(ConnectionRejected):
-            async with open_websocket_url(WEBSOCKET_URL) as ws:
+            async with open_websocket_url(
+                WEBSOCKET_URL, extra_headers=[("Origin", "http://127.0.0.1")]
+            ) as ws:
                 # Should fail before we can send anything
                 await ws.get_message()
 

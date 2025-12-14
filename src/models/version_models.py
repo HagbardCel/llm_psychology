@@ -2,6 +2,8 @@
 Pydantic models for version negotiation and compatibility checking.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -24,7 +26,9 @@ class VersionInfo(BaseModel):
         example="1.0.0",
     )
     server_time: str = Field(
-        ..., description="Current server timestamp (ISO 8601)", example="2025-12-03T10:00:00Z"
+        ...,
+        description="Current server timestamp (ISO 8601)",
+        example="2025-12-03T10:00:00Z",
     )
 
 
@@ -40,8 +44,8 @@ class VersionCheckRequest(BaseModel):
         description="Client's version (semantic versioning: MAJOR.MINOR.PATCH)",
         example="1.0.0",
     )
-    client_type: str = Field(
-        ..., description="Type of client", example="console", enum=["console", "web"]
+    client_type: Literal["console", "web"] = Field(
+        ..., description="Type of client", example="console"
     )
 
 
@@ -56,11 +60,14 @@ class VersionCheckResponse(BaseModel):
     api_version: str = Field(..., description="Current backend API version")
     client_version: str = Field(..., description="Client's reported version")
     message: str = Field(
-        ..., description="Human-readable compatibility message", example="Versions are compatible"
+        ...,
+        description="Human-readable compatibility message",
+        example="Versions are compatible",
     )
     upgrade_required: bool = Field(
         default=False, description="Whether client must upgrade to continue"
     )
     upgrade_recommended: bool = Field(
-        default=False, description="Whether client upgrade is recommended (but not required)"
+        default=False,
+        description="Whether client upgrade is recommended (but not required)",
     )

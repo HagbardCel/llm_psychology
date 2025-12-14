@@ -21,7 +21,9 @@ class VersionCheckError(Exception):
     pass
 
 
-async def check_backend_version(base_url: str, timeout: float = 5.0) -> Tuple[bool, str]:
+async def check_backend_version(
+    base_url: str, timeout: float = 5.0
+) -> Tuple[bool, str]:
     """
     Check compatibility with backend API version.
 

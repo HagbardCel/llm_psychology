@@ -36,6 +36,7 @@ class Message(BaseModel):
     role: str  # "user" or "assistant"
     content: str
     timestamp: datetime
+    agent: str | None = None  # e.g., "IntakeAgent", "AssessmentAgent", "PsychoanalystAgent"
 
 
 class Topic(BaseModel):

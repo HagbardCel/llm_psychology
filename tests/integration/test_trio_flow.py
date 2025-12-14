@@ -23,7 +23,12 @@ def app_config(tmp_path):
     test_db_path = str(tmp_path / "test_trio_flow.db")
 
     # Create a modified copy of settings
-    mock_settings = settings.model_copy(update={"DATABASE_PATH": test_db_path})
+    mock_settings = settings.model_copy(
+        update={
+            "DATABASE_PATH": test_db_path,
+            "REQUIRE_AUTHENTICATION": False,  # Disable auth for internal flow tests
+        }
+    )
     return mock_settings
 
 

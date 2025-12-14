@@ -10,13 +10,13 @@ from datetime import datetime, timezone
 from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
 
-from src.version import API_VERSION, MIN_CLIENT_VERSION, Version
-from src.models.version_models import (
+from version import API_VERSION, MIN_CLIENT_VERSION, Version
+from models.version_models import (
     VersionInfo,
     VersionCheckRequest,
     VersionCheckResponse,
 )
-from src.api.cache_utils import add_cache_headers, CACHE_PRESETS
+from api.cache_utils import add_cache_headers, CACHE_PRESETS
 
 # Create blueprint
 version_bp = Blueprint("version", __name__, url_prefix="/api/version")

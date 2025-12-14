@@ -1,17 +1,13 @@
-"""Authentication routes for JWT-based authentication."""
-
 import logging
 from datetime import datetime
+from typing import Callable
 
 from quart import Blueprint, jsonify, request
 
-from config import settings
 from models.auth_models import (
     LoginRequest,
-    LoginResponse,
     RegisterRequest,
     UserCredentials,
-    UserInfo,
 )
 from models.data_models import UserProfile, UserStatus
 from services.auth_service import AuthService
@@ -19,18 +15,23 @@ from services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
 
-# Create Blueprint for auth routes
-auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
-
-def create_auth_routes(db_service: TrioDatabaseService, auth_service: AuthService):
+def create_auth_routes(
+    db_service: TrioDatabaseService, auth_service: AuthService, require_auth: Callable
+):
     """
     Create and configure authentication routes.
 
     Args:
         db_service: Database service for user management
         auth_service: Authentication service for JWT handling
+        require_auth: Decorator for requiring authentication
+
+    Returns:
+        Configured Blueprint for authentication routes
     """
+    # Create a fresh Blueprint instance for each call (prevents test issues)
+    auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
     @auth_bp.route("/register", methods=["POST"])
     async def register():
@@ -89,9 +90,9 @@ def create_auth_routes(db_service: TrioDatabaseService, auth_service: AuthServic
                 updated_at=datetime.now(),
             )
 
-            # Save to database
-            creds_success = await db_service.create_user_credentials(credentials)
+            # Save to database - profile FIRST to satisfy foreign key constraint
             profile_success = await db_service.save_user_profile(profile)
+            creds_success = await db_service.create_user_credentials(credentials)
 
             if not creds_success or not profile_success:
                 return jsonify({"error": "Failed to create user"}), 500
@@ -165,6 +166,7 @@ def create_auth_routes(db_service: TrioDatabaseService, auth_service: AuthServic
             return jsonify({"error": "Internal server error"}), 500
 
     @auth_bp.route("/me", methods=["GET"])
+    @require_auth
     async def get_current_user():
         """
         Get current authenticated user information.
@@ -187,8 +189,6 @@ def create_auth_routes(db_service: TrioDatabaseService, auth_service: AuthServic
             if not profile:
                 return jsonify({"error": "User not found"}), 404
 
-            # Get credentials for additional info
-            credentials = None
             # We need to get credentials by user_id, but we only have username lookup
             # Let's add the username to the profile response
             # For now, get credentials separately if needed
@@ -197,6 +197,7 @@ def create_auth_routes(db_service: TrioDatabaseService, auth_service: AuthServic
                 jsonify(
                     {
                         "user_id": profile.user_id,
+                        "username": getattr(request, "username", None),
                         "name": profile.name,
                         "status": profile.status.value,
                         "created_at": profile.created_at.isoformat(),

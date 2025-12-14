@@ -12,22 +12,108 @@ from exceptions import LLMServiceError
 logger = logging.getLogger(__name__)
 
 
-class LLMService:
-    """Service for handling LLM API calls."""
+class TrioRateLimiter:
+    """Token bucket rate limiter for Trio applications.
 
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
-        """
-        Initialize the LLM service.
+    This rate limiter uses the token bucket algorithm to control the rate
+    of operations. It allows for burst traffic up to the capacity limit
+    while ensuring the average rate stays within the specified limit.
+
+    Attributes:
+        rate: Tokens refilled per second
+        capacity: Maximum number of tokens (burst capacity)
+    """
+
+    def __init__(self, rate: float, capacity: float):
+        """Initialize the rate limiter.
 
         Args:
-            api_key (str): Google Gemini API key.
-            model_name (str): Name of the LLM model to use.
+            rate: Tokens per second (e.g., 5/60 = 0.083 for 5 req/min)
+            capacity: Maximum burst tokens (max concurrent requests)
+        """
+        self.rate = rate
+        self.capacity = capacity
+        self._tokens = capacity
+        self._last_update = trio.current_time()
+        self._lock = trio.Lock()
+
+    async def acquire(self, tokens: float = 1.0) -> None:
+        """Acquire tokens, waiting if necessary.
+
+        This method will block until enough tokens are available.
+        Tokens are refilled continuously based on the configured rate.
+
+        Args:
+            tokens: Number of tokens to acquire (default: 1.0)
+        """
+        async with self._lock:
+            while True:
+                # Refill tokens based on elapsed time
+                now = trio.current_time()
+                elapsed = now - self._last_update
+                self._tokens = min(self.capacity, self._tokens + elapsed * self.rate)
+                self._last_update = now
+
+                if self._tokens >= tokens:
+                    # Enough tokens available
+                    self._tokens -= tokens
+                    return
+
+                # Not enough tokens, wait for next refill
+                wait_time = (tokens - self._tokens) / self.rate
+                logger.debug(
+                    f"Rate limit: waiting {wait_time:.2f}s "
+                    f"(tokens: {self._tokens:.2f}/{self.capacity})"
+                )
+                await trio.sleep(wait_time)
+
+
+class LLMService:
+    """Service for handling LLM API calls with rate limiting."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str,
+        rate_limit_enabled: bool = True,
+        requests_per_minute: float = 4.0,
+        burst_capacity: int = 2,
+    ):
+        """Initialize the LLM service with optional rate limiting.
+
+        Args:
+            api_key: Google Gemini API key
+            model_name: Name of the LLM model to use
+            rate_limit_enabled: Enable rate limiting (default: True)
+            requests_per_minute: Max requests per minute (default: 4.0)
+            burst_capacity: Max concurrent requests (default: 2)
         """
         self.api_key = api_key
         self.model_name = model_name
         self.llm = ChatGoogleGenerativeAI(
             model=model_name, google_api_key=api_key, temperature=0.7
         )
+
+        # Initialize rate limiter
+        self.rate_limit_enabled = rate_limit_enabled
+        if rate_limit_enabled:
+            # Convert requests per minute to tokens per second
+            tokens_per_second = requests_per_minute / 60.0
+            self._rate_limiter = TrioRateLimiter(
+                rate=tokens_per_second, capacity=float(burst_capacity)
+            )
+            logger.info(
+                f"Rate limiting enabled: {requests_per_minute} req/min, "
+                f"burst capacity: {burst_capacity}"
+            )
+        else:
+            self._rate_limiter = None
+            logger.info("Rate limiting disabled")
+
+    async def _acquire_rate_limit(self) -> None:
+        """Acquire rate limit token if rate limiting is enabled."""
+        if self.rate_limit_enabled and self._rate_limiter is not None:
+            await self._rate_limiter.acquire()
 
     def generate_response(
         self, prompt: str, context: list[dict[str, str]] | None = None
@@ -81,11 +167,11 @@ class LLMService:
     async def generate_response_stream(
         self, prompt: str, context: list[dict[str, str]] | None = None
     ) -> list[str]:
-        """
-        Generate a streaming response from the LLM, returning chunks as a list.
+        """Generate a streaming response from the LLM with rate limiting.
 
         This method runs LangChain's streaming in a thread pool and collects
         all chunks. The caller can then yield them in async context.
+        Rate limiting is applied before starting the stream.
 
         Args:
             prompt: The prompt to send to the LLM
@@ -94,6 +180,9 @@ class LLMService:
         Returns:
             List[str]: List of response chunks in order
         """
+        # Apply rate limiting before starting the request
+        await self._acquire_rate_limit()
+
         try:
             # Build messages
             messages = []
@@ -215,31 +304,35 @@ class LLMService:
     async def generate_response_async(
         self, prompt: str, context: list[dict[str, str]] | None = None
     ) -> str:
-        """
-        Generate a response from the LLM asynchronously using Trio.
+        """Generate a response from the LLM asynchronously with rate limiting.
 
         Args:
-            prompt (str): The prompt to send to the LLM.
-            context (Optional[List[Dict[str, str]]]): Optional conversation history.
+            prompt: The prompt to send to the LLM
+            context: Optional conversation history
 
         Returns:
-            str: The LLM's response.
+            str: The LLM's response
         """
+        # Apply rate limiting before starting the request
+        await self._acquire_rate_limit()
+
         return await trio.to_thread.run_sync(self.generate_response, prompt, context)
 
     async def generate_structured_response_async(
         self, prompt: str, output_format: str
     ) -> dict[str, Any]:
-        """
-        Generate a structured response from the LLM asynchronously using Trio.
+        """Generate a structured response with rate limiting.
 
         Args:
-            prompt (str): The prompt to send to the LLM.
-            output_format (str): Description of the expected output format.
+            prompt: The prompt to send to the LLM
+            output_format: Description of the expected output format
 
         Returns:
-            Dict[str, Any]: The structured response.
+            Dict[str, Any]: The structured response
         """
+        # Apply rate limiting before starting the request
+        await self._acquire_rate_limit()
+
         return await trio.to_thread.run_sync(
             self.generate_structured_response, prompt, output_format
         )

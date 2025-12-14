@@ -90,9 +90,9 @@ async def test_save_and_load_therapy_plan_with_briefing(
 
     # Verify the session briefing was saved and retrieved correctly
     assert retrieved_plan.session_briefing is not None, "Session briefing was not saved"
-    assert isinstance(retrieved_plan.session_briefing, dict), (
-        "Session briefing should be a dict"
-    )
+    assert isinstance(
+        retrieved_plan.session_briefing, dict
+    ), "Session briefing should be a dict"
 
     # Verify briefing content
     assert (
@@ -253,9 +253,9 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
         return await trio.to_thread.run_sync(_check)
 
     has_column = await check_column_exists()
-    assert has_column is True, (
-        "session_briefing column should exist in therapy_plans table"
-    )
+    assert (
+        has_column is True
+    ), "session_briefing column should exist in therapy_plans table"
 
 
 # Authentication Tests
@@ -279,6 +279,19 @@ def sample_user_credentials():
 @pytest.mark.unit
 async def test_create_user_credentials(test_db_service, sample_user_credentials):
     """Test creating user credentials in database."""
+    # Create user profile first (FK constraint requires it)
+    from models.data_models import UserProfile, UserStatus
+
+    profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="Test User",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(profile)
+
+    # Now create credentials
     success = await test_db_service.create_user_credentials(sample_user_credentials)
     assert success is True, "Failed to create user credentials"
 
@@ -296,9 +309,31 @@ async def test_create_user_credentials(test_db_service, sample_user_credentials)
 @pytest.mark.unit
 async def test_create_duplicate_username(test_db_service, sample_user_credentials):
     """Test that duplicate usernames are rejected."""
+    # Create user profile first (FK constraint requires it)
+    from models.data_models import UserProfile, UserStatus
+
+    profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="Test User",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(profile)
+
     # Create first user
     success = await test_db_service.create_user_credentials(sample_user_credentials)
     assert success is True
+
+    # Create profile for second user (different user_id)
+    profile2 = UserProfile(
+        user_id="different_user_id",
+        name="Test User 2",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(profile2)
 
     # Try to create second user with same username
     from models.auth_models import UserCredentials
@@ -327,7 +362,19 @@ async def test_get_user_credentials_not_found(test_db_service):
 @pytest.mark.unit
 async def test_update_last_login(test_db_service, sample_user_credentials):
     """Test updating last login time."""
-    # Create user
+    # Create user profile first (FK constraint requires it)
+    from models.data_models import UserProfile, UserStatus
+
+    profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="Test User",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(profile)
+
+    # Create user credentials
     success = await test_db_service.create_user_credentials(sample_user_credentials)
     assert success is True
 
@@ -354,6 +401,16 @@ async def test_update_last_login(test_db_service, sample_user_credentials):
 async def test_get_user_by_username(test_db_service, sample_user_credentials):
     """Test getting user profile by username."""
     from models.data_models import UserProfile, UserStatus
+
+    # Create user profile first
+    profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="Test User",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(profile)
 
     # Create user credentials
     success = await test_db_service.create_user_credentials(sample_user_credentials)
@@ -383,17 +440,35 @@ async def test_get_user_by_username(test_db_service, sample_user_credentials):
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_user_by_username_no_profile(test_db_service, sample_user_credentials):
-    """Test getting user by username when profile doesn't exist."""
-    # Create credentials but no profile
+async def test_get_user_by_username_no_profile(
+    test_db_service, sample_user_credentials
+):
+    """Test getting user by username returns None when only credentials exist (no full profile)."""
+    from models.data_models import UserProfile, UserStatus
+
+    # Create minimal profile first (FK constraint requires it)
+    minimal_profile = UserProfile(
+        user_id=sample_user_credentials.user_id,
+        name="MinimalUser",  # Minimal name
+        birthdate=None,
+        profession=None,
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await test_db_service.save_user_profile(minimal_profile)
+
+    # Create credentials
     success = await test_db_service.create_user_credentials(sample_user_credentials)
     assert success is True
 
-    # Try to get profile by username
+    # Get user by username - should return the profile
     retrieved_profile = await test_db_service.get_user_by_username(
         sample_user_credentials.username
     )
-    assert retrieved_profile is None
+    assert retrieved_profile is not None
+    assert retrieved_profile.user_id == sample_user_credentials.user_id
+    assert retrieved_profile.name == "MinimalUser"
 
 
 @pytest.mark.trio

@@ -100,6 +100,27 @@ npm run build  # Production build
 
 2. **Docker**: Required for web interface (optional for CLI)
 
+### Multi-Model Configuration (Optional)
+
+The application supports configuring different LLM models for different agents, allowing you to optimize costs while maintaining quality where it matters most.
+
+**Environment Variables**:
+- `INTAKE_MODEL` - Model for intake conversations (default: MODEL_NAME)
+- `ASSESSMENT_MODEL` - Model for session analysis (default: MODEL_NAME)
+- `PSYCHOANALYST_MODEL` - Model for main therapy sessions (default: MODEL_NAME)
+- `REFLECTION_MODEL` - Model for session summaries (default: MODEL_NAME)
+- `MEMORY_MODEL` - Model for memory extraction (default: MODEL_NAME)
+- `PLANNING_MODEL` - Model for therapy plan generation (default: MODEL_NAME)
+
+**Example** - Using Flash for simple tasks, Pro for complex therapy:
+```bash
+INTAKE_MODEL=gemini-2.5-flash
+PSYCHOANALYST_MODEL=gemini-2.5-pro
+REFLECTION_MODEL=gemini-2.5-flash
+```
+
+See [.env.example](.env.example) for complete configuration options.
+
 ## 🎨 Choosing Your Interface
 
 This application supports **three interface modes**, each optimized for different use cases:

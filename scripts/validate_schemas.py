@@ -25,6 +25,7 @@ SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
 
 class ValidationError(Exception):
     """Raised when validation fails."""
+
     pass
 
 
@@ -139,9 +140,7 @@ def validate_index_file() -> None:
 
     # Check for schema files not in index
     schema_files = [
-        f.stem
-        for f in SCHEMAS_DIR.glob("*.json")
-        if f.name != "index.json"
+        f.stem for f in SCHEMAS_DIR.glob("*.json") if f.name != "index.json"
     ]
 
     missing_from_index = set(schema_files) - set(models)
@@ -159,7 +158,9 @@ def validate_all_schemas() -> Tuple[int, List[str]]:
         Tuple of (success_count, error_messages)
     """
     if not SCHEMAS_DIR.exists():
-        return 0, ["Schemas directory does not exist. Run 'make generate-schemas' first."]
+        return 0, [
+            "Schemas directory does not exist. Run 'make generate-schemas' first."
+        ]
 
     schema_files = list(SCHEMAS_DIR.glob("*.json"))
     if not schema_files:
@@ -227,6 +228,7 @@ def main() -> int:
     except Exception as e:
         print(f"\n✗ Validation failed with unexpected error: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 

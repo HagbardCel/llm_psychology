@@ -17,38 +17,38 @@ from container.service_container import ServiceContainer
 
 
 @pytest.fixture
-async def test_server(tmp_path):
-    """Create a test server with temporary database."""
+async def test_server(tmp_path, mock_llm_service, mock_rag_service):
+    """Create a test server with authentication enabled."""
+    from trio_server import TrioServer
+
     # Use temporary database
     test_db_path = str(tmp_path / "test_auth.db")
-    settings.DATABASE_PATH = test_db_path
-    settings.REQUIRE_AUTHENTICATION = True  # Enable auth for testing
-    settings.JWT_SECRET_KEY = "test_secret_key_for_integration_tests"
 
-    # Create service container
-    container = ServiceContainer(settings)
+    # Create test config with auth enabled
+    test_config = settings.model_copy(
+        update={
+            "DATABASE_PATH": test_db_path,
+            "REQUIRE_AUTHENTICATION": True,  # Enable auth for these tests
+            "JWT_SECRET_KEY": "test_secret_key_for_integration_tests",
+        }
+    )
+
+    # Create service container with mocked services
+    container = ServiceContainer(test_config)
+    container.register("llm_service", mock_llm_service)
+    container.register("rag_service", mock_rag_service)
 
     # Initialize database
     db_service = container.get("trio_db_service")
     await db_service.initialize()
 
-    # Import after path setup
-    from trio_server import TrioServer
-
     # Create server
     server = TrioServer(container, host="127.0.0.1", port=8888)
 
-    # Create Hypercorn config
-    config = HypercornConfig()
-    config.bind = [f"{server.host}:{server.port}"]
-
     # Start server in background
     async with trio.open_nursery() as nursery:
-        # Start server
-        nursery.start_soon(serve, server.app, config)
-
-        # Give server time to start
-        await trio.sleep(0.5)
+        await nursery.start(server.run)
+        await trio.sleep(0.2)  # Give server time to start
 
         # Provide server info to test
         yield {
@@ -63,13 +63,15 @@ async def test_server(tmp_path):
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_register_new_user():
+async def test_register_new_user(test_server):
     """Test user registration endpoint."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "testuser123",
                 "password": "securepassword123",
@@ -87,14 +89,16 @@ async def test_register_new_user():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_register_duplicate_username():
+async def test_register_duplicate_username(test_server):
     """Test that duplicate username registration fails."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Register first user
         response1 = await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "duplicate_user",
                 "password": "password123",
@@ -105,7 +109,7 @@ async def test_register_duplicate_username():
 
         # Try to register with same username
         response2 = await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "duplicate_user",
                 "password": "different_password",
@@ -118,14 +122,16 @@ async def test_register_duplicate_username():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_login_success():
+async def test_login_success(test_server):
     """Test successful login."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Register user first
         await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "logintest",
                 "password": "testpass123",
@@ -135,7 +141,7 @@ async def test_login_success():
 
         # Login
         response = await client.post(
-            "http://127.0.0.1:8888/api/auth/login",
+            f"{base_url}/api/auth/login",
             json={"username": "logintest", "password": "testpass123"},
         )
 
@@ -149,14 +155,16 @@ async def test_login_success():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_login_invalid_credentials():
+async def test_login_invalid_credentials(test_server):
     """Test login with invalid credentials."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Register user
         await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "wrongpass",
                 "password": "correctpassword",
@@ -166,7 +174,7 @@ async def test_login_invalid_credentials():
 
         # Try to login with wrong password
         response = await client.post(
-            "http://127.0.0.1:8888/api/auth/login",
+            f"{base_url}/api/auth/login",
             json={"username": "wrongpass", "password": "wrongpassword"},
         )
 
@@ -176,13 +184,15 @@ async def test_login_invalid_credentials():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_protected_endpoint_without_token():
+async def test_protected_endpoint_without_token(test_server):
     """Test that protected endpoints reject requests without token."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Try to access protected endpoint without token
-        response = await client.get("http://127.0.0.1:8888/api/user/status?user_id=test")
+        response = await client.get(f"{base_url}/api/user/status?user_id=test")
 
         assert response.status_code == 401
         assert "authorization" in response.json()["error"].lower()
@@ -190,14 +200,16 @@ async def test_protected_endpoint_without_token():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_protected_endpoint_with_valid_token():
+async def test_protected_endpoint_with_valid_token(test_server):
     """Test that protected endpoints accept valid tokens."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Register and get token
         register_response = await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "protected_test",
                 "password": "testpass123",
@@ -208,7 +220,7 @@ async def test_protected_endpoint_with_valid_token():
 
         # Access protected endpoint with token
         response = await client.get(
-            "http://127.0.0.1:8888/api/user/status?user_id=test",
+            f"{base_url}/api/user/status?user_id=test",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -218,12 +230,15 @@ async def test_protected_endpoint_with_valid_token():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_protected_endpoint_with_expired_token():
+async def test_protected_endpoint_with_expired_token(test_server):
     """Test that expired tokens are rejected."""
-    import httpx
     from datetime import timedelta
 
+    import httpx
+
     from services.auth_service import AuthService
+
+    base_url = test_server["base_url"]
 
     # Create auth service with short expiration
     auth_service = AuthService(
@@ -239,9 +254,9 @@ async def test_protected_endpoint_with_expired_token():
 
     await trio.sleep(0.1)  # Wait for token to expire
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
-            "http://127.0.0.1:8888/api/user/status?user_id=test",
+            f"{base_url}/api/user/status?user_id=test",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -251,14 +266,16 @@ async def test_protected_endpoint_with_expired_token():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_login_updates_last_login():
+async def test_login_updates_last_login(test_server):
     """Test that login updates the last_login timestamp."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         # Register user
         await client.post(
-            "http://127.0.0.1:8888/api/auth/register",
+            f"{base_url}/api/auth/register",
             json={
                 "username": "lastlogintest",
                 "password": "testpass123",
@@ -268,7 +285,7 @@ async def test_login_updates_last_login():
 
         # Login twice with a delay
         response1 = await client.post(
-            "http://127.0.0.1:8888/api/auth/login",
+            f"{base_url}/api/auth/login",
             json={"username": "lastlogintest", "password": "testpass123"},
         )
         assert response1.status_code == 200
@@ -276,7 +293,7 @@ async def test_login_updates_last_login():
         await trio.sleep(1)
 
         response2 = await client.post(
-            "http://127.0.0.1:8888/api/auth/login",
+            f"{base_url}/api/auth/login",
             json={"username": "lastlogintest", "password": "testpass123"},
         )
         assert response2.status_code == 200
@@ -284,12 +301,14 @@ async def test_login_updates_last_login():
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_health_endpoint_no_auth_required():
+async def test_health_endpoint_no_auth_required(test_server):
     """Test that health endpoint doesn't require authentication."""
     import httpx
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get("http://127.0.0.1:8888/health")
+    base_url = test_server["base_url"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(f"{base_url}/health")
 
         # Should work without authentication
         assert response.status_code == 200

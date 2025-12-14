@@ -76,10 +76,15 @@ class TestLLMService:
         pass
 
 
-# Integration test for the real LLMService (skipped in normal test runs)
-@pytest.mark.skip(reason="Requires real API key and network access")
+# Integration test for the real LLMService
+# This class uses an autouse fixture to skip itself if --no-mocks is not set
 class TestLLMServiceIntegration:
     """Integration tests for LLMService with real API calls."""
+
+    @pytest.fixture(autouse=True)
+    def skip_if_mocks_enabled(self, request):
+        if not request.config.getoption("--no-mocks"):
+            pytest.skip("Skipping real integration tests because --no-mocks is not set")
 
     def test_real_generate_response(self):
         """Test generating a real response (requires API key)."""

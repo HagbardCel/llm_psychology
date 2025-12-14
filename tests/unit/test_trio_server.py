@@ -2,7 +2,7 @@
 Unit tests for TrioServer to ensure proper initialization.
 """
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 import trio
@@ -15,9 +15,19 @@ class TestTrioServer:
     """Test TrioServer initialization and startup."""
 
     @pytest.fixture
-    async def mock_container(self):
+    def mock_container(self):
         """Create a mock service container."""
-        container = Mock(spec=ServiceContainer)
+        container = MagicMock()
+
+        # Mock Config
+        mock_config = MagicMock()
+        mock_config.CORS_ALLOWED_ORIGINS = ["*"]
+        mock_config.JWT_SECRET_KEY = "test_secret"
+        mock_config.JWT_ALGORITHM = "HS256"
+        mock_config.ACCESS_TOKEN_EXPIRE_MINUTES = 60
+        mock_config.REQUIRE_AUTHENTICATION = False
+
+        container.config = mock_config
 
         # Mock database service
         db_service = AsyncMock()
@@ -76,7 +86,7 @@ class TestTrioServer:
         # Call the health check endpoint within app context
         async with server.app.app_context():
             result = await server._health_check()
-            
+
             # Check the response format
             response_data = await result.get_json()
             assert response_data["status"] == "healthy"

@@ -54,6 +54,9 @@ class ServiceContainer:
         self._lock = RLock()
         self._initialized = False
 
+        # Cache for LLMService instances by model name
+        self._llm_service_cache: dict[str, Any] = {}
+
         logger.info("Initializing ServiceContainer")
         self._setup_factories()
         logger.info("ServiceContainer initialized with factories")
@@ -63,6 +66,24 @@ class ServiceContainer:
         self._factories.update(
             {
                 "llm_service": self._create_llm_service,
+                "llm_service_intake": lambda: self._create_agent_llm_service(
+                    "INTAKE_MODEL"
+                ),
+                "llm_service_assessment": lambda: self._create_agent_llm_service(
+                    "ASSESSMENT_MODEL"
+                ),
+                "llm_service_psychoanalyst": lambda: self._create_agent_llm_service(
+                    "PSYCHOANALYST_MODEL"
+                ),
+                "llm_service_reflection": lambda: self._create_agent_llm_service(
+                    "REFLECTION_MODEL"
+                ),
+                "llm_service_memory": lambda: self._create_agent_llm_service(
+                    "MEMORY_MODEL"
+                ),
+                "llm_service_planning": lambda: self._create_agent_llm_service(
+                    "PLANNING_MODEL"
+                ),
                 "rag_service": self._create_rag_service,
                 "migration_service": self._create_migration_service,
                 "trio_db_service": self._create_trio_db_service,
@@ -212,6 +233,49 @@ class ServiceContainer:
             logger.error(f"Failed to create TrioDatabaseService: {e}")
             raise
 
+    def _get_or_create_llm_service_for_model(
+        self, model_name: str, config_key: str = "DEFAULT"
+    ) -> LLMService:
+        """
+        Get existing LLMService for a model or create a new one.
+
+        Args:
+            model_name: Name of the LLM model
+            config_key: Configuration key alias for logging (e.g., "INTAKE_MODEL")
+
+        Returns:
+            LLMService instance (shared per model)
+        """
+        # Check cache first
+        if model_name in self._llm_service_cache:
+            logger.debug(f"Reusing existing LLMService for model {model_name}")
+            return self._llm_service_cache[model_name]
+
+        # Create new instance
+        if not self.config.GOOGLE_API_KEY:
+            raise ConfigurationError("GOOGLE_API_KEY must be configured")
+
+        try:
+            llm_service = LLMService(
+                api_key=self.config.GOOGLE_API_KEY,
+                model_name=model_name,
+                rate_limit_enabled=self.config.LLM_RATE_LIMIT_ENABLED,
+                requests_per_minute=self.config.LLM_REQUESTS_PER_MINUTE,
+                burst_capacity=self.config.LLM_BURST_CAPACITY,
+            )
+
+            # Cache it
+            self._llm_service_cache[model_name] = llm_service
+
+            logger.info(
+                f"Created new LLMService for model {model_name} (source: {config_key}), "
+                f"rate limiting: {self.config.LLM_RATE_LIMIT_ENABLED}"
+            )
+            return llm_service
+        except Exception as e:
+            logger.error(f"Failed to create LLMService for {model_name}: {e}")
+            raise
+
     def _create_llm_service(self) -> LLMService:
         """
         Create LLM service.
@@ -220,20 +284,32 @@ class ServiceContainer:
             Configured LLMService instance
         """
         logger.debug("Creating LLMService")
+        return self._get_or_create_llm_service_for_model(
+            self.config.MODEL_NAME, "DEFAULT_MODEL"
+        )
 
+    def _create_agent_llm_service(self, config_key: str) -> LLMService:
+        """
+        Create agent-specific LLM service with fallback to default model.
+
+        Args:
+            config_key: Configuration key for the agent model (e.g., "INTAKE_MODEL")
+
+        Returns:
+            Configured LLMService instance with agent-specific or default model
+        """
         if not self.config.GOOGLE_API_KEY:
             raise ConfigurationError("GOOGLE_API_KEY must be configured")
 
-        try:
-            model_name = getattr(self.config, "MODEL_NAME", "gemini-2.5-flash")
-            llm_service = LLMService(
-                api_key=self.config.GOOGLE_API_KEY, model_name=model_name
-            )
-            logger.info(f"Created LLMService with model {model_name}")
-            return llm_service
-        except Exception as e:
-            logger.error(f"Failed to create LLMService: {e}")
-            raise
+        # Get agent-specific model, fall back to MODEL_NAME if not set
+        model_name = getattr(self.config, config_key, "")
+        if not model_name:
+            model_name = self.config.MODEL_NAME
+
+        logger.debug(
+            f"Creating agent LLM service for {config_key} with model {model_name}"
+        )
+        return self._get_or_create_llm_service_for_model(model_name, config_key)
 
     def _create_rag_service(self) -> RAGService:
         """

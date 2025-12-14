@@ -38,8 +38,8 @@ async def test_handle_agent_response_await_selection(orchestrator, mock_dependen
         metadata={"some": "metadata"},
     )
 
-    # Execute the method
-    await orchestrator._handle_agent_response("test_user", response)
+    # Execute the method (method signature requires user_id, session_id, agent_response)
+    await orchestrator._handle_agent_response("test_user", "test_session", response)
 
     # Verify no transition was called
     mock_dependencies["workflow_engine"].transition.assert_not_called()
@@ -55,7 +55,7 @@ async def test_handle_agent_response_transition(orchestrator, mock_dependencies)
         metadata={},
     )
 
-    await orchestrator._handle_agent_response("test_user", response)
+    await orchestrator._handle_agent_response("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_called_once_with(
         "test_user", WorkflowState.INTAKE_IN_PROGRESS
@@ -69,7 +69,7 @@ async def test_handle_agent_response_continue(orchestrator, mock_dependencies):
         content="Test content", next_action="continue", next_state=None, metadata={}
     )
 
-    await orchestrator._handle_agent_response("test_user", response)
+    await orchestrator._handle_agent_response("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_not_called()
 
@@ -84,7 +84,7 @@ async def test_handle_agent_response_complete(orchestrator, mock_dependencies):
         metadata={"result": "success"},
     )
 
-    await orchestrator._handle_agent_response("test_user", response)
+    await orchestrator._handle_agent_response("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_not_called()
 
@@ -115,7 +115,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
         name="Test",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
-        updated_at=datetime.now()
+        updated_at=datetime.now(),
     )
     mock_db_service.get_user_profile.return_value = profile
     mock_db_service.get_latest_therapy_plan.return_value = None
@@ -177,12 +177,13 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
         name="Test",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
-        updated_at=datetime.now()
+        updated_at=datetime.now(),
     )
     mock_db_service.get_user_profile.return_value = profile
 
     # Mock existing plan
     from models.data_models import TherapyPlan
+
     existing_plan = TherapyPlan(
         plan_id="existing_plan_id",
         user_id="test_user",
@@ -190,7 +191,7 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
         updated_at=datetime.now(),
         plan_details={},
         version=1,
-        selected_therapy_style="freud"
+        selected_therapy_style="freud",
     )
     mock_db_service.get_latest_therapy_plan.return_value = existing_plan
 

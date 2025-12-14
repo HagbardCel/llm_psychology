@@ -96,7 +96,7 @@ async def test_full_patient_journey_with_real_llm():
         await ws.send_message(json.dumps(msg))
 
         # Wait for the response to be fully received
-        with trio.move_on_after(45) as cancel_scope:
+        with trio.move_on_after(60) as cancel_scope:
             while not received_events["chat_response_chunk"]:
                 await trio.sleep(0.1)
 
@@ -106,7 +106,12 @@ async def test_full_patient_journey_with_real_llm():
         return received_events["chat_response_chunk"][0]
 
     try:
-        async with open_websocket_url(WEBSOCKET_URL) as ws:
+        async with open_websocket_url(
+            f"{WEBSOCKET_URL}?user_id={user_id}",
+            extra_headers=[
+                ("Origin", "http://localhost:5173"),
+            ],
+        ) as ws:
             async with trio.open_nursery() as nursery:
                 nursery.start_soon(websocket_receiver, ws)
                 await trio.sleep(0.2)  # Let receiver start
@@ -122,27 +127,27 @@ async def test_full_patient_journey_with_real_llm():
                     )
                 )
 
-                with trio.move_on_after(45) as cancel_scope:
+                with trio.move_on_after(60) as cancel_scope:
                     while not received_events["chat_response_chunk"]:
                         await trio.sleep(0.1)
 
                 if cancel_scope.cancelled_caught:
                     pytest.fail("Test timed out waiting for the initial server prompt.")
 
-                assert received_events["session_started"], (
-                    "session_started event was not received."
-                )
+                assert received_events[
+                    "session_started"
+                ], "session_started event was not received."
                 session_id = received_events["session_started"][0]["data"]["session_id"]
                 initial_prompt = received_events["chat_response_chunk"][0]
 
                 logger.info(f"Received initial prompt: '{initial_prompt}'")
                 assert initial_prompt, "The initial prompt was empty."
-                assert initial_prompt.strip() not in GENERIC_PROMPTS, (
-                    "Initial prompt is a generic placeholder."
-                )
-                assert len(initial_prompt.split()) > 5, (
-                    "Initial prompt seems too short."
-                )
+                assert (
+                    initial_prompt.strip() not in GENERIC_PROMPTS
+                ), "Initial prompt is a generic placeholder."
+                assert (
+                    len(initial_prompt.split()) > 5
+                ), "Initial prompt seems too short."
                 logger.info("✓ Initial prompt is specific and non-generic.")
 
                 # 2. Intake Flow
@@ -158,9 +163,9 @@ async def test_full_patient_journey_with_real_llm():
                     "I've been feeling anxious about an upcoming project.",
                     session_id,
                 )
-                assert problem_response, (
-                    "Did not get a response to the presenting problem."
-                )
+                assert (
+                    problem_response
+                ), "Did not get a response to the presenting problem."
                 logger.info("✓ Responded to presenting problem.")
 
                 # 3. Assessment and Style Selection
@@ -174,9 +179,9 @@ async def test_full_patient_journey_with_real_llm():
                 style_selection_response = await send_and_wait_for_response(
                     ws, "I think I'd like to try CBT.", session_id
                 )
-                assert style_selection_response, (
-                    "Did not get a response to style selection."
-                )
+                assert (
+                    style_selection_response
+                ), "Did not get a response to style selection."
                 logger.info("✓ Responded to style selection.")
 
                 # 4. First Therapy Session
@@ -184,22 +189,22 @@ async def test_full_patient_journey_with_real_llm():
                 therapy_start_response = await send_and_wait_for_response(
                     ws, "I'm ready to begin.", session_id
                 )
-                assert therapy_start_response, (
-                    "Did not get an opening for the therapy session."
-                )
+                assert (
+                    therapy_start_response
+                ), "Did not get an opening for the therapy session."
                 logger.info("✓ Received therapy session opening.")
 
                 therapy_message_response = await send_and_wait_for_response(
                     ws, "The project at work is making me nervous.", session_id
                 )
-                assert therapy_message_response, (
-                    "Did not get a response to the first therapy message."
-                )
+                assert (
+                    therapy_message_response
+                ), "Did not get a response to the first therapy message."
                 logger.info("✓ Responded to first therapy message.")
 
-                assert not received_events["error"], (
-                    f"Received errors during the test: {received_events['error']}"
-                )
+                assert not received_events[
+                    "error"
+                ], f"Received errors during the test: {received_events['error']}"
                 logger.info("\n✓ End-to-end patient flow test completed successfully!")
 
                 nursery.cancel_scope.cancel()

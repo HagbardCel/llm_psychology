@@ -48,7 +48,7 @@ help:
 	@echo "  docker-usertest   - Run app in user-test mode (shorter sessions, test DB)"
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
-	@echo "  docker-db-view    - Start database viewer at http://localhost:8080"
+	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=prod|usertest, default: prod)"
 	@echo "  docker-test-reset - Reset test database"
 	@echo "  docker-clean      - Clean up all Docker resources"
 	@echo ""
@@ -115,7 +115,7 @@ test-validate-no-mocks:
 	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
 	@echo "⚠️  Requires valid API keys in .env.test"
 	@echo ""
-	docker compose --profile usertest-all up -d --wait api-usertest
+	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
 	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
 
 # Install git hooks for automated testing
@@ -125,7 +125,8 @@ install-hooks:
 
 # Clean up generated files
 clean:
-	rm -rf __pycache__ */__pycache__ \
+	@echo "Cleaning generated files and caches..."
+	@rm -rf __pycache__ */__pycache__ \
 		*.pyc */*.pyc \
 		*.pyo */*.pyo \
 		*.pyd */*.pyd \
@@ -135,25 +136,27 @@ clean:
 		build/ \
 		dist/ \
 		*.egg-info/ \
-		data/vector_db/ \
 		data/psychoanalyst.db \
 		data/psychoanalyst_test.db \
-		data/psychoanalyst_usertest.db \
-		data/vector_db_usertest/
+		data/psychoanalyst_usertest.db 2>/dev/null || true
+	@# Use Docker to remove vector DB files created by Docker containers
+	@if [ -d "data/vector_db" ] || [ -d "data/vector_db_usertest" ]; then \
+		echo "Removing Docker-created vector DB files..."; \
+		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db /data/vector_db_usertest" 2>/dev/null || true; \
+	fi
+	@echo "✓ Cleanup complete"
 
 # Clean test databases only
 clean-testdb:
 	@echo "Cleaning test databases..."
 	@rm -rf data/psychoanalyst_test.db \
-		data/psychoanalyst_usertest.db \
-		data/vector_db_usertest/ \
-		data/test_vector_db/ 2>/dev/null || true
+		data/psychoanalyst_usertest.db 2>/dev/null || true
+	@# Use Docker to remove files created by Docker containers (no sudo needed)
 	@if [ -d "data/vector_db_usertest" ] || [ -d "data/test_vector_db" ]; then \
-		echo "⚠️  Some files require elevated permissions (created by Docker)."; \
-		echo "Run: sudo rm -rf data/vector_db_usertest/ data/test_vector_db/"; \
-	else \
-		echo "✓ Test databases cleaned"; \
+		echo "Removing Docker-created files..."; \
+		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db_usertest /data/test_vector_db" 2>/dev/null || true; \
 	fi
+	@echo "✓ Test databases cleaned"
 
 # Generate locked requirements from .in files with UV
 requirements:
@@ -183,11 +186,11 @@ validate-schemas:
 
 # Start all development services (api, frontend, console-ui)
 docker-up:
-	docker compose up --build
+	docker compose up --build --remove-orphans
 
 # Start all services including optional ones
 docker-up-all:
-	docker compose up --build api frontend console-ui
+	docker compose up --build --remove-orphans api frontend console-ui
 
 # Stop all Docker containers
 docker-down:
@@ -230,11 +233,56 @@ docker-usertest:
 	@echo "- Session duration: 10 minutes"
 	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
 	@echo ""
-	docker compose --profile usertest up --build usertest
+	docker compose --profile usertest up --build --remove-orphans usertest
 
 # Start database viewer for debugging
+# Usage:
+#   make docker-db-view             # View production DB (default)
+#   make docker-db-view DB=usertest # View usertest DB
+# Note: Test databases use in-memory SQLite and don't create viewable files
 docker-db-view:
-	docker compose --profile debug up db-viewer
+	@DB_NAME=$${DB:-prod}; \
+	case $$DB_NAME in \
+		prod) DB_FILE=psychoanalyst.db ;; \
+		usertest) DB_FILE=psychoanalyst_usertest.db ;; \
+		*) echo "❌ Invalid DB. Use: prod or usertest"; \
+		   echo ""; \
+		   echo "Note: Test databases use in-memory SQLite (:memory:) and"; \
+		   echo "      don't create persistent files to view."; \
+		   echo ""; \
+		   echo "Example: make docker-db-view DB=usertest"; \
+		   exit 1 ;; \
+	esac; \
+	if [ ! -f "data/$$DB_FILE" ]; then \
+		echo "❌ Database file not found: data/$$DB_FILE"; \
+		echo ""; \
+		echo "Available databases:"; \
+		ls -1 data/*.db 2>/dev/null || echo "  (none)"; \
+		echo ""; \
+		echo "💡 Tip: Run the app to create databases:"; \
+		echo "   - Production: make ui-console"; \
+		echo "   - Usertest: make ui-console-test"; \
+		exit 1; \
+	fi; \
+	if [ ! -s "data/$$DB_FILE" ]; then \
+		echo "⚠️  Warning: Database file is empty (0 bytes): data/$$DB_FILE"; \
+		echo ""; \
+		echo "💡 This database hasn't been initialized yet. Run the app to create tables:"; \
+		echo "   - Production: make ui-console"; \
+		echo "   - Usertest: make ui-console-test"; \
+		echo ""; \
+		read -p "Continue anyway? (y/N) " -n 1 -r; \
+		echo ""; \
+		if [[ ! $$REPLY =~ ^[Yy]$$ ]]; then \
+			echo "Cancelled."; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "🔍 Starting database viewer for $$DB_NAME database..."; \
+	echo "📁 Database file: data/$$DB_FILE"; \
+	echo "🌐 Access at: http://localhost:8080"; \
+	echo ""; \
+	DB_FILE=$$DB_FILE docker compose --profile debug up db-viewer
 
 # Reset test database (removes test data volume)
 docker-test-reset:
@@ -252,11 +300,11 @@ docker-clean:
 
 # Run production app
 docker-prod:
-	docker compose --profile production up --build app
+	docker compose --profile production up --build --remove-orphans app
 
 # Run production in detached mode
 docker-prod-detach:
-	docker compose --profile production up -d app
+	docker compose --profile production up -d --remove-orphans app
 
 # ============================================
 # UI Mode Selection Commands
@@ -286,7 +334,7 @@ ui-console:
 	@echo ""
 	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
 	@echo ""
-	docker compose up --build -d api && docker compose run --rm -it console-ui
+	docker compose up --build --remove-orphans -d api && docker compose run --rm -it console-ui
 
 # Console UI Service (usertest mode)
 ui-console-test:
@@ -297,7 +345,7 @@ ui-console-test:
 	@echo ""
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
 	@echo ""
-	docker compose --profile usertest-console up --build -d api-usertest && docker compose --profile usertest-console run --rm -it console-ui-usertest
+	docker compose --profile usertest-console up --build --remove-orphans -d api-usertest && docker compose --profile usertest-console run --rm -it console-ui-usertest
 
 # Web UI (browser interface)
 ui-web:
@@ -305,7 +353,7 @@ ui-web:
 	@echo "- API Server: http://localhost:8000"
 	@echo "- Frontend: http://localhost:5173"
 	@echo ""
-	docker compose up --build api frontend
+	docker compose up --build --remove-orphans api frontend
 
 # Web UI (usertest mode)
 ui-web-test:
@@ -316,7 +364,7 @@ ui-web-test:
 	@echo "- Frontend: http://localhost:5174"
 	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
 	@echo ""
-	docker compose --profile usertest-web up --build api-usertest frontend-usertest
+	docker compose --profile usertest-web up --build --remove-orphans api-usertest frontend-usertest
 
 # All UI modes simultaneously
 ui-all:
@@ -328,7 +376,7 @@ ui-all:
 	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
 	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
 	@echo ""
-	docker compose up --build -d api frontend && docker compose run --rm -it console-ui
+	docker compose up --build --remove-orphans -d api frontend && docker compose run --rm -it console-ui
 
 # All UI modes (usertest mode)
 ui-all-test:
@@ -343,7 +391,7 @@ ui-all-test:
 	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
 	@echo ""
-	docker compose --profile usertest-all up --build -d api-usertest frontend-usertest && docker compose --profile usertest-all run --rm -it console-ui-usertest
+	docker compose --profile usertest-all up --build --remove-orphans -d api-usertest frontend-usertest && docker compose --profile usertest-all run --rm -it console-ui-usertest
 
 # ============================================
 # DevContainer Commands

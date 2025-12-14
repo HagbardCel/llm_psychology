@@ -1,15 +1,11 @@
 """Tests for JSON schema generation from Pydantic models."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-# Add scripts to path
-scripts_path = Path(__file__).parent.parent.parent / "scripts"
-sys.path.insert(0, str(scripts_path))
-
+# Imports from scripts directory (added to path by conftest.py)
 from generate_schemas import (
     dataclass_to_pydantic,
     enhance_schema_for_typescript,
@@ -17,8 +13,7 @@ from generate_schemas import (
     generate_schema,
 )
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-
+# Imports from src directory (added to path by conftest.py)
 from models.data_models import Message, UserProfile, UserStatus
 from orchestration.models import AgentResponse, WorkflowState
 

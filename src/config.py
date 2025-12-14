@@ -21,6 +21,48 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     GOOGLE_API_KEY: str = Field(default="")
+    MODEL_NAME: str = Field(
+        default="gemini-2.5-flash", description="Google Gemini model to use"
+    )
+
+    # Agent-Specific LLM Models (Optional - defaults to MODEL_NAME)
+    INTAKE_MODEL: str = Field(
+        default="", description="Model for intake agent (defaults to MODEL_NAME)"
+    )
+    ASSESSMENT_MODEL: str = Field(
+        default="", description="Model for assessment agent (defaults to MODEL_NAME)"
+    )
+    PSYCHOANALYST_MODEL: str = Field(
+        default="",
+        description="Model for psychoanalyst agent (defaults to MODEL_NAME)",
+    )
+    REFLECTION_MODEL: str = Field(
+        default="", description="Model for reflection agent (defaults to MODEL_NAME)"
+    )
+    MEMORY_MODEL: str = Field(
+        default="", description="Model for memory agent (defaults to MODEL_NAME)"
+    )
+    PLANNING_MODEL: str = Field(
+        default="", description="Model for planning agent (defaults to MODEL_NAME)"
+    )
+
+    # LLM Rate Limiting Configuration
+    LLM_RATE_LIMIT_ENABLED: bool = Field(
+        default=True,
+        description="Enable rate limiting for LLM API calls",
+    )
+    LLM_REQUESTS_PER_MINUTE: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=1000.0,
+        description="Maximum LLM requests per minute (Gemini free tier: 5/min)",
+    )
+    LLM_BURST_CAPACITY: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Maximum burst requests (concurrent capacity)",
+    )
 
     # Database Configuration
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
@@ -68,7 +110,9 @@ class Settings(BaseSettings):
     # Authentication Configuration
     JWT_SECRET_KEY: str = Field(
         default="",
-        description="Secret key for JWT token encoding/decoding (MUST be set in production)",
+        description=(
+            "Secret key for JWT token encoding/decoding " "(MUST be set in production)"
+        ),
     )
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT algorithm")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
@@ -76,6 +120,10 @@ class Settings(BaseSettings):
     )
     REQUIRE_AUTHENTICATION: bool = Field(
         default=True, description="Whether authentication is required"
+    )
+    CORS_ALLOWED_ORIGINS: list[str] = Field(
+        default=["http://localhost:5173"],
+        description="List of allowed CORS origins",
     )
 
     # Logging Configuration

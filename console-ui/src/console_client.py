@@ -14,7 +14,7 @@ from .base_ui import BaseUI
 from .websocket_protocol import (
     ClientMessageTypes,
     ServerMessageTypes,
-    WS_PROTOCOL_VERSION
+    WS_PROTOCOL_VERSION,
 )
 
 
@@ -27,8 +27,10 @@ class ConsoleClient:
     Uses Trio for structured concurrency and automatic resource cleanup.
     """
 
-    def __init__(self, backend_url: str, websocket_url: str, user_id: str, auth_token: str):
-        self.backend_url = backend_url.rstrip('/')
+    def __init__(
+        self, backend_url: str, websocket_url: str, user_id: str, auth_token: str
+    ):
+        self.backend_url = backend_url.rstrip("/")
         self.websocket_url = websocket_url
         self.user_id = user_id
         self.auth_token = auth_token
@@ -49,6 +51,7 @@ class ConsoleClient:
         self.waiting_for_initial_message = False
         self.waiting_for_response = False
         self.response_complete = trio.Event()
+        self.current_session_id: Optional[str] = None
 
     async def _websocket_receiver(self, ws):
         """Background task to receive and handle WebSocket messages."""
@@ -71,8 +74,8 @@ class ConsoleClient:
 
     async def _handle_websocket_message(self, message: Dict[str, Any]):
         """Handle incoming WebSocket message."""
-        msg_type = message.get('type')
-        data = message.get('data', {})
+        msg_type = message.get("type")
+        data = message.get("data", {})
 
         logger.debug(f"Received message type: {msg_type}")
 
@@ -94,19 +97,19 @@ class ConsoleClient:
     async def _handle_chat_response_chunk(self, data: Dict[str, Any]):
         """Handle streaming response chunks from therapist."""
         try:
-            chunk = data.get('chunk', '')
-            is_complete = data.get('is_complete', False)
+            chunk = data.get("chunk", "")
+            is_complete = data.get("is_complete", False)
 
             if not is_complete:
                 # Accumulate and display chunk
                 if not self.is_streaming:
                     # First chunk - start new message
-                    print("\n\033[94mTHERAPIST\033[0m: ", end='', flush=True)
+                    print("\n\033[94mTHERAPIST\033[0m: ", end="", flush=True)
                     self.is_streaming = True
                     self.current_message = ""
 
                 # Display chunk in real-time
-                print(chunk, end='', flush=True)
+                print(chunk, end="", flush=True)
                 self.current_message += chunk
             else:
                 # Streaming complete
@@ -119,7 +122,14 @@ class ConsoleClient:
                 if self.waiting_for_initial_message:
                     self.waiting_for_initial_message = False
                     # Show welcome message AFTER therapist greeting completes
-                    print("\n💬 You can now chat with your therapist. Type '/quit' to end the session.", flush=True)
+                    print(
+                        "\n💬 You can now chat with your therapist.",
+                        flush=True,
+                    )
+                    print(
+                        "   Commands: /timer (show time), /quit (exit session)",
+                        flush=True,
+                    )
                     print("=" * 60, flush=True)
                     print()  # Add blank line for better visibility
                     self.session_ready.set()
@@ -134,8 +144,11 @@ class ConsoleClient:
 
     async def _handle_session_started(self, data: Dict[str, Any]):
         """Handle session started confirmation."""
+        # Capture session_id for timer requests
+        self.current_session_id = data.get("session_id")
+
         # Check if there's an initial message coming
-        has_initial_message = data.get('has_initial_message', False)
+        has_initial_message = data.get("has_initial_message", False)
 
         if has_initial_message:
             # Wait for the initial message before allowing user input
@@ -144,51 +157,60 @@ class ConsoleClient:
         else:
             # No initial message, ready to start immediately
             print(f"\n✅ Your therapy session has begun.", flush=True)
-            print("\n💬 You can now chat with your therapist. Type '/quit' to end the session.", flush=True)
+            print(
+                "\n💬 You can now chat with your therapist.",
+                flush=True,
+            )
+            print(
+                "   Commands: /timer (show time), /quit (exit session)",
+                flush=True,
+            )
             print("=" * 60, flush=True)
             print()  # Add blank line for better visibility
             self.session_ready.set()
 
     async def _handle_connected(self, data: Dict[str, Any]):
         """Handle connection confirmation."""
-        user_id = data.get('user_id', 'unknown')
-        name = data.get('name', user_id)
-        status = data.get('status', 'unknown')
-        
+        user_id = data.get("user_id", "unknown")
+        name = data.get("name", user_id)
+        status = data.get("status", "unknown")
+
         print(f"🔐 Connected as: {name} (user_id: {user_id})", flush=True)
-        if status == 'PROFILE_ONLY':
+        if status == "PROFILE_ONLY":
             print(f"ℹ️  New user profile created", flush=True)
 
     async def _handle_typing_start(self):
         """Handle therapist typing indicator."""
         if not self.is_streaming:
-            print("\n💭 Therapist is typing...", end='\r')
+            print("\n💭 Therapist is typing...", end="\r")
 
     async def _handle_typing_stop(self):
         """Handle therapist stopped typing."""
         if not self.is_streaming:
-            print(" " * 30, end='\r')  # Clear typing indicator
+            print(" " * 30, end="\r")  # Clear typing indicator
 
     async def _handle_error(self, data: Dict[str, Any]):
         """Handle WebSocket errors."""
         print(f"\n❌ Error: {data.get('message', data)}")
 
-    async def _api_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+    async def _api_request(
+        self, method: str, endpoint: str, **kwargs
+    ) -> Dict[str, Any]:
         """Make an API request to the backend."""
         if not self.http_client:
             raise RuntimeError("HTTP client not initialized")
 
         url = f"{self.backend_url}/api{endpoint}"
-        headers = kwargs.get('headers', {})
-        headers['Authorization'] = f"Bearer {self.auth_token}"
-        kwargs['headers'] = headers
+        headers = kwargs.get("headers", {})
+        headers["Authorization"] = f"Bearer {self.auth_token}"
+        kwargs["headers"] = headers
 
         response = await self.http_client.request(method, url, **kwargs)
 
-        if response.headers.get('content-type', '').startswith('application/json'):
+        if response.headers.get("content-type", "").startswith("application/json"):
             return response.json()
         else:
-            return {'text': response.text, 'status': response.status_code}
+            return {"text": response.text, "status": response.status_code}
 
     async def _display_message(self, role: str, text: str):
         """Display a message in the console."""
@@ -219,8 +241,8 @@ class ConsoleClient:
 
         try:
             msg_data = {
-                'type': ClientMessageTypes.CHAT_MESSAGE,
-                'data': {'message': message}
+                "type": ClientMessageTypes.CHAT_MESSAGE,
+                "data": {"message": message},
             }
             await ws.send_message(json.dumps(msg_data))
             logger.debug(f"Sent chat message: {message[:50]}...")
@@ -231,10 +253,70 @@ class ConsoleClient:
     async def _get_user_status(self) -> Dict[str, Any]:
         """Get user status from backend API."""
         try:
-            return await self._api_request('GET', '/user/status', params={'user_id': self.user_id})
+            return await self._api_request(
+                "GET", "/user/status", params={"user_id": self.user_id}
+            )
         except Exception as e:
             logger.error(f"Error getting user status: {e}")
-            return {'error': str(e)}
+            return {"error": str(e)}
+
+    async def _get_session_timer(self) -> Dict[str, Any]:
+        """Get session timer information from backend API."""
+        if not self.current_session_id:
+            return {"error": "No active session"}
+
+        try:
+            return await self._api_request(
+                "GET", f"/sessions/{self.current_session_id}/timer"
+            )
+        except Exception as e:
+            logger.error(f"Error getting session timer: {e}")
+            return {"error": str(e)}
+
+    async def _display_timer_info(self):
+        """Fetch and display session timer information."""
+        timer_data = await self._get_session_timer()
+
+        if "error" in timer_data:
+            print(f"\n⚠️  Could not retrieve timer: {timer_data['error']}", flush=True)
+            return
+
+        # Extract timing information
+        elapsed = timer_data.get("elapsed_minutes", 0)
+        remaining = timer_data.get("remaining_minutes", 0)
+        total = timer_data.get("total_duration_minutes", 0)
+        extensions_used = timer_data.get("extensions_used", 0)
+        max_extensions = timer_data.get("max_extensions", 0)
+        can_extend = timer_data.get("can_extend", False)
+        is_time_up = timer_data.get("is_time_up", False)
+
+        # Format and display
+        print("\n" + "=" * 60, flush=True)
+        print("⏱️  SESSION TIMER", flush=True)
+        print("=" * 60, flush=True)
+        print(f"Time elapsed:   {int(elapsed)} minutes", flush=True)
+        print(f"Time remaining: {int(remaining)} minutes", flush=True)
+        print(f"Total duration: {total} minutes", flush=True)
+
+        if extensions_used > 0:
+            print(
+                f"Extensions:     {extensions_used}/{max_extensions} used", flush=True
+            )
+        else:
+            print(f"Extensions:     {max_extensions} available", flush=True)
+
+        if is_time_up:
+            print("\n⚠️  Time is up! Session should be ending soon.", flush=True)
+        elif remaining < 5:
+            print("\n⚠️  Less than 5 minutes remaining!", flush=True)
+        elif can_extend and remaining < 10:
+            print(
+                f"\nℹ️  Running low on time. You can extend the session.",
+                flush=True,
+            )
+
+        print("=" * 60, flush=True)
+        print()
 
     async def _start_therapy_session(self, ws):
         """Start a therapy session."""
@@ -244,8 +326,8 @@ class ConsoleClient:
 
         print("🎯 Starting therapy session...", flush=True)
         msg_data = {
-            'type': ClientMessageTypes.SESSION_REQUEST,
-            'data': {'session_type': 'therapy'}
+            "type": ClientMessageTypes.SESSION_REQUEST,
+            "data": {"session_type": "therapy"},
         }
         await ws.send_message(json.dumps(msg_data))
 
@@ -256,17 +338,25 @@ class ConsoleClient:
             self.http_client = http_client
 
             # Connect to WebSocket and run with structured concurrency
-            ws_url = self.websocket_url.replace('http://', 'ws://').replace('https://', 'wss://')
-            if not ws_url.endswith('/ws'):
+            ws_url = self.websocket_url.replace("http://", "ws://").replace(
+                "https://", "wss://"
+            )
+            if not ws_url.endswith("/ws"):
                 ws_url = f"{ws_url}/ws"
 
-            # Add user_id and token as query parameters
-            ws_url = f"{ws_url}?user_id={self.user_id}&token={self.auth_token}"
+            # Add user_id as query parameter (server only expects user_id, not token)
+            ws_url = f"{ws_url}?user_id={self.user_id}"
+
+            # Extract origin for CORS (required for WebSocket handshake)
+            origin = self.backend_url  # Use backend_url as origin (e.g., http://api-usertest:8000)
 
             logger.info(f"Connecting to WebSocket: {ws_url}")
 
             try:
-                async with open_websocket_url(ws_url) as ws:
+                # Include Origin header for CORS validation during WebSocket handshake
+                async with open_websocket_url(
+                    ws_url, extra_headers=[("Origin", origin)]
+                ) as ws:
                     self.ws = ws
                     self.connected = True
                     logger.info("Connected to WebSocket server")
@@ -281,7 +371,10 @@ class ConsoleClient:
                         await trio.sleep(1)
 
                         if not self.connected:
-                            print("❌ Failed to establish connection. Exiting.", flush=True)
+                            print(
+                                "❌ Failed to establish connection. Exiting.",
+                                flush=True,
+                            )
                             nursery.cancel_scope.cancel()
                             return
 
@@ -289,8 +382,11 @@ class ConsoleClient:
                         print("📊 Checking user status...", flush=True)
                         status = await self._get_user_status()
 
-                        if 'error' in status:
-                            print(f"⚠️  Could not get user status: {status['error']}", flush=True)
+                        if "error" in status:
+                            print(
+                                f"⚠️  Could not get user status: {status['error']}",
+                                flush=True,
+                            )
                             print("Proceeding with basic session...", flush=True)
 
                         # Start therapy session
@@ -307,20 +403,26 @@ class ConsoleClient:
                                     user_message = await self._get_user_input()
 
                                     # Check for system commands (starting with /)
-                                    if user_message.startswith('/'):
+                                    if user_message.startswith("/"):
                                         command = user_message.lower().strip()
-                                        if command in ['/quit', '/exit']:
+                                        if command in ["/quit", "/exit"]:
                                             print("👋 Ending therapy session...")
                                             break
+                                        elif command == "/timer":
+                                            await self._display_timer_info()
+                                            continue
                                         else:
-                                            print(f"⚠️  Unknown command: {command}. Type '/quit' to exit.", flush=True)
+                                            print(
+                                                f"⚠️  Unknown command: {command}. Available commands: /timer, /quit",
+                                                flush=True,
+                                            )
                                             continue
 
                                     if not user_message:
                                         continue
 
                                     # Display user message
-                                    await self._display_message('user', user_message)
+                                    await self._display_message("user", user_message)
 
                                     # Send message via WebSocket and wait for response
                                     self.waiting_for_response = True

@@ -1,0 +1,137 @@
+# Session Lifecycle Documentation
+
+This document describes the chronological flow of a user session within the application, detailing agent activation, data checks, and database persistence.
+
+## 1. Session Initialization
+
+### 1.1. WebSocket Connection
+
+The session begins when a client connects to the WebSocket endpoint (`/ws?user_id=<user_id>`).
+
+- **Entry Point:** `TrioServer.ws_endpoint` in `src/trio_server.py`.
+- **User Check:** The system checks `trio_db_service` for an existing `UserProfile`.
+  - **New User:** If no profile exists, a guest profile is auto-created with status `PROFILE_ONLY`.
+  - **Persistence:** `UserProfile` is saved to the `user_profiles` table.
+
+### 1.2. Session Start Request
+
+The client sends a JSON message `{"type": "session_request"}`.
+
+- **Action:** `TrioAgentOrchestrator.start_session(user_id)` is called.
+- **Session Creation:**
+  - A new `Session` object is created with a unique UUID.
+  - **Persistence:** The session is saved to the `sessions` table in the database.
+- **Initial Greeting:**
+  - If the user's `WorkflowState` indicates a need for proactive engagement (e.g., `NEW`, `INTAKE_IN_PROGRESS`), the orchestrator triggers an "initial greeting".
+  - This is simulated by sending an empty message to the active agent to prompt a welcome message.
+
+## 2. Active Session Workflow
+
+The session flow is driven by the **Orchestrator**, which routes user messages to the appropriate **Agent** based on the user's **Workflow State**.
+
+### 2.1. The Orchestrator (`TrioAgentOrchestrator`)
+
+- **Role:** Central router and state manager.
+- **Process:**
+  1.  Receives user message via WebSocket.
+  2.  Persists message to `Session` transcript.
+  3.  Determines current `WorkflowState` (e.g., `INTAKE_IN_PROGRESS`, `ASSESSMENT_IN_PROGRESS`).
+  4.  Instantiates the correct agent (`Intake`, `Assessment`, etc.).
+  5.  Delegates message processing to the agent.
+  6.  Streams the agent's textual response back to the user.
+  7.  Handles state transitions returned by the agent.
+
+### 2.2. Phase 1: Intake (`TrioIntakeAgent`)
+
+**Active when State = `NEW` or `INTAKE_IN_PROGRESS`**
+
+- **Role:** Collects basic user information and understands the presenting problem.
+- **Key Activities:**
+  - **Name Collection:** If the user is `Guest`, it asks for and updates the user's name.
+  - **Topic Tracking:** Analyzes every message for keywords related to `INTAKE_TOPICS` (e.g., "Family", "Symptoms", "Work").
+  - **Completion Check:** Monitors if sufficient topics (≥80%) have been covered or if time is up.
+- **Data Persistence:**
+  - Updates `UserProfile.name`.
+  - Updates `UserProfile.status` to `INTAKE_IN_PROGRESS` or `INTAKE_COMPLETE`.
+
+### 2.3. Phase 2: Assessment (`TrioAssessmentAgent`)
+
+**Active when State = `INTAKE_COMPLETE` or `ASSESSMENT_IN_PROGRESS`**
+
+- **Role:** Analyzes the intake session and recommends formatted therapy styles.
+- **Key Activities:**
+  - **Recommendation Generation:** Uses LLM to assess the intake transcript against known therapy styles (e.g., Freud, Jung, CBT).
+  - **Presentation:** Presents top recommendations to the user.
+  - **Selection Handling:** Parses user response to identify the selected therapy style.
+- **Data Persistence:**
+  - **Therapy Plan:** Upon selection, triggers `ReflectionAgent` to create an initial `TherapyPlan` (v1).
+  - **Plan Details:** Saves selected style and empty plan details to `therapy_plans` table.
+  - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` or `PLAN_COMPLETE`.
+
+### 2.4. Phase 3: Therapy (`TrioPsychoanalystAgent` - _implied_)
+
+**Active when State = `THERAPY_IN_PROGRESS`**
+
+- **Role:** Conducts actual therapy sessions based on the selected plan.
+- **Key Activities:**
+  - Engages in therapeutic dialogue.
+  - Updates session topics and transcript.
+- **Data Persistence:**
+  - Continually updates `Session` transcript in `sessions` table.
+
+### 2.5. Phase 4: Reflection (`TrioReflectionAgent`)
+
+**Active when State = `REFLECTION_IN_PROGRESS`**
+
+- **Trigger:** Automatically activated when the `PsychoanalystAgent` detects the session time is up (`context.is_time_up`).
+- **Role:** Analyzes the completed session, generates insights, and prepares for the next session.
+- **Key Activities:**
+  - **Session Analysis:** Uses `TrioMemoryAgent` to extract key themes and emotional states.
+  - **Plan Update:** Uses `TrioPlanningAgent` to assess plan effectiveness and recommend adjustments.
+  - **Briefing Generation:** Creates a comprehensive `SessionBriefing` for the next session (critical for continuity).
+- **Data Persistence:**
+  - **Therapy Plan:** Updates `TherapyPlan` with new version, plan details, and `session_briefing`.
+  - **State Update:** Transitions user to `PLAN_COMPLETE` (ready for next session).
+
+### 2.6. Session Continuity (The Loop)
+
+The system ensures continuity between sessions using the `SessionBriefing` object.
+
+- **Generation:** Created by `ReflectionAgent` at the end of Session N.
+- **Storage:** Saved within the `TherapyPlan`.
+- **Consumption:** Used by `PsychoanalystAgent` at the start of Session N+1.
+- **Mechanism:**
+  - When starting a new session, the agent checks for a valid `session_briefing`.
+  - If found, it generates a **Resumption Prompt** instead of a generic greeting.
+  - This prompt includes:
+    - **Narrative Handoff:** A summary of where the last session left off.
+    - **Key Themes:** Unresolved issues or high-priority topics to revisit.
+    - **Emotional Trajectory:** Context on the user's emotional state.
+    - **Suggested Questions:** Tailored opening questions for the therapist.
+  - **Staleness Check:** If the briefing is too old (> 7 days), the prompt is adjusted to be more exploratory, acknowledging the time gap.
+
+## 3. Session Closure
+
+The session can be closed in two ways:
+
+### 3.1. Explicit Closure
+
+- **Trigger:** An agent returns an `end_session` action (e.g., user says "I'm done for now").
+- **Action:** The Orchestrator stops processing.
+- **Persistence:** The final state of the session transcript is saved.
+
+### 3.2. WebSocket Disconnection
+
+- **Trigger:** Client disconnects.
+- **Action:** `TrioServer`'s `finally` block cleans up the orchestrator connection.
+- **Persistence:** Any pending session data is flushed to the database.
+
+## 4. Database Schema Summary
+
+Data is persisted in `app/src/data/trio.db` (SQLite) via `TrioDatabaseService`.
+
+| Table               | Key Content                                         | Updated By                        |
+| :------------------ | :-------------------------------------------------- | :-------------------------------- |
+| **`sessions`**      | `session_id`, `transcript` (JSON), `topics` (JSON)  | All Agents (per message)          |
+| **`user_profiles`** | `name`, `status` (Workflow State), `profession`     | Intake Agent, Orchestrator        |
+| **`therapy_plans`** | `selected_therapy_style`, `plan_details`, `version` | Assessment Agent (via Reflection) |

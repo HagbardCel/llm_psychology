@@ -8,8 +8,8 @@ from hypercorn.config import Config as HypercornConfig
 from hypercorn.trio import serve
 from quart import Quart
 
-from src.trio_server import TrioServer
-from src.version import API_VERSION, MIN_CLIENT_VERSION
+from trio_server import TrioServer
+from version import API_VERSION, MIN_CLIENT_VERSION
 from container.service_container import ServiceContainer
 from config import Settings
 
@@ -18,11 +18,9 @@ import httpx
 
 
 @pytest.fixture
-async def server_url():
-    """Start test server and return URL."""
-    # This would normally be setup by conftest
-    # For now, just return the expected URL
-    return "http://localhost:8000"
+async def server_url(test_server_websocket):
+    """Get server URL from test_server_websocket fixture."""
+    return test_server_websocket["url"]
 
 
 @pytest.mark.trio
@@ -116,7 +114,9 @@ async def test_check_version_too_old(server_url):
         # Should require upgrade
         assert data["compatible"] is False
         assert data["upgrade_required"] is True
-        assert "too old" in data["message"].lower() or "upgrade" in data["message"].lower()
+        assert (
+            "too old" in data["message"].lower() or "upgrade" in data["message"].lower()
+        )
 
 
 @pytest.mark.trio
@@ -139,7 +139,10 @@ async def test_check_version_outdated_but_compatible(server_url):
             assert data["compatible"] is True
             assert data["upgrade_required"] is False
             assert data["upgrade_recommended"] is True
-            assert "outdated" in data["message"].lower() or "consider" in data["message"].lower()
+            assert (
+                "outdated" in data["message"].lower()
+                or "consider" in data["message"].lower()
+            )
 
 
 @pytest.mark.trio

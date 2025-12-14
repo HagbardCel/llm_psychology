@@ -42,9 +42,7 @@ def migrate_database(db_path: str) -> bool:
 
         # Add column
         logger.info("Adding session_briefing column to therapy_plans table")
-        cursor.execute(
-            "ALTER TABLE therapy_plans ADD COLUMN session_briefing TEXT"
-        )
+        cursor.execute("ALTER TABLE therapy_plans ADD COLUMN session_briefing TEXT")
         conn.commit()
         conn.close()
 

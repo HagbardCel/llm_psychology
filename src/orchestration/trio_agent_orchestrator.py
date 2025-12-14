@@ -135,20 +135,39 @@ class TrioAgentOrchestrator:
                 f"Agent {agent_type} returned action: {agent_response.next_action}"
             )
             print(
-                f"DEBUG: Agent response: action={agent_response.next_action} state={agent_response.next_state} direct={agent_response.metadata.get('is_direct_response')}"
+                f"DEBUG: Agent response: action={agent_response.next_action} "
+                f"state={agent_response.next_state} "
+                f"direct={agent_response.metadata.get('is_direct_response')}"
             )
+
+            # Determine which LLM service to use based on agent type
+            llm_service_key_map = {
+                "INTAKE": "llm_service_intake",
+                "ASSESSMENT": "llm_service_assessment",
+                "PSYCHOANALYST": "llm_service_psychoanalyst",
+                "REFLECTION": "llm_service_reflection",
+                "MEMORY": "llm_service_memory",
+                "PLANNING": "llm_service_planning",
+            }
+
+            # Get agent-specific LLM service, fallback to default
+            llm_service_key = llm_service_key_map.get(agent_type, "llm_service")
+            agent_llm_service = self.service_container.get(llm_service_key)
 
             # Stream the agent's content
             if agent_response.metadata.get("is_direct_response"):
                 # Stream static content directly
                 async for chunk in self.conversation_manager.stream_static_response(
-                    agent_response.content, context
+                    agent_response.content, context, agent=agent_type
                 ):
                     yield chunk
             else:
                 # Stream through LLM (content is a prompt)
                 async for chunk in self.conversation_manager.stream_response(
-                    agent_response.content, context
+                    agent_response.content,
+                    context,
+                    agent=agent_type,
+                    llm_service=agent_llm_service,
                 ):
                     yield chunk
 
@@ -333,6 +352,7 @@ STACKTRACE:
         try:
             # Validate therapy style
             from services.style_service import style_service
+
             available_styles = style_service.get_available_styles()
 
             if therapy_style not in available_styles:
@@ -345,9 +365,7 @@ STACKTRACE:
                 raise ValueError(f"User profile not found: {user_id}")
 
             # Check if plan already exists
-            existing_plan = await trio_db_service.get_latest_therapy_plan(
-                user_id
-            )
+            existing_plan = await trio_db_service.get_latest_therapy_plan(user_id)
             if existing_plan and existing_plan.version == 1:
                 logger.info(
                     f"Therapy plan already exists for {user_id}, returning existing"
@@ -366,10 +384,10 @@ STACKTRACE:
                     "focus": "To be determined in first therapy session",
                     "goals": [],
                     "techniques": [],
-                    "themes": []
+                    "themes": [],
                 },
                 version=1,
-                selected_therapy_style=therapy_style
+                selected_therapy_style=therapy_style,
             )
 
             # Save plan
@@ -659,6 +677,42 @@ STACKTRACE:
             logger.info(f"Agent is waiting for selection from user {user_id}")
             if agent_response.metadata:
                 logger.debug(f"Selection metadata: {agent_response.metadata}")
+
+        elif action == "await_continuation_choice":
+            # Agent is waiting for user to choose continuation
+            logger.info(
+                f"Agent is waiting for continuation choice from user {user_id}"
+            )
+            if agent_response.metadata:
+                logger.debug(f"Continuation metadata: {agent_response.metadata}")
+
+        elif action == "end_session":
+            # User chose to finish for the day
+            logger.info(f"User {user_id} chose to end session {session_id}")
+            # Session will naturally end here - no further action needed
+
+        elif action == "start_therapy":
+            # User chose to continue to therapy session
+            logger.info(
+                f"User {user_id} chose to start therapy session immediately"
+            )
+            # State transition already handled above if next_state was set
+
+            # Create a new session for the therapy portion
+            # This ensures assessment and therapy are logged separately
+            new_session_id = await self._create_session(user_id)
+            logger.info(
+                f"Created new therapy session {new_session_id} for user {user_id}"
+            )
+
+            # Update websocket registration to use the new session
+            ws = self.conversation_manager.websockets.get(session_id)
+            if ws:
+                self.conversation_manager.unregister_websocket(session_id)
+                self.conversation_manager.register_websocket(new_session_id, ws)
+                logger.info(
+                    f"Switched websocket from session {session_id} to {new_session_id}"
+                )
 
         else:
             logger.warning(f"Unknown agent action '{action}' for user {user_id}")

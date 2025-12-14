@@ -107,8 +107,23 @@ class TrioIntakeAgent:
 
             if is_guest:
                 if not message.strip():
-                    # Initial greeting for guest
+                    # Initial greeting for guest - send directly to user, not to LLM
                     prompt = GUEST_WELCOME_PROMPT
+                    next_action = "continue"
+                    next_state = None
+                    # Mark as direct response so orchestrator doesn't send to LLM
+                    return AgentResponse(
+                        content=prompt,
+                        next_action=next_action,
+                        next_state=next_state,
+                        metadata={
+                            "is_direct_response": True,
+                            "topics_covered": context.topics_covered,
+                            "time_remaining_minutes": context.time_remaining_minutes,
+                            "can_extend": context.can_extend,
+                            "is_time_up": context.is_time_up,
+                        },
+                    )
                 else:
                     # User provided name - update profile and start intake
                     new_name = message.strip()

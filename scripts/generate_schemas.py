@@ -83,9 +83,7 @@ def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
     # Create Pydantic model
     model_name = f"{dataclass_type.__name__}Model"
     pydantic_model = create_model(
-        model_name,
-        __doc__=dataclass_type.__doc__,
-        **field_definitions
+        model_name, __doc__=dataclass_type.__doc__, **field_definitions
     )
 
     return pydantic_model
@@ -119,9 +117,7 @@ def enhance_schema_for_typescript(schema: dict, model: Type[BaseModel]) -> dict:
 
 
 def generate_schema(
-    model: Type[BaseModel],
-    output_dir: Path,
-    schema_name: str | None = None
+    model: Type[BaseModel], output_dir: Path, schema_name: str | None = None
 ) -> None:
     """
     Generate JSON Schema for a single model.
@@ -268,5 +264,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n✗ Schema generation failed: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

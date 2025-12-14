@@ -234,6 +234,121 @@ async def test_intake_agent_initialization(service_container, user_context):
     assert len(intake_agent.intake_topics) > 0
 
 
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_intake_agent_guest_welcome_direct_response(service_container):
+    """Test that guest welcome prompt is marked as direct response."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+
+    # Create a guest user profile
+    guest_user = UserProfile(
+        user_id="guest_test_user",
+        name="Guest",
+        birthdate=None,
+        profession="",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(guest_user)
+
+    user_context = UserContext(user_id=guest_user.user_id)
+    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+
+    # Create session
+    session_id = str(uuid.uuid4())
+    session = Session(
+        session_id=session_id,
+        user_id=guest_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[],
+        topics=[],
+    )
+    await trio_db_service.save_session(session)
+
+    # Create context for guest with empty message (initial greeting)
+    context = ConversationContext(
+        session_id=session_id,
+        user_profile=guest_user,
+        therapy_plan=None,
+        message_history=[],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=60,
+    )
+
+    # Process empty message (should trigger guest welcome)
+    response = await intake_agent.process_message("", context)
+
+    # Verify response is marked as direct (not sent to LLM)
+    assert response is not None
+    assert response.metadata.get("is_direct_response") is True
+    assert "Dr. AI" in response.content
+    assert "may I have your name" in response.content
+    assert response.next_action == "continue"
+    assert response.next_state is None
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_intake_agent_guest_name_collection(service_container):
+    """Test that guest name collection triggers state transition."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+
+    # Create a guest user profile
+    guest_user = UserProfile(
+        user_id="guest_name_test",
+        name="Guest",
+        birthdate=None,
+        profession="",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(guest_user)
+
+    user_context = UserContext(user_id=guest_user.user_id)
+    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+
+    # Create session
+    session_id = str(uuid.uuid4())
+    session = Session(
+        session_id=session_id,
+        user_id=guest_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[],
+        topics=[],
+    )
+    await trio_db_service.save_session(session)
+
+    # Create context for guest
+    context = ConversationContext(
+        session_id=session_id,
+        user_profile=guest_user,
+        therapy_plan=None,
+        message_history=[],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=60,
+    )
+
+    # Process name message
+    response = await intake_agent.process_message("John Smith", context)
+
+    # Verify name was updated and state transitioned
+    assert response is not None
+    assert response.next_action == "transition"
+    assert response.next_state == WorkflowState.INTAKE_IN_PROGRESS
+    assert context.user_profile.name == "John Smith"
+    assert context.user_profile.status == UserStatus.INTAKE_IN_PROGRESS
+
+    # Verify profile was saved to database
+    updated_profile = await trio_db_service.get_user_profile(guest_user.user_id)
+    assert updated_profile.name == "John Smith"
+
+
 # ===== TrioReflectionAgent Tests =====
 
 

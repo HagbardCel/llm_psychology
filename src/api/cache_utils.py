@@ -1,6 +1,7 @@
 """
 Cache utilities for HTTP response caching.
 """
+
 from datetime import datetime, timedelta
 from quart import Response
 
@@ -9,7 +10,7 @@ def add_cache_headers(
     response: Response,
     cache_type: str = "private",
     max_age: int = 300,
-    must_revalidate: bool = False
+    must_revalidate: bool = False,
 ) -> Response:
     """
     Add cache control headers to a response.
