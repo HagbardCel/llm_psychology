@@ -3,7 +3,7 @@
   "dockerComposeFile": "../docker-compose.yml",
   "service": "devcontainer",
   "workspaceFolder": "/app",
-  "postCreateCommand": "pip install uv && python -m uv pip install --system -r /app/requirements-dev.txt",
+  "postCreateCommand": "python -m pip install uv && python -m uv pip install --system -r /app/requirements-dev.txt",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": true,
@@ -47,7 +47,8 @@
         "ms-python.python",
         "ms-python.vscode-pylance",
         "ms-python.black-formatter",
-        "ms-python.pylint"
+        "ms-python.pylint",
+        "openai.chatgpt"
       ]
     }
   },

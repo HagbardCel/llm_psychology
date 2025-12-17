@@ -83,6 +83,9 @@ export function useUpdateUserProfile() {
 
       // Invalidate all user-related queries to refetch
       queryClient.invalidateQueries({ queryKey: ['user'] });
+
+      // Invalidate workflow navigation for this user (profile completion changes state)
+      queryClient.invalidateQueries({ queryKey: ['workflow', 'next-action', data.id] });
     },
   });
 }

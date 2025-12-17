@@ -21,7 +21,10 @@ export function ProfilePage() {
   const { mutateAsync: updateProfile, isPending } = useUpdateUserProfile();
 
   // Get next action for navigation
-  const { data: nextAction } = useWorkflowNextAction(userId || '', '/profile');
+  const { data: nextAction, refetch: refetchNextAction } = useWorkflowNextAction(
+    userId || '',
+    '/profile'
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -81,8 +84,10 @@ export function ProfilePage() {
       setSuccess(true);
 
       // Backend-driven navigation - check next action
-      if (nextAction?.route && nextAction.route !== '/profile') {
-        setTimeout(() => navigate(nextAction.route!), 1500);
+      const refreshed = await refetchNextAction();
+      const route = refreshed.data?.route || nextAction?.route;
+      if (route && route !== '/profile') {
+        setTimeout(() => navigate(route), 1500);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save profile');

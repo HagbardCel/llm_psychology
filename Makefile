@@ -1,4 +1,4 @@
-.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb
+.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
@@ -14,11 +14,15 @@ help:
 	@echo "  dev-install       - Install development dependencies with UV"
 	@echo "  format            - Format code with black"
 	@echo "  lint              - Lint code with ruff"
-	@echo "  test              - Run all tests locally with pytest"
+	@echo "  test              - Run backend tests (deterministic)"
+	@echo "  test-all          - Run backend + frontend + E2E"
 	@echo "  test-dev          - Quick tests in devContainer (fast, for active development)"
 	@echo "  test-validate     - Full isolated Docker tests (pre-commit validation)"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests only"
+	@echo "  test-frontend     - Run frontend Jest unit tests"
+	@echo "  test-e2e          - Run deterministic Playwright E2E"
+	@echo "  test-real-llm     - Run real-LLM tests only"
 	@echo "  test-devcontainer - Run devcontainer setup tests"
 	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
 	@echo "  clean             - Clean up generated files and caches"
@@ -82,7 +86,7 @@ lint:
 
 # Run all tests
 test:
-	pytest
+	pytest -m "not real_llm"
 
 # Run unit tests only
 test-unit:
@@ -92,16 +96,35 @@ test-unit:
 test-integration:
 	pytest -m integration
 
+# Run full suite (deterministic CI-grade)
+# Note: Runs locally (or inside devcontainer). For Docker usage, use 'make docker-test-all'
+test-all:
+	pytest -m "not real_llm"
+	$(MAKE) test-frontend
+	$(MAKE) test-e2e
+
+# Frontend unit tests (Jest)
+test-frontend:
+	npm --prefix frontend test
+
+# Deterministic full-stack E2E (Playwright)
+test-e2e:
+	npm --prefix frontend run test:e2e
+
+# Real LLM/RAG smoke tests (requires secrets / external services)
+test-real-llm:
+	pytest -m real_llm --no-mocks
+
 # Run devcontainer setup tests
 test-devcontainer:
-	pytest tests/test_devcontainer.py -v
+	python scripts/devcontainer_test.py
 
 # Quick tests in devContainer (fast, for TDD workflow)
 test-dev:
 	@echo "🚀 Running quick tests in devContainer..."
 	@echo "Perfect for: Active development, TDD, debugging"
 	@echo ""
-	pytest -x --tb=short -q
+	pytest -m "not real_llm" -x --tb=short -q
 
 # Full isolated Docker tests (pre-commit validation)
 test-validate:
@@ -205,6 +228,16 @@ docker-test:
 # Run specific test file
 docker-test-one:
 	docker compose --profile test run --rm test pytest $(TEST)
+
+# Run frontend tests in Docker
+docker-test-frontend:
+	docker compose --profile test run --rm frontend-test npm test
+
+# Run all tests in Docker (Backend + Frontend)
+# Note: E2E tests are skipped as they require a browser environment
+docker-test-all:
+	$(MAKE) docker-test
+	$(MAKE) docker-test-frontend
 
 # Shell into API container
 docker-shell:

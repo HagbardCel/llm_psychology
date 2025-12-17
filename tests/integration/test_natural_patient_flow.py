@@ -163,60 +163,265 @@ def mock_llm_service_natural_flow():
 
     llm.generate_response = mock_generate_sync
 
-    # Mock structured response for assessment
-    async def mock_structured(prompt, output_format=None):
-        return {
-            "raw_response": json.dumps(
-                {
-                    "recommendations": [
-                        {"style": "CBT", "reason": "Good for anxiety"},
-                        {"style": "Psychodynamic", "reason": "Explores past"},
-                        {"style": "Humanistic", "reason": "Focuses on growth"},
-                    ]
-                }
-            )
-        }
+    async def mock_structured_output_async(prompt, schema, method="json_schema"):
+        from pydantic import BaseModel
 
-    def mock_structured_sync(prompt, output_format=None):
-        return {
-            "raw_response": json.dumps(
-                {
-                    "focus": "CBT Focus",
-                    "goals": "Reduce anxiety",
-                    "techniques": "Cognitive Restructuring",
-                    "themes": "Anxiety, Sleep",
-                    "timeline": "8 weeks",
-                    "recommendations": [
-                        {"style": "CBT", "reason": "Good for anxiety"},
-                        {"style": "FREUD", "reason": "Not suitable"},
-                        {"style": "JUNG", "reason": "Not suitable"},
-                    ],
-                }
-            )
-        }
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            name = schema.__name__
+            if name == "PlanUpdate":
+                return schema.model_validate(
+                    {
+                        "focus": "CBT for anxiety",
+                        "goals": "- Reduce anxiety symptoms\n- Improve sleep",
+                        "techniques": "- Cognitive restructuring\n- Mindfulness",
+                        "themes": "Anxiety, coping",
+                        "timeline": "12 weeks",
+                    }
+                )
+            if name == "PatientProfileExtract":
+                return schema.model_validate(
+                    {
+                        "basic_info": {
+                            "alias": "Guest",
+                            "date_of_birth": None,
+                            "gender": None,
+                            "cultural_background": None,
+                            "primary_language": "English",
+                        },
+                        "family": {
+                            "parents": None,
+                            "siblings": None,
+                            "family_atmosphere": None,
+                            "significant_events": None,
+                        },
+                        "history": {
+                            "education": None,
+                            "work_history": None,
+                            "relationship_to_work": None,
+                        },
+                        "context": {
+                            "relationships": None,
+                            "social_context": None,
+                            "current_situation": None,
+                        },
+                        "frame": {
+                            "preferred_school": None,
+                            "session_mode": "virtual",
+                            "boundary_notes": None,
+                            "frame_notes": None,
+                        },
+                    }
+                )
+            if name == "PatientAnalysis":
+                return schema.model_validate(
+                    {
+                        "current_focus": {
+                            "theme": "Anxiety",
+                            "salience": "Patient reports persistent anxiety",
+                        },
+                        "transference": {
+                            "idealization": None,
+                            "devaluation": None,
+                            "boundaries": None,
+                            "other_patterns": "Developing alliance",
+                        },
+                        "narratives": [],
+                        "defenses": {
+                            "primary_defenses": ["intellectualization"],
+                            "defensive_style": "Cerebral",
+                            "flexibility": "Moderate",
+                        },
+                        "orientation": {
+                            "pacing": "Gradual",
+                            "risk_areas": ["perfectionism"],
+                            "key_questions": ["What triggers the anxiety?"],
+                        },
+                    }
+                )
+            if name == "Tier4Extract":
+                return schema.model_validate(
+                    {
+                        "initial_goals": ["Reduce anxiety symptoms"],
+                        "current_progress": "Baseline established",
+                        "planned_interventions": ["Cognitive restructuring"],
+                        "status": "active",
+                    }
+                )
+            if name == "SessionAnalysis":
+                return schema.model_validate(
+                    {
+                        "key_themes": ["anxiety"],
+                        "emotional_state": "anxious",
+                        "insights": [],
+                        "progress_indicators": [],
+                    }
+                )
+            if name == "Tier2Enrichment":
+                return schema.model_validate(
+                    {
+                        "psychological_summary": "Mock summary",
+                        "dominant_affects": ["anxiety"],
+                        "key_themes": ["anxiety"],
+                        "notable_interactions": None,
+                        "interpretations": None,
+                        "patient_reactions": None,
+                    }
+                )
+            if name == "SessionBriefing":
+                now = datetime.now()
+                return schema.model_validate(
+                    {
+                        "briefing_type": "resumption",
+                        "generated_at": now.isoformat(),
+                        "session_count": 1,
+                        "last_session_id": "test_session",
+                        "last_session_date": now.date().isoformat(),
+                        "narrative_handoff": (
+                            "Patient expressed anxiety and we explored initial coping strategies. "
+                            "We identified triggers and planned next steps."
+                        ),
+                        "patient_observations": "Patient was open but anxious.",
+                        "plan_progression_notes": "Initial assessment completed.",
+                        "relationship_quality": "building",
+                        "continuity_points": ["Work stress"],
+                        "emotional_summary": {
+                            "last_session": "Anxious",
+                            "trend": "stable",
+                            "note": "Consistent anxiety",
+                        },
+                        "key_themes": [
+                            {
+                                "theme": "Anxiety",
+                                "status": "ongoing",
+                                "priority": "high",
+                                "frequency": 1,
+                                "first_appearance": "session_1",
+                                "last_discussed": "session_1",
+                            }
+                        ],
+                        "progress_highlights": ["Acknowledged anxiety"],
+                        "unresolved_issues": ["Coping mechanisms"],
+                        "recommended_approach": {
+                            "opening_tone": "Warm and welcoming",
+                            "opening_focus": "Check in on anxiety",
+                            "things_to_avoid": "Overwhelming questions",
+                            "suggested_questions": ["How have you been?"],
+                            "therapeutic_goals_for_session": ["Build rapport"],
+                        },
+                    }
+                )
+        return {}
 
-    llm.generate_structured_response = mock_structured_sync
-    llm.generate_structured_response_async = mock_structured
+    llm.generate_structured_output_async = mock_structured_output_async
 
-    def mock_structured_sync(prompt, output_format=None):
-        return {
-            "raw_response": json.dumps(
+    def mock_structured_output(prompt, schema, method="json_schema"):
+        from pydantic import BaseModel
+
+        if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
+            return {}
+        name = schema.__name__
+        if name == "PlanUpdate":
+            return schema.model_validate(
                 {
                     "focus": "CBT for anxiety",
-                    "goals": "Reduce anxiety symptoms",
-                    "techniques": "Cognitive restructuring",
-                    "themes": "Anxiety, Coping",
+                    "goals": "- Reduce anxiety symptoms\n- Improve sleep",
+                    "techniques": "- Cognitive restructuring\n- Mindfulness",
+                    "themes": "Anxiety, coping",
                     "timeline": "12 weeks",
-                    "recommendations": [
-                        {"style": "CBT", "reason": "Good for anxiety"},
-                        {"style": "Psychodynamic", "reason": "Explores past"},
-                        {"style": "Humanistic", "reason": "Focuses on growth"},
-                    ],
                 }
             )
-        }
+        if name == "PatientProfileExtract":
+            return schema.model_validate(
+                {
+                    "basic_info": {
+                        "alias": "Guest",
+                        "date_of_birth": None,
+                        "gender": None,
+                        "cultural_background": None,
+                        "primary_language": "English",
+                    },
+                    "family": {
+                        "parents": None,
+                        "siblings": None,
+                        "family_atmosphere": None,
+                        "significant_events": None,
+                    },
+                    "history": {
+                        "education": None,
+                        "work_history": None,
+                        "relationship_to_work": None,
+                    },
+                    "context": {
+                        "relationships": None,
+                        "social_context": None,
+                        "current_situation": None,
+                    },
+                    "frame": {
+                        "preferred_school": None,
+                        "session_mode": "virtual",
+                        "boundary_notes": None,
+                        "frame_notes": None,
+                    },
+                }
+            )
+        if name == "PatientAnalysis":
+            return schema.model_validate(
+                {
+                    "current_focus": {
+                        "theme": "Anxiety",
+                        "salience": "Patient reports persistent anxiety",
+                    },
+                    "transference": {
+                        "idealization": None,
+                        "devaluation": None,
+                        "boundaries": None,
+                        "other_patterns": "Developing alliance",
+                    },
+                    "narratives": [],
+                    "defenses": {
+                        "primary_defenses": ["intellectualization"],
+                        "defensive_style": "Cerebral",
+                        "flexibility": "Moderate",
+                    },
+                    "orientation": {
+                        "pacing": "Gradual",
+                        "risk_areas": ["perfectionism"],
+                        "key_questions": ["What triggers the anxiety?"],
+                    },
+                }
+            )
+        if name == "Tier4Extract":
+            return schema.model_validate(
+                {
+                    "initial_goals": ["Reduce anxiety symptoms"],
+                    "current_progress": "Baseline established",
+                    "planned_interventions": ["Cognitive restructuring"],
+                    "status": "active",
+                }
+            )
+        if name == "SessionAnalysis":
+            return schema.model_validate(
+                {
+                    "key_themes": ["anxiety"],
+                    "emotional_state": "anxious",
+                    "insights": [],
+                    "progress_indicators": [],
+                }
+            )
+        if name == "Tier2Enrichment":
+            return schema.model_validate(
+                {
+                    "psychological_summary": "Mock summary",
+                    "dominant_affects": ["anxiety"],
+                    "key_themes": ["anxiety"],
+                    "notable_interactions": None,
+                    "interpretations": None,
+                    "patient_reactions": None,
+                }
+            )
+        return schema.model_validate({})
 
-    llm.generate_structured_response = mock_structured_sync
+    llm.generate_structured_output = Mock(side_effect=mock_structured_output)
 
     async def mock_generate_async(prompt, *args, **kwargs):
         """Mock async generation."""
@@ -314,7 +519,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
     )
 
     received_messages = []
-    completion_events = []
+    completion_send, completion_recv = trio.open_memory_channel(1000)
 
     async def websocket_receiver(ws):
         """Receive and track WebSocket messages, including completion signals."""
@@ -324,9 +529,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 data = json.loads(message)
                 if data.get("type") == "chat_response_chunk":
                     if data["data"].get("is_complete"):
-                        # Signal that response is complete
-                        if completion_events:
-                            completion_events[-1].set()
+                        await completion_send.send(True)
                 elif data.get("type") == "session_started":
                     received_messages.append(data)
                 elif data.get("type") == "error":
@@ -336,13 +539,8 @@ async def test_natural_patient_flow(test_server, use_real_llm):
 
     async def wait_for_response_complete(timeout=60):
         """Wait for the server to complete processing (is_complete signal)."""
-        event = trio.Event()
-        completion_events.append(event)
         with trio.fail_after(timeout):
-            await event.wait()
-        # Remove this event after it's triggered
-        if event in completion_events:
-            completion_events.remove(event)
+            await completion_recv.receive()
 
     async with open_websocket_url(
         f"{test_server['ws_url']}/ws?user_id={user_id}",
@@ -369,6 +567,9 @@ async def test_natural_patient_flow(test_server, use_real_llm):
             assert received_messages, "Did not receive session_started event"
             session_id = received_messages[0]["data"]["session_id"]
             logger.info(f"Test using session_id: {session_id}")
+
+            # Drain the initial greeting (sent automatically when starting a session)
+            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
             # 2. Intake - Provide Name
             await ws.send_message(

@@ -175,7 +175,7 @@ describe('ApiClient', () => {
       );
     });
 
-    it('should handle timeout by passing abort signal to fetch', () => {
+    it('should handle timeout by passing abort signal to fetch', async () => {
       const slowClient = new ApiClient({
         baseUrl: 'http://test.example.com',
         timeout: 100
@@ -192,7 +192,7 @@ describe('ApiClient', () => {
         }
       );
 
-      expect(slowClient.get('/slow')).rejects.toThrow('Request timeout after 100ms');
+      await expect(slowClient.get('/slow')).rejects.toThrow('Request timeout after 100ms');
     });
   });
 

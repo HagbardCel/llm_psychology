@@ -33,6 +33,8 @@ class TestTrioServer:
         db_service = AsyncMock()
         db_service.initialize = AsyncMock()
         db_service.health_check = AsyncMock(return_value=True)
+        # Ensure background enrichment worker idles during unit tests
+        db_service.claim_next_session_enrichment_job = AsyncMock(return_value=None)
 
         # Setup get() to return appropriate mocks
         def get_service(name):

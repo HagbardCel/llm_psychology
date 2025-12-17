@@ -44,6 +44,10 @@ def sample_therapy_plan():
             "approaches": ["CBT", "Mindfulness"],
             "timeline": "12 weeks",
         },
+        initial_goals=["Reduce anxiety"],
+        current_progress="Initial baseline established",
+        planned_interventions=["CBT", "Mindfulness"],
+        status="active",
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -87,6 +91,9 @@ async def test_save_and_load_therapy_plan_with_briefing(
     assert retrieved_plan is not None, "Failed to retrieve therapy plan"
     assert retrieved_plan.plan_id == sample_therapy_plan.plan_id
     assert retrieved_plan.user_id == sample_therapy_plan.user_id
+    assert retrieved_plan.initial_goals == ["Reduce anxiety"]
+    assert retrieved_plan.current_progress.startswith("Initial baseline")
+    assert retrieved_plan.planned_interventions[0] == "CBT"
 
     # Verify the session briefing was saved and retrieved correctly
     assert retrieved_plan.session_briefing is not None, "Session briefing was not saved"
@@ -191,6 +198,10 @@ async def test_get_latest_therapy_plan_with_briefing(
         created_at=datetime.now(),
         updated_at=datetime.now(),
         plan_details={"goals": ["Goal 1"]},
+        initial_goals=["Goal 1"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
+        status="active",
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -204,6 +215,10 @@ async def test_get_latest_therapy_plan_with_briefing(
         created_at=datetime.now(),
         updated_at=datetime.now(),
         plan_details={"goals": ["Goal 1", "Goal 2"]},
+        initial_goals=["Goal 1", "Goal 2"],
+        current_progress="Progress improving",
+        planned_interventions=["CBT"],
+        status="active",
         version=2,
         selected_therapy_style="CBT",
         session_briefing=sample_session_briefing,

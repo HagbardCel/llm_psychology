@@ -9,6 +9,23 @@ from datetime import datetime, timedelta
 
 
 @pytest.fixture
+def test_server_config(tmp_path):
+    """Create test server configuration with authentication ENABLED."""
+    from config import settings
+
+    test_db_path = str(tmp_path / "timer_test_server.db")
+
+    return settings.model_copy(
+        update={
+            "DATABASE_PATH": test_db_path,
+            "REQUIRE_AUTHENTICATION": True,
+            "JWT_SECRET_KEY": "test_secret_key_for_integration_tests",
+            "CORS_ALLOWED_ORIGINS": ["http://localhost", "http://127.0.0.1"],
+        }
+    )
+
+
+@pytest.fixture
 async def server_url(test_server_websocket):
     """Get server URL from test_server_websocket fixture."""
     return test_server_websocket["url"]
@@ -27,7 +44,7 @@ async def auth_headers(test_server_websocket):
     )
 
     # Create a test token for user "test_user"
-    token = auth_service.create_access_token({"sub": "test_user"})
+    token = auth_service.create_access_token("test_user", "test_user")
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -50,10 +67,17 @@ async def active_session(test_server_websocket, auth_headers):
     # Create therapy plan
     from models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
+        plan_id="plan_timer_test",
         user_id="test_user",
-        selected_therapy_style="freud",
-        recommendation_reasoning="Test reasoning",
         created_at=datetime.now(),
+        updated_at=datetime.now(),
+        selected_therapy_style="freud",
+        plan_details={"focus": "test", "goals": "test goals"},
+        initial_goals=["Stabilize presenting concerns"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
+        status="active",
+        version=1,
     )
     await db_service.save_therapy_plan(therapy_plan)
 
@@ -62,11 +86,9 @@ async def active_session(test_server_websocket, auth_headers):
     session = Session(
         session_id="test_session_123",
         user_id="test_user",
-        agent_type="psychoanalyst",
         timestamp=datetime.now() - timedelta(minutes=10),  # Started 10 minutes ago
         transcript=[],
         topics=[],
-        therapy_style="freud",
     )
     await db_service.save_session(session)
 
@@ -132,9 +154,7 @@ async def test_get_session_timer_requires_auth(server_url, active_session):
             f"{server_url}/api/sessions/{active_session.session_id}/timer",
         )
 
-        # Should return 401 Unauthorized if auth is enabled
-        # Or 200 if auth is disabled in test config
-        assert response.status_code in [200, 401]
+        assert response.status_code == 401
 
 
 @pytest.mark.trio
@@ -156,10 +176,17 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     # Create therapy plan
     from models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
+        plan_id="plan_timer_ext",
         user_id="test_user_ext",
-        selected_therapy_style="freud",
-        recommendation_reasoning="Test reasoning",
         created_at=datetime.now(),
+        updated_at=datetime.now(),
+        selected_therapy_style="freud",
+        plan_details={"focus": "test", "goals": "test goals"},
+        initial_goals=["Stabilize presenting concerns"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
+        status="active",
+        version=1,
     )
     await db_service.save_therapy_plan(therapy_plan)
 
@@ -168,11 +195,9 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     session = Session(
         session_id="test_session_ext",
         user_id="test_user_ext",
-        agent_type="psychoanalyst",
         timestamp=datetime.now() - timedelta(minutes=40),
         transcript=[],
         topics=[],
-        therapy_style="freud",
     )
     await db_service.save_session(session)
 
@@ -211,10 +236,17 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url, auth
     # Create therapy plan
     from models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
+        plan_id="plan_timer_timeup",
         user_id="test_user_timeup",
-        selected_therapy_style="freud",
-        recommendation_reasoning="Test reasoning",
         created_at=datetime.now(),
+        updated_at=datetime.now(),
+        selected_therapy_style="freud",
+        plan_details={"focus": "test", "goals": "test goals"},
+        initial_goals=["Stabilize presenting concerns"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
+        status="active",
+        version=1,
     )
     await db_service.save_therapy_plan(therapy_plan)
 
@@ -223,11 +255,9 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url, auth
     session = Session(
         session_id="test_session_timeup",
         user_id="test_user_timeup",
-        agent_type="psychoanalyst",
         timestamp=datetime.now() - timedelta(minutes=50),
         transcript=[],
         topics=[],
-        therapy_style="freud",
     )
     await db_service.save_session(session)
 

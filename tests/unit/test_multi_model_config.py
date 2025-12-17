@@ -6,8 +6,23 @@ from config import Settings
 from container.service_container import ServiceContainer
 
 
+def _clear_agent_model_env(monkeypatch):
+    # Settings loads values from `.env` by default; make tests deterministic by
+    # explicitly overriding all agent-model env vars unless a test sets them.
+    for key in (
+        "INTAKE_MODEL",
+        "ASSESSMENT_MODEL",
+        "PSYCHOANALYST_MODEL",
+        "REFLECTION_MODEL",
+        "MEMORY_MODEL",
+        "PLANNING_MODEL",
+    ):
+        monkeypatch.setenv(key, "")
+
+
 def test_agent_specific_models_from_config(monkeypatch):
     """Test that agents get correct model configurations from env vars."""
+    _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("INTAKE_MODEL", "gemini-pro")
     monkeypatch.setenv("PSYCHOANALYST_MODEL", "gemini-2.5-pro")
@@ -26,6 +41,7 @@ def test_agent_specific_models_from_config(monkeypatch):
 
 def test_fallback_to_default_model(monkeypatch):
     """Test that missing agent models fall back to MODEL_NAME."""
+    _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
     # Don't set INTAKE_MODEL - should fall back to MODEL_NAME
@@ -37,6 +53,7 @@ def test_fallback_to_default_model(monkeypatch):
 
 def test_all_agent_models_configurable(monkeypatch):
     """Test that all 6 agent models can be individually configured."""
+    _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "assessment-model")
@@ -60,6 +77,7 @@ def test_all_agent_models_configurable(monkeypatch):
 
 def test_config_class_fields(monkeypatch):
     """Test that Settings class properly loads agent model fields."""
+    _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("INTAKE_MODEL", "test-intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "test-assessment-model")
@@ -74,6 +92,7 @@ def test_config_class_fields(monkeypatch):
 
 def test_default_llm_service_unchanged(monkeypatch):
     """Test that default llm_service still uses MODEL_NAME."""
+    _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("INTAKE_MODEL", "gemini-pro")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")

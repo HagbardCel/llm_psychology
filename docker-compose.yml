@@ -87,6 +87,29 @@ x-frontend-base: &frontend-base
     retries: 3
     start_period: 10s
 
+# Frontend test runner: same image, but without the persistent node_modules volume.
+# This avoids stale/partial node_modules in the shared volume causing Jest failures
+# (e.g., "ts-jest in the transform option was not found").
+x-frontend-test-base: &frontend-test-base
+  build:
+    context: ./frontend
+    dockerfile: Dockerfile.dev
+  volumes:
+    - ./frontend/src:/app/src:delegated
+    - ./frontend/public:/app/public:delegated
+    - ./frontend/index.html:/app/index.html:delegated
+    - ./frontend/vite.config.ts:/app/vite.config.ts:delegated
+    - ./frontend/tsconfig.json:/app/tsconfig.json:delegated
+    - ./frontend/jest.config.js:/app/jest.config.js:delegated
+    - ./frontend/package.json:/app/package.json:delegated
+    - ./frontend/package-lock.json:/app/package-lock.json:delegated
+  environment:
+    - NODE_ENV=test
+    - VITE_API_URL=http://localhost:8000
+    - VITE_WS_URL=ws://localhost:8000
+  networks:
+    - app-network
+
 services:
   # ============================================
   # Backend API Server (HTTP + WebSocket)
@@ -107,6 +130,11 @@ services:
     container_name: psychoanalyst_frontend
     depends_on:
       - api
+
+  frontend-test:
+    <<: *frontend-test-base
+    container_name: psychoanalyst_frontend_test
+    profiles: ["test"]
 
   # ============================================
   # Console UI (Terminal Interface via WebSocket)

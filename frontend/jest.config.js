@@ -1,6 +1,8 @@
 export default {
   testEnvironment: 'jsdom',
   setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts'],
+  roots: ['<rootDir>/src'],
+  testPathIgnorePatterns: ['<rootDir>/e2e/', '/node_modules/'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },

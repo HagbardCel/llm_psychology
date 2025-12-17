@@ -190,6 +190,9 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
         created_at=datetime.now(),
         updated_at=datetime.now(),
         plan_details={},
+        initial_goals=["Stabilize presenting concerns"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
         version=1,
         selected_therapy_style="freud",
     )

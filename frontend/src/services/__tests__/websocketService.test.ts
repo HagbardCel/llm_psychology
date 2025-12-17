@@ -141,7 +141,9 @@ describe('WebSocketService', () => {
       const connectPromise = service.connect();
 
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
-      expect(mockWs.url).toBe('ws://localhost:8000/ws?user_id=test-user');
+      expect(mockWs.url).toBe(
+        'ws://localhost:8000/ws?user_id=test-user&token=test-token'
+      );
 
       mockWs.simulateOpen();
       await connectPromise;
@@ -157,7 +159,9 @@ describe('WebSocketService', () => {
       const connectPromise = service.connect();
 
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
-      expect(mockWs.url).toBe('ws://localhost:8000/ws?user_id=test-user');
+      expect(mockWs.url).toBe(
+        'ws://localhost:8000/ws?user_id=test-user&token=test-token'
+      );
 
       mockWs.simulateOpen();
       await connectPromise;

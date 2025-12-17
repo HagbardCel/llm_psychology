@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { SessionHeader } from '../SessionHeader';
 import { Session, TherapyStyle, AgentType, SessionStatus } from '../../types';
 import { format } from 'date-fns';
@@ -224,7 +224,7 @@ describe('SessionHeader', () => {
       expect(screen.getByText('Settings')).toBeInTheDocument();
     });
 
-    it('should close menu when clicking outside', () => {
+    it('should close menu when clicking outside', async () => {
       render(<SessionHeader onMenuClick={mockOnMenuClick} />);
 
       // Open menu
@@ -233,14 +233,20 @@ describe('SessionHeader', () => {
 
       expect(screen.getByText('Settings')).toBeInTheDocument();
 
-      // Close menu by pressing Escape
-      fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+      // Close menu by clicking the modal backdrop (reliable in jsdom/MUI portals)
+      const backdrop = document.querySelector('.MuiBackdrop-root') as HTMLElement | null;
+      expect(backdrop).toBeTruthy();
+      if (backdrop) {
+        fireEvent.mouseDown(backdrop);
+        fireEvent.click(backdrop);
+        fireEvent.mouseUp(backdrop);
+      }
 
       // Menu should be closed (Settings should not be visible)
       // Note: MUI Menu uses portal, so we need to wait for it to close
-      setTimeout(() => {
+      await waitFor(() => {
         expect(screen.queryByText('Settings')).not.toBeInTheDocument();
-      }, 100);
+      });
     });
 
     it('should show Settings menu item', () => {
@@ -271,7 +277,7 @@ describe('SessionHeader', () => {
       expect(screen.queryByText('End Session')).not.toBeInTheDocument();
     });
 
-    it('should close menu after Settings clicked', () => {
+    it('should close menu after Settings clicked', async () => {
       render(<SessionHeader onMenuClick={mockOnMenuClick} onSettingsClick={mockOnSettingsClick} />);
 
       const moreButton = screen.getByLabelText('more options');
@@ -281,12 +287,12 @@ describe('SessionHeader', () => {
       fireEvent.click(settingsItem);
 
       // Menu should close after clicking Settings
-      setTimeout(() => {
+      await waitFor(() => {
         expect(screen.queryByText('Settings')).not.toBeInTheDocument();
-      }, 100);
+      });
     });
 
-    it('should close menu after End Session clicked', () => {
+    it('should close menu after End Session clicked', async () => {
       const session = createMockSession();
       render(
         <SessionHeader
@@ -303,9 +309,9 @@ describe('SessionHeader', () => {
       fireEvent.click(endSessionItem);
 
       // Menu should close after clicking End Session
-      setTimeout(() => {
+      await waitFor(() => {
         expect(screen.queryByText('End Session')).not.toBeInTheDocument();
-      }, 100);
+      });
     });
 
     it('should apply error color to End Session item', () => {

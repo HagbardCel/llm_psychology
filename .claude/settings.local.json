@@ -54,7 +54,8 @@
       "Bash(npx tsc:*)",
       "Bash(xargs ls:*)",
       "Bash(xargs grep:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(/usr/bin/python3 -m pytest:*)"
     ],
     "deny": [],
     "ask": [],

@@ -88,19 +88,14 @@ export function fromSession(session: Session): GeneratedSession {
  * Convert generated TherapyPlan to client TherapyPlan type
  */
 export function toTherapyPlan(plan: GeneratedTherapyPlan): TherapyPlan {
-  // Type assertion for field mapping
-  const {
-    planId,
-    userId,
-    selectedTherapyStyle,
-    ...rest
-  } = plan as any;
+  // Type assertion for field mapping (quicktype currently generates `planid`/`userid`).
+  const { planid, userid, selectedTherapyStyle, ...rest } = plan as any;
 
   return {
     ...rest,
-    id: planId || plan.planId || '',
-    userId: userId || plan.userId || '',
-    therapyStyle: selectedTherapyStyle,
+    id: planid || (plan as any).planId || '',
+    userId: userid || (plan as any).userId || '',
+    therapyStyle: selectedTherapyStyle ?? undefined,
     // Client-only fields remain undefined unless set elsewhere
   };
 }

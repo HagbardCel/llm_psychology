@@ -5,6 +5,8 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * See https://playwright.dev/docs/test-configuration
  */
+const fullBrowserMatrix = !!process.env.E2E_FULL_BROWSERS;
+
 export default defineConfig({
   testDir: './e2e',
 
@@ -39,38 +41,29 @@ export default defineConfig({
   },
 
   /* Configure projects for major browsers */
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-
-    {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
-    },
-
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
-
-    /* Test against mobile viewports. */
-    {
-      name: 'Mobile Chrome',
-      use: { ...devices['Pixel 5'] },
-    },
-    {
-      name: 'Mobile Safari',
-      use: { ...devices['iPhone 12'] },
-    },
-  ],
+  projects: fullBrowserMatrix
+    ? [
+        { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+        { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+        { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+        { name: 'Mobile Chrome', use: { ...devices['Pixel 5'] } },
+        { name: 'Mobile Safari', use: { ...devices['iPhone 12'] } },
+      ]
+    : [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
+  webServer: [
+    {
+      command: 'python ../src/e2e_server.py',
+      url: 'http://127.0.0.1:8000/health',
+      reuseExistingServer: false,
+      timeout: 120 * 1000,
+    },
+    {
+      command: 'npm run dev',
+      url: 'http://localhost:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120 * 1000,
+    },
+  ],
 });

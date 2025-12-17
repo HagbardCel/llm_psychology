@@ -81,6 +81,9 @@ def sample_therapy_plan():
             "approaches": ["CBT", "Mindfulness"],
             "timeline": "12 weeks",
         },
+        initial_goals=["Reduce anxiety", "Improve sleep"],
+        current_progress="Baseline established",
+        planned_interventions=["CBT", "Mindfulness"],
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -147,6 +150,9 @@ async def test_generate_session_briefing_structure(
         created_at=datetime.now(),
         updated_at=datetime.now(),
         plan_details={"goals": ["test"]},
+        initial_goals=["test"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -205,6 +211,9 @@ async def test_briefing_generation_failure_propagates(
         created_at=datetime.now(),
         updated_at=datetime.now(),
         plan_details={"goals": ["test"]},
+        initial_goals=["test"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -255,9 +264,10 @@ async def test_briefing_generation_failure_propagates(
     # Create a mock LLM service that will raise an exception
     mock_llm = Mock()
     mock_llm.generate_response = Mock(side_effect=Exception("LLM service failure"))
-    mock_llm.generate_structured_response = Mock(
-        side_effect=Exception("LLM service failure")
-    )
+    async def _fail_structured_output_async(*args, **kwargs):
+        raise Exception("LLM service failure")
+
+    mock_llm.generate_structured_output_async = _fail_structured_output_async
 
     # Create reflection agent with failing LLM
     agent = TrioReflectionAgent(
@@ -299,7 +309,7 @@ async def test_process_reflection_updates_plan_with_briefing(
     planning_agent = Mock()
     planning_agent.update_plan = AsyncMock(return_value=sample_therapy_plan)
     planning_agent.assess_plan_effectiveness = AsyncMock(return_value={})
-    planning_agent.recommend_plan_adjustments = AsyncMock(return_value={})
+    planning_agent.recommend_plan_adjustments = AsyncMock(return_value=[])
 
     memory_agent = Mock()
     mock_session_context = Mock()

@@ -132,6 +132,8 @@ class TrioServer:
         from orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
         from orchestration.trio_conversation_manager import TrioConversationManager
         from orchestration.trio_workflow_engine import TrioWorkflowEngine
+        from services.session_enrichment_service import SessionEnrichmentService
+        from services.session_enrichment_worker import run_session_enrichment_worker
 
         # Get services
         llm_service = self.container.get("llm_service")
@@ -144,6 +146,14 @@ class TrioServer:
         )
         self.orchestrator = TrioAgentOrchestrator(
             self.container, self.workflow_engine, self.conversation_manager, nursery
+        )
+
+        # Background Tier 2 enrichment worker (no LLM calls on read paths)
+        self.session_enrichment_service = SessionEnrichmentService(
+            llm_service=llm_service, db_service=self.db_service
+        )
+        nursery.start_soon(
+            run_session_enrichment_worker, self.db_service, self.session_enrichment_service
         )
 
         logger.info("Orchestration layer initialized with nursery")
@@ -165,6 +175,9 @@ class TrioServer:
         # User management (protected)
         self.app.route("/api/user/status", methods=["GET"])(
             self.require_auth(self._get_user_status)
+        )
+        self.app.route("/api/user/profile", methods=["GET"])(
+            self.require_auth(self._get_user_profile)
         )
         self.app.route("/api/user/profile", methods=["POST"])(
             self.require_auth(self._create_user_profile)
@@ -273,14 +286,10 @@ class TrioServer:
                             logger.info(f"Switching session from {session_id}")
 
                         # Start session and get session info
-                        session_info = await self.orchestrator.start_session(user_id)
-                        session_id = session_info.session_id
-
-                        # Register websocket for this session
-                        # Pass websocket directly - it's valid for the connection duration
-                        self.conversation_manager.register_websocket(
-                            session_id, websocket
+                        session_info = await self.orchestrator.start_session(
+                            user_id, send_initial_message=True
                         )
+                        session_id = session_info.session_id
 
                         # Send session started confirmation
                         await websocket.send(
@@ -291,6 +300,11 @@ class TrioServer:
                                 }
                             )
                         )
+
+                        # Register websocket for this session AFTER sending session_started.
+                        # The console client relies on receiving session_started before any
+                        # streamed greeting chunks.
+                        self.conversation_manager.register_websocket(session_id, websocket)
 
                     elif msg_type == "chat_message":
                         if not session_id:
@@ -391,6 +405,19 @@ class TrioServer:
             }
         )
 
+    async def _get_user_profile(self):
+        """Get a user profile."""
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
+
+        profile = await self.db_service.get_user_profile(user_id)
+        if not profile:
+            return jsonify({"error": "User profile not found"}), 404
+
+        response = jsonify(profile.model_dump(mode="json"))
+        return add_cache_headers(response, **CACHE_PRESETS["user_data"])
+
     async def _create_user_profile(self):
         """Create a new user profile."""
         try:
@@ -406,7 +433,7 @@ class TrioServer:
                 birthdate=data.get("birthdate"),
                 profession=data.get("profession"),
             )
-            return jsonify(profile.model_dump()), 201
+            return jsonify(profile.model_dump(mode="json")), 201
 
         except ValueError as e:
             # Expected errors (validation, etc.)
@@ -443,7 +470,9 @@ class TrioServer:
         if not user_profile:
             return jsonify({"error": "User profile not found"}), 404
 
-        session_info = await self.orchestrator.start_session(user_id)
+        session_info = await self.orchestrator.start_session(
+            user_id, send_initial_message=False
+        )
         return (
             jsonify(
                 {
@@ -581,8 +610,10 @@ class TrioServer:
                     404,
                 )
 
-            # Determine next action based on workflow state
-            workflow_state = WorkflowState(profile.workflow_state)
+            # Determine next action based on workflow state (derived from user status)
+            workflow_state = self.workflow_engine.USER_STATUS_TO_WORKFLOW_STATE.get(
+                profile.status, WorkflowState.NEW
+            )
             response = self._determine_next_action(workflow_state, profile)
 
             return jsonify(response.model_dump()), 200

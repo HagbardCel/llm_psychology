@@ -49,6 +49,7 @@ class TrioPsychoanalystAgent:
         rag_service: RAGService,
         user_context: UserContext | None = None,
         conversation_manager: Any | None = None,
+        reflection_agent: Any | None = None,
     ):
         """
         Initialize the Trio Psychoanalyst Agent.
@@ -59,12 +60,14 @@ class TrioPsychoanalystAgent:
             rag_service: The RAG service for retrieving domain knowledge (synchronous)
             user_context: User context (optional, for legacy mode)
             conversation_manager: Conversation manager for streaming (optional)
+            reflection_agent: Reflection agent (optional; used for on-demand Tier 2 enrichment)
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
         self.user_context = user_context
         self.conversation_manager = conversation_manager
+        self.reflection_agent = reflection_agent
 
     # ===== SESSION RESUMPTION SUPPORT =====
 
@@ -260,7 +263,9 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
             # due to the proactive prompt in start_session.
             if not context.message_history or len(context.message_history) <= 1:
                 prompt = await self._build_initial_session_prompt(
-                    context.user_profile, therapy_plan
+                    context.user_profile,
+                    therapy_plan,
+                    active_session_id=context.session_id,
                 )
             else:
                 # Build continuation prompt with RAG context
@@ -308,7 +313,11 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
             )
 
     async def _build_initial_session_prompt(
-        self, user_profile: UserProfile, therapy_plan: TherapyPlan
+        self,
+        user_profile: UserProfile,
+        therapy_plan: TherapyPlan,
+        *,
+        active_session_id: str | None = None,
     ) -> str:
         """
         Build initial greeting prompt for therapy session using Trio.
@@ -346,6 +355,13 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
         selected_style = therapy_plan.selected_therapy_style
         user_name = user_profile.name
         plan_context = await self._build_plan_context(therapy_plan)
+        exclude = {active_session_id} if active_session_id else None
+        patient_context = await self._load_patient_context(
+            user_profile.user_id,
+            exclude_session_ids=exclude,
+        )
+        if patient_context:
+            plan_context = f"{patient_context}\n\n{plan_context}"
 
         # Get style instructions
         style_instructions = "Conduct a general psychoanalytic session."
@@ -399,6 +415,12 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
 
         # Build plan context
         plan_context = await self._build_plan_context(therapy_plan)
+        patient_context = await self._load_patient_context(
+            context.user_profile.user_id,
+            exclude_session_ids={context.session_id},
+        )
+        if patient_context:
+            plan_context = f"{patient_context}\n\n{plan_context}"
 
         # Get style instructions
         style_instructions = "Conduct a general psychoanalytic session."
@@ -479,6 +501,206 @@ Example approach: "Welcome back, {user_profile.name}. It's been a while since we
             context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
 
         return context
+
+    async def _load_patient_context(
+        self, user_id: str, *, exclude_session_ids: set[str] | None = None
+    ) -> str | None:
+        """
+        Load comprehensive patient context from all 4 tiers.
+
+        Loads current/latest data only (no version history) to keep
+        context focused and token count manageable.
+
+        Args:
+            user_id: User ID to load context for
+
+        Returns:
+            Formatted patient context string or None if no data available
+        """
+        exclude_session_ids = exclude_session_ids or set()
+        try:
+            # Load all 4 tiers concurrently
+            async with trio.open_nursery() as nursery:
+                tier1_result = {"data": None}
+                tier2_result = {"data": None}
+                tier3_result = {"data": None}
+                tier4_result = {"data": None}
+
+                async def load_tier1():
+                    tier1_result["data"] = (
+                        await self.db_service.get_patient_profile(user_id)
+                    )
+
+                async def load_tier2():
+                    # Read-only: do not trigger LLM calls during context loading.
+                    limit = 5
+                    enriched = await self.db_service.get_recent_sessions(
+                        user_id, limit=limit, enriched_only=True
+                    )
+                    tier2_result["data"] = enriched
+
+                    # Opportunistically enqueue missing enrichments for future sessions.
+                    if len(enriched) < limit:
+                        recent_any = await self.db_service.get_recent_sessions(
+                            user_id, limit=max(limit * 3, 10), enriched_only=False
+                        )
+                        for session in recent_any:
+                            if session.session_id in exclude_session_ids:
+                                continue
+                            if getattr(session, "enriched", False):
+                                continue
+                            await self.db_service.enqueue_session_enrichment_job(
+                                session.session_id, user_id
+                            )
+
+                async def load_tier3():
+                    tier3_result["data"] = (
+                        await self.db_service.get_latest_patient_analysis(user_id)
+                    )
+
+                async def load_tier4():
+                    tier4_result["data"] = (
+                        await self.db_service.get_latest_therapy_plan(user_id)
+                    )
+
+                nursery.start_soon(load_tier1)
+                nursery.start_soon(load_tier2)
+                nursery.start_soon(load_tier3)
+                nursery.start_soon(load_tier4)
+
+            # Extract results
+            patient_profile = tier1_result["data"]
+            recent_sessions = tier2_result["data"]
+            current_analysis = tier3_result["data"]
+            treatment_plan = tier4_result["data"]
+
+            # If no data at all, return None
+            has_data = any(
+                [patient_profile, recent_sessions, current_analysis, treatment_plan]
+            )
+            if not has_data:
+                logger.info(f"No patient context data for user {user_id}")
+                return None
+
+            # Build formatted context
+            context_parts = []
+
+            # Tier 1: Patient Background
+            if patient_profile:
+                context_parts.append("=== PATIENT BACKGROUND ===")
+                context_parts.append(
+                    f"Patient: {patient_profile.basic_info.alias}"
+                )
+
+                if patient_profile.basic_info.cultural_background:
+                    context_parts.append(
+                        f"Cultural Background: "
+                        f"{patient_profile.basic_info.cultural_background}"
+                    )
+
+                if patient_profile.family.family_atmosphere:
+                    context_parts.append(
+                        f"Family: {patient_profile.family.family_atmosphere}"
+                    )
+
+                if patient_profile.history.relationship_to_work:
+                    context_parts.append(
+                        f"Work: {patient_profile.history.relationship_to_work}"
+                    )
+
+                if patient_profile.context.current_situation:
+                    context_parts.append(
+                        f"Current Situation: "
+                        f"{patient_profile.context.current_situation}"
+                    )
+
+                context_parts.append("")  # Blank line
+
+            # Tier 3: Clinical Formulation (most important for therapist)
+            if current_analysis:
+                analysis = current_analysis.analysis_data
+                context_parts.append("=== CLINICAL FORMULATION ===")
+                context_parts.append(f"(Version {current_analysis.version})")
+                context_parts.append(
+                    f"Current Focus: {analysis.current_focus.theme}"
+                )
+                context_parts.append(f"  {analysis.current_focus.salience}")
+
+                if analysis.transference.other_patterns:
+                    context_parts.append(
+                        f"Transference: {analysis.transference.other_patterns}"
+                    )
+
+                if analysis.narratives:
+                    context_parts.append("Recurring Narratives:")
+                    for narrative in analysis.narratives[:3]:  # Max 3
+                        context_parts.append(f"  - {narrative.title}: {narrative.description}")
+
+                if analysis.defenses.primary_defenses:
+                    context_parts.append(
+                        f"Primary Defenses: "
+                        f"{', '.join(analysis.defenses.primary_defenses[:3])}"
+                    )
+
+                if analysis.orientation.pacing:
+                    context_parts.append(
+                        f"Therapeutic Pacing: {analysis.orientation.pacing}"
+                    )
+
+                if analysis.orientation.risk_areas:
+                    context_parts.append(
+                        f"Risk Areas: "
+                        f"{', '.join(analysis.orientation.risk_areas[:3])}"
+                    )
+
+                context_parts.append("")  # Blank line
+
+            # Tier 4: Treatment Goals
+            if treatment_plan:
+                context_parts.append("=== TREATMENT GOALS ===")
+                for i, goal in enumerate(treatment_plan.initial_goals[:3], 1):
+                    context_parts.append(f"{i}. {goal}")
+
+                if treatment_plan.current_progress:
+                    # Truncate to first 200 chars for conciseness
+                    progress = treatment_plan.current_progress[:200]
+                    if len(treatment_plan.current_progress) > 200:
+                        progress += "..."
+                    context_parts.append(f"Progress: {progress}")
+
+                context_parts.append("")  # Blank line
+
+            # Tier 2: Recent Session Highlights (brief summaries only)
+            if recent_sessions and len(recent_sessions) > 0:
+                context_parts.append(
+                    f"=== RECENT SESSIONS (Last {len(recent_sessions)}) ==="
+                )
+                for session in recent_sessions:
+                    if session.enriched and session.psychological_summary:
+                        # Take first sentence or 100 chars
+                        summary = session.psychological_summary.split(".")[0]
+                        if len(summary) > 100:
+                            summary = summary[:100] + "..."
+                        date = session.timestamp.strftime("%Y-%m-%d")
+                        context_parts.append(f"[{date}] {summary}")
+
+                        # Add key themes if available
+                        if session.key_themes:
+                            themes = ", ".join(session.key_themes[:3])
+                            context_parts.append(f"  Themes: {themes}")
+                    else:
+                        # Session not enriched yet - just note it exists
+                        date = session.timestamp.strftime("%Y-%m-%d")
+                        context_parts.append(f"[{date}] Session recorded")
+
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            logger.error(
+                f"Error loading patient context for user {user_id}: {e}",
+                exc_info=True,
+            )
+            return None
 
     # ===== LEGACY INTERFACE (limited support) =====
 

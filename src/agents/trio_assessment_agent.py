@@ -1,5 +1,5 @@
 """
-TrioAssessmentAgent: Trio-native agent for evaluating user needs and recommending therapy styles.
+TrioAssessmentAgent: Agent for evaluating needs and recommending styles.
 
 This agent analyzes the intake session and recommends appropriate therapy
 approaches based on the user's needs and presenting concerns.
@@ -7,27 +7,49 @@ approaches based on the user's needs and presenting concerns.
 Pure Trio implementation using structured concurrency.
 """
 
+import json
+import logging
+import re
+import uuid
 from datetime import datetime
+from typing import Any
 
 import trio
 
 from context.user_context import UserContext
-from models.data_models import Session, TherapyPlan
+from models.data_models import (
+    AnalyticOrientation,
+    CurrentFocus,
+    DefensiveOrganization,
+    PatientAnalysis,
+    PatientAnalysisVersion,
+    RecurringNarrative,
+    Session,
+    TherapyPlan,
+    TransferenceImpressions,
+)
+from models.structured_output_models import Tier4Extract
 from orchestration.models import (
     AgentResponse,
     ConversationContext,
     TherapyStyleRecommendation,
     WorkflowState,
 )
+from prompts.assessment_prompts import (
+    TIER3_INITIAL_FORMULATION_PROMPT,
+    TIER4_INITIAL_PLAN_PROMPT,
+)
 from services.llm_service import LLMService
 from services.rag_service import RAGService
 from services.style_service import style_service
 from services.trio_db_service import TrioDatabaseService
 
+logger = logging.getLogger(__name__)
+
 
 class TrioAssessmentAgent:
     """
-    Trio-native agent responsible for assessing user needs and recommending therapy styles.
+    Agent for assessing user needs and recommending therapy styles.
 
     This agent has two modes:
     1. Legacy mode: Direct method calls (for backward compatibility)
@@ -131,8 +153,8 @@ like to finish for today (option 1) or continue with our first therapy session n
                     recommendations_made = True
                     break
 
-            print(f"DEBUG: History length: {len(context.message_history)}")
-            print(f"DEBUG: Recommendations made: {recommendations_made}")
+            logger.debug("Assessment history length: %s", len(context.message_history))
+            logger.debug("Assessment recommendations made: %s", recommendations_made)
 
             if recommendations_made:
                 # We have made recommendations, so any user message now is
@@ -207,18 +229,20 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         """
         message = message.lower()
         available_styles = style_service.get_available_styles()
-        print(
-            f"DEBUG: _parse_selection message={repr(message)} styles={available_styles}"
+        logger.debug(
+            "Assessment selection parse: message=%r styles=%s",
+            message,
+            available_styles,
         )
 
         # Simple keyword matching for now
         # In a real system, we might use LLM to interpret intent
         for style in available_styles:
             if style.lower() in message:
-                print(f"DEBUG: Found style {style}")
+                logger.debug("Assessment selection matched style: %s", style)
                 return style
 
-        print("DEBUG: No style found")
+        logger.debug("Assessment selection: no style found")
         return None
 
     async def process_assessment(self, context: ConversationContext) -> AgentResponse:
@@ -283,7 +307,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         context: ConversationContext,
     ) -> AgentResponse:
         """
-        Process user's style selection and create therapy plan using Trio (orchestrator interface).
+        Process style selection and create therapy plan (orchestrator).
 
         Args:
             selected_style: User's selected therapy style
@@ -294,7 +318,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             AgentResponse with confirmation
         """
         try:
-            print(f"DEBUG: process_selection style={selected_style}")
+            logger.debug("Processing assessment selection style=%s", selected_style)
             # Create therapy plan with selected style (FIXED: added await)
             # Construct a temporary session object for the plan creation
             # (ReflectionAgent expects a Session object)
@@ -309,7 +333,69 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             therapy_plan = await self.create_initial_plan_with_style(
                 temp_session, selected_style
             )
-            print(f"DEBUG: Plan created: {therapy_plan.plan_id}")
+            logger.debug("Therapy plan created: %s", therapy_plan.plan_id)
+
+            # Phase 4: Create Tier 3 & 4 initial data
+            logger.info(
+                f"Creating initial Tier 3 & 4 data for user "
+                f"{context.user_profile.user_id}"
+            )
+
+            # Load Tier 1 (PatientProfile) for context
+            patient_background = await self._load_patient_profile(
+                context.user_profile.user_id
+            )
+
+            # Extract Tier 3 (initial clinical formulation)
+            tier3_analysis = await self._extract_tier3_initial_formulation(
+                temp_session, selected_style, patient_background
+            )
+
+            if tier3_analysis:
+                # Save to database
+                success = await self.db_service.save_patient_analysis_version(
+                    tier3_analysis
+                )
+                if success:
+                    logger.info(
+                        f"Saved Tier 3 v1 for user {context.user_profile.user_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to save Tier 3 for user "
+                        f"{context.user_profile.user_id}"
+                    )
+            else:
+                logger.warning(
+                    "Failed to extract Tier 3 initial formulation"
+                )
+
+            # Extract Tier 4 (initial treatment plan)
+            tier4_data = await self._extract_tier4_initial_plan(
+                temp_session, selected_style, patient_background, tier3_analysis
+            )
+
+            if tier4_data:
+                therapy_plan.initial_goals = tier4_data["initial_goals"]
+                therapy_plan.current_progress = tier4_data["current_progress"]
+                therapy_plan.planned_interventions = tier4_data["planned_interventions"]
+                therapy_plan.status = tier4_data["status"]
+                therapy_plan.updated_at = datetime.now()
+
+                # Persist unified therapy plan (now containing Tier 4 data)
+                plan_saved = await self.db_service.save_therapy_plan(therapy_plan)
+                if plan_saved:
+                    logger.info(
+                        "Updated TherapyPlan with Tier 4 data for user %s",
+                        context.user_profile.user_id,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to persist Tier 4 data for user %s",
+                        context.user_profile.user_id,
+                    )
+            else:
+                logger.warning("Failed to extract Tier 4 initial plan")
 
             # Format confirmation message with suggestion to finish for the day
             content = f"""
@@ -338,13 +424,15 @@ What would you prefer?
                     "selected_style": selected_style,
                     "plan_id": therapy_plan.plan_id,
                     "plan_version": therapy_plan.version,
+                    "tier3_created": tier3_analysis is not None,
+                    "tier4_created": tier4_data is not None,
                     "is_direct_response": True,
                     "awaiting_continuation": True,
                 },
             )
 
         except Exception as e:
-            print(f"DEBUG: Error in process_selection: {e}")
+            logger.error("Error in process_selection: %s", e, exc_info=True)
             return AgentResponse(
                 content=f"I encountered an error creating your therapy plan: {str(e)}",
                 next_action="continue",
@@ -365,7 +453,8 @@ What would you prefer?
             Formatted string
         """
         parts = [
-            "Based on our intake session, I'd like to recommend the following therapy approaches:\n"
+            "Based on our intake session, I'd like to recommend the "
+            "following therapy approaches:\n"
         ]
 
         for i, rec in enumerate(recommendations, 1):
@@ -471,3 +560,229 @@ Session Transcript:
         return await reflection_agent.create_initial_plan_with_style(
             intake_session, selected_style
         )
+
+    async def _load_patient_profile(self, user_id: str) -> str | None:
+        """
+        Load Tier 1 patient profile and format as context string.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Formatted patient background string, or None if not found
+        """
+        try:
+            patient_profile = await self.db_service.get_patient_profile(user_id)
+
+            if not patient_profile:
+                logger.warning(f"No patient profile found for user {user_id}")
+                return None
+
+            # Format patient profile into readable context
+            parts = [f"Patient: {patient_profile.basic_info.alias}"]
+
+            if patient_profile.basic_info.date_of_birth:
+                parts.append(f"DOB: {patient_profile.basic_info.date_of_birth}")
+            if patient_profile.basic_info.gender:
+                parts.append(f"Gender: {patient_profile.basic_info.gender}")
+            if patient_profile.basic_info.cultural_background:
+                parts.append(
+                    f"Cultural Background: "
+                    f"{patient_profile.basic_info.cultural_background}"
+                )
+
+            if patient_profile.family.parents:
+                parts.append(f"Family - Parents: {patient_profile.family.parents}")
+            if patient_profile.family.siblings:
+                parts.append(
+                    f"Family - Siblings: {patient_profile.family.siblings}"
+                )
+            if patient_profile.family.family_atmosphere:
+                parts.append(
+                    f"Family Atmosphere: "
+                    f"{patient_profile.family.family_atmosphere}"
+                )
+
+            if patient_profile.history.education:
+                parts.append(f"Education: {patient_profile.history.education}")
+            if patient_profile.history.work_history:
+                parts.append(
+                    f"Work History: {patient_profile.history.work_history}"
+                )
+            if patient_profile.history.relationship_to_work:
+                parts.append(
+                    f"Relationship to Work: "
+                    f"{patient_profile.history.relationship_to_work}"
+                )
+
+            if patient_profile.context.relationships:
+                parts.append(
+                    f"Relationships: {patient_profile.context.relationships}"
+                )
+            if patient_profile.context.social_context:
+                parts.append(
+                    f"Social Context: {patient_profile.context.social_context}"
+                )
+            if patient_profile.context.current_situation:
+                parts.append(
+                    f"Current Situation: "
+                    f"{patient_profile.context.current_situation}"
+                )
+
+            return "\n".join(parts)
+
+        except Exception as e:
+            logger.error(
+                f"Error loading patient profile for {user_id}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    async def _extract_tier3_initial_formulation(
+        self,
+        intake_session: Session,
+        therapy_style: str,
+        patient_background: str | None,
+    ) -> PatientAnalysisVersion | None:
+        """
+        Extract initial clinical formulation (Tier 3) from intake assessment.
+
+        Creates version 1 of PatientAnalysis.
+
+        Args:
+            intake_session: Completed intake session
+            therapy_style: Selected therapy style
+            patient_background: Formatted patient background (Tier 1)
+
+        Returns:
+            PatientAnalysisVersion v1, or None if extraction fails
+        """
+        try:
+            # Format intake transcript
+            transcript_lines = []
+            for msg in intake_session.transcript:
+                role = "Therapist" if msg.role == "assistant" else "Patient"
+                transcript_lines.append(f"{role}: {msg.content}")
+
+            transcript = "\n".join(transcript_lines)
+
+            # Format extraction prompt
+            extraction_prompt = TIER3_INITIAL_FORMULATION_PROMPT.format(
+                patient_background=patient_background or "No background data",
+                intake_transcript=transcript,
+                therapy_style=therapy_style,
+            )
+
+            logger.info("Extracting Tier 3 initial formulation...")
+
+            analysis = await self.llm_service.generate_structured_output_async(
+                extraction_prompt,
+                PatientAnalysis,
+                method="json_schema",
+            )
+            if not isinstance(analysis, PatientAnalysis):
+                logger.error("Tier 3 extraction returned unexpected type")
+                return None
+
+            # Create versioned wrapper (v1)
+            analysis_version = PatientAnalysisVersion(
+                user_id=intake_session.user_id,
+                version=1,
+                analysis_data=analysis,
+                created_at=datetime.now(),
+                created_by_session=intake_session.session_id,
+                change_summary="Initial formulation created from intake assessment",
+            )
+
+            logger.info(
+                f"Successfully created Tier 3 v1 for user "
+                f"{intake_session.user_id}"
+            )
+
+            return analysis_version
+
+        except Exception as e:
+            logger.error(
+                f"Error extracting Tier 3 formulation: {e}", exc_info=True
+            )
+            return None
+
+    async def _extract_tier4_initial_plan(
+        self,
+        intake_session: Session,
+        therapy_style: str,
+        patient_background: str | None,
+        tier3_formulation: PatientAnalysisVersion | None,
+    ) -> dict[str, Any] | None:
+        """
+        Extract initial treatment plan (Tier 4) from intake assessment.
+
+        Args:
+            intake_session: Completed intake session
+            therapy_style: Selected therapy style
+            patient_background: Formatted patient background (Tier 1)
+            tier3_formulation: Clinical formulation (Tier 3)
+
+        Returns:
+            Dict containing Tier 4 data, or None if extraction fails
+        """
+        try:
+            # Format intake transcript
+            transcript_lines = []
+            for msg in intake_session.transcript:
+                role = "Therapist" if msg.role == "assistant" else "Patient"
+                transcript_lines.append(f"{role}: {msg.content}")
+
+            transcript = "\n".join(transcript_lines)
+
+            # Format Tier 3 formulation for context
+            if tier3_formulation:
+                analysis_data = tier3_formulation.analysis_data
+                formulation_summary = (
+                    f"Central Theme: {analysis_data.current_focus.theme}\n"
+                    f"Primary Defenses: "
+                    f"{', '.join(analysis_data.defenses.primary_defenses)}\n"
+                    f"Risk Areas: "
+                    f"{', '.join(analysis_data.orientation.risk_areas)}"
+                )
+            else:
+                formulation_summary = "No formulation available"
+
+            # Format extraction prompt
+            extraction_prompt = TIER4_INITIAL_PLAN_PROMPT.format(
+                patient_background=patient_background or "No background data",
+                intake_transcript=transcript,
+                therapy_style=therapy_style,
+                clinical_formulation=formulation_summary,
+            )
+
+            logger.info("Extracting Tier 4 initial treatment plan...")
+
+            tier4 = await self.llm_service.generate_structured_output_async(
+                extraction_prompt,
+                Tier4Extract,
+                method="json_schema",
+            )
+            if not isinstance(tier4, Tier4Extract):
+                logger.error("Tier 4 extraction returned unexpected type")
+                return None
+
+            tier4_payload = {
+                "initial_goals": tier4.initial_goals,
+                "current_progress": tier4.current_progress,
+                "planned_interventions": tier4.planned_interventions,
+                "status": tier4.status,
+            }
+
+            logger.info(
+                "Successfully extracted Tier 4 plan details for user %s",
+                intake_session.user_id,
+            )
+
+            return tier4_payload
+
+        except Exception as e:
+            logger.error(
+                f"Error extracting Tier 4 treatment plan: {e}", exc_info=True
+            )
+            return None

@@ -20,6 +20,8 @@ from container.service_container import ServiceContainer
 from orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
 from orchestration.trio_conversation_manager import TrioConversationManager
 from orchestration.trio_workflow_engine import TrioWorkflowEngine
+from services.session_enrichment_service import SessionEnrichmentService
+from services.session_enrichment_worker import run_session_enrichment_worker
 from ui.base_ui import BaseUI
 
 # Set up logging
@@ -121,7 +123,9 @@ class TerminalUI(BaseUI):
             # Register with user_id initially (though orchestrator uses session_id for greeting)
             self.orchestrator.conversation_manager.register_websocket(self.user_id, ws)
 
-            session_info = await self.orchestrator.start_session(self.user_id)
+            session_info = await self.orchestrator.start_session(
+                self.user_id, send_initial_message=True
+            )
 
             # CRITICAL FIX: Register websocket with session_id so initial greeting (sent to session_id)
             # can be received. The orchestrator sends to session_id, not user_id.
@@ -212,6 +216,12 @@ async def main():
         orchestrator = TrioAgentOrchestrator(
             container, workflow_engine, conversation_manager, nursery
         )
+
+        # Background Tier 2 enrichment worker (for async job queue)
+        enrichment_service = SessionEnrichmentService(
+            llm_service=llm_service, db_service=db_service
+        )
+        nursery.start_soon(run_session_enrichment_worker, db_service, enrichment_service)
 
         ui = TerminalUI(orchestrator)
         await ui.run()

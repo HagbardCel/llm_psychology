@@ -10,7 +10,16 @@ import pytest
 
 from agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
 from models.briefing_models import BriefingStatus
-from models.data_models import TherapyPlan, UserProfile
+from models.data_models import (
+    AnalyticFrame,
+    BasicPatientBackground,
+    EducationalWorkHistory,
+    FamilyConstellation,
+    PatientProfile,
+    RelationalLifeContext,
+    TherapyPlan,
+    UserProfile,
+)
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
 
@@ -60,6 +69,9 @@ def sample_therapy_plan():
             "approaches": ["CBT", "Mindfulness"],
             "timeline": "12 weeks",
         },
+        initial_goals=["Reduce anxiety", "Build confidence"],
+        current_progress="Baseline established",
+        planned_interventions=["CBT", "Mindfulness"],
         version=1,
         selected_therapy_style="CBT",
         session_briefing=None,
@@ -204,6 +216,60 @@ async def test_get_briefing_status_invalid_no_timestamp(psychoanalyst_agent):
     status = psychoanalyst_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.INVALID
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_load_patient_context_includes_tiers():
+    """Ensure psychoanalyst can assemble patient context from tiers."""
+    from unittest.mock import AsyncMock, Mock
+
+    mock_llm = Mock()
+    mock_rag = Mock()
+    mock_db = Mock()
+
+    mock_db.get_patient_profile = AsyncMock(
+        return_value=PatientProfile(
+            user_id="test_user_123",
+            basic_info=BasicPatientBackground(alias="Alex"),
+            family=FamilyConstellation(family_atmosphere="Tense but loving"),
+            history=EducationalWorkHistory(),
+            context=RelationalLifeContext(),
+            frame=AnalyticFrame(),
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+    )
+    mock_db.get_recent_sessions = AsyncMock(return_value=[])
+    mock_db.get_latest_patient_analysis = AsyncMock(return_value=None)
+    mock_db.get_latest_therapy_plan = AsyncMock(
+        return_value=TherapyPlan(
+            plan_id="plan123",
+            user_id="test_user_123",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            plan_details={},
+            initial_goals=["Reduce anxiety"],
+            current_progress="Baseline",
+            planned_interventions=["Supportive listening"],
+            status="active",
+            version=1,
+            selected_therapy_style="cbt",
+        )
+    )
+
+    agent = TrioPsychoanalystAgent(
+        llm_service=mock_llm,
+        db_service=mock_db,
+        rag_service=mock_rag,
+        user_context=None,
+        conversation_manager=None,
+    )
+
+    context_text = await agent._load_patient_context("test_user_123")
+    assert context_text is not None
+    assert "=== PATIENT BACKGROUND ===" in context_text
+    assert "=== TREATMENT GOALS ===" in context_text
 
 
 @pytest.mark.trio

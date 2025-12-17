@@ -249,6 +249,35 @@ async def test_conversation_manager_stream_response(
     assert "Hello" in full_response or len(full_response) > 10  # Basic sanity check
 
 
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_conversation_manager_rag_filter_source_and_content(conversation_manager):
+    """Test that conversation-manager RAG uses correct source filter and content key."""
+    from models.data_models import TherapyPlan
+
+    therapy_plan = TherapyPlan(
+        user_id="rag_test_user",
+        plan_details={"focus": "test"},
+        initial_goals=["test"],
+        current_progress="test",
+        planned_interventions=["test"],
+        selected_therapy_style="cbt",
+    )
+
+    # Ensure we prefer `content` over legacy `text` keys.
+    conversation_manager.rag_service.retrieve_relevant_knowledge.return_value = [
+        {"text": "WRONG", "content": "RIGHT", "source": "cbt.md"}
+    ]
+
+    rag_context = await conversation_manager._retrieve_rag_context("query", therapy_plan)
+
+    conversation_manager.rag_service.retrieve_relevant_knowledge.assert_called_once_with(
+        "query", 3, "cbt.md"
+    )
+    assert "RIGHT" in rag_context
+    assert "WRONG" not in rag_context
+
+
 # ===== AgentOrchestrator Tests =====
 
 
@@ -266,7 +295,9 @@ async def test_orchestrator_create_user_profile(orchestrator):
     assert user_profile.user_id == "new_test_user"
     assert user_profile.name == "New Test User"
     assert user_profile.profession == "Engineer"
-    assert user_profile.status == UserStatus.PROFILE_ONLY
+    # First profile completion advances the workflow to intake.
+    assert user_profile.status == UserStatus.INTAKE_IN_PROGRESS
+    assert await orchestrator.get_user_state(user_profile.user_id) == WorkflowState.INTAKE_IN_PROGRESS
 
 
 @pytest.mark.trio

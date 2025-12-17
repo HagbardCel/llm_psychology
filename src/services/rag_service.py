@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+from typing import Any
 
 import faiss
 import numpy as np
@@ -17,6 +18,9 @@ class RAGService:
         self,
         domain_knowledge_path: str,
         vector_db_path: str,
+        *,
+        embedding_utils: EmbeddingUtils | None = None,
+        styles_dir: str | None = "src/styles",
         use_onnx: bool = True,
         model_name: str = "all-MiniLM-L6-v2",
     ):
@@ -31,7 +35,10 @@ class RAGService:
         """
         self.domain_knowledge_path = domain_knowledge_path
         self.vector_db_path = vector_db_path
-        self.embedding_utils = EmbeddingUtils(model_name=model_name, use_onnx=use_onnx)
+        self.styles_dir = styles_dir
+        self.embedding_utils = embedding_utils or EmbeddingUtils(
+            model_name=model_name, use_onnx=use_onnx
+        )
 
         # Storage for documents and metadata
         self.documents = []
@@ -92,11 +99,10 @@ class RAGService:
                     )
                     chunk_id = len(documents)
 
-        # Load from styles directory
-        styles_dir = "src/styles"
-        if os.path.exists(styles_dir):
-            for style_dir in os.listdir(styles_dir):
-                style_path = os.path.join(styles_dir, style_dir)
+        # Load from styles directory (therapy style packs)
+        if self.styles_dir and os.path.exists(self.styles_dir):
+            for style_dir in os.listdir(self.styles_dir):
+                style_path = os.path.join(self.styles_dir, style_dir)
                 if os.path.isdir(style_path):
                     knowledge_file = os.path.join(style_path, "knowledge.md")
                     if os.path.exists(knowledge_file):
@@ -187,7 +193,7 @@ class RAGService:
 
     def retrieve_relevant_knowledge(
         self, query: str, n_results: int = 3, filter_source: str | None = None
-    ) -> list[dict[str, any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve relevant domain knowledge based on a query.
 
@@ -197,17 +203,17 @@ class RAGService:
             filter_source (Optional[str]): Optional source filter (e.g., "freud.md").
 
         Returns:
-            List[Dict[str, any]]: List of relevant knowledge chunks with their metadata.
+            List[Dict[str, Any]]: List of relevant knowledge chunks with their metadata.
         """
         if self.index is None or len(self.documents) == 0:
             logger.warning("FAISS index is empty or not initialized")
             return []
 
         try:
-            print(f"DEBUG: RAG retrieve query='{query[:50]}...'")
+            logger.debug("RAG retrieve query=%r", f"{query[:50]}...")
             # Generate query embedding
             query_embedding = self.embedding_utils.generate_embedding(query)
-            print("DEBUG: RAG generated embedding")
+            logger.debug("RAG generated embedding")
             query_vector = np.array([query_embedding], dtype=np.float32)
 
             # Normalize for cosine similarity
@@ -215,9 +221,9 @@ class RAGService:
 
             # Search FAISS index (get more results than needed for filtering)
             search_k = min(n_results * 3, len(self.documents))
-            print(f"DEBUG: RAG searching index k={search_k}")
+            logger.debug("RAG searching index k=%s", search_k)
             scores, indices = self.index.search(query_vector, search_k)
-            print("DEBUG: RAG search complete")
+            logger.debug("RAG search complete")
 
             # Format results
             relevant_knowledge = []
@@ -243,14 +249,14 @@ class RAGService:
                 if len(relevant_knowledge) >= n_results:
                     break
 
-            print(f"DEBUG: RAG found {len(relevant_knowledge)} results")
+            logger.debug("RAG found %s results", len(relevant_knowledge))
             return relevant_knowledge
 
         except Exception as e:
             logger.error(f"Error retrieving relevant knowledge: {e}", exc_info=True)
             return []
 
-    def get_knowledge_by_source(self, source: str) -> list[dict[str, any]]:
+    def get_knowledge_by_source(self, source: str) -> list[dict[str, Any]]:
         """
         Retrieve all knowledge chunks from a specific source.
 
@@ -258,7 +264,7 @@ class RAGService:
             source (str): The source file name.
 
         Returns:
-            List[Dict[str, any]]: List of knowledge chunks from the specified source.
+            List[Dict[str, Any]]: List of knowledge chunks from the specified source.
         """
         try:
             knowledge_chunks = []
@@ -294,7 +300,7 @@ class RAGService:
 
     def retrieve_relevant_user_history(
         self, query: str, user_id: str, n_results: int = 2
-    ) -> list[dict[str, any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve relevant user history based on a query.
         This is a placeholder for future implementation.
@@ -305,7 +311,7 @@ class RAGService:
             n_results (int): Number of results to return.
 
         Returns:
-            List[Dict[str, any]]: List of relevant user history chunks.
+            List[Dict[str, Any]]: List of relevant user history chunks.
         """
         # Placeholder for future implementation
         return []

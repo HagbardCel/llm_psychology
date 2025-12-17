@@ -2,19 +2,16 @@
 Integration tests for version API endpoints.
 """
 
-import pytest
-import trio
-from hypercorn.config import Config as HypercornConfig
-from hypercorn.trio import serve
-from quart import Quart
+import os
+import sys
 
-from trio_server import TrioServer
+import pytest
 from version import API_VERSION, MIN_CLIENT_VERSION
-from container.service_container import ServiceContainer
-from config import Settings
 
 # Use httpx for async HTTP requests in Trio
 import httpx
+
+pytestmark = pytest.mark.trio
 
 
 @pytest.fixture
@@ -23,7 +20,6 @@ async def server_url(test_server_websocket):
     return test_server_websocket["url"]
 
 
-@pytest.mark.trio
 async def test_get_version_info(server_url):
     """Test GET /api/version endpoint."""
     async with httpx.AsyncClient() as client:
@@ -46,7 +42,6 @@ async def test_get_version_info(server_url):
         assert "Z" in data["server_time"] or "+" in data["server_time"]
 
 
-@pytest.mark.trio
 async def test_check_version_compatible(server_url):
     """Test POST /api/version/check with compatible version."""
     async with httpx.AsyncClient() as client:
@@ -73,7 +68,6 @@ async def test_check_version_compatible(server_url):
         assert data["client_version"] == str(API_VERSION)
 
 
-@pytest.mark.trio
 async def test_check_version_incompatible_major(server_url):
     """Test version check with incompatible major version."""
     async with httpx.AsyncClient() as client:
@@ -93,7 +87,6 @@ async def test_check_version_incompatible_major(server_url):
         assert "not compatible" in data["message"].lower()
 
 
-@pytest.mark.trio
 async def test_check_version_too_old(server_url):
     """Test version check with client version below minimum."""
     async with httpx.AsyncClient() as client:
@@ -119,33 +112,32 @@ async def test_check_version_too_old(server_url):
         )
 
 
-@pytest.mark.trio
 async def test_check_version_outdated_but_compatible(server_url):
     """Test version check with outdated but still compatible version."""
     async with httpx.AsyncClient() as client:
-        # Use an older minor version (if possible)
-        if API_VERSION.minor > 0:
-            outdated_version = f"{API_VERSION.major}.{API_VERSION.minor - 1}.0"
+        if API_VERSION.minor == 0:
+            pytest.skip("No older minor version to test against (API_VERSION.minor == 0)")
 
-            response = await client.post(
-                f"{server_url}/api/version/check",
-                json={"client_version": outdated_version, "client_type": "web"},
-            )
+        outdated_version = f"{API_VERSION.major}.{API_VERSION.minor - 1}.0"
 
-            assert response.status_code == 200
-            data = response.json()
+        response = await client.post(
+            f"{server_url}/api/version/check",
+            json={"client_version": outdated_version, "client_type": "web"},
+        )
 
-            # Should be compatible but recommend upgrade
-            assert data["compatible"] is True
-            assert data["upgrade_required"] is False
-            assert data["upgrade_recommended"] is True
-            assert (
-                "outdated" in data["message"].lower()
-                or "consider" in data["message"].lower()
-            )
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should be compatible but recommend upgrade
+        assert data["compatible"] is True
+        assert data["upgrade_required"] is False
+        assert data["upgrade_recommended"] is True
+        assert (
+            "outdated" in data["message"].lower()
+            or "consider" in data["message"].lower()
+        )
 
 
-@pytest.mark.trio
 async def test_check_version_invalid_format(server_url):
     """Test version check with invalid version format."""
     async with httpx.AsyncClient() as client:
@@ -160,7 +152,6 @@ async def test_check_version_invalid_format(server_url):
         assert "invalid" in data["error"].lower()
 
 
-@pytest.mark.trio
 async def test_check_version_missing_fields(server_url):
     """Test version check with missing required fields."""
     async with httpx.AsyncClient() as client:
@@ -179,7 +170,6 @@ async def test_check_version_missing_fields(server_url):
         assert response.status_code == 400
 
 
-@pytest.mark.trio
 async def test_check_version_invalid_client_type(server_url):
     """Test version check with invalid client type."""
     async with httpx.AsyncClient() as client:
@@ -192,7 +182,6 @@ async def test_check_version_invalid_client_type(server_url):
         assert response.status_code == 400
 
 
-@pytest.mark.trio
 async def test_version_endpoints_no_auth_required(server_url):
     """Test that version endpoints do not require authentication."""
     async with httpx.AsyncClient() as client:
@@ -206,3 +195,35 @@ async def test_version_endpoints_no_auth_required(server_url):
             json={"client_version": "1.0.0", "client_type": "console"},
         )
         assert response.status_code == 200
+
+
+async def test_version_check_patch_difference(server_url):
+    """Test that patch version differences don't affect compatibility."""
+    different_patch = f"{API_VERSION.major}.{API_VERSION.minor}.{API_VERSION.patch + 1}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{server_url}/api/version/check",
+            json={"client_version": different_patch, "client_type": "web"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["compatible"] is True
+        assert data["upgrade_required"] is False
+
+
+async def test_console_client_version_check_flow(server_url):
+    """Test the console client's version-check helper against the running backend."""
+    console_ui_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../console-ui/src")
+    )
+    if console_ui_path not in sys.path:
+        sys.path.append(console_ui_path)
+
+    from version_check import check_backend_version
+
+    compatible, message = await check_backend_version(server_url)
+    assert compatible is True
+    assert message

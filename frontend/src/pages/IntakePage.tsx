@@ -1,12 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, AlertTitle, Button } from '@mui/material';
 import { PageContainer, LoadingOverlay } from '../components/shared';
 import { TherapySession } from '../components/TherapySession';
 import { useCurrentUserId } from '../contexts/AppContext';
-import { useAuth } from '../contexts/AuthContext';
 import { useUserProfile } from '../hooks/useUserProfile';
-import { useWebSocket } from '../hooks/useWebSocket';
 import { UserStatus } from '../types';
 
 /**
@@ -15,47 +13,19 @@ import { UserStatus } from '../types';
  */
 export function IntakePage() {
   const userId = useCurrentUserId();
-  const { token, user: authUser } = useAuth();
   const { data: user, isLoading: userLoading } = useUserProfile(userId || '');
   const navigate = useNavigate();
-  const { requestSession } = useWebSocket({
-    userId: authUser?.userId || userId || '',
-    authToken: token || ''
-  });
-  const [isSessionReady, setIsSessionReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (userLoading || !user) return;
 
-    const initIntakeSession = async () => {
-      try {
-        // Verify user is in intake phase
-        if (user.status !== UserStatus.INTAKE_IN_PROGRESS) {
-          console.warn(
-            `User status is ${user.status}, but IntakePage expects INTAKE_IN_PROGRESS. Proceeding anyway.`
-          );
-        }
-
-        // Request session via WebSocket
-        // The useWebSocket hook will emit 'session_started' event
-        // which TherapySession will handle
-        await requestSession();
-
-        // Session will be initialized by TherapySession component
-        setIsSessionReady(true);
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to initialize intake session'
-        );
-        console.error('Intake session error:', err);
-      }
-    };
-
-    initIntakeSession();
-  }, [user, userLoading, requestSession]);
+    if (user.status !== UserStatus.INTAKE_IN_PROGRESS) {
+      console.warn(
+        `User status is ${user.status}, but IntakePage expects INTAKE_IN_PROGRESS. Proceeding anyway.`
+      );
+    }
+  }, [user, userLoading]);
 
   if (error) {
     return (
@@ -70,7 +40,7 @@ export function IntakePage() {
     );
   }
 
-  if (!isSessionReady) {
+  if (userLoading) {
     return <LoadingOverlay message="Preparing your intake session..." fullScreen />;
   }
 

@@ -1,0 +1,356 @@
+make docker-test
+make[1]: Entering directory '/home/fabian/Projects/llm_psychology/psychoanalyst_app'
+docker compose --profile test run --rm test
+============================= test session starts ==============================
+platform linux -- Python 3.11.14, pytest-9.0.1, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.11.0, trio-0.8.0, langsmith-0.4.43
+collecting ... collected 258 items
+
+tests/integration/test_auth_endpoints.py::test_register_new_user PASSED  [  0%]
+tests/integration/test_auth_endpoints.py::test_register_duplicate_username PASSED [  0%]
+tests/integration/test_auth_endpoints.py::test_login_success PASSED      [  1%]
+tests/integration/test_auth_endpoints.py::test_login_invalid_credentials PASSED [  1%]
+tests/integration/test_auth_endpoints.py::test_protected_endpoint_without_token PASSED [  1%]
+tests/integration/test_auth_endpoints.py::test_protected_endpoint_with_valid_token PASSED [  2%]
+tests/integration/test_auth_endpoints.py::test_protected_endpoint_with_expired_token PASSED [  2%]
+tests/integration/test_auth_endpoints.py::test_login_updates_last_login PASSED [  3%]
+tests/integration/test_auth_endpoints.py::test_health_endpoint_no_auth_required PASSED [  3%]
+tests/integration/test_console_client_auth.py::test_user_registration_flow PASSED [  3%]
+tests/integration/test_console_client_auth.py::test_user_login_flow PASSED [  4%]
+tests/integration/test_console_client_auth.py::test_registration_duplicate_username PASSED [  4%]
+tests/integration/test_console_client_auth.py::test_login_invalid_credentials PASSED [  5%]
+tests/integration/test_console_client_auth.py::test_login_wrong_password PASSED [  5%]
+tests/integration/test_console_client_auth.py::test_protected_endpoint_without_token PASSED [  5%]
+tests/integration/test_console_client_auth.py::test_protected_endpoint_with_invalid_token PASSED [  6%]
+tests/integration/test_console_client_auth.py::test_token_based_api_access PASSED [  6%]
+tests/integration/test_console_client_auth.py::test_registration_validation PASSED [  6%]
+tests/integration/test_console_client_auth.py::test_login_validation PASSED [  7%]
+tests/integration/test_console_ui_patient_flow.py::test_complete_patient_journey_intake_to_therapy PASSED [  7%]
+tests/integration/test_console_ui_patient_flow.py::test_intake_flow_only PASSED [  8%]
+tests/integration/test_natural_patient_flow.py::test_natural_patient_flow PASSED [  8%]
+tests/integration/test_session_timer_endpoint.py::test_get_session_timer_success PASSED [  8%]
+tests/integration/test_session_timer_endpoint.py::test_get_session_timer_not_found PASSED [  9%]
+tests/integration/test_session_timer_endpoint.py::test_get_session_timer_requires_auth PASSED [  9%]
+tests/integration/test_session_timer_endpoint.py::test_get_session_timer_with_extensions PASSED [ 10%]
+tests/integration/test_session_timer_endpoint.py::test_get_session_timer_time_up PASSED [ 10%]
+tests/integration/test_trio_agents.py::test_memory_agent_initialization PASSED [ 10%]
+tests/integration/test_trio_agents.py::test_memory_agent_analyze_session PASSED [ 11%]
+tests/integration/test_trio_agents.py::test_memory_agent_get_therapeutic_memory PASSED [ 11%]
+tests/integration/test_trio_agents.py::test_planning_agent_initialization PASSED [ 12%]
+tests/integration/test_trio_agents.py::test_planning_agent_create_initial_plan PASSED [ 12%]
+tests/integration/test_trio_agents.py::test_intake_agent_initialization PASSED [ 12%]
+tests/integration/test_trio_agents.py::test_intake_agent_guest_welcome_direct_response PASSED [ 13%]
+tests/integration/test_trio_agents.py::test_intake_agent_guest_name_collection PASSED [ 13%]
+tests/integration/test_trio_agents.py::test_intake_agent_tier1_extraction PASSED [ 13%]
+tests/integration/test_trio_agents.py::test_reflection_agent_initialization PASSED [ 14%]
+tests/integration/test_trio_agents.py::test_reflection_agent_create_initial_plan PASSED [ 14%]
+tests/integration/test_trio_agents.py::test_reflection_agent_session_enrichment PASSED [ 15%]
+tests/integration/test_trio_agents.py::test_assessment_agent_initialization PASSED [ 15%]
+tests/integration/test_trio_agents.py::test_assessment_agent_process_assessment PASSED [ 15%]
+tests/integration/test_trio_agents.py::test_psychoanalyst_agent_initialization PASSED [ 16%]
+tests/integration/test_trio_agents.py::test_full_agent_workflow PASSED   [ 16%]
+tests/integration/test_trio_agents.py::test_concurrent_agent_operations PASSED [ 17%]
+tests/integration/test_trio_agents.py::test_assessment_agent_process_selection PASSED [ 17%]
+tests/integration/test_trio_agents.py::test_assessment_agent_creates_tier3_and_tier4 PASSED [ 17%]
+tests/integration/test_trio_agents.py::test_reflection_agent_tier3_versioning PASSED [ 18%]
+tests/integration/test_trio_agents.py::test_reflection_agent_tier3_no_update_when_stable PASSED [ 18%]
+tests/integration/test_trio_flow.py::test_trio_database_service_health_check PASSED [ 18%]
+tests/integration/test_trio_flow.py::test_trio_database_service_save_and_retrieve_user PASSED [ 19%]
+tests/integration/test_trio_flow.py::test_health_endpoint PASSED         [ 19%]
+tests/integration/test_trio_flow.py::test_create_session_endpoint_success PASSED [ 20%]
+tests/integration/test_trio_flow.py::test_create_session_endpoint_missing_user_id PASSED [ 20%]
+tests/integration/test_trio_flow.py::test_create_session_endpoint_nonexistent_user PASSED [ 20%]
+tests/integration/test_trio_flow.py::test_create_session_and_verify_in_database PASSED [ 21%]
+tests/integration/test_trio_flow.py::test_structured_concurrency_with_nursery PASSED [ 21%]
+tests/integration/test_trio_flow.py::test_get_user_status_endpoint PASSED [ 22%]
+tests/integration/test_trio_orchestration.py::test_workflow_engine_get_new_user_state PASSED [ 22%]
+tests/integration/test_trio_orchestration.py::test_workflow_engine_get_existing_user_state PASSED [ 22%]
+tests/integration/test_trio_orchestration.py::test_workflow_engine_get_current_agent PASSED [ 23%]
+tests/integration/test_trio_orchestration.py::test_workflow_engine_transition PASSED [ 23%]
+tests/integration/test_trio_orchestration.py::test_workflow_engine_can_transition PASSED [ 24%]
+tests/integration/test_trio_orchestration.py::test_conversation_manager_add_message PASSED [ 24%]
+tests/integration/test_trio_orchestration.py::test_conversation_manager_stream_response PASSED [ 24%]
+tests/integration/test_trio_orchestration.py::test_conversation_manager_rag_filter_source_and_content PASSED [ 25%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_create_user_profile PASSED [ 25%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_start_session PASSED [ 25%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_get_user_state PASSED [ 26%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_process_message_new_user PASSED [ 26%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_concurrent_processing PASSED [ 27%]
+tests/integration/test_trio_orchestration.py::test_orchestrator_creates_agents PASSED [ 27%]
+tests/integration/test_trio_orchestration.py::test_full_orchestration_flow PASSED [ 27%]
+tests/integration/test_version_endpoints.py::test_get_version_info PASSED [ 28%]
+tests/integration/test_version_endpoints.py::test_check_version_compatible PASSED [ 28%]
+tests/integration/test_version_endpoints.py::test_check_version_incompatible_major PASSED [ 29%]
+tests/integration/test_version_endpoints.py::test_check_version_too_old PASSED [ 29%]
+tests/integration/test_version_endpoints.py::test_check_version_outdated_but_compatible SKIPPED [ 29%]
+tests/integration/test_version_endpoints.py::test_check_version_invalid_format PASSED [ 30%]
+tests/integration/test_version_endpoints.py::test_check_version_missing_fields PASSED [ 30%]
+tests/integration/test_version_endpoints.py::test_check_version_invalid_client_type PASSED [ 31%]
+tests/integration/test_version_endpoints.py::test_version_endpoints_no_auth_required PASSED [ 31%]
+tests/integration/test_version_endpoints.py::test_version_check_patch_difference PASSED [ 31%]
+tests/integration/test_version_endpoints.py::test_console_client_version_check_flow PASSED [ 32%]
+tests/integration/test_websocket_protocol_contract.py::test_ws_connected_and_session_started_contract PASSED [ 32%]
+tests/integration/test_websocket_protocol_contract.py::test_ws_chat_response_chunk_contract PASSED [ 32%]
+tests/integration/test_websocket_protocol_contract.py::test_ws_missing_user_id_is_rejected PASSED [ 33%]
+tests/real_llm/test_full_patient_flow.py::test_full_patient_journey_with_real_llm SKIPPED [ 33%]
+tests/test_entry_points.py::test_server_entry_point_importable PASSED    [ 34%]
+tests/test_entry_points.py::test_main_entry_point_importable PASSED      [ 34%]
+tests/test_trio_validation.py::test_trio_import PASSED                   [ 34%]
+tests/test_trio_validation.py::test_trio_sleep PASSED                    [ 35%]
+tests/test_trio_validation.py::test_trio_nursery PASSED                  [ 35%]
+tests/test_trio_validation.py::test_trio_database_service PASSED         [ 36%]
+tests/test_trio_validation.py::test_trio_database_concurrent_operations PASSED [ 36%]
+tests/unit/test_auth_service.py::TestAuthService::test_hash_password PASSED [ 36%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_password_correct PASSED [ 37%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_password_incorrect PASSED [ 37%]
+tests/unit/test_auth_service.py::TestAuthService::test_create_access_token PASSED [ 37%]
+tests/unit/test_auth_service.py::TestAuthService::test_create_access_token_custom_expiry PASSED [ 38%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_token_valid PASSED [ 38%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_token_expired PASSED [ 39%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_token_invalid_signature PASSED [ 39%]
+tests/unit/test_auth_service.py::TestAuthService::test_verify_token_malformed PASSED [ 39%]
+tests/unit/test_auth_service.py::TestAuthService::test_create_login_response PASSED [ 40%]
+tests/unit/test_auth_service.py::TestAuthService::test_generate_user_id PASSED [ 40%]
+tests/unit/test_auth_service.py::TestAuthService::test_credentials_to_user_info PASSED [ 41%]
+tests/unit/test_auth_service.py::TestAuthService::test_hash_password_different_each_time PASSED [ 41%]
+tests/unit/test_auth_service.py::TestAuthService::test_token_payload_model PASSED [ 41%]
+tests/unit/test_auth_service.py::TestAuthService::test_multiple_tokens_for_same_user PASSED [ 42%]
+tests/unit/test_llm_service.py::test_generate_response_without_context_uses_human_message PASSED [ 42%]
+tests/unit/test_llm_service.py::test_generate_response_with_context_maps_roles PASSED [ 43%]
+tests/unit/test_llm_service.py::test_generate_response_wraps_exceptions PASSED [ 43%]
+tests/unit/test_llm_service.py::test_generate_response_stream_collects_non_empty_chunks PASSED [ 43%]
+tests/unit/test_llm_service.py::test_generate_structured_output_uses_with_structured_output PASSED [ 44%]
+tests/unit/test_llm_service.py::test_trio_rate_limiter_honors_capacity_and_rate PASSED [ 44%]
+tests/unit/test_multi_model_config.py::test_agent_specific_models_from_config PASSED [ 44%]
+tests/unit/test_multi_model_config.py::test_fallback_to_default_model PASSED [ 45%]
+tests/unit/test_multi_model_config.py::test_all_agent_models_configurable PASSED [ 45%]
+tests/unit/test_multi_model_config.py::test_config_class_fields PASSED   [ 46%]
+tests/unit/test_multi_model_config.py::test_default_llm_service_unchanged PASSED [ 46%]
+tests/unit/test_rag_service.py::test_retrieve_relevant_knowledge_ranks_best_match_first PASSED [ 46%]
+tests/unit/test_rag_service.py::test_retrieve_relevant_knowledge_filter_source PASSED [ 47%]
+tests/unit/test_rag_service.py::test_get_knowledge_by_source_returns_all_chunks PASSED [ 47%]
+tests/unit/test_rag_service.py::test_index_persists_and_loads_from_disk PASSED [ 48%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_generate_pydantic_schema PASSED [ 48%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_generate_enum_schema PASSED [ 48%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_dataclass_to_pydantic_conversion PASSED [ 49%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_schema_has_metadata PASSED [ 49%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_enum_enhancement_for_typescript PASSED [ 50%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_optional_fields_handled_correctly PASSED [ 50%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_datetime_fields_serialized_as_strings PASSED [ 50%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_all_models_have_schemas PASSED [ 51%]
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_committed_schemas_up_to_date PASSED [ 51%]
+tests/unit/test_schema_generation.py::TestSchemaIntegration::test_backend_models_match_schemas PASSED [ 51%]
+tests/unit/test_schema_generation.py::TestSchemaIntegration::test_enum_values_consistent PASSED [ 52%]
+tests/unit/test_schema_generation.py::TestSchemaIntegration::test_workflow_state_enum_consistency PASSED [ 52%]
+tests/unit/test_service_container.py::TestServiceContainer::test_container_initialization PASSED [ 53%]
+tests/unit/test_service_container.py::TestServiceContainer::test_service_registration PASSED [ 53%]
+tests/unit/test_service_container.py::TestServiceContainer::test_factory_registration PASSED [ 53%]
+tests/unit/test_service_container.py::TestServiceContainer::test_singleton_behavior PASSED [ 54%]
+tests/unit/test_service_container.py::TestServiceContainer::test_unknown_service_error PASSED [ 54%]
+tests/unit/test_service_container.py::TestServiceContainer::test_list_services PASSED [ 55%]
+tests/unit/test_service_container.py::TestServiceContainer::test_container_clear PASSED [ 55%]
+tests/unit/test_service_container.py::TestServiceContainer::test_is_registered PASSED [ 55%]
+tests/unit/test_service_container.py::TestServiceContainer::test_string_representation PASSED [ 56%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_intake_agent PASSED [ 56%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_assessment_agent PASSED [ 56%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_psychoanalyst_agent PASSED [ 57%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_reflection_agent PASSED [ 57%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_memory_agent PASSED [ 58%]
+tests/unit/test_service_container.py::TestServiceContainerAgentCreation::test_create_planning_agent PASSED [ 58%]
+tests/unit/test_service_container.py::TestServiceContainerHealthCheck::test_health_check_no_services PASSED [ 58%]
+tests/unit/test_service_container.py::TestServiceContainerHealthCheck::test_health_check_healthy_services PASSED [ 59%]
+tests/unit/test_service_container.py::TestServiceContainerHealthCheck::test_health_check_unhealthy_services PASSED [ 59%]
+tests/unit/test_service_container.py::TestServiceContainerHealthCheck::test_health_check_service_without_health_check PASSED [ 60%]
+tests/unit/test_service_container.py::TestServiceContainerHealthCheck::test_health_check_service_health_check_exception PASSED [ 60%]
+tests/unit/test_service_container.py::TestServiceContainerShutdown::test_shutdown_clears_instances PASSED [ 60%]
+tests/unit/test_session_timer.py::test_time_elapsed_calculation PASSED   [ 61%]
+tests/unit/test_session_timer.py::test_time_remaining_calculation PASSED [ 61%]
+tests/unit/test_session_timer.py::test_is_time_up PASSED                 [ 62%]
+tests/unit/test_session_timer.py::test_is_time_not_up PASSED             [ 62%]
+tests/unit/test_session_timer.py::test_can_extend PASSED                 [ 62%]
+tests/unit/test_session_timer.py::test_extension_adds_time PASSED        [ 63%]
+tests/unit/test_session_timer.py::test_time_up_with_extensions PASSED    [ 63%]
+tests/unit/test_style_service.py::TestStyleService::test_init_with_default_directory PASSED [ 63%]
+tests/unit/test_style_service.py::TestStyleService::test_get_available_styles PASSED [ 64%]
+tests/unit/test_style_service.py::TestStyleService::test_get_style_pack PASSED [ 64%]
+tests/unit/test_style_service.py::TestStyleService::test_get_style_description PASSED [ 65%]
+tests/unit/test_style_service.py::TestStyleService::test_get_agent_prompts PASSED [ 65%]
+tests/unit/test_style_service.py::TestStyleService::test_get_knowledge_source PASSED [ 65%]
+tests/unit/test_style_service.py::TestStylePack::test_style_pack_loading PASSED [ 66%]
+tests/unit/test_style_service.py::TestStylePack::test_style_pack_missing_components PASSED [ 66%]
+tests/unit/test_style_service.py::TestStylePack::test_style_pack_empty_directory PASSED [ 67%]
+tests/unit/test_style_service.py::TestStyleServiceIntegration::test_load_style_packs_from_custom_directory PASSED [ 67%]
+tests/unit/test_style_service.py::TestStyleServiceEdgeCases::test_nonexistent_styles_directory PASSED [ 67%]
+tests/unit/test_style_service.py::TestStyleServiceEdgeCases::test_style_pack_with_empty_files PASSED [ 68%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_valid_basic_background PASSED [ 68%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_alias_required PASSED [ 68%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_alias_min_length PASSED [ 69%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_alias_max_length PASSED [ 69%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_cultural_background_max_length PASSED [ 70%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_default_primary_language PASSED [ 70%]
+tests/unit/test_tier_data_models.py::TestBasicPatientBackground::test_optional_fields PASSED [ 70%]
+tests/unit/test_tier_data_models.py::TestFamilyConstellation::test_all_fields_optional PASSED [ 71%]
+tests/unit/test_tier_data_models.py::TestFamilyConstellation::test_field_max_lengths PASSED [ 71%]
+tests/unit/test_tier_data_models.py::TestFamilyConstellation::test_valid_family_data PASSED [ 72%]
+tests/unit/test_tier_data_models.py::TestPatientProfile::test_valid_patient_profile PASSED [ 72%]
+tests/unit/test_tier_data_models.py::TestPatientProfile::test_json_serialization_roundtrip PASSED [ 72%]
+tests/unit/test_tier_data_models.py::TestDetailedSession::test_basic_session_fields PASSED [ 73%]
+tests/unit/test_tier_data_models.py::TestDetailedSession::test_tier2_enrichment_fields PASSED [ 73%]
+tests/unit/test_tier_data_models.py::TestDetailedSession::test_default_enriched_false PASSED [ 74%]
+tests/unit/test_tier_data_models.py::TestDetailedSession::test_psychological_summary_max_length PASSED [ 74%]
+tests/unit/test_tier_data_models.py::TestCurrentFocus::test_valid_current_focus PASSED [ 74%]
+tests/unit/test_tier_data_models.py::TestCurrentFocus::test_theme_required PASSED [ 75%]
+tests/unit/test_tier_data_models.py::TestCurrentFocus::test_theme_max_length PASSED [ 75%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysis::test_valid_patient_analysis PASSED [ 75%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysis::test_json_serialization PASSED [ 76%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysisVersion::test_version_creation PASSED [ 76%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysisVersion::test_auto_generated_fields PASSED [ 77%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysisVersion::test_version_min_value PASSED [ 77%]
+tests/unit/test_tier_data_models.py::TestPatientAnalysisVersion::test_version_linking PASSED [ 77%]
+tests/unit/test_tier_data_models.py::TestTherapyPlanTier4::test_tier4_fields_required PASSED [ 78%]
+tests/unit/test_tier_data_models.py::TestTherapyPlanTier4::test_custom_tier4_data PASSED [ 78%]
+tests/unit/test_tier_data_models.py::TestTherapyPlanTier4::test_serialization_roundtrip PASSED [ 79%]
+tests/unit/test_tier_data_models.py::TestModelIntegration::test_complete_patient_file_structure PASSED [ 79%]
+tests/unit/test_tier_data_models.py::TestModelIntegration::test_serialization_preserves_nested_structure PASSED [ 79%]
+tests/unit/test_trio_agent_orchestrator.py::test_handle_agent_response_await_selection PASSED [ 80%]
+tests/unit/test_trio_agent_orchestrator.py::test_handle_agent_response_transition PASSED [ 80%]
+tests/unit/test_trio_agent_orchestrator.py::test_handle_agent_response_continue PASSED [ 81%]
+tests/unit/test_trio_agent_orchestrator.py::test_handle_agent_response_complete PASSED [ 81%]
+tests/unit/test_trio_agent_orchestrator.py::test_create_therapy_plan_success PASSED [ 81%]
+tests/unit/test_trio_agent_orchestrator.py::test_create_therapy_plan_invalid_style PASSED [ 82%]
+tests/unit/test_trio_agent_orchestrator.py::test_create_therapy_plan_prevents_duplicate_v1 PASSED [ 82%]
+tests/unit/test_trio_db_service.py::test_save_and_load_therapy_plan_with_briefing PASSED [ 82%]
+tests/unit/test_trio_db_service.py::test_save_therapy_plan_without_briefing PASSED [ 83%]
+tests/unit/test_trio_db_service.py::test_update_therapy_plan_with_briefing PASSED [ 83%]
+tests/unit/test_trio_db_service.py::test_get_latest_therapy_plan_with_briefing PASSED [ 84%]
+tests/unit/test_trio_db_service.py::test_database_migration_adds_session_briefing_column PASSED [ 84%]
+tests/unit/test_trio_db_service.py::test_create_user_credentials PASSED  [ 84%]
+tests/unit/test_trio_db_service.py::test_create_duplicate_username PASSED [ 85%]
+tests/unit/test_trio_db_service.py::test_get_user_credentials_not_found PASSED [ 85%]
+tests/unit/test_trio_db_service.py::test_update_last_login PASSED        [ 86%]
+tests/unit/test_trio_db_service.py::test_get_user_by_username PASSED     [ 86%]
+tests/unit/test_trio_db_service.py::test_get_user_by_username_no_profile PASSED [ 86%]
+tests/unit/test_trio_db_service.py::test_auth_tables_migration PASSED    [ 87%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_fresh PASSED [ 87%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_fresh_within_validity PASSED [ 87%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_stale PASSED [ 88%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_very_stale PASSED [ 88%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_invalid_no_timestamp PASSED [ 89%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_load_patient_context_includes_tiers PASSED [ 89%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_get_briefing_status_invalid_bad_timestamp PASSED [ 89%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_build_resumption_prompt_fresh_briefing PASSED [ 90%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_build_resumption_prompt_stale_briefing PASSED [ 90%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_build_resumption_prompt_includes_therapy_style PASSED [ 91%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_build_resumption_prompt_includes_key_themes PASSED [ 91%]
+tests/unit/test_trio_psychoanalyst_agent.py::test_build_resumption_prompt_includes_emotional_state PASSED [ 91%]
+tests/unit/test_trio_reflection_agent.py::test_generate_session_briefing_structure PASSED [ 92%]
+tests/unit/test_trio_reflection_agent.py::test_briefing_generation_failure_propagates PASSED [ 92%]
+tests/unit/test_trio_reflection_agent.py::test_process_reflection_updates_plan_with_briefing PASSED [ 93%]
+tests/unit/test_trio_server.py::TestTrioServer::test_server_initializes_database_service PASSED [ 93%]
+tests/unit/test_trio_server.py::TestTrioServer::test_server_health_check_after_initialization PASSED [ 93%]
+tests/unit/test_trio_server.py::TestTrioServer::test_database_initialization_order PASSED [ 94%]
+tests/unit/test_version.py::TestVersion::test_version_creation PASSED    [ 94%]
+tests/unit/test_version.py::TestVersion::test_version_string_representation PASSED [ 94%]
+tests/unit/test_version.py::TestVersion::test_version_from_string_valid PASSED [ 95%]
+tests/unit/test_version.py::TestVersion::test_version_from_string_invalid_format PASSED [ 95%]
+tests/unit/test_version.py::TestVersion::test_version_equality PASSED    [ 96%]
+tests/unit/test_version.py::TestVersion::test_version_comparison PASSED  [ 96%]
+tests/unit/test_version.py::TestVersionCompatibility::test_compatible_same_version PASSED [ 96%]
+tests/unit/test_version.py::TestVersionCompatibility::test_compatible_older_minor_version PASSED [ 97%]
+tests/unit/test_version.py::TestVersionCompatibility::test_compatible_different_patch_version PASSED [ 97%]
+tests/unit/test_version.py::TestVersionCompatibility::test_incompatible_different_major_version PASSED [ 98%]
+tests/unit/test_version.py::TestVersionCompatibility::test_incompatible_newer_minor_version PASSED [ 98%]
+tests/unit/test_version.py::TestVersionCompatibility::test_edge_case_zero_versions PASSED [ 98%]
+tests/unit/test_version.py::TestAPIVersionConstants::test_api_version_defined PASSED [ 99%]
+tests/unit/test_version.py::TestAPIVersionConstants::test_min_client_version_defined PASSED [ 99%]
+tests/unit/test_version.py::TestAPIVersionConstants::test_min_client_version_not_greater_than_api_version PASSED [100%]
+
+=============================== warnings summary ===============================
+src/models/api_models.py:42
+  /app/tests/../src/models/api_models.py:42: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class WorkflowNextActionResponse(BaseModel):
+
+src/models/version_models.py:18
+  /app/tests/../src/models/version_models.py:18: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    api_version: str = Field(
+
+src/models/version_models.py:23
+  /app/tests/../src/models/version_models.py:23: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    min_client_version: str = Field(
+
+src/models/version_models.py:28
+  /app/tests/../src/models/version_models.py:28: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    server_time: str = Field(
+
+src/models/version_models.py:42
+  /app/tests/../src/models/version_models.py:42: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    client_version: str = Field(
+
+src/models/version_models.py:47
+  /app/tests/../src/models/version_models.py:47: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    client_type: Literal["console", "web"] = Field(
+
+src/models/version_models.py:62
+  /app/tests/../src/models/version_models.py:62: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    message: str = Field(
+
+src/models/data_models.py:105
+  /app/tests/../src/models/data_models.py:105: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    initial_goals: list[str] = Field(
+
+src/models/data_models.py:116
+  /app/tests/../src/models/data_models.py:116: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    planned_interventions: list[str] = Field(
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+src/models/structured_output_models.py:19
+  /app/tests/../src/models/structured_output_models.py:19: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    dominant_affects: list[str] = Field(..., min_items=1)
+
+src/models/structured_output_models.py:20
+  /app/tests/../src/models/structured_output_models.py:20: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    key_themes: list[str] = Field(..., min_items=1)
+
+src/models/structured_output_models.py:89
+  /app/tests/../src/models/structured_output_models.py:89: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    initial_goals: list[str] = Field(..., min_items=1)
+
+src/models/structured_output_models.py:91
+  /app/tests/../src/models/structured_output_models.py:91: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    planned_interventions: list[str] = Field(..., min_items=1)
+
+src/models/structured_output_models.py:118
+  /app/tests/../src/models/structured_output_models.py:118: PydanticDeprecatedSince20: `min_items` is deprecated and will be removed, use `min_length` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    key_themes: list[str] = Field(..., min_items=1)
+
+../usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854
+  /usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    from crypt import crypt as _crypt
+
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_dataclass_to_pydantic_conversion
+tests/unit/test_schema_generation.py::TestSchemaGeneration::test_committed_schemas_up_to_date
+  /usr/local/lib/python3.11/site-packages/pydantic/json_schema.py:2448: PydanticJsonSchemaWarning: Default value <dataclasses._MISSING_TYPE object at 0x7f4d4fecaed0> is not JSON serializable; excluding default from JSON schema [non-serializable-default]
+    warnings.warn(message, PydanticJsonSchemaWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========== 256 passed, 2 skipped, 20 warnings in 123.01s (0:02:03) ============
+make[1]: Leaving directory '/home/fabian/Projects/llm_psychology/psychoanalyst_app'
+make docker-test-frontend
+make[1]: Entering directory '/home/fabian/Projects/llm_psychology/psychoanalyst_app'
+docker compose run --rm frontend npm test
+
+> psychoanalyst-frontend@1.0.0 test
+> jest
+
+make[1]: Leaving directory '/home/fabian/Projects/llm_psychology/psychoanalyst_app'

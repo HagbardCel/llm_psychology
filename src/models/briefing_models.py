@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class BriefingStatus(Enum):
@@ -26,8 +26,9 @@ class EmotionalSummary(BaseModel):
         ..., max_length=500, description="Contextual note about emotional progression"
     )
 
-    @validator("trend")
-    def validate_trend(cls, v):
+    @field_validator("trend")
+    @classmethod
+    def validate_trend(cls, v: str) -> str:
         allowed_trends = ["improving", "stable", "declining", "fluctuating"]
         if v not in allowed_trends:
             raise ValueError(f"Trend must be one of {allowed_trends}")
@@ -47,8 +48,9 @@ class KeyTheme(BaseModel):
     first_appearance: str = Field(..., description="Session ID where first discussed")
     last_discussed: str = Field(..., description="Session ID where last discussed")
 
-    @validator("status")
-    def validate_status(cls, v):
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
         allowed_statuses = [
             "ongoing",
             "newly introduced",
@@ -60,8 +62,9 @@ class KeyTheme(BaseModel):
             raise ValueError(f"Status must be one of {allowed_statuses}")
         return v
 
-    @validator("priority")
-    def validate_priority(cls, v):
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: str) -> str:
         allowed_priorities = ["high", "medium", "low"]
         if v not in allowed_priorities:
             raise ValueError(f"Priority must be one of {allowed_priorities}")
@@ -76,8 +79,8 @@ class RecommendedApproach(BaseModel):
     things_to_avoid: str
 
     # More explicit guidance
-    suggested_questions: list[str] = Field(max_items=3)
-    therapeutic_goals_for_session: list[str] = Field(max_items=3)
+    suggested_questions: list[str] = Field(max_length=3)
+    therapeutic_goals_for_session: list[str] = Field(max_length=3)
 
 
 class SessionBriefing(BaseModel):
@@ -95,27 +98,30 @@ class SessionBriefing(BaseModel):
     plan_progression_notes: str = Field(..., max_length=1000)
 
     relationship_quality: str
-    continuity_points: list[str] = Field(max_items=10)
+    continuity_points: list[str] = Field(max_length=10)
     emotional_summary: EmotionalSummary
-    key_themes: list[KeyTheme] = Field(max_items=10)
-    progress_highlights: list[str] = Field(max_items=10)
-    unresolved_issues: list[str] = Field(max_items=10)
+    key_themes: list[KeyTheme] = Field(max_length=10)
+    progress_highlights: list[str] = Field(max_length=10)
+    unresolved_issues: list[str] = Field(max_length=10)
     recommended_approach: RecommendedApproach
 
-    @validator("continuity_points")
-    def validate_continuity_points(cls, v):
+    @field_validator("continuity_points")
+    @classmethod
+    def validate_continuity_points(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("At least one continuity point required")
         return v
 
-    @validator("key_themes")
-    def validate_key_themes(cls, v):
+    @field_validator("key_themes")
+    @classmethod
+    def validate_key_themes(cls, v: list[KeyTheme]) -> list[KeyTheme]:
         if not v:
             raise ValueError("At least one key theme required")
         return v
 
-    @validator("narrative_handoff")
-    def validate_narrative_handoff(cls, v):
+    @field_validator("narrative_handoff")
+    @classmethod
+    def validate_narrative_handoff(cls, v: str) -> str:
         if len(v.strip()) < 50:
             raise ValueError("Narrative handoff too short - needs substantial summary")
         return v

@@ -1,92 +1,169 @@
-from unittest.mock import Mock
+from __future__ import annotations
 
 import pytest
+import trio
+import trio.testing
+
+from exceptions import LLMServiceError
+from services.llm_service import LLMService, TrioRateLimiter
 
 
-class TestLLMService:
-    """Unit tests for LLMService."""
+class _FakeChatModel:
+    def __init__(self) -> None:
+        self.invoke_calls: list[list[object]] = []
+        self.stream_calls: list[list[object]] = []
+        self.with_structured_output_calls: list[tuple[object, str]] = []
 
-    def test_init(self, mock_llm_service):
-        """Test LLMService initialization."""
-        # The mock_llm_service fixture already creates an LLMService instance
-        assert mock_llm_service is not None
-        assert hasattr(mock_llm_service, "generate_response")
+        self.response_content: str = "fake response"
+        self.raise_on_invoke: Exception | None = None
+        self.stream_chunk_contents: list[str] = ["Hello ", "", "world!"]
+        self.structured_result: object = {"ok": True}
+        self.last_runnable: object | None = None
 
-    def test_generate_response_without_context(self, mock_llm_service):
-        """Test generating a response without context."""
-        mock_llm_service.generate_response = Mock(return_value="Test response")
+    def invoke(self, messages):
+        self.invoke_calls.append(messages)
+        if self.raise_on_invoke:
+            raise self.raise_on_invoke
+        return type("Resp", (), {"content": self.response_content})()
 
-        response = mock_llm_service.generate_response("Test prompt")
-        assert response == "Test response"
-        mock_llm_service.generate_response.assert_called_once_with("Test prompt")
+    def stream(self, messages):
+        self.stream_calls.append(messages)
+        for content in self.stream_chunk_contents:
+            yield type("Chunk", (), {"content": content})()
 
-    def test_generate_response_with_context(self, mock_llm_service):
-        """Test generating a response with conversation context."""
-        mock_llm_service.generate_response = Mock(return_value="Response with context")
+    def with_structured_output(self, schema, method: str = "json_schema"):
+        self.with_structured_output_calls.append((schema, method))
 
-        context = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
-        ]
+        parent = self
 
-        response = mock_llm_service.generate_response("How are you?", context)
-        assert response == "Response with context"
+        class _Runnable:
+            def __init__(self):
+                self.invoke_calls: list[str] = []
 
-    def test_generate_structured_response(self, mock_llm_service):
-        """Test generating a structured response."""
-        mock_response = {"key": "value", "number": 42}
-        mock_llm_service.generate_structured_response = Mock(return_value=mock_response)
+            def invoke(self, prompt: str):
+                self.invoke_calls.append(prompt)
+                return parent.structured_result
 
-        response = mock_llm_service.generate_structured_response(
-            "Test prompt", "Expected format"
-        )
-        assert response == mock_response
-        mock_llm_service.generate_structured_response.assert_called_once_with(
-            "Test prompt", "Expected format"
-        )
-
-    def test_create_prompt_template(self, mock_llm_service):
-        """Test creating a prompt template."""
-        template = "Hello {name}, you are {age} years old."
-        input_variables = ["name", "age"]
-
-        # Since we're using a mock, we'll test that the method can be called
-        # In a real test, we'd check the returned template object
-        try:
-            result = mock_llm_service.create_prompt_template(template, input_variables)
-            # If using a real LLMService, we'd assert isinstance(result, PromptTemplate)
-        except Exception:
-            # With a mock, this might fail, which is expected
-            pass
-
-    def test_run_prompt_chain(self, mock_llm_service):
-        """Test running a prompt chain."""
-        mock_llm_service.run_prompt_chain = Mock(return_value="Chain response")
-
-        response = mock_llm_service.run_prompt_chain(None, {"input": "test"})
-        assert response == "Chain response"
-
-    def test_generate_response_error_handling(self, mock_llm_service):
-        """Test error handling in generate_response."""
-        mock_llm_service.generate_response = Mock(side_effect=Exception("API Error"))
-
-        # Since we're using a mock, we can't test the actual error handling
-        # In a real test, we'd mock the LLM call to raise an exception
-        # and verify that the service returns the fallback message
-        pass
+        runnable = _Runnable()
+        self.last_runnable = runnable
+        return runnable
 
 
-# Integration test for the real LLMService
-# This class uses an autouse fixture to skip itself if --no-mocks is not set
-class TestLLMServiceIntegration:
-    """Integration tests for LLMService with real API calls."""
+@pytest.fixture
+def fake_chat_model(monkeypatch) -> _FakeChatModel:
+    import services.llm_service as llm_module
 
-    @pytest.fixture(autouse=True)
-    def skip_if_mocks_enabled(self, request):
-        if not request.config.getoption("--no-mocks"):
-            pytest.skip("Skipping real integration tests because --no-mocks is not set")
+    fake = _FakeChatModel()
+    monkeypatch.setattr(
+        llm_module,
+        "ChatGoogleGenerativeAI",
+        lambda **_kwargs: fake,
+    )
+    return fake
 
-    def test_real_generate_response(self):
-        """Test generating a real response (requires API key)."""
-        # This test would be run manually with a real API key
-        pass
+
+def test_generate_response_without_context_uses_human_message(fake_chat_model):
+    from langchain_core.messages import HumanMessage
+
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    fake_chat_model.response_content = "ok"
+
+    result = service.generate_response("Hello")
+    assert result == "ok"
+
+    assert len(fake_chat_model.invoke_calls) == 1
+    messages = fake_chat_model.invoke_calls[0]
+    assert len(messages) == 1
+    assert isinstance(messages[0], HumanMessage)
+    assert messages[0].content == "Hello"
+
+
+def test_generate_response_with_context_maps_roles(fake_chat_model):
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    fake_chat_model.response_content = "ok"
+
+    context = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello"},
+    ]
+
+    result = service.generate_response("How are you?", context=context)
+    assert result == "ok"
+
+    assert len(fake_chat_model.invoke_calls) == 1
+    messages = fake_chat_model.invoke_calls[0]
+    assert [type(m) for m in messages] == [
+        SystemMessage,
+        HumanMessage,
+        AIMessage,
+        HumanMessage,
+    ]
+    assert messages[0].content == "You are helpful."
+    assert messages[-1].content == "How are you?"
+
+
+def test_generate_response_wraps_exceptions(fake_chat_model):
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    fake_chat_model.raise_on_invoke = RuntimeError("boom")
+
+    with pytest.raises(LLMServiceError) as exc_info:
+        service.generate_response("Hello")
+
+    msg = str(exc_info.value)
+    assert "LLM generation failed" in msg
+    assert "STACKTRACE" in msg
+    assert "RuntimeError" in msg
+
+
+@pytest.mark.trio
+async def test_generate_response_stream_collects_non_empty_chunks(fake_chat_model, monkeypatch):
+    import services.llm_service as llm_module
+
+    async def _run_sync(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(llm_module.trio.to_thread, "run_sync", _run_sync)
+
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    fake_chat_model.stream_chunk_contents = ["a", "", "b"]
+
+    chunks = await service.generate_response_stream("Hello", context=None)
+    assert chunks == ["a", "b"]
+
+    assert len(fake_chat_model.stream_calls) == 1
+
+
+def test_generate_structured_output_uses_with_structured_output(fake_chat_model):
+    from pydantic import BaseModel
+
+    class _Schema(BaseModel):
+        ok: bool
+
+    expected = _Schema(ok=True)
+    fake_chat_model.structured_result = expected
+
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    result = service.generate_structured_output("prompt", _Schema)
+
+    assert result == expected
+    assert fake_chat_model.with_structured_output_calls == [(_Schema, "json_schema")]
+
+
+def test_trio_rate_limiter_honors_capacity_and_rate():
+    async def _main():
+        limiter = TrioRateLimiter(rate=1.0, capacity=2.0)  # 1 token/sec, burst 2
+        # Use up the burst without waiting.
+        await limiter.acquire()
+        await limiter.acquire()
+
+        t0 = trio.current_time()
+        await limiter.acquire()  # requires waiting ~1s for refill
+        t1 = trio.current_time()
+
+        assert t1 - t0 == pytest.approx(1.0, abs=1e-6)
+
+    # Without auto-jumping, MockClock time does not advance and sleeps can hang.
+    trio.run(_main, clock=trio.testing.MockClock(autojump_threshold=0.0))

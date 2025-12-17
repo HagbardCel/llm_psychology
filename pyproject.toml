@@ -21,16 +21,6 @@ select = [
     "UP",   # pyupgrade
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = [
-    "--verbose",
-    "--tb=short",
-]
-
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

@@ -20,6 +20,7 @@ from container.service_container import ServiceContainer
 async def test_server(tmp_path, mock_llm_service, mock_rag_service):
     """Create a test server with authentication enabled."""
     from trio_server import TrioServer
+    import socket
 
     # Use temporary database
     test_db_path = str(tmp_path / "test_auth.db")
@@ -43,12 +44,33 @@ async def test_server(tmp_path, mock_llm_service, mock_rag_service):
     await db_service.initialize()
 
     # Create server
-    server = TrioServer(container, host="127.0.0.1", port=8888)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    server = TrioServer(container, host="127.0.0.1", port=port)
 
     # Start server in background
     async with trio.open_nursery() as nursery:
         await nursery.start(server.run)
-        await trio.sleep(0.2)  # Give server time to start
+
+        # Verify server is actually accepting connections via health check
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            for _ in range(20):  # 2 seconds max (20 * 0.1s)
+                try:
+                    response = await client.get(
+                        f"http://127.0.0.1:{port}/health", timeout=1.0
+                    )
+                    if response.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await trio.sleep(0.1)
+            else:
+                raise RuntimeError("Server failed to respond to health checks")
 
         # Provide server info to test
         yield {
@@ -220,12 +242,13 @@ async def test_protected_endpoint_with_valid_token(test_server):
 
         # Access protected endpoint with token
         response = await client.get(
-            f"{base_url}/api/user/status?user_id=test",
+            f"{base_url}/api/auth/me",
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        # Should not be 401 (may be 200 or other depending on endpoint logic)
-        assert response.status_code != 401
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "protected_test"
 
 
 @pytest.mark.trio
@@ -247,12 +270,10 @@ async def test_protected_endpoint_with_expired_token(test_server):
         access_token_expire_minutes=1,
     )
 
-    # Create expired token (0 seconds expiration)
+    # Create an already-expired token (avoid time-based sleeps in tests).
     token = auth_service.create_access_token(
-        "test_user", "testuser", expires_delta=timedelta(seconds=0)
+        "test_user", "testuser", expires_delta=timedelta(seconds=-1)
     )
-
-    await trio.sleep(0.1)  # Wait for token to expire
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
@@ -271,6 +292,7 @@ async def test_login_updates_last_login(test_server):
     import httpx
 
     base_url = test_server["base_url"]
+    db_service = test_server["db_service"]
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Register user
@@ -290,13 +312,20 @@ async def test_login_updates_last_login(test_server):
         )
         assert response1.status_code == 200
 
-        await trio.sleep(1)
+        creds1 = await db_service.get_user_credentials("lastlogintest")
+        assert creds1 is not None
+        assert creds1.last_login is not None
 
         response2 = await client.post(
             f"{base_url}/api/auth/login",
             json={"username": "lastlogintest", "password": "testpass123"},
         )
         assert response2.status_code == 200
+
+        creds2 = await db_service.get_user_credentials("lastlogintest")
+        assert creds2 is not None
+        assert creds2.last_login is not None
+        assert creds2.last_login != creds1.last_login
 
 
 @pytest.mark.trio

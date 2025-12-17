@@ -12,6 +12,7 @@ Pure Trio implementation using structured concurrency.
 """
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -22,6 +23,7 @@ from agents.trio_memory_agent import TrioMemoryAgent
 from context.user_context import UserContext
 from exceptions import PlanningError
 from models.data_models import Session, TherapyPlan
+from models.structured_output_models import PlanUpdate
 from prompts.reflection_prompts import CREATE_INITIAL_PLAN_PROMPT, UPDATE_PLAN_PROMPT
 from services.llm_service import LLMService
 from services.rag_service import RAGService
@@ -136,19 +138,21 @@ class TrioPlanningAgent:
         try:
             # Shield entire plan creation from cancellation for data integrity
             with trio.CancelScope(shield=True):
-                print("DEBUG: TrioPlanningAgent.create_initial_plan started (shielded)")
+                logger.debug(
+                    "TrioPlanningAgent.create_initial_plan started (shielded)"
+                )
                 # Analyze intake session with memory agent
                 session_context = await self.memory_agent.analyze_session_context(
                     intake_session
                 )
-                print("DEBUG: TrioPlanningAgent analyzed session context")
+                logger.debug("TrioPlanningAgent analyzed session context")
 
                 # Get relevant domain knowledge (run in thread)
                 session_text = self._extract_session_text(intake_session)
                 relevant_knowledge = await self._get_relevant_knowledge(
                     session_text, selected_style
                 )
-                print("DEBUG: TrioPlanningAgent got relevant knowledge")
+                logger.debug("TrioPlanningAgent got relevant knowledge")
 
                 # Determine therapy style if not specified
                 if not selected_style:
@@ -163,20 +167,33 @@ class TrioPlanningAgent:
                 self.current_strategy = strategy
 
                 # Generate plan using LLM (run in thread)
-                print("DEBUG: TrioPlanningAgent generating plan details via LLM")
+                logger.debug("TrioPlanningAgent generating plan details via LLM")
                 plan_details = await self._generate_initial_plan_details(
                     intake_session, session_context, strategy, relevant_knowledge
                 )
-                print("DEBUG: TrioPlanningAgent generated plan details")
+                logger.debug("TrioPlanningAgent generated plan details")
 
                 # Create therapy plan object
                 plan_id = str(uuid.uuid4())
+                initial_goals = self._split_bullets(plan_details.get("goals", ""))
+                if not initial_goals:
+                    raise PlanningError("Failed to derive initial goals for TherapyPlan")
+                planned_interventions = self._split_bullets(
+                    plan_details.get("techniques", "")
+                )
+                if not planned_interventions:
+                    planned_interventions = ["Supportive listening"]
+
                 therapy_plan = TherapyPlan(
                     plan_id=plan_id,
                     user_id=self.user_context.user_id,
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                     plan_details=plan_details,
+                    initial_goals=initial_goals,
+                    current_progress="Baseline established",
+                    planned_interventions=planned_interventions,
+                    status="active",
                     version=1,
                     selected_therapy_style=selected_style,
                 )
@@ -196,7 +213,7 @@ class TrioPlanningAgent:
                 self.plan_evolution.append(evolution)
 
                 logger.info(f"Initial therapy plan created: {plan_id}")
-                print(f"DEBUG: TrioPlanningAgent plan created {plan_id}")
+                logger.debug("TrioPlanningAgent plan created %s", plan_id)
                 return therapy_plan
 
         except Exception as e:
@@ -262,8 +279,13 @@ class TrioPlanningAgent:
                 created_at=current_plan.created_at,
                 updated_at=datetime.now(),
                 plan_details=updated_details,
+                initial_goals=current_plan.initial_goals,
+                current_progress=current_plan.current_progress,
+                planned_interventions=current_plan.planned_interventions,
+                status=current_plan.status,
                 version=current_plan.version + 1,
                 selected_therapy_style=current_plan.selected_therapy_style,
+                session_briefing=current_plan.session_briefing,
             )
 
             # Save updated plan
@@ -469,16 +491,16 @@ class TrioPlanningAgent:
         self, session_text: str, therapy_style: str | None
     ) -> list[dict[str, Any]]:
         """Get relevant domain knowledge filtered by therapy style using Trio."""
-        print(f"DEBUG: _get_relevant_knowledge style={therapy_style}")
-        print(f"DEBUG: self.rag_service type: {type(self.rag_service)}")
+        logger.debug("_get_relevant_knowledge style=%s", therapy_style)
+        logger.debug("rag_service type=%s", type(self.rag_service))
 
         try:
             with trio.move_on_after(30) as cancel_scope:
                 if therapy_style and style_service.get_style_pack(therapy_style):
                     knowledge_source = f"{therapy_style.lower()}.md"
-                    print(f"DEBUG: knowledge_source={knowledge_source}")
-                    print(
-                        "DEBUG: calling rag_service.retrieve_relevant_knowledge with filter"
+                    logger.debug("knowledge_source=%s", knowledge_source)
+                    logger.debug(
+                        "Calling rag_service.retrieve_relevant_knowledge with filter"
                     )
                     # Direct call to avoid Trio/Mock threading issues
                     return await trio.to_thread.run_sync(
@@ -489,8 +511,8 @@ class TrioPlanningAgent:
                     )
 
                 # Default retrieval without filter
-                print(
-                    "DEBUG: calling rag_service.retrieve_relevant_knowledge without filter"
+                logger.debug(
+                    "Calling rag_service.retrieve_relevant_knowledge without filter"
                 )
                 return await trio.to_thread.run_sync(
                     self.rag_service.retrieve_relevant_knowledge,
@@ -498,13 +520,11 @@ class TrioPlanningAgent:
                     3,  # n_results
                 )
         except trio.Cancelled:
-            print("DEBUG: _get_relevant_knowledge CANCELLED")
+            logger.debug("_get_relevant_knowledge cancelled")
             raise
         except Exception as e:
-            print(f"DEBUG: _get_relevant_knowledge EXCEPTION: {e}")
-            logger.error(f"Failed to get relevant knowledge: {e}")
+            logger.error("Failed to get relevant knowledge: %s", e, exc_info=True)
             if cancel_scope.cancelled_caught:
-                print("DEBUG: _get_relevant_knowledge TIMEOUT")
                 logger.warning("RAG retrieval timed out")
 
         return []
@@ -601,15 +621,15 @@ Focus on the identified themes and provide specific, actionable elements.
         else:
             plan_prompt = CREATE_INITIAL_PLAN_PROMPT.format(context=context)
 
-        # Generate structured response (run in thread)
-        response = await trio.to_thread.run_sync(
-            self.llm_service.generate_structured_response,
+        plan_update = await self.llm_service.generate_structured_output_async(
             plan_prompt,
-            '{"focus": "string", "goals": "string", "techniques": "string", "themes": "string", "timeline": "string"}',
+            PlanUpdate,
+            method="json_schema",
         )
+        if not isinstance(plan_update, PlanUpdate):
+            raise PlanningError("Initial plan generation returned unexpected type")
 
-        # Parse and enhance response
-        plan_details = self._parse_plan_response(response, strategy)
+        plan_details = plan_update.model_dump()
 
         # Add metadata
         plan_details.update(
@@ -684,19 +704,17 @@ Consider the therapeutic progress, emerging patterns, and current session insigh
             update_prompt = UPDATE_PLAN_PROMPT.format(context=context)
 
         # Generate structured response (run in thread)
-        response = await trio.to_thread.run_sync(
-            self.llm_service.generate_structured_response,
+        plan_update = await self.llm_service.generate_structured_output_async(
             update_prompt,
-            '{"focus": "string", "goals": "string", "techniques": "string", "themes": "string", "timeline": "string"}',
+            PlanUpdate,
+            method="json_schema",
         )
+        if not isinstance(plan_update, PlanUpdate):
+            raise PlanningError("Plan update generation returned unexpected type")
 
-        # Parse response and merge with current plan
         updated_details = current_plan.plan_details.copy()
-        parsed_updates = self._parse_plan_response(response, self.current_strategy)
-
-        # Update specific fields
-        for key, value in parsed_updates.items():
-            if value and value.strip():  # Only update non-empty values
+        for key, value in plan_update.model_dump().items():
+            if isinstance(value, str) and value.strip():
                 updated_details[key] = value
 
         # Add update metadata
@@ -713,47 +731,8 @@ Consider the therapeutic progress, emerging patterns, and current session insigh
 
         return updated_details
 
-    def _parse_plan_response(
-        self, response: dict[str, Any], strategy: PlanningStrategy | None
-    ) -> dict[str, Any]:
-        """Parse LLM response into plan details."""
-        default_details = {
-            "focus": f"Therapeutic work using {strategy.therapy_style.upper() if strategy else 'general'} approach",
-            "goals": "Build therapeutic relationship and address key concerns",
-            "techniques": ", ".join(
-                strategy.techniques if strategy else ["supportive_therapy"]
-            ),
-            "themes": ", ".join(
-                strategy.focus_areas if strategy else ["general_wellbeing"]
-            ),
-            "timeline": "Ongoing assessment with regular reviews",
-        }
-
-        if "raw_response" in response:
-            try:
-                import json
-
-                raw_response = response["raw_response"].strip()
-
-                # Clean markdown formatting
-                if raw_response.startswith("```json"):
-                    raw_response = raw_response[7:]
-                if raw_response.startswith("```"):
-                    raw_response = raw_response[3:]
-                if raw_response.endswith("```"):
-                    raw_response = raw_response[:-3]
-
-                parsed = json.loads(raw_response.strip())
-
-                # Update defaults with parsed values
-                for key in default_details.keys():
-                    if key in parsed and parsed[key]:
-                        default_details[key] = parsed[key]
-
-            except Exception as e:
-                logger.warning(f"Failed to parse plan response: {e}")
-
-        return default_details
+    # NOTE: No JSON scraping/parsing here; structured outputs are produced by Gemini
+    # using schema-guided decoding via LLMService.generate_structured_output_async.
 
     def _format_plan_details(self, plan_details: dict[str, Any]) -> str:
         """Format plan details for LLM context."""
@@ -762,6 +741,32 @@ Consider the therapeutic progress, emerging patterns, and current session insigh
             if isinstance(value, (str, int, float)):
                 formatted.append(f"{key.title()}: {value}")
         return "\n".join(formatted)
+
+    def _split_bullets(self, value: Any) -> list[str]:
+        """Extract a short list from an LLM-generated bullet/numbered string."""
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if not isinstance(value, str):
+            return []
+
+        text = value.replace("\r", "\n").strip()
+        if not text:
+            return []
+
+        items: list[str] = []
+        for raw in text.split("\n"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            raw = raw.lstrip("-•* ").strip()
+            raw = re.sub(r"^\\d+\\s*[\\).\\:-]\\s*", "", raw)
+            if raw:
+                items.append(raw)
+        if not items:
+            # Fallback: split on semicolons/commas for single-line formats.
+            parts = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
+            return parts[:5]
+        return items[:5]
 
     def _assess_update_necessity(
         self, session_context, memory, current_plan: TherapyPlan

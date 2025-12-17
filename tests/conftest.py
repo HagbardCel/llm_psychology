@@ -4,6 +4,18 @@ from unittest.mock import Mock
 
 import pytest
 
+# NOTE: Do not import app modules at top-level unless needed for fixtures.
+# This file is imported by pytest during collection.
+
+
+def _get_free_tcp_port(host: str = "127.0.0.1") -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
 # Add the src and scripts directories to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -36,66 +48,184 @@ def mock_google_api_key(monkeypatch, request):
 def mock_llm_service():
     """Create a mock LLMService for testing."""
     import json
+    from datetime import datetime
+
+    from pydantic import BaseModel
 
     llm_service = Mock()
 
-    # Return valid JSON for session briefing generation
-    # Note: generated_at, session_count, last_session_id are added by agent automatically
-    briefing_response = {
-        "briefing_type": "resumption",
-        "last_session_date": "2025-01-01",  # Required field
-        "narrative_handoff": (
-            "Mock session narrative for testing purposes with "
-            "sufficient length to meet validation"
-        ),
-        "patient_observations": "Patient was engaged and communicative during session",
-        "plan_progression_notes": "Session progressed well according to treatment plan",
-        "relationship_quality": "developing",
-        "continuity_points": ["Follow up on main topic", "Explore deeper issue"],
-        "emotional_summary": {
-            "last_session": "calm and engaged",
-            "trend": "stable",
-            "note": "Patient showing good progress",
-        },
-        "key_themes": [
-            {
-                "theme": "anxiety",
-                "status": "ongoing",
-                "priority": "high",
-                "frequency": 3,
-                "first_appearance": "session_001",
-                "last_discussed": "session_003",
+    llm_service.generate_response = Mock(return_value="Mock response")
+
+    def _mock_structured_payload(prompt: str, schema: type[BaseModel]) -> dict:
+        schema_name = getattr(schema, "__name__", "")
+
+        if schema_name == "SessionAnalysis":
+            return {
+                "key_themes": ["anxiety", "work stress"],
+                "emotional_state": "anxious",
+                "insights": ["pattern recognition"],
+                "progress_indicators": ["engagement"],
             }
-        ],
-        "progress_highlights": ["Made progress on identifying triggers"],
-        "unresolved_issues": ["Underlying perfectionism"],
-        "recommended_approach": {
-            "opening_tone": "Warm and supportive",
-            "opening_focus": "Check in on progress",
-            "things_to_avoid": "Being too direct",
-            "suggested_questions": ["How have you been feeling?"],
-            "therapeutic_goals_for_session": ["Build on previous insights"],
-        },
-    }
 
-    llm_service.generate_response = Mock(return_value=json.dumps(briefing_response))
+        if schema_name == "Tier2Enrichment":
+            return {
+                "psychological_summary": "Mock summary",
+                "dominant_affects": ["anxiety"],
+                "key_themes": ["work stress"],
+                "notable_interactions": None,
+                "interpretations": None,
+                "patient_reactions": None,
+            }
 
-    # Enhanced structured response with common fields used by agents
-    def mock_structured_response(prompt, output_format=None):
-        """Return structured response based on what agents typically request."""
-        # Default response structure
-        response_data = {
-            "test": "response",
-            "key_themes": ["anxiety", "work_stress", "coping"],
-            "emotional_state": "anxious",
-            "progress_indicators": ["engagement", "insight"],
-            "recommended_approaches": ["CBT", "mindfulness"],
-        }
-        return {"raw_response": str(response_data)}
+        if schema_name == "PlanUpdate":
+            return {
+                "focus": "Anxiety management",
+                "goals": "- Reduce anxiety\n- Improve sleep",
+                "techniques": "- Cognitive restructuring\n- Mindfulness",
+                "themes": "Anxiety, coping, work stress",
+                "timeline": "12 weeks",
+            }
 
-    llm_service.generate_structured_response = Mock(
-        side_effect=mock_structured_response
-    )
+        if schema_name == "PatientProfileExtract":
+            # Some tests assert on a specific name; pick it if it appears in the prompt.
+            alias = "Alex"
+            prompt_lower = prompt.lower()
+            if "sarah johnson" in prompt_lower or "hello sarah" in prompt_lower:
+                alias = "Sarah Johnson"
+            return {
+                "basic_info": {
+                    "alias": alias,
+                    "date_of_birth": None,
+                    "gender": None,
+                    "cultural_background": None,
+                    "primary_language": "English",
+                },
+                "family": {
+                    "parents": None,
+                    "siblings": None,
+                    "family_atmosphere": None,
+                    "significant_events": None,
+                },
+                "history": {
+                    "education": None,
+                    "work_history": None,
+                    "relationship_to_work": None,
+                },
+                "context": {
+                    "relationships": None,
+                    "social_context": None,
+                    "current_situation": None,
+                },
+                "frame": {
+                    "preferred_school": None,
+                    "session_mode": "virtual",
+                    "boundary_notes": None,
+                    "frame_notes": None,
+                },
+            }
+
+        if schema_name == "PatientAnalysis":
+            return {
+                "current_focus": {
+                    "theme": "Work-related anxiety",
+                    "salience": "Patient reports anxiety escalating in professional settings",
+                },
+                "transference": {
+                    "idealization": None,
+                    "devaluation": None,
+                    "boundaries": None,
+                    "other_patterns": "Developing therapeutic alliance",
+                },
+                "narratives": [
+                    {
+                        "title": "Fear of failure",
+                        "description": "Recurring worry about being judged and failing",
+                        "first_appeared": "intake",
+                    }
+                ],
+                "defenses": {
+                    "primary_defenses": ["intellectualization"],
+                    "defensive_style": "Cerebral",
+                    "flexibility": "Moderately flexible",
+                },
+                "orientation": {
+                    "pacing": "Gradual",
+                    "risk_areas": ["perfectionism"],
+                    "key_questions": ["What happens internally before anxiety spikes?"],
+                },
+            }
+
+        if schema_name == "Tier4Extract":
+            return {
+                "initial_goals": ["Reduce work-related anxiety"],
+                "current_progress": "Baseline established",
+                "planned_interventions": ["Supportive listening"],
+                "status": "active",
+            }
+
+        if schema_name == "ChangeDetectionDecision":
+            return {
+                "update_needed": False,
+                "change_summary": None,
+                "confidence": "high",
+            }
+
+        if schema_name == "Tier1ProfilePatch":
+            return {}
+
+        if schema_name == "SessionBriefing":
+            today = datetime.now()
+            return {
+                "briefing_type": "resumption",
+                "generated_at": today.isoformat(),
+                "session_count": 1,
+                "last_session_id": "session_001",
+                "last_session_date": today.date().isoformat(),
+                "narrative_handoff": (
+                    "Patient discussed work-related anxiety and stress. "
+                    "We explored triggers, automatic thoughts, and early patterns. "
+                    "Focus remains on building coping skills and insight."
+                ),
+                "patient_observations": "Patient was engaged and communicative.",
+                "plan_progression_notes": "Session aligned with the current plan.",
+                "relationship_quality": "developing",
+                "continuity_points": ["Follow up on workplace triggers"],
+                "emotional_summary": {
+                    "last_session": "anxious but engaged",
+                    "trend": "stable",
+                    "note": "Anxiety levels steady; patient shows engagement.",
+                },
+                "key_themes": [
+                    {
+                        "theme": "work stress",
+                        "status": "ongoing",
+                        "priority": "high",
+                        "frequency": 1,
+                        "first_appearance": "session_001",
+                        "last_discussed": "session_001",
+                    }
+                ],
+                "progress_highlights": ["Identified trigger situations"],
+                "unresolved_issues": ["Perfectionism"],
+                "recommended_approach": {
+                    "opening_tone": "Warm and supportive",
+                    "opening_focus": "Check in on workplace anxiety",
+                    "things_to_avoid": "Overwhelming with too many questions",
+                    "suggested_questions": ["What stood out from last time?"],
+                    "therapeutic_goals_for_session": ["Build on prior insights"],
+                },
+            }
+
+        # Default: minimal safe payload for schemas we don't explicitly handle.
+        return {}
+
+    def mock_structured_output(prompt, schema, method="json_schema"):
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            payload = _mock_structured_payload(prompt, schema)
+            return schema.model_validate(payload)
+        return {}
+
+    llm_service.generate_structured_output = Mock(side_effect=mock_structured_output)
 
     # Add streaming support - returns list of chunks (not async generator)
     async def mock_stream_response(*args, **kwargs):
@@ -110,12 +240,10 @@ def mock_llm_service():
 
     llm_service.generate_response_async = mock_generate_response_async
 
-    async def mock_generate_structured_response_async(prompt, output_format=None):
-        return llm_service.generate_structured_response(prompt, output_format)
+    async def mock_generate_structured_output_async(prompt, schema, method="json_schema"):
+        return llm_service.generate_structured_output(prompt, schema, method=method)
 
-    llm_service.generate_structured_response_async = (
-        mock_generate_structured_response_async
-    )
+    llm_service.generate_structured_output_async = mock_generate_structured_output_async
 
     return llm_service
 
@@ -199,6 +327,9 @@ def sample_therapy_plan():
             "techniques": "Cognitive restructuring and mindfulness exercises",
             "themes": "Work stress, anxiety, coping mechanisms",
         },
+        initial_goals=["Develop coping strategies"],
+        current_progress="Baseline established",
+        planned_interventions=["Cognitive restructuring"],
         version=1,
         selected_therapy_style="cbt",
     )
@@ -344,8 +475,8 @@ async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_s
     """Create a test server with WebSocket support for integration tests.
 
     Returns a dict with:
-        - url: HTTP base URL (e.g., "http://127.0.0.1:8888")
-        - ws_url: WebSocket URL (e.g., "ws://127.0.0.1:8888/ws")
+        - url: HTTP base URL (e.g., "http://127.0.0.1:12345")
+        - ws_url: WebSocket URL (e.g., "ws://127.0.0.1:12345/ws")
         - db_service: TrioDatabaseService instance
         - container: ServiceContainer instance
     """
@@ -365,15 +496,30 @@ async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_s
     await trio_db_service.initialize()
 
     # Create server on a free port
-    server = TrioServer(container, host="127.0.0.1", port=8888)
+    port = _get_free_tcp_port("127.0.0.1")
+    server = TrioServer(container, host="127.0.0.1", port=port)
 
     # Start server in background
     async with trio.open_nursery() as nursery:
         # Start server
         await nursery.start(server.run)
 
-        # Give server time to fully start
-        await trio.sleep(0.2)
+        # Verify server is actually accepting connections via health check
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            for _ in range(20):  # 2 seconds max (20 * 0.1s)
+                try:
+                    response = await client.get(
+                        f"http://{server.host}:{server.port}/health", timeout=1.0
+                    )
+                    if response.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await trio.sleep(0.1)
+            else:
+                raise RuntimeError("Server failed to respond to health checks")
 
         # Provide server info to test
         yield {
@@ -401,3 +547,28 @@ def pytest_addoption(parser):
 def use_real_llm(request):
     """Fixture to check if real LLM should be used."""
     return request.config.getoption("--no-mocks")
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Ensure `-m unit` / `-m integration` selections are reliable.
+
+    Many tests live under `tests/unit/` and `tests/integration/` but are not
+    explicitly decorated. We auto-mark based on path unless a test already has
+    an explicit `unit` or `integration` marker.
+    """
+
+    def _has_marker(item, name: str) -> bool:
+        return item.get_closest_marker(name) is not None
+
+    for item in items:
+        path = str(getattr(item, "fspath", "")).replace("\\", "/")
+
+        if "/tests/unit/" in path:
+            if not _has_marker(item, "unit") and not _has_marker(item, "integration"):
+                item.add_marker(pytest.mark.unit)
+            continue
+
+        if "/tests/integration/" in path:
+            if not _has_marker(item, "unit") and not _has_marker(item, "integration"):
+                item.add_marker(pytest.mark.integration)

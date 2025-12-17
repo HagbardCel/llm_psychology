@@ -349,6 +349,160 @@ async def test_intake_agent_guest_name_collection(service_container):
     assert updated_profile.name == "John Smith"
 
 
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_intake_agent_tier1_extraction(service_container):
+    """Test Tier 1 patient profile extraction from intake conversation."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+
+    # Create a test user
+    test_user = UserProfile(
+        user_id="tier1_test_user",
+        name="Sarah Johnson",
+        birthdate=None,
+        profession="",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(test_user)
+
+    user_context = UserContext(user_id=test_user.user_id)
+    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+
+    # Create a rich intake conversation with patient information
+    session_id = str(uuid.uuid4())
+    intake_messages = [
+        Message(
+            role="assistant",
+            content=(
+                "Hello Sarah. I am Dr. AI, your therapist. "
+                "What brings you here today?"
+            ),
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="user",
+            content=(
+                "I've been feeling very anxious lately, especially at work. "
+                "I'm a software engineer and the pressure has been overwhelming."
+            ),
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="assistant",
+            content="Tell me more about your family background.",
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="user",
+            content=(
+                "I grew up in a small town. My mother is supportive but my "
+                "father passed away when I was 15. I have an older brother "
+                "who lives abroad. The family atmosphere was generally loving "
+                "but we had financial struggles."
+            ),
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="assistant",
+            content="What about your education and work history?",
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="user",
+            content=(
+                "I graduated from MIT with a computer science degree. I've "
+                "been working as a software engineer for 5 years now at a "
+                "tech startup. Work is both fulfilling and stressful - it's "
+                "become a major part of my identity."
+            ),
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="assistant",
+            content="How are your current relationships?",
+            timestamp=datetime.now(),
+        ),
+        Message(
+            role="user",
+            content=(
+                "I'm in a long-term relationship with my partner Alex. "
+                "We've been together for 3 years. I have a few close friends "
+                "but I've been feeling isolated lately due to work demands."
+            ),
+            timestamp=datetime.now(),
+        ),
+    ]
+
+    # Create session with conversation
+    session = Session(
+        session_id=session_id,
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=intake_messages,
+        topics=[],
+    )
+    await trio_db_service.save_session(session)
+
+    # Create context
+    context = ConversationContext(
+        session_id=session_id,
+        user_profile=test_user,
+        therapy_plan=None,
+        message_history=intake_messages,
+        topics_covered=[
+            "Presenting Problem",
+            "Current Symptoms",
+            "Family Background",
+            "Work/School",
+            "Relationships",
+            "Personal History",
+            "Goals for Therapy",
+            "Mental Health History",
+            "Coping Mechanisms",
+            "Support System",
+        ],  # Mark sufficient topics as covered
+        session_start_time=datetime.now(),
+        duration_minutes=60,
+    )
+
+    # Process message that triggers completion
+    response = await intake_agent.process_message(
+        (
+            "I hope therapy can help me manage my anxiety "
+            "and find better work-life balance."
+        ),
+        context,
+    )
+
+    # Verify intake completed
+    assert response.next_action == "transition"
+    assert response.next_state == WorkflowState.INTAKE_COMPLETE
+
+    # Verify patient profile was extracted and saved
+    patient_profile = await trio_db_service.get_patient_profile(test_user.user_id)
+
+    assert patient_profile is not None
+    assert patient_profile.user_id == test_user.user_id
+
+    # Verify basic info
+    assert patient_profile.basic_info is not None
+    assert patient_profile.basic_info.alias == "Sarah Johnson"
+    # Note: Other fields may be null if not mentioned in conversation
+
+    # Verify sub-models exist (even if fields are null)
+    assert patient_profile.family is not None
+    assert patient_profile.history is not None
+    assert patient_profile.context is not None
+    assert patient_profile.frame is not None
+
+    # Verify timestamps
+    assert patient_profile.created_at is not None
+    assert patient_profile.updated_at is not None
+
+
 # ===== TrioReflectionAgent Tests =====
 
 
@@ -413,6 +567,109 @@ async def test_reflection_agent_create_initial_plan(
 
     assert therapy_plan is not None
     assert therapy_plan.selected_therapy_style == "freud"
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_reflection_agent_session_enrichment(
+    service_container, user_context, test_session
+):
+    """Test reflection agent enriching session with Tier 2 psychological data."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    # Mock the structured response for Tier 2 enrichment
+    # This will be called by _enrich_session()
+    tier2_enrichment_data = {
+        "psychological_summary": (
+            "The patient presented with anxiety related to work stress. "
+            "Discussion focused on coping mechanisms and underlying fears "
+            "of failure. The patient demonstrated good insight and "
+            "willingness to explore deeper issues."
+        ),
+        "dominant_affects": ["anxiety", "fear", "determination"],
+        "key_themes": ["work stress", "fear of failure", "coping strategies"],
+        "notable_interactions": (
+            "Patient showed resistance when discussing childhood experiences, "
+            "but later opened up after gentle exploration."
+        ),
+        "interpretations": (
+            "Therapist linked current work anxiety to early experiences of "
+            "parental expectations and performance pressure."
+        ),
+        "patient_reactions": (
+            "Patient acknowledged the connection and showed visible emotional "
+            "response, indicating deeper recognition of the pattern."
+        ),
+    }
+
+    from unittest.mock import AsyncMock
+
+    from models.structured_output_models import Tier2Enrichment
+
+    original_structured = llm_service.generate_structured_output_async
+
+    async def _structured_side_effect(prompt, schema, method="json_schema"):
+        if schema is Tier2Enrichment:
+            return Tier2Enrichment.model_validate(tier2_enrichment_data)
+        return await original_structured(prompt, schema, method=method)
+
+    llm_service.generate_structured_output_async = AsyncMock(
+        side_effect=_structured_side_effect
+    )
+
+    # Verify session is not yet enriched
+    assert test_session.enriched is False
+
+    # Create agents
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+
+    planning_agent = TrioPlanningAgent(
+        llm_service, trio_db_service, rag_service, user_context, memory_agent
+    )
+
+    reflection_agent = TrioReflectionAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        planning_agent,
+    )
+
+    # Generate comprehensive reflection (which triggers enrichment)
+    reflection = await reflection_agent.generate_comprehensive_reflection(
+        test_session, current_plan=None
+    )
+
+    # Verify reflection was generated
+    assert reflection is not None
+    assert reflection["session_id"] == test_session.session_id
+
+    # Verify session was enriched in database
+    enriched_session = await trio_db_service.get_session(test_session.session_id)
+
+    assert enriched_session is not None
+    assert enriched_session.enriched is True
+    assert enriched_session.psychological_summary == tier2_enrichment_data[
+        "psychological_summary"
+    ]
+    assert enriched_session.dominant_affects == tier2_enrichment_data[
+        "dominant_affects"
+    ]
+    assert enriched_session.key_themes == tier2_enrichment_data["key_themes"]
+    assert enriched_session.notable_interactions == tier2_enrichment_data[
+        "notable_interactions"
+    ]
+    assert enriched_session.interpretations == tier2_enrichment_data[
+        "interpretations"
+    ]
+    assert enriched_session.patient_reactions == tier2_enrichment_data[
+        "patient_reactions"
+    ]
 
 
 # ===== TrioAssessmentAgent Tests =====
@@ -634,6 +891,883 @@ async def test_assessment_agent_process_selection(
     response = await assessment_agent.process_selection("cbt", context)
 
     assert response is not None
-    assert response.next_action == "transition"
+    assert response.next_action == "await_continuation_choice"
     assert response.next_state == WorkflowState.ASSESSMENT_COMPLETE
     assert "plan_id" in response.metadata
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_assessment_agent_creates_tier3_and_tier4(service_container):
+    """Test assessment agent creating initial Tier 3 & 4 data."""
+    from models.data_models import PatientProfile, UserProfile, UserStatus
+
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    # Create test user with Tier 1 (PatientProfile)
+    test_user = UserProfile(
+        user_id="tier34_test_user",
+        name="Test Patient",
+        birthdate=None,
+        profession="Engineer",
+        status=UserStatus.INTAKE_COMPLETE,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(test_user)
+
+    # Create Tier 1 patient profile
+    from models.data_models import (
+        AnalyticFrame,
+        BasicPatientBackground,
+        EducationalWorkHistory,
+        FamilyConstellation,
+        RelationalLifeContext,
+    )
+
+    patient_profile = PatientProfile(
+        user_id=test_user.user_id,
+        basic_info=BasicPatientBackground(
+            alias="Test Patient",
+            date_of_birth=None,
+            gender="Non-binary",
+            cultural_background="Asian-American",
+            primary_language="English",
+        ),
+        family=FamilyConstellation(
+            parents="Mother supportive, father distant",
+            siblings="One younger sister",
+            family_atmosphere="Generally warm but with occasional conflict",
+            significant_events="Parents divorced when patient was 10",
+        ),
+        history=EducationalWorkHistory(
+            education="BS in Computer Science",
+            work_history="Software engineer for 5 years",
+            relationship_to_work="Source of both pride and stress",
+        ),
+        context=RelationalLifeContext(
+            relationships="Single, few close friends",
+            social_context="Somewhat isolated due to work demands",
+            current_situation="High work stress, seeking better balance",
+        ),
+        frame=AnalyticFrame(
+            preferred_school=None,
+            session_mode="virtual",
+            boundary_notes=None,
+            frame_notes=None,
+        ),
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_patient_profile(patient_profile)
+
+    # Create intake session
+    intake_session_id = str(uuid.uuid4())
+    intake_session = Session(
+        session_id=intake_session_id,
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="Tell me about what brings you here today.",
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="user",
+                content=(
+                    "I've been feeling overwhelmed with work stress and "
+                    "I'm struggling to maintain relationships."
+                ),
+                timestamp=datetime.now(),
+            ),
+        ],
+        topics=[],
+    )
+    await trio_db_service.save_session(intake_session)
+
+    # Mock Tier 3 extraction response
+    tier3_data = {
+        "current_focus": {
+            "theme": "Work-life balance and relationship strain",
+            "salience": (
+                "Patient presents with acute work stress that is "
+                "impacting personal relationships and overall wellbeing"
+            ),
+        },
+        "transference": {
+            "idealization": None,
+            "devaluation": None,
+            "boundaries": None,
+            "other_patterns": "Early signs of trust-building",
+        },
+        "narratives": [
+            {
+                "title": "The Overachiever",
+                "description": (
+                    "Patient identifies strongly with work performance "
+                    "as source of self-worth"
+                ),
+                "first_appeared": "intake",
+            }
+        ],
+        "defenses": {
+            "primary_defenses": ["intellectualization", "isolation"],
+            "defensive_style": "Cerebral, emotionally distancing",
+            "flexibility": "Somewhat rigid",
+        },
+        "orientation": {
+            "pacing": "Gradual, build trust before deep exploration",
+            "risk_areas": ["perfectionism", "self-criticism"],
+            "key_questions": [
+                "What does work success mean to you?",
+                "How do you experience emotional intimacy?",
+            ],
+        },
+    }
+
+    # Mock Tier 4 extraction response
+    tier4_data = {
+        "initial_goals": [
+            "Reduce work-related stress and anxiety",
+            "Improve work-life balance",
+            "Develop healthier relationship patterns",
+        ],
+        "current_progress": (
+            "Patient beginning therapy with awareness of work stress "
+            "and relationship difficulties. Shows good insight and "
+            "motivation for change. Currently experiencing moderate "
+            "anxiety related to work performance."
+        ),
+        "planned_interventions": [
+            "Cognitive restructuring around perfectionism",
+            "Mindfulness-based stress reduction",
+            "Interpersonal effectiveness skills",
+        ],
+        "status": "active",
+    }
+
+    from unittest.mock import AsyncMock
+
+    from models.data_models import PatientAnalysis
+    from models.structured_output_models import Tier4Extract
+
+    original_structured = llm_service.generate_structured_output_async
+
+    async def mock_structured_tier34(prompt, schema, method="json_schema"):
+        if schema is PatientAnalysis:
+            return PatientAnalysis.model_validate(tier3_data)
+        if schema is Tier4Extract:
+            return Tier4Extract.model_validate(tier4_data)
+        return await original_structured(prompt, schema, method=method)
+
+    llm_service.generate_structured_output_async = AsyncMock(
+        side_effect=mock_structured_tier34
+    )
+
+    # Create user context and agents
+    user_context = UserContext(user_id=test_user.user_id)
+
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+    planning_agent = TrioPlanningAgent(
+        llm_service, trio_db_service, rag_service, user_context, memory_agent
+    )
+    reflection_agent = TrioReflectionAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        planning_agent,
+    )
+
+    assessment_agent = TrioAssessmentAgent(
+        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+    )
+
+    # Create context
+    context = ConversationContext(
+        session_id=intake_session.session_id,
+        user_profile=test_user,
+        therapy_plan=None,
+        message_history=intake_session.transcript,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=60,
+    )
+
+    # Process style selection (should create Tier 3 & 4)
+    response = await assessment_agent.process_selection("cbt", context)
+
+    # Verify response
+    assert response is not None
+    assert response.next_state == WorkflowState.ASSESSMENT_COMPLETE
+    assert response.metadata.get("tier3_created") is True
+    assert response.metadata.get("tier4_created") is True
+
+    # Verify Tier 3 was saved
+    tier3_analysis = await trio_db_service.get_latest_patient_analysis(
+        test_user.user_id
+    )
+    assert tier3_analysis is not None
+    assert tier3_analysis.version == 1
+    assert tier3_analysis.user_id == test_user.user_id
+    assert (
+        tier3_analysis.analysis_data.current_focus.theme
+        == "Work-life balance and relationship strain"
+    )
+    assert "intellectualization" in (
+        tier3_analysis.analysis_data.defenses.primary_defenses
+    )
+    assert len(tier3_analysis.analysis_data.narratives) == 1
+
+    # Verify Tier 4 was saved
+    tier4_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    assert tier4_plan is not None
+    assert tier4_plan.user_id == test_user.user_id
+    assert tier4_plan.status == "active"
+    assert len(tier4_plan.initial_goals) == 3
+    assert "Reduce work-related stress and anxiety" in tier4_plan.initial_goals
+    assert len(tier4_plan.planned_interventions) == 3
+    assert "Cognitive restructuring" in tier4_plan.planned_interventions[0]
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_reflection_agent_tier3_versioning(service_container):
+    """Test Tier 3 versioning through reflection agent."""
+    import json
+
+    from models.data_models import (
+        PatientProfile,
+        Session,
+        TherapyPlan,
+        UserProfile,
+        UserStatus,
+    )
+
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    # Create test user
+    test_user = UserProfile(
+        user_id="tier3_versioning_test",
+        name="Versioning Test Patient",
+        birthdate=None,
+        profession="Designer",
+        status=UserStatus.PLAN_COMPLETE,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(test_user)
+
+    # Create Tier 1 patient profile (required for reflection)
+    from models.data_models import (
+        AnalyticFrame,
+        BasicPatientBackground,
+        EducationalWorkHistory,
+        FamilyConstellation,
+        RelationalLifeContext,
+    )
+
+    patient_profile = PatientProfile(
+        user_id=test_user.user_id,
+        basic_info=BasicPatientBackground(
+            alias="Versioning Test Patient",
+            date_of_birth=None,
+            gender="Female",
+            cultural_background="European-American",
+            primary_language="English",
+        ),
+        family=FamilyConstellation(
+            parents="Both parents present, mother anxious",
+            siblings="Only child",
+            family_atmosphere="Tense, high expectations",
+            significant_events="Mother's anxiety was formative influence",
+        ),
+        history=EducationalWorkHistory(
+            education="MFA in Design",
+            work_history="Freelance designer for 3 years",
+            relationship_to_work="Creative outlet but financially unstable",
+        ),
+        context=RelationalLifeContext(
+            relationships="In long-term relationship, some conflict",
+            social_context="Small circle of close friends",
+            current_situation="Career uncertainty causing anxiety",
+        ),
+        frame=AnalyticFrame(
+            preferred_school="psychodynamic",
+            session_mode="virtual",
+            boundary_notes=None,
+            frame_notes=None,
+        ),
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_patient_profile(patient_profile)
+
+    # Create initial Tier 3 (version 1)
+    from models.data_models import (
+        AnalyticOrientation,
+        CurrentFocus,
+        DefensiveOrganization,
+        PatientAnalysis,
+        PatientAnalysisVersion,
+        RecurringNarrative,
+        TransferenceImpressions,
+    )
+
+    initial_analysis = PatientAnalysis(
+        current_focus=CurrentFocus(
+            theme="Career anxiety and financial insecurity",
+            salience=(
+                "Patient presents with acute anxiety about career "
+                "stability and financial future"
+            ),
+        ),
+        transference=TransferenceImpressions(
+            idealization=None,
+            devaluation=None,
+            boundaries=None,
+            other_patterns="Early therapeutic alliance forming",
+        ),
+        narratives=[
+            RecurringNarrative(
+                title="The Struggling Artist",
+                description=(
+                    "Patient identifies with creative work but struggles "
+                    "with financial realities"
+                ),
+                first_appeared="intake",
+            )
+        ],
+        defenses=DefensiveOrganization(
+            primary_defenses=["rationalization", "intellectualization"],
+            defensive_style="Cerebral, avoids emotional depth",
+            flexibility="Moderately flexible",
+        ),
+        orientation=AnalyticOrientation(
+            pacing="Build trust, explore career anxieties gradually",
+            risk_areas=["perfectionism", "financial stress"],
+            key_questions=[
+                "What does creative success mean to you?",
+                "How do you manage uncertainty?",
+            ],
+        ),
+    )
+
+    tier3_v1 = PatientAnalysisVersion(
+        user_id=test_user.user_id,
+        version=1,
+        analysis_data=initial_analysis,
+        created_at=datetime.now(),
+        created_by_session=None,
+        change_summary=None,
+        superseded_by=None,
+    )
+    await trio_db_service.save_patient_analysis_version(tier3_v1)
+
+    # Create therapy plan
+    therapy_plan = TherapyPlan(
+        plan_id=str(uuid.uuid4()),
+        user_id=test_user.user_id,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        plan_details={"focus": "career anxiety"},
+        initial_goals=[
+            "Explore relationship between career anxiety and family patterns",
+            "Develop tolerance for uncertainty",
+        ],
+        current_progress="Baseline",
+        planned_interventions=["Exploratory listening"],
+        status="active",
+        version=1,
+        selected_therapy_style="psychodynamic",
+    )
+    await trio_db_service.save_therapy_plan(therapy_plan)
+
+    # Create therapy session with significant content that should trigger update
+    session_id = str(uuid.uuid4())
+    therapy_session = Session(
+        session_id=session_id,
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="How have things been since our last session?",
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="user",
+                content=(
+                    "I had a breakthrough this week. I realized my anxiety "
+                    "about money isn't really about money at all - it's about "
+                    "my mother's constant worry about security. I've been "
+                    "carrying her anxiety as my own. Also, I got angry at my "
+                    "partner for the first time in months, which felt scary "
+                    "but also liberating."
+                ),
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="assistant",
+                content=(
+                    "That's a significant insight - recognizing the "
+                    "intergenerational transmission of anxiety. And the anger "
+                    "- tell me more about what made that feel liberating."
+                ),
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="user",
+                content=(
+                    "I think I've been so afraid of conflict because I saw "
+                    "how anxious my mother got. But expressing anger actually "
+                    "brought my partner and me closer. It's like I'm learning "
+                    "I can have feelings without everything falling apart."
+                ),
+                timestamp=datetime.now(),
+            ),
+        ],
+        topics=[],
+    )
+    await trio_db_service.save_session(therapy_session)
+
+    from unittest.mock import AsyncMock
+
+    from models.data_models import PatientAnalysis
+    from models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+
+    tier2_data = {
+        "psychological_summary": (
+            "Patient demonstrated significant insight this session, recognizing "
+            "intergenerational transmission of anxiety from mother. Also reported "
+            "breakthrough in expressing anger toward partner, strengthening relationship."
+        ),
+        "dominant_affects": ["anxiety", "anger", "relief"],
+        "key_themes": [
+            "intergenerational anxiety transmission",
+            "anger expression",
+            "relationship intimacy",
+        ],
+        "notable_interactions": (
+            "Patient showed increased emotional openness and depth of self-reflection."
+        ),
+        "interpretations": (
+            "Therapist linked patient's financial anxiety to mother's chronic worry about security."
+        ),
+        "patient_reactions": (
+            "Patient receptive to interpretation, elaborated with new material."
+        ),
+    }
+
+    updated_tier3 = {
+        "current_focus": {
+            "theme": "Intergenerational anxiety and emotional freedom",
+            "salience": (
+                "Patient has connected career anxiety to maternal influence and is exploring "
+                "emotional expression as path to autonomy"
+            ),
+        },
+        "transference": {
+            "idealization": None,
+            "devaluation": None,
+            "boundaries": None,
+            "other_patterns": (
+                "Strong therapeutic alliance; patient trusts therapist enough to explore difficult material"
+            ),
+        },
+        "narratives": [
+            {
+                "title": "The Struggling Artist",
+                "description": (
+                    "Patient identifies with creative work but struggles with financial realities. "
+                    "Now recognizing this anxiety as inherited from mother."
+                ),
+                "first_appeared": "intake",
+            },
+            {
+                "title": "Mother's Anxious Daughter",
+                "description": (
+                    "Patient carries mother's chronic anxiety about security and is beginning "
+                    "to differentiate her own feelings from maternal introject."
+                ),
+                "first_appeared": session_id,
+            },
+        ],
+        "defenses": {
+            "primary_defenses": [
+                "intellectualization",
+                "identification with aggressor",
+            ],
+            "defensive_style": (
+                "Previously cerebral; now showing greater affective range and access to anger"
+            ),
+            "flexibility": "Improving significantly",
+        },
+        "orientation": {
+            "pacing": "Can move faster now; patient ready for deeper work",
+            "risk_areas": [
+                "fear of maternal abandonment",
+                "guilt about differentiation",
+            ],
+            "key_questions": [
+                "What would it mean to choose differently from mother?",
+                "How do you distinguish your anxiety from hers?",
+            ],
+        },
+    }
+
+    original_structured = llm_service.generate_structured_output_async
+
+    async def mock_structured_versioning(prompt, schema, method="json_schema"):
+        if schema is Tier2Enrichment:
+            return Tier2Enrichment.model_validate(tier2_data)
+        if schema is ChangeDetectionDecision:
+            return ChangeDetectionDecision.model_validate(
+                {
+                    "update_needed": True,
+                    "change_summary": (
+                        "Major shift in clinical understanding: intergenerational anxiety connection "
+                        "and increased flexibility with anger expression"
+                    ),
+                    "confidence": "high",
+                }
+            )
+        if schema is PatientAnalysis:
+            return PatientAnalysis.model_validate(updated_tier3)
+        return await original_structured(prompt, schema, method=method)
+
+    llm_service.generate_structured_output_async = AsyncMock(
+        side_effect=mock_structured_versioning
+    )
+
+    # Create user context and agents
+    user_context = UserContext(user_id=test_user.user_id)
+
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+    planning_agent = TrioPlanningAgent(
+        llm_service, trio_db_service, rag_service, user_context, memory_agent
+    )
+    reflection_agent = TrioReflectionAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        planning_agent,
+    )
+
+    # Run reflection (should create Tier 3 v2)
+    current_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    reflection = await reflection_agent.generate_comprehensive_reflection(
+        therapy_session, current_plan=current_plan
+    )
+
+    # Verify reflection metadata shows Tier 3 update
+    assert reflection is not None
+    assert reflection["tier3_updated"] is True
+    assert reflection["tier3_version"] == 2
+    assert reflection["tier4_updated"] is True
+
+    # Verify Tier 3 v2 was created
+    tier3_v2 = await trio_db_service.get_latest_patient_analysis(
+        test_user.user_id
+    )
+    assert tier3_v2 is not None
+    assert tier3_v2.version == 2
+    assert tier3_v2.user_id == test_user.user_id
+    assert tier3_v2.created_by_session == session_id
+    assert tier3_v2.change_summary is not None
+    assert "intergenerational" in tier3_v2.change_summary.lower()
+    assert tier3_v2.superseded_by is None  # Latest version not superseded
+
+    # Verify v2 content reflects session insights
+    assert (
+        "Intergenerational anxiety" in tier3_v2.analysis_data.current_focus.theme
+    )
+    assert len(tier3_v2.analysis_data.narratives) == 2  # Original + new
+    assert (
+        "Mother's Anxious Daughter" in
+        [n.title for n in tier3_v2.analysis_data.narratives]
+    )
+    assert "Improving" in tier3_v2.analysis_data.defenses.flexibility
+
+    latest_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    assert latest_plan is not None
+    assert latest_plan.current_progress != ""
+    assert len(latest_plan.planned_interventions) >= 1
+
+    # Verify old version was marked as superseded
+    tier3_v1_updated = await trio_db_service.get_patient_analysis_version(
+        test_user.user_id, version=1
+    )
+    assert tier3_v1_updated is not None
+    assert tier3_v1_updated.superseded_by == tier3_v2.analysis_id
+
+    # Verify we can still retrieve old version
+    assert tier3_v1_updated.version == 1
+    assert (
+        tier3_v1_updated.analysis_data.current_focus.theme ==
+        "Career anxiety and financial insecurity"
+    )
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_reflection_agent_tier3_no_update_when_stable(service_container):
+    """Test Tier 3 not updated when session doesn't warrant change."""
+    import json
+
+    from models.data_models import (
+        PatientProfile,
+        Session,
+        TherapyPlan,
+        UserProfile,
+        UserStatus,
+    )
+
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    # Create test user
+    test_user = UserProfile(
+        user_id="tier3_stable_test",
+        name="Stable Test Patient",
+        birthdate=None,
+        profession="Accountant",
+        status=UserStatus.PLAN_COMPLETE,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_user_profile(test_user)
+
+    # Create Tier 1 patient profile
+    from models.data_models import (
+        AnalyticFrame,
+        BasicPatientBackground,
+        EducationalWorkHistory,
+        FamilyConstellation,
+        RelationalLifeContext,
+    )
+
+    patient_profile = PatientProfile(
+        user_id=test_user.user_id,
+        basic_info=BasicPatientBackground(
+            alias="Stable Test Patient",
+            date_of_birth=None,
+            gender="Male",
+            cultural_background="American",
+            primary_language="English",
+        ),
+        family=FamilyConstellation(
+            parents="Both parents, stable upbringing",
+            siblings="Two siblings",
+            family_atmosphere="Supportive",
+            significant_events=None,
+        ),
+        history=EducationalWorkHistory(
+            education="BA in Accounting",
+            work_history="Accountant for 10 years",
+            relationship_to_work="Stable and satisfying",
+        ),
+        context=RelationalLifeContext(
+            relationships="Married, supportive partner",
+            social_context="Good social network",
+            current_situation="General life stress, minor anxiety",
+        ),
+        frame=AnalyticFrame(
+            preferred_school="cbt",
+            session_mode="in-person",
+            boundary_notes=None,
+            frame_notes=None,
+        ),
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_db_service.save_patient_profile(patient_profile)
+
+    # Create initial Tier 3 (version 1)
+    from models.data_models import (
+        AnalyticOrientation,
+        CurrentFocus,
+        DefensiveOrganization,
+        PatientAnalysis,
+        PatientAnalysisVersion,
+        RecurringNarrative,
+        TransferenceImpressions,
+    )
+
+    initial_analysis = PatientAnalysis(
+        current_focus=CurrentFocus(
+            theme="General life stress management",
+            salience="Patient managing everyday stressors effectively",
+        ),
+        transference=TransferenceImpressions(
+            idealization=None,
+            devaluation=None,
+            boundaries=None,
+            other_patterns="Collaborative therapeutic relationship",
+        ),
+        narratives=[
+            RecurringNarrative(
+                title="The Stable Professional",
+                description=(
+                    "Patient has stable life but seeks better coping skills"
+                ),
+                first_appeared="intake",
+            )
+        ],
+        defenses=DefensiveOrganization(
+            primary_defenses=["suppression", "sublimation"],
+            defensive_style="Healthy, adaptive",
+            flexibility="Good flexibility",
+        ),
+        orientation=AnalyticOrientation(
+            pacing="Steady progress, skill-building focus",
+            risk_areas=[],
+            key_questions=["What coping strategies work best for you?"],
+        ),
+    )
+
+    tier3_v1 = PatientAnalysisVersion(
+        user_id=test_user.user_id,
+        version=1,
+        analysis_data=initial_analysis,
+        created_at=datetime.now(),
+        created_by_session=None,
+        change_summary=None,
+        superseded_by=None,
+    )
+    await trio_db_service.save_patient_analysis_version(tier3_v1)
+
+    # Create therapy plan
+    therapy_plan = TherapyPlan(
+        plan_id=str(uuid.uuid4()),
+        user_id=test_user.user_id,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        plan_details={"focus": "stress management"},
+        initial_goals=["Develop stress management skills"],
+        current_progress="Baseline",
+        planned_interventions=["Skills practice"],
+        status="active",
+        version=1,
+        selected_therapy_style="cbt",
+    )
+    await trio_db_service.save_therapy_plan(therapy_plan)
+
+    # Create routine therapy session (no major breakthroughs)
+    session_id = str(uuid.uuid4())
+    therapy_session = Session(
+        session_id=session_id,
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="How was your week?",
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="user",
+                content=(
+                    "Pretty good. Work was busy but I used the breathing "
+                    "techniques we discussed and they helped."
+                ),
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="assistant",
+                content="That's great. Tell me more about when you used them.",
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="user",
+                content=(
+                    "During a stressful meeting. I felt myself getting tense "
+                    "and took a few deep breaths. It really helped me stay calm."
+                ),
+                timestamp=datetime.now(),
+            ),
+        ],
+        topics=[],
+    )
+    await trio_db_service.save_session(therapy_session)
+
+    from unittest.mock import AsyncMock
+
+    from models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+
+    tier2_data = {
+        "psychological_summary": (
+            "Patient reported successful use of breathing techniques during a stressful work meeting. "
+            "Progress is steady and consistent with treatment plan."
+        ),
+        "dominant_affects": ["calm", "satisfaction"],
+        "key_themes": ["stress management", "skill application"],
+        "notable_interactions": None,
+        "interpretations": None,
+        "patient_reactions": None,
+    }
+
+    original_structured = llm_service.generate_structured_output_async
+
+    async def mock_structured_stable(prompt, schema, method="json_schema"):
+        if schema is Tier2Enrichment:
+            return Tier2Enrichment.model_validate(tier2_data)
+        if schema is ChangeDetectionDecision:
+            return ChangeDetectionDecision.model_validate(
+                {"update_needed": False, "change_summary": None, "confidence": "high"}
+            )
+        return await original_structured(prompt, schema, method=method)
+
+    llm_service.generate_structured_output_async = AsyncMock(
+        side_effect=mock_structured_stable
+    )
+
+    # Create user context and agents
+    user_context = UserContext(user_id=test_user.user_id)
+
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+    planning_agent = TrioPlanningAgent(
+        llm_service, trio_db_service, rag_service, user_context, memory_agent
+    )
+    reflection_agent = TrioReflectionAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        planning_agent,
+    )
+
+    # Run reflection (should NOT create Tier 3 v2)
+    reflection = await reflection_agent.generate_comprehensive_reflection(
+        therapy_session
+    )
+
+    # Verify reflection metadata shows NO Tier 3 update
+    assert reflection is not None
+    assert reflection["tier3_updated"] is False
+    assert reflection["tier3_version"] is None
+
+    # Verify Tier 3 remains at v1
+    tier3_current = await trio_db_service.get_latest_patient_analysis(
+        test_user.user_id
+    )
+    assert tier3_current is not None
+    assert tier3_current.version == 1  # Still version 1
+    assert tier3_current.analysis_id == tier3_v1.analysis_id
+    assert tier3_current.superseded_by is None  # Not superseded

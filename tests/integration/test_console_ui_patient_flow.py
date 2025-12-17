@@ -216,6 +216,316 @@ def mock_llm_service_with_context():
     llm.generate_response_stream = mock_stream
     llm.generate_response = Mock(return_value="This is a generated response.")
 
+    # Structured outputs: used by Tier extraction/enrichment paths.
+    async def mock_structured_output_async(prompt, schema, method="json_schema"):
+        from pydantic import BaseModel
+
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            schema_name = schema.__name__
+            if schema_name == "PatientProfileExtract":
+                return schema.model_validate(
+                    {
+                        "basic_info": {
+                            "alias": "Fabian",
+                            "date_of_birth": None,
+                            "gender": None,
+                            "cultural_background": None,
+                            "primary_language": "English",
+                        },
+                        "family": {
+                            "parents": None,
+                            "siblings": None,
+                            "family_atmosphere": None,
+                            "significant_events": None,
+                        },
+                        "history": {
+                            "education": None,
+                            "work_history": None,
+                            "relationship_to_work": None,
+                        },
+                        "context": {
+                            "relationships": None,
+                            "social_context": None,
+                            "current_situation": None,
+                        },
+                        "frame": {
+                            "preferred_school": None,
+                            "session_mode": "virtual",
+                            "boundary_notes": None,
+                            "frame_notes": None,
+                        },
+                    }
+                )
+            if schema_name == "PatientAnalysis":
+                return schema.model_validate(
+                    {
+                        "current_focus": {
+                            "theme": "Anxiety",
+                            "salience": "Work stress causing persistent anxiety",
+                        },
+                        "transference": {
+                            "idealization": None,
+                            "devaluation": None,
+                            "boundaries": None,
+                            "other_patterns": "Developing alliance",
+                        },
+                        "narratives": [],
+                        "defenses": {
+                            "primary_defenses": ["intellectualization"],
+                            "defensive_style": "Cerebral",
+                            "flexibility": "Moderate",
+                        },
+                        "orientation": {
+                            "pacing": "Gradual",
+                            "risk_areas": ["perfectionism"],
+                            "key_questions": ["What triggers the anxiety?"],
+                        },
+                    }
+                )
+            if schema_name == "Tier4Extract":
+                return schema.model_validate(
+                    {
+                        "initial_goals": ["Reduce workplace anxiety"],
+                        "current_progress": "Baseline established",
+                        "planned_interventions": ["Cognitive restructuring"],
+                        "status": "active",
+                    }
+                )
+            if schema_name == "PlanUpdate":
+                return schema.model_validate(
+                    {
+                        "focus": "Anxiety management",
+                        "goals": "- Reduce anxiety\n- Improve sleep",
+                        "techniques": "- Cognitive restructuring\n- Mindfulness",
+                        "themes": "Anxiety, coping",
+                        "timeline": "12 weeks",
+                    }
+                )
+            if schema_name == "Tier2Enrichment":
+                return schema.model_validate(
+                    {
+                        "psychological_summary": "Mock summary",
+                        "dominant_affects": ["anxiety"],
+                        "key_themes": ["work stress"],
+                        "notable_interactions": None,
+                        "interpretations": None,
+                        "patient_reactions": None,
+                    }
+                )
+            if schema_name == "SessionAnalysis":
+                return schema.model_validate(
+                    {
+                        "key_themes": ["work stress"],
+                        "emotional_state": "anxious",
+                        "insights": [],
+                        "progress_indicators": [],
+                    }
+                )
+            if schema_name == "SessionBriefing":
+                from datetime import datetime
+
+                now = datetime.now()
+                return schema.model_validate(
+                    {
+                        "briefing_type": "resumption",
+                        "generated_at": now.isoformat(),
+                        "session_count": 1,
+                        "last_session_id": "session_001",
+                        "last_session_date": now.date().isoformat(),
+                        "narrative_handoff": (
+                            "Patient discussed anxiety about work and ongoing stress. "
+                            "We explored triggers and began identifying automatic thoughts."
+                        ),
+                        "patient_observations": "Patient was engaged.",
+                        "plan_progression_notes": "Plan remains appropriate.",
+                        "relationship_quality": "developing",
+                        "continuity_points": ["Follow up on work anxiety"],
+                        "emotional_summary": {
+                            "last_session": "anxious",
+                            "trend": "stable",
+                            "note": "Stable anxiety with engagement",
+                        },
+                        "key_themes": [
+                            {
+                                "theme": "work stress",
+                                "status": "ongoing",
+                                "priority": "high",
+                                "frequency": 1,
+                                "first_appearance": "session_001",
+                                "last_discussed": "session_001",
+                            }
+                        ],
+                        "progress_highlights": ["Identified triggers"],
+                        "unresolved_issues": ["Perfectionism"],
+                        "recommended_approach": {
+                            "opening_tone": "Warm",
+                            "opening_focus": "Check in",
+                            "things_to_avoid": "Overwhelming questions",
+                            "suggested_questions": ["How have you been?"],
+                            "therapeutic_goals_for_session": ["Build rapport"],
+                        },
+                    }
+                )
+        return {}
+
+    llm.generate_structured_output_async = mock_structured_output_async
+
+    def mock_structured_output(prompt, schema, method="json_schema"):
+        from datetime import datetime
+
+        from pydantic import BaseModel
+
+        if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
+            return {}
+
+        schema_name = schema.__name__
+        if schema_name == "PatientProfileExtract":
+            return schema.model_validate(
+                {
+                    "basic_info": {
+                        "alias": "Fabian",
+                        "date_of_birth": None,
+                        "gender": None,
+                        "cultural_background": None,
+                        "primary_language": "English",
+                    },
+                    "family": {
+                        "parents": None,
+                        "siblings": None,
+                        "family_atmosphere": None,
+                        "significant_events": None,
+                    },
+                    "history": {
+                        "education": None,
+                        "work_history": None,
+                        "relationship_to_work": None,
+                    },
+                    "context": {
+                        "relationships": None,
+                        "social_context": None,
+                        "current_situation": None,
+                    },
+                    "frame": {
+                        "preferred_school": None,
+                        "session_mode": "virtual",
+                        "boundary_notes": None,
+                        "frame_notes": None,
+                    },
+                }
+            )
+        if schema_name == "PatientAnalysis":
+            return schema.model_validate(
+                {
+                    "current_focus": {
+                        "theme": "Anxiety",
+                        "salience": "Work stress causing persistent anxiety",
+                    },
+                    "transference": {
+                        "idealization": None,
+                        "devaluation": None,
+                        "boundaries": None,
+                        "other_patterns": "Developing alliance",
+                    },
+                    "narratives": [],
+                    "defenses": {
+                        "primary_defenses": ["intellectualization"],
+                        "defensive_style": "Cerebral",
+                        "flexibility": "Moderate",
+                    },
+                    "orientation": {
+                        "pacing": "Gradual",
+                        "risk_areas": ["perfectionism"],
+                        "key_questions": ["What triggers the anxiety?"],
+                    },
+                }
+            )
+        if schema_name == "Tier4Extract":
+            return schema.model_validate(
+                {
+                    "initial_goals": ["Reduce workplace anxiety"],
+                    "current_progress": "Baseline established",
+                    "planned_interventions": ["Cognitive restructuring"],
+                    "status": "active",
+                }
+            )
+        if schema_name == "PlanUpdate":
+            return schema.model_validate(
+                {
+                    "focus": "Anxiety management",
+                    "goals": "- Reduce anxiety\n- Improve sleep",
+                    "techniques": "- Cognitive restructuring\n- Mindfulness",
+                    "themes": "Anxiety, coping",
+                    "timeline": "12 weeks",
+                }
+            )
+        if schema_name == "Tier2Enrichment":
+            return schema.model_validate(
+                {
+                    "psychological_summary": "Mock summary",
+                    "dominant_affects": ["anxiety"],
+                    "key_themes": ["work stress"],
+                    "notable_interactions": None,
+                    "interpretations": None,
+                    "patient_reactions": None,
+                }
+            )
+        if schema_name == "SessionAnalysis":
+            return schema.model_validate(
+                {
+                    "key_themes": ["work stress"],
+                    "emotional_state": "anxious",
+                    "insights": [],
+                    "progress_indicators": [],
+                }
+            )
+        if schema_name == "SessionBriefing":
+            now = datetime.now()
+            return schema.model_validate(
+                {
+                    "briefing_type": "resumption",
+                    "generated_at": now.isoformat(),
+                    "session_count": 1,
+                    "last_session_id": "session_001",
+                    "last_session_date": now.date().isoformat(),
+                    "narrative_handoff": (
+                        "Patient discussed anxiety about work and ongoing stress. "
+                        "We explored triggers and began identifying automatic thoughts."
+                    ),
+                    "patient_observations": "Patient was engaged.",
+                    "plan_progression_notes": "Plan remains appropriate.",
+                    "relationship_quality": "developing",
+                    "continuity_points": ["Follow up on work anxiety"],
+                    "emotional_summary": {
+                        "last_session": "anxious",
+                        "trend": "stable",
+                        "note": "Stable anxiety with engagement",
+                    },
+                    "key_themes": [
+                        {
+                            "theme": "work stress",
+                            "status": "ongoing",
+                            "priority": "high",
+                            "frequency": 1,
+                            "first_appearance": "session_001",
+                            "last_discussed": "session_001",
+                        }
+                    ],
+                    "progress_highlights": ["Identified triggers"],
+                    "unresolved_issues": ["Perfectionism"],
+                    "recommended_approach": {
+                        "opening_tone": "Warm",
+                        "opening_focus": "Check in",
+                        "things_to_avoid": "Overwhelming questions",
+                        "suggested_questions": ["How have you been?"],
+                        "therapeutic_goals_for_session": ["Build rapport"],
+                    },
+                }
+            )
+
+        return schema.model_validate({})
+
+    llm.generate_structured_output = Mock(side_effect=mock_structured_output)
+
     return llm
 
 
@@ -674,6 +984,9 @@ async def test_complete_patient_journey_intake_to_therapy(
                     "goals": "Develop coping strategies for workplace anxiety",
                     "techniques": "Cognitive restructuring, thought challenging",
                 },
+                initial_goals=["Develop coping strategies for workplace anxiety"],
+                current_progress="Baseline established",
+                planned_interventions=["Cognitive restructuring"],
                 version=1,
                 selected_therapy_style=selected_style,
             )

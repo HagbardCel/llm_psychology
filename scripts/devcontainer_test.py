@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Test script to verify devcontainer functionality.
-This script can be used to test that the devcontainer is working correctly.
+Script to verify devcontainer functionality.
+
+Note: This is intentionally not a pytest test module; it is invoked via `make test-devcontainer`.
 """
 
 import os

@@ -229,8 +229,8 @@ describe('Type Converters', () => {
   describe('TherapyPlan Converters', () => {
     it('should convert GeneratedTherapyPlan to TherapyPlan', () => {
       const generatedPlan: any = {
-        planId: 'plan-123',
-        userId: 'user-123',
+        planid: 'plan-123',
+        userid: 'user-123',
         selectedTherapyStyle: 'freud',
         planDetails: { approach: 'psychoanalytic' },
         version: 1,
@@ -249,8 +249,8 @@ describe('Type Converters', () => {
 
     it('should handle missing optional fields', () => {
       const generatedPlan: any = {
-        planId: 'plan-minimal',
-        userId: 'user-minimal',
+        planid: 'plan-minimal',
+        userid: 'user-minimal',
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -275,8 +275,8 @@ describe('Type Converters', () => {
 
       const generatedPlan = fromTherapyPlan(plan);
 
-      expect((generatedPlan as any).planId).toBe('plan-789');
-      expect((generatedPlan as any).userId).toBe('user-789');
+      expect((generatedPlan as any).planid).toBe('plan-789');
+      expect((generatedPlan as any).userid).toBe('user-789');
       expect((generatedPlan as any).selectedTherapyStyle).toBe('jung');
       // Client-only fields should not be in generated plan
       expect((generatedPlan as any).goals).toBeUndefined();
@@ -286,14 +286,14 @@ describe('Type Converters', () => {
     it('should convert array of TherapyPlans', () => {
       const plans: any[] = [
         {
-          planId: 'plan-1',
-          userId: 'user-1',
+          planid: 'plan-1',
+          userid: 'user-1',
           createdAt: new Date(),
           updatedAt: new Date(),
         },
         {
-          planId: 'plan-2',
-          userId: 'user-2',
+          planid: 'plan-2',
+          userid: 'user-2',
           createdAt: new Date(),
           updatedAt: new Date(),
         },

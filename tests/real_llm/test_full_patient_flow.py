@@ -19,8 +19,8 @@ import pytest
 import trio
 from trio_websocket import ConnectionClosed, open_websocket_url
 
-# Mark all tests in this file as Trio tests
-pytestmark = pytest.mark.trio
+# Mark all tests in this file as real-LLM E2E (not part of the default deterministic suite)
+pytestmark = [pytest.mark.trio, pytest.mark.real_llm]
 
 # Use the service name for container-to-container communication
 SERVER_URL = "http://api-usertest:8000"

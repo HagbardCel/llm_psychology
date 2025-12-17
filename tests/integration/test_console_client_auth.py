@@ -207,11 +207,7 @@ async def test_protected_endpoint_without_token(test_server_url):
         # Try to access protected endpoint without token
         response = await client.get(f"{test_server_url}/api/user/status")
 
-        # When auth is disabled in development, this returns 200
-        # When auth is enabled, this should return 401
-        # The actual behavior depends on REQUIRE_AUTHENTICATION setting
-        # Just verify it doesn't crash
-        assert response.status_code in [200, 401]
+        assert response.status_code == 401
 
 
 @pytest.mark.trio
@@ -224,9 +220,7 @@ async def test_protected_endpoint_with_invalid_token(test_server_url):
             headers={"Authorization": "Bearer invalid_token_here"},
         )
 
-        # When auth is disabled, returns 200
-        # When auth is enabled, returns 401
-        assert response.status_code in [200, 401]
+        assert response.status_code == 401
 
 
 @pytest.mark.trio

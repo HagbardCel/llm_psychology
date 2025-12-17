@@ -7,17 +7,31 @@ the user's background, current concerns, and therapy goals.
 Pure Trio implementation using structured concurrency.
 """
 
+import json
 import logging
 from datetime import datetime
 
+import trio
+
 from config import settings
 from context.user_context import UserContext
-from models.data_models import Message, UserStatus
+from models.data_models import (
+    AnalyticFrame,
+    BasicPatientBackground,
+    EducationalWorkHistory,
+    FamilyConstellation,
+    Message,
+    PatientProfile,
+    RelationalLifeContext,
+    UserStatus,
+)
+from models.structured_output_models import PatientProfileExtract
 from orchestration.models import AgentResponse, ConversationContext, WorkflowState
 from prompts.intake_prompts import (
     CONTINUE_CONVERSATION_PROMPT,
     GUEST_WELCOME_PROMPT,
     INITIAL_GREETING_PROMPT,
+    TIER1_EXTRACTION_PROMPT,
 )
 from services.llm_service import LLMService
 from services.trio_db_service import TrioDatabaseService
@@ -151,6 +165,24 @@ class TrioIntakeAgent:
 
                 # Determine next action and state
                 if is_complete:
+                    # Extract and save Tier 1 patient profile data
+                    logger.info("Intake complete - extracting Tier 1 data...")
+                    patient_profile = await self._extract_tier1_data(
+                        context.message_history
+                    )
+
+                    if patient_profile:
+                        # Save patient profile to database
+                        await self.db_service.save_patient_profile(patient_profile)
+                        logger.info(
+                            f"Saved Tier 1 patient profile for "
+                            f"{patient_profile.basic_info.alias}"
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to extract Tier 1 data from intake conversation"
+                        )
+
                     next_action = "transition"
                     next_state = WorkflowState.INTAKE_COMPLETE
                 elif context.is_time_up:
@@ -339,3 +371,65 @@ class TrioIntakeAgent:
                 logger.info(f"Matched topic: {topic}")
 
         return covered
+
+    async def _extract_tier1_data(
+        self, conversation_history: list[Message]
+    ) -> PatientProfile | None:
+        """
+        Extract Tier 1 patient profile data from intake conversation using LLM.
+
+        Uses structured output to extract patient background information
+        from the intake conversation transcript.
+
+        Args:
+            conversation_history: Complete intake conversation history
+
+        Returns:
+            PatientProfile instance with extracted data, or None if extraction fails
+        """
+        try:
+            # Format conversation into transcript
+            transcript_lines = []
+            for msg in conversation_history:
+                role = "Therapist" if msg.role == "assistant" else "Patient"
+                transcript_lines.append(f"{role}: {msg.content}")
+
+            transcript = "\n".join(transcript_lines)
+
+            # Format the extraction prompt
+            extraction_prompt = TIER1_EXTRACTION_PROMPT.format(
+                conversation_transcript=transcript
+            )
+
+            logger.info("Extracting Tier 1 patient data from intake conversation...")
+
+            extracted = await self.llm_service.generate_structured_output_async(
+                extraction_prompt,
+                PatientProfileExtract,
+                method="json_schema",
+            )
+            if not isinstance(extracted, PatientProfileExtract):
+                logger.error("Tier 1 extraction returned unexpected type")
+                return None
+
+            # Construct PatientProfile
+            patient_profile = PatientProfile(
+                user_id=self.user_context.user_id,
+                basic_info=extracted.basic_info,
+                family=extracted.family,
+                history=extracted.history,
+                context=extracted.context,
+                frame=extracted.frame,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+
+            logger.info(
+                f"Successfully extracted Tier 1 data for patient: {extracted.basic_info.alias}"
+            )
+
+            return patient_profile
+
+        except Exception as e:
+            logger.error(f"Error extracting Tier 1 data: {e}", exc_info=True)
+            return None

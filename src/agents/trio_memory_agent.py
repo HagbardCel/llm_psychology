@@ -10,7 +10,6 @@ This agent is responsible for:
 Pure Trio implementation using structured concurrency.
 """
 
-import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -24,6 +23,7 @@ from models.data_models import Session
 from services.llm_service import LLMService
 from services.rag_service import RAGService
 from services.trio_db_service import TrioDatabaseService
+from models.structured_output_models import SessionAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -174,22 +174,21 @@ class TrioMemoryAgent:
             """
 
             # Get structured response from LLM (run in thread)
-            response = await trio.to_thread.run_sync(
-                self.llm_service.generate_structured_response,
+            analysis = await self.llm_service.generate_structured_output_async(
                 analysis_prompt,
-                '{"key_themes": ["string"], "emotional_state": "string", "insights": ["string"], "progress_indicators": ["string"]}',
+                SessionAnalysis,
+                method="json_schema",
             )
-
-            # Parse response
-            analysis = self._parse_session_analysis(response)
+            if not isinstance(analysis, SessionAnalysis):
+                raise MemoryError("Session analysis returned unexpected type")
 
             # Create session context
             context = SessionContext(
                 session_id=session.session_id,
-                key_themes=analysis.get("key_themes", []),
-                emotional_state=analysis.get("emotional_state", "neutral"),
-                insights=analysis.get("insights", []),
-                progress_indicators=analysis.get("progress_indicators", []),
+                key_themes=analysis.key_themes,
+                emotional_state=analysis.emotional_state,
+                insights=analysis.insights,
+                progress_indicators=analysis.progress_indicators,
             )
 
             logger.info(f"Session context analyzed for {session.session_id}")
@@ -444,38 +443,8 @@ class TrioMemoryAgent:
 
         return "\n".join(formatted)
 
-    def _parse_session_analysis(self, response: dict[str, Any]) -> dict[str, Any]:
-        """Parse LLM response for session analysis."""
-        try:
-            if "raw_response" in response:
-                raw_response = response["raw_response"].strip()
-
-                # Remove markdown code block markers
-                if raw_response.startswith("```json"):
-                    raw_response = raw_response[7:]
-                if raw_response.startswith("```"):
-                    raw_response = raw_response[3:]
-                if raw_response.endswith("```"):
-                    raw_response = raw_response[:-3]
-
-                return json.loads(raw_response.strip())
-
-            # Fallback to default
-            return {
-                "key_themes": ["general_discussion"],
-                "emotional_state": "neutral",
-                "insights": [],
-                "progress_indicators": [],
-            }
-
-        except Exception as e:
-            logger.warning(f"Failed to parse session analysis: {e}")
-            return {
-                "key_themes": ["general_discussion"],
-                "emotional_state": "neutral",
-                "insights": [],
-                "progress_indicators": [],
-            }
+    # NOTE: No JSON scraping/parsing here; structured outputs are produced by Gemini
+    # using schema-guided decoding via LLMService.generate_structured_output_async.
 
     def _assess_relationship_quality(self, sessions: list[Session]) -> str:
         """Assess therapeutic relationship quality based on sessions."""

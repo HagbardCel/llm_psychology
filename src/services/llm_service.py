@@ -34,7 +34,8 @@ class TrioRateLimiter:
         self.rate = rate
         self.capacity = capacity
         self._tokens = capacity
-        self._last_update = trio.current_time()
+        # Initialized lazily in `acquire()` (cannot call `trio.current_time()` outside async context).
+        self._last_update: float | None = None
         self._lock = trio.Lock()
 
     async def acquire(self, tokens: float = 1.0) -> None:
@@ -47,6 +48,8 @@ class TrioRateLimiter:
             tokens: Number of tokens to acquire (default: 1.0)
         """
         async with self._lock:
+            if self._last_update is None:
+                self._last_update = trio.current_time()
             while True:
                 # Refill tokens based on elapsed time
                 now = trio.current_time()
@@ -223,41 +226,28 @@ class LLMService:
                 f"LLM streaming failed: {type(e).__name__}: {str(e)}\n\nSTACKTRACE:\n{tb_str}"
             ) from e
 
-    def generate_structured_response(
-        self, prompt: str, output_format: str
-    ) -> dict[str, Any]:
+    def generate_structured_output(
+        self,
+        prompt: str,
+        schema: dict | type["BaseModel"],
+        *,
+        method: str = "json_schema",
+    ) -> Any:
         """
-        Generate a structured response from the LLM.
+        Generate a structured output using Gemini's native structured output support.
 
-        Args:
-            prompt (str): The prompt to send to the LLM.
-            output_format (str): Description of the expected output format.
-
-        Returns:
-            Dict[str, Any]: The structured response.
+        This avoids JSON scraping/parsing by relying on `response_mime_type` +
+        schema-guided decoding inside the Gemini API / LangChain integration.
         """
-        try:
-            # Create a prompt that instructs the LLM to return JSON
-            structured_prompt = f"""
-            {prompt}
-            
-            Please provide your response in JSON format with the following structure:
-            {output_format}
-            
-            Respond ONLY with valid JSON. Do not include any other text.
-            """
+        # Import here to avoid hard dependency in module import order.
+        from pydantic import BaseModel
 
-            response = self.llm.invoke([HumanMessage(content=structured_prompt)])
-            response_text = response.content.strip()
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            runnable = self.llm.with_structured_output(schema, method=method)
+            return runnable.invoke(prompt)
 
-            # Attempt to parse JSON (in a real implementation, you'd use json.loads)
-            # For now, we'll return the raw text
-            return {"raw_response": response_text}
-        except Exception as e:
-            logger.error(
-                f"Error generating structured LLM response: {e}", exc_info=True
-            )
-            return {"error": "Failed to generate structured response"}
+        runnable = self.llm.with_structured_output(schema, method=method)
+        return runnable.invoke(prompt)
 
     def create_prompt_template(
         self, template: str, input_variables: list[str]
@@ -318,21 +308,17 @@ class LLMService:
 
         return await trio.to_thread.run_sync(self.generate_response, prompt, context)
 
-    async def generate_structured_response_async(
-        self, prompt: str, output_format: str
-    ) -> dict[str, Any]:
-        """Generate a structured response with rate limiting.
-
-        Args:
-            prompt: The prompt to send to the LLM
-            output_format: Description of the expected output format
-
-        Returns:
-            Dict[str, Any]: The structured response
-        """
-        # Apply rate limiting before starting the request
+    async def generate_structured_output_async(
+        self,
+        prompt: str,
+        schema: dict | type["BaseModel"],
+        *,
+        method: str = "json_schema",
+    ) -> Any:
+        """Async wrapper for generate_structured_output with rate limiting."""
         await self._acquire_rate_limit()
-
+        # trio.to_thread.run_sync doesn't forward arbitrary kwargs to the target callable,
+        # so pass keyword-only args via a closure.
         return await trio.to_thread.run_sync(
-            self.generate_structured_response, prompt, output_format
+            lambda: self.generate_structured_output(prompt, schema, method=method)
         )

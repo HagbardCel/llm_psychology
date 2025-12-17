@@ -12,7 +12,7 @@ from datetime import datetime
 from threading import RLock
 from typing import Any, TypeVar
 
-from config import Settings, settings
+from config import Settings
 from context.user_context import UserContext
 from exceptions import ConfigurationError
 from services.llm_service import LLMService
@@ -41,14 +41,24 @@ class ServiceContainer:
     - Mock service support for testing
     """
 
-    def __init__(self, config: Settings = settings):
+    LLM_SERVICE_KEYS = [
+        "llm_service",
+        "llm_service_intake",
+        "llm_service_assessment",
+        "llm_service_psychoanalyst",
+        "llm_service_reflection",
+        "llm_service_memory",
+        "llm_service_planning",
+    ]
+
+    def __init__(self, config: Settings | None = None):
         """
         Initialize the service container.
 
         Args:
             config: Application configuration object
         """
-        self.config = config
+        self.config = config or Settings()
         self._instances: dict[str, Any] = {}
         self._factories: dict[str, Callable[[], Any]] = {}
         self._lock = RLock()
@@ -140,7 +150,14 @@ class ServiceContainer:
             instance: Service instance to register
         """
         with self._lock:
-            self._instances[service_name] = instance
+            if service_name == "llm_service":
+                for llm_key in self.LLM_SERVICE_KEYS:
+                    self._instances[llm_key] = instance
+                logger.debug(
+                    "Registered mock LLM service for all agent-specific LLM keys"
+                )
+            else:
+                self._instances[service_name] = instance
             logger.debug(f"Registered custom instance for {service_name}")
 
     def register_factory(self, service_name: str, factory: Callable[[], Any]) -> None:

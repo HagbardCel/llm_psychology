@@ -134,10 +134,11 @@ class TrioAgentOrchestrator:
             logger.info(
                 f"Agent {agent_type} returned action: {agent_response.next_action}"
             )
-            print(
-                f"DEBUG: Agent response: action={agent_response.next_action} "
-                f"state={agent_response.next_state} "
-                f"direct={agent_response.metadata.get('is_direct_response')}"
+            logger.debug(
+                "Agent response: action=%s state=%s direct=%s",
+                agent_response.next_action,
+                agent_response.next_state,
+                (agent_response.metadata or {}).get("is_direct_response"),
             )
 
             # Determine which LLM service to use based on agent type
@@ -207,14 +208,20 @@ STACKTRACE:
             yield error_msg
 
     async def start_session(
-        self, user_id: str, session_type: str = "THERAPY"
+        self,
+        user_id: str,
+        session_type: str = "THERAPY",
+        *,
+        send_initial_message: bool = False,
     ) -> SessionInfo:
         """
-        Start a new therapy session and send an initial greeting if appropriate.
+        Start a new therapy session and optionally send an initial greeting.
 
         Args:
             user_id: User identifier
             session_type: Type of session to start
+            send_initial_message: If True, schedule an initial therapist message
+                (via the current agent) to be streamed over WebSocket.
 
         Returns:
             Session information, including whether an initial message is being sent.
@@ -224,30 +231,21 @@ STACKTRACE:
         """
         try:
             logger.info(f"Starting session for user {user_id}, type: {session_type}")
-            has_initial_message = False
+            has_initial_message = bool(send_initial_message)
 
             # Get current workflow state
             state = await self.workflow_engine.get_user_state(user_id)
             agent_type = self.workflow_engine.get_current_agent(state)
             session_id = await self._create_session(user_id)
 
-            # Proactively send an initial message for certain states
-            if state in [
-                WorkflowState.NEW,
-                WorkflowState.INTAKE_IN_PROGRESS,
-                WorkflowState.THERAPY_IN_PROGRESS,
-            ]:
+            if send_initial_message:
+                # Trigger the agent's normal message processing with an empty message.
+                # This avoids introducing a separate "greeting" code path per agent.
+                self.nursery.start_soon(self._send_initial_greeting, user_id, session_id)
                 logger.info(
-                    f"State {state} qualifies for a proactive initial greeting."
+                    f"Scheduled initial greeting for session {session_id} "
+                    f"(state={state}, agent={agent_type})"
                 )
-                has_initial_message = True
-
-                # Trigger the agent's normal message processing with an empty message
-                # This will cause the agent to generate its initial greeting
-                self.nursery.start_soon(
-                    self._send_initial_greeting, user_id, session_id
-                )
-                logger.info(f"Scheduled initial greeting for session {session_id}")
 
             # Build session info
             session_info = SessionInfo(
@@ -305,25 +303,45 @@ STACKTRACE:
                 except ValueError:
                     logger.warning(f"Invalid birthdate format: {birthdate}")
 
-            # Create user profile
+            trio_db_service = self.service_container.get("trio_db_service")
+            existing_profile = await trio_db_service.get_user_profile(user_id)
+
+            # Preserve created_at and status; only advance workflow when profile is first completed.
+            created_at = (
+                existing_profile.created_at if existing_profile else datetime.now()
+            )
+            status = existing_profile.status if existing_profile else UserStatus.PROFILE_ONLY
+
+            # Create/update user profile
             user_profile = UserProfile(
                 user_id=user_id,
-                name=name,
+                name=name or (existing_profile.name if existing_profile else user_id),
                 birthdate=birthdate_dt,
-                profession=profession,
-                status=UserStatus.PROFILE_ONLY,
-                created_at=datetime.now(),
+                profession=profession or None,
+                status=status,
+                created_at=created_at,
                 updated_at=datetime.now(),
             )
 
             # Save to database
-            trio_db_service = self.service_container.get("trio_db_service")
             success = await trio_db_service.save_user_profile(user_profile)
 
             if not success:
                 raise ValueError("Failed to save user profile to database")
 
-            logger.info(f"Created user profile for {user_id}: {name}")
+            # If this is the initial profile completion, advance to intake.
+            if status == UserStatus.PROFILE_ONLY:
+                from orchestration.models import WorkflowEvent, WorkflowState
+
+                await self.workflow_engine.transition(
+                    user_id, WorkflowState.INTAKE_IN_PROGRESS, event=WorkflowEvent.START_INTAKE
+                )
+                updated = await trio_db_service.get_user_profile(user_id)
+                if updated:
+                    logger.info(f"Created user profile for {user_id}: {updated.name}")
+                    return updated
+
+            logger.info(f"Updated user profile for {user_id}: {user_profile.name}")
             return user_profile
 
         except Exception as e:
@@ -372,20 +390,24 @@ STACKTRACE:
                 )
                 return existing_plan
 
-            # Create minimal therapy plan (version 1)
-            # Detailed plan_details will be generated by PlanningAgent
-            # during first session
+            # Create minimal therapy plan (version 1).
+            # Tier 4 fields must always be present.
             plan = TherapyPlan(
                 plan_id=str(uuid.uuid4()),
                 user_id=user_id,
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
                 plan_details={
-                    "focus": "To be determined in first therapy session",
-                    "goals": [],
-                    "techniques": [],
-                    "themes": [],
+                    "focus": "To be refined in early sessions",
+                    "goals": "Stabilize presenting concerns",
+                    "techniques": "Supportive listening; clarification",
+                    "themes": "Presenting concerns; therapeutic alliance",
+                    "timeline": "Ongoing assessment with regular reviews",
                 },
+                initial_goals=["Stabilize presenting concerns"],
+                current_progress="Baseline established",
+                planned_interventions=["Supportive listening", "Clarification"],
+                status="active",
                 version=1,
                 selected_therapy_style=therapy_style,
             )
@@ -493,7 +515,7 @@ STACKTRACE:
         user_context = UserContext(user_id=user_id)
 
         # Create reflection agent first as it's a dependency
-        reflection_agent = await self._create_reflection_agent(user_id)
+        reflection_agent = await self._get_or_create_agent("REFLECTION", user_id)
 
         logger.info(f"Creating TrioAssessmentAgent for user {user_id}")
         return TrioAssessmentAgent(
@@ -517,9 +539,16 @@ STACKTRACE:
         rag_service = self.service_container.get("rag_service")
         user_context = UserContext(user_id=user_id)
 
+        # Provide ReflectionAgent so Psychoanalyst can trigger on-demand Tier 2 enrichment
+        reflection_agent = await self._get_or_create_agent("REFLECTION", user_id)
+
         logger.info(f"Creating TrioPsychoanalystAgent for user {user_id}")
         return TrioPsychoanalystAgent(
-            llm_service, db_service, rag_service, user_context
+            llm_service,
+            db_service,
+            rag_service,
+            user_context,
+            reflection_agent=reflection_agent,
         )
 
     async def _create_reflection_agent(self, user_id: str):
@@ -611,27 +640,69 @@ STACKTRACE:
             user_id: User identifier
             session_id: Session identifier
         """
-        # Small delay to ensure session is fully initialized
-        await trio.sleep(0.1)
+        typing_started = False
+        try:
+            # Wait for the websocket to be registered for this session.
+            # This prevents racing the `session_started` message in the console client.
+            ws_ready = await self.conversation_manager.wait_for_websocket(
+                session_id, timeout_seconds=5.0
+            )
+            if not ws_ready:
+                logger.warning(
+                    "Skipping initial greeting for session %s: websocket never registered",
+                    session_id,
+                )
+                return
 
-        # Send typing start
-        await self.conversation_manager.send_typing_indicator(session_id, True)
+            await self.conversation_manager.send_typing_indicator(session_id, True)
+            typing_started = True
 
-        # Process empty message to trigger initial greeting
-        async for chunk in self.process_message(user_id, "", session_id):
+            # Process empty message to trigger initial greeting
+            async for chunk in self.process_message(user_id, "", session_id):
+                await self.conversation_manager.send_stream_chunk(
+                    session_id, chunk, is_complete=False
+                )
+
             await self.conversation_manager.send_stream_chunk(
-                session_id, chunk, is_complete=False
+                session_id, "", is_complete=True
             )
 
-        # Send completion
-        await self.conversation_manager.send_stream_chunk(
-            session_id, "", is_complete=True
-        )
+            logger.info(f"Initial greeting sent for session {session_id}")
 
-        # Send typing stop
-        await self.conversation_manager.send_typing_indicator(session_id, False)
-
-        logger.info(f"Initial greeting sent for session {session_id}")
+        except Exception as e:
+            logger.error(
+                "Initial greeting failed for session %s: %s",
+                session_id,
+                e,
+                exc_info=True,
+            )
+            try:
+                await self.conversation_manager.send_stream_chunk(
+                    session_id,
+                    f"\nERROR: Initial greeting failed: {type(e).__name__}: {e}\n",
+                    is_complete=False,
+                )
+                await self.conversation_manager.send_stream_chunk(
+                    session_id, "", is_complete=True
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to send initial-greeting error chunk for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+        finally:
+            try:
+                if typing_started:
+                    await self.conversation_manager.send_typing_indicator(
+                        session_id, False
+                    )
+            except Exception:
+                logger.debug(
+                    "Failed to send typing_stop for session %s (likely disconnected)",
+                    session_id,
+                    exc_info=True,
+                )
 
     async def _handle_agent_response(
         self, user_id: str, session_id: str, agent_response: AgentResponse
@@ -646,6 +717,7 @@ STACKTRACE:
         """
         # Always check for state transition if next_state is provided
         if agent_response.next_state:
+            prior_state = await self.workflow_engine.get_user_state(user_id)
             logger.info(
                 f"Transitioning user {user_id} to state: {agent_response.next_state}"
             )
@@ -653,6 +725,23 @@ STACKTRACE:
 
             # Clear context cache to ensure next request gets fresh user status
             self.conversation_manager.clear_context(session_id)
+
+            # Session completion hook: enqueue Tier 2 enrichment job for completed therapy sessions.
+            if (
+                prior_state == WorkflowState.THERAPY_IN_PROGRESS
+                and agent_response.next_state == WorkflowState.REFLECTION_IN_PROGRESS
+            ):
+                try:
+                    trio_db_service = self.service_container.get("trio_db_service")
+                    await trio_db_service.enqueue_session_enrichment_job(
+                        session_id, user_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to enqueue Tier 2 enrichment job for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
 
         action = agent_response.next_action
         logger.info(f"Handling agent response for user {user_id}: action={action}")

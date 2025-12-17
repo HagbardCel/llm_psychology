@@ -100,6 +100,15 @@ class LoadTestRunner:
                 '"progress_indicators": ["self_awareness"]}'
             )
         }
+        mock_llm.generate_structured_data.return_value = {
+            "raw_response": mock_llm.generate_structured_response.return_value["raw_response"],
+            "data": {
+                "key_themes": ["stress", "anxiety"],
+                "emotional_state": "concerned",
+                "insights": ["recognizing_patterns"],
+                "progress_indicators": ["self_awareness"],
+            },
+        }
         self.container.register("llm_service", mock_llm)
 
         # Mock RAG service for fast knowledge retrieval

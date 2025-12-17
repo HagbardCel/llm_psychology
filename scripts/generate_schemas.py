@@ -6,6 +6,7 @@ This script exports all API-facing Pydantic models to JSON Schema format
 for TypeScript type generation.
 """
 
+import argparse
 import json
 import sys
 from dataclasses import asdict, fields, is_dataclass
@@ -171,11 +172,11 @@ def generate_enum_schema(enum_type: Type[Enum], output_dir: Path) -> None:
     print(f"✓ Generated enum schema: {output_file.name}")
 
 
-def generate_all_schemas() -> None:
+def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
     """Generate JSON Schemas for all API models."""
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-    print(f"Generating schemas in {OUTPUT_DIR.absolute()}...\n")
+    print(f"Generating schemas in {output_dir.absolute()}...\n")
 
     # Pydantic models (direct generation)
     pydantic_models: list[Type[BaseModel]] = [
@@ -212,14 +213,14 @@ def generate_all_schemas() -> None:
     print("Generating Pydantic model schemas...")
     for model in pydantic_models:
         try:
-            generate_schema(model, OUTPUT_DIR)
+            generate_schema(model, output_dir)
         except Exception as e:
             print(f"✗ Failed to generate schema for {model.__name__}: {e}")
 
     print("\nGenerating enum schemas...")
     for enum_type in enums:
         try:
-            generate_enum_schema(enum_type, OUTPUT_DIR)
+            generate_enum_schema(enum_type, output_dir)
         except Exception as e:
             print(f"✗ Failed to generate enum schema for {enum_type.__name__}: {e}")
 
@@ -228,7 +229,7 @@ def generate_all_schemas() -> None:
         try:
             # Convert dataclass to Pydantic model
             pydantic_model = dataclass_to_pydantic(dataclass_type)
-            generate_schema(pydantic_model, OUTPUT_DIR, schema_name=name)
+            generate_schema(pydantic_model, output_dir, schema_name=name)
         except Exception as e:
             print(f"✗ Failed to generate schema for {name}: {e}")
 
@@ -248,19 +249,27 @@ def generate_all_schemas() -> None:
         "models": sorted(all_models),
     }
 
-    with open(OUTPUT_DIR / "index.json", "w") as f:
+    with open(output_dir / "index.json", "w") as f:
         json.dump(index, f, indent=2)
 
     print(f"\n{'='*60}")
     print(f"✓ Successfully generated {len(all_models)} schemas")
-    print(f"  Output directory: {OUTPUT_DIR.absolute()}")
+    print(f"  Output directory: {output_dir.absolute()}")
     print(f"  Index file: index.json")
     print(f"{'='*60}")
 
 
 if __name__ == "__main__":
     try:
-        generate_all_schemas()
+        parser = argparse.ArgumentParser(description="Generate JSON schemas from Pydantic models")
+        parser.add_argument(
+            "--output-dir",
+            default=str(OUTPUT_DIR),
+            help="Directory to write schema files to (default: ./schemas)",
+        )
+        args = parser.parse_args()
+
+        generate_all_schemas(Path(args.output_dir))
     except Exception as e:
         print(f"\n✗ Schema generation failed: {e}", file=sys.stderr)
         import traceback

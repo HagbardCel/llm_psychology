@@ -11,6 +11,7 @@ from generate_schemas import (
     enhance_schema_for_typescript,
     generate_enum_schema,
     generate_schema,
+    generate_all_schemas,
 )
 
 # Imports from src directory (added to path by conftest.py)
@@ -163,6 +164,35 @@ class TestSchemaGeneration:
             with open(schema_file) as f:
                 schema = json.load(f)
                 assert "$schema" in schema or "enum" in schema
+
+    def test_committed_schemas_up_to_date(self, tmp_path):
+        """Test that committed schema files match generation output."""
+        generate_all_schemas(tmp_path)
+
+        committed_dir = Path(__file__).parent.parent.parent / "schemas"
+        committed_files = sorted(p.name for p in committed_dir.glob("*.json"))
+        generated_files = sorted(p.name for p in tmp_path.glob("*.json"))
+
+        assert (
+            committed_files == generated_files
+        ), "Generated schemas differ from committed set"
+
+        for filename in committed_files:
+            committed_path = committed_dir / filename
+            generated_path = tmp_path / filename
+
+            with open(committed_path) as f:
+                committed = json.load(f)
+            with open(generated_path) as f:
+                generated = json.load(f)
+
+            if filename == "index.json":
+                committed = {**committed, "generated_at": "<ignored>"}
+                generated = {**generated, "generated_at": "<ignored>"}
+
+            assert (
+                committed == generated
+            ), f"Committed schema out of date: {filename}"
 
 
 @pytest.mark.integration

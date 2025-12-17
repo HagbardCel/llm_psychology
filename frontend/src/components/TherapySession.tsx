@@ -1,19 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Box,
   Container,
   Alert,
   Snackbar,
 } from '@mui/material';
+import { useParams } from 'react-router-dom';
 import { SessionHeader } from './SessionHeader';
 import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';
 import { ConnectionStatus } from './ConnectionStatus';
-import { useAppContext } from '../contexts/AppContext';
+import { useCurrentUserId } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useTypingIndicator } from '../hooks/useTypingIndicator';
-import { Message, Session, AgentType, SessionStatus, TherapyStyle } from '../types';
+import { apiClient } from '../services/apiClient';
+import { Message, Session, AgentType, SessionStatus } from '../types';
 import type { SessionStartedEvent } from '../types/websocket';
 
 interface TherapySessionProps {
@@ -21,75 +23,88 @@ interface TherapySessionProps {
 }
 
 export function TherapySession({ sessionId }: TherapySessionProps) {
-  const { state, actions } = useAppContext();
   const { token, user: authUser } = useAuth();
-  const user = state.user;
+  const currentUserId = useCurrentUserId();
+  const params = useParams<{ sessionId?: string }>();
+  const effectiveSessionId = sessionId ?? params.sessionId;
+  const isReadOnly = !!effectiveSessionId;
+
+  const userId = authUser?.userId || currentUserId || 'guest';
+
+  const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamingMessage, setStreamingMessage] = useState<string>('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSessionReady, setIsSessionReady] = useState(false);
 
-  const currentSession = state.currentSession;
-  const messages = currentSession?.transcript || [];
+  const streamBufferRef = useRef<string>('');
+  const sessionRequestedRef = useRef(false);
+
+  const messages = session?.transcript || [];
 
   // Callback for handling streaming chunks
-  const handleStreamingChunk = (chunk: string, isComplete: boolean, fullResponse?: string) => {
-    if (!currentSession) return;
+  const handleStreamingChunk = useCallback(
+    (chunk: string, isComplete: boolean, fullResponse?: string) => {
+      if (isReadOnly) return;
 
-    if (!isComplete) {
-      // Accumulate chunks
-      setStreamingMessage(prev => prev + chunk);
-      setIsStreaming(true);
-    } else {
-      // Streaming complete - create final message
-      const finalContent = fullResponse || streamingMessage;
+      if (!isComplete) {
+        streamBufferRef.current += chunk;
+        setStreamingMessage(streamBufferRef.current);
+        setIsStreaming(true);
+        return;
+      }
 
-      const agentMessage: Message = {
-        id: generateMessageId(),
-        content: finalContent,
-        role: 'assistant',
-        timestamp: new Date(),
-        sessionId: currentSession.id,
-      };
+      const finalContent = fullResponse || streamBufferRef.current;
+      streamBufferRef.current = '';
 
-      const updatedSession: Session = {
-        ...currentSession,
-        transcript: [...currentSession.transcript, agentMessage],
-      };
-
-      actions.updateSession(updatedSession);
-
-      // Reset streaming state
-      setStreamingMessage('');
       setIsStreaming(false);
+      setStreamingMessage('');
       setIsLoading(false);
-    }
-  };
+
+      if (!finalContent) return;
+
+      setSession((prev) => {
+        if (!prev) return prev;
+
+        const agentMessage: Message = {
+          id: generateMessageId(),
+          content: finalContent,
+          role: 'assistant',
+          timestamp: new Date(),
+          sessionId: prev.id,
+        };
+
+        return {
+          ...prev,
+          transcript: [...(prev.transcript || []), agentMessage],
+        };
+      });
+    },
+    [isReadOnly]
+  );
 
   // Callback for session started event
-  const handleSessionStarted = (event: SessionStartedEvent) => {
-    console.log('Therapy session started:', event);
+  const handleSessionStarted = useCallback((event: SessionStartedEvent) => {
+    if (isReadOnly) return;
 
-    if (!currentSession) {
-      console.error('No current session to update with server session ID');
-      return;
-    }
+    streamBufferRef.current = '';
+    sessionRequestedRef.current = true;
 
-    // Update session with server-assigned ID
-    const updatedSession: Session = {
-      ...currentSession,
+    const startedSession: Session = {
       id: event.session_id,
+      userId: event.user_id,
       agentType: event.agent_type as AgentType,
+      status: SessionStatus.ACTIVE,
       startTime: new Date(event.created_at),
+      transcript: [],
+      topics: [],
     };
 
-    actions.updateSession(updatedSession);
-    actions.setCurrentSession(updatedSession);
+    setSession(startedSession);
     setIsSessionReady(true);
-
-    console.log(`Session synchronized: ${event.session_id} (${event.agent_type})`);
-  };
+    setIsLoading(false);
+  }, [isReadOnly]);
 
   // WebSocket integration
   const {
@@ -101,9 +116,9 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     requestSession,
     isConnected
   } = useWebSocket({
-    userId: authUser?.userId || user?.id || 'guest',
+    userId,
     authToken: token || '',
-    autoConnect: true,
+    autoConnect: !isReadOnly,
     onStreamingChunk: handleStreamingChunk,
     onSessionStarted: handleSessionStarted
   });
@@ -123,22 +138,74 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   }, [lastMessage]);
 
   useEffect(() => {
-    if (sessionId && sessionId !== currentSession?.id) {
-      loadSession(sessionId);
-    }
-  }, [sessionId, currentSession?.id]);
+    if (!effectiveSessionId) return;
 
-  // Request therapy session when connected
+    let cancelled = false;
+    const load = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        setIsSessionReady(false);
+
+        const response = await apiClient.get<any>(`/api/sessions/${effectiveSessionId}`);
+
+        if (cancelled) return;
+
+        const loadedSession: Session = {
+          id: response.session_id,
+          userId: response.user_id,
+          startTime: response.timestamp ? new Date(response.timestamp) : undefined,
+          transcript: (response.transcript || []).map((m: any) => ({
+            id: `${response.session_id}-${m.timestamp}-${m.role}`,
+            role: m.role,
+            content: m.content,
+            timestamp: new Date(m.timestamp),
+            sessionId: response.session_id,
+          })),
+          topics: response.topics || [],
+          status: SessionStatus.COMPLETED,
+        };
+
+        setSession(loadedSession);
+        setIsSessionReady(true);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load session');
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSessionId]);
+
+  // Request session once per connection (new sessions only).
   useEffect(() => {
-    if (isConnected && currentSession?.agentType === AgentType.PSYCHOANALYST) {
-      setIsSessionReady(false);
-      requestSession('therapy');
-    }
-  }, [isConnected, currentSession?.agentType]);
+    if (isReadOnly) return;
+    if (!isConnected) return;
+    if (isSessionReady) return;
+    if (sessionRequestedRef.current) return;
+
+    sessionRequestedRef.current = true;
+    setIsLoading(true);
+    setIsSessionReady(false);
+    requestSession('therapy');
+  }, [isConnected, isReadOnly, isSessionReady, requestSession]);
+
+  // If we disconnect, allow re-requesting a session on reconnect.
+  useEffect(() => {
+    if (isReadOnly) return;
+    if (isConnected) return;
+    sessionRequestedRef.current = false;
+    setIsSessionReady(false);
+  }, [isConnected, isReadOnly]);
 
   // Session initialization timeout
   useEffect(() => {
-    if (!isConnected || isSessionReady) {
+    if (isReadOnly || !isConnected || isSessionReady) {
       return;
     }
 
@@ -154,25 +221,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
 
   const handleWebSocketMessage = (message: any) => {
     try {
-      if (message.type === 'chat_response' && currentSession) {
-        const agentMessage: Message = {
-          id: generateMessageId(),
-          content: message.message,
-          role: 'assistant',
-          timestamp: new Date(message.timestamp),
-          sessionId: currentSession.id,
-        };
-
-        const updatedSession: Session = {
-          ...currentSession,
-          transcript: [...currentSession.transcript, agentMessage],
-        };
-
-        actions.updateSession(updatedSession);
-        setIsLoading(false);
-      } else if (message.type === 'session_started') {
-        console.log('Therapy session started:', message);
-      } else if (message.error) {
+      if (message.error) {
         setError(message.error);
         setIsLoading(false);
       }
@@ -183,25 +232,10 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     }
   };
 
-  const loadSession = async (id: string) => {
-    try {
-      setIsLoading(true);
-      const session = state.sessions.find(s => s.id === id);
-      if (session) {
-        actions.setCurrentSession(session);
-      } else {
-        throw new Error('Session not found');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load session');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleSendMessage = async (content: string) => {
-    if (!currentSession || !state.user) {
-      setError('No active session or user');
+    if (isReadOnly) return;
+    if (!session || !userId) {
+      setError('No active session');
       return;
     }
 
@@ -214,16 +248,17 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         content,
         role: 'user',
         timestamp: new Date(),
-        sessionId: currentSession.id,
+        sessionId: session.id,
       };
 
-      // Update session with user message immediately
-      const updatedSession: Session = {
-        ...currentSession,
-        transcript: [...currentSession.transcript, userMessage],
-      };
-
-      actions.updateSession(updatedSession);
+      // Update transcript immediately for responsive UI
+      setSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          transcript: [...(prev.transcript || []), userMessage],
+        };
+      });
 
       // Send message via WebSocket if connected
       if (isConnected) {
@@ -240,17 +275,16 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   };
 
   const handleEndSession = async () => {
-    if (!currentSession) return;
+    if (!session) return;
 
     try {
       const endedSession: Session = {
-        ...currentSession,
+        ...session,
         status: SessionStatus.COMPLETED,
         endTime: new Date(),
       };
 
-      actions.updateSession(endedSession);
-      actions.setCurrentSession(null);
+      setSession(endedSession);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to end session');
     }
@@ -269,8 +303,8 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <SessionHeader
-        session={currentSession}
-        therapyStyle={state.therapyPlan?.therapyStyle as TherapyStyle | undefined}
+        session={session}
+        therapyStyle={undefined}
         onMenuClick={handleMenuClick}
         onSettingsClick={handleSettingsClick}
         onEndSession={handleEndSession}
@@ -302,9 +336,15 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
 
         <MessageInput
           onSendMessage={handleSendMessage}
-          disabled={!currentSession || currentSession.status !== SessionStatus.ACTIVE || !isConnected || !isSessionReady}
+          disabled={
+            isReadOnly ||
+            !session ||
+            session.status !== SessionStatus.ACTIVE ||
+            !isConnected ||
+            !isSessionReady
+          }
           isLoading={isLoading}
-          placeholder={getInputPlaceholder(currentSession?.agentType)}
+          placeholder={getInputPlaceholder(session?.agentType)}
           onTypingChange={typingIndicator.handleInputChange}
         />
       </Container>

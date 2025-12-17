@@ -57,17 +57,40 @@ class TrioConversationManager:
         self.active_contexts: dict[str, ConversationContext] = {}
         self.nursery = nursery
         self.websockets: dict[str, Any] = {}
+        self._websocket_ready_events: dict[str, trio.Event] = {}
 
     def register_websocket(self, session_id: str, ws: Any):
         """Registers a websocket for a given session."""
         self.websockets[session_id] = ws
+        event = self._websocket_ready_events.get(session_id)
+        if event is None:
+            event = trio.Event()
+            self._websocket_ready_events[session_id] = event
+        event.set()
         logger.info(f"Registered websocket for session {session_id}")
 
     def unregister_websocket(self, session_id: str):
         """Unregisters a websocket for a given session."""
         if session_id in self.websockets:
             del self.websockets[session_id]
-            logger.info(f"Unregistered websocket for session {session_id}")
+        if session_id in self._websocket_ready_events:
+            del self._websocket_ready_events[session_id]
+        logger.info(f"Unregistered websocket for session {session_id}")
+
+    async def wait_for_websocket(self, session_id: str, *, timeout_seconds: float) -> bool:
+        """Wait until a websocket is registered for the given session."""
+        if session_id in self.websockets:
+            return True
+
+        event = self._websocket_ready_events.get(session_id)
+        if event is None:
+            event = trio.Event()
+            self._websocket_ready_events[session_id] = event
+
+        with trio.move_on_after(timeout_seconds) as scope:
+            await event.wait()
+
+        return not scope.cancelled_caught and session_id in self.websockets
 
     async def send_stream_chunk(
         self, session_id: str, chunk: str, is_complete: bool = False
@@ -347,12 +370,16 @@ STACKTRACE:
             Relevant context from knowledge base
         """
         try:
+            filter_source = therapy_plan.selected_therapy_style
+            if filter_source and not filter_source.endswith(".md"):
+                filter_source = f"{filter_source}.md"
+
             # Run synchronous RAG call in thread
             relevant_docs = await trio.to_thread.run_sync(
                 self.rag_service.retrieve_relevant_knowledge,
                 query,
                 3,  # n_results
-                therapy_plan.selected_therapy_style,  # filter_source
+                filter_source,
             )
 
             if not relevant_docs:
@@ -364,7 +391,7 @@ STACKTRACE:
             for i, doc in enumerate(relevant_docs[:3], 1):  # Top 3 docs
                 # Extract text content from doc dict
                 if isinstance(doc, dict):
-                    text = doc.get("text", str(doc))
+                    text = doc.get("content") or doc.get("text") or str(doc)
                 else:
                     text = str(doc)
                 context_parts.append(f"[Context {i}]: {text}")
@@ -442,8 +469,14 @@ Based on the above context and your therapeutic approach, respond to:
             session = await self.db_service.get_session(session_id)
             if session:
                 session.transcript.append(message)
-                await self.db_service.save_session(session)
-                logger.info(f"Persisted message for session {session_id}: {role}")
+                saved = await self.db_service.save_session(session)
+                if saved:
+                    logger.info(f"Persisted message for session {session_id}: {role}")
+                else:
+                    logger.warning(
+                        "Did not persist message for session %s (session may be immutable/enriched)",
+                        session_id,
+                    )
             else:
                 logger.warning(
                     f"Session not found for message persistence: {session_id}"

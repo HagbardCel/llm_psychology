@@ -1,8 +1,9 @@
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserStatus(str, Enum):
@@ -53,19 +54,75 @@ class Session(BaseModel):
     user_id: str
     timestamp: datetime
     transcript: list[Message]
-    topics: list[Topic] = []
+    topics: list[Topic] = Field(default_factory=list)
+
+    # Tier 2 enrichment fields (added by Reflection Agent)
+    psychological_summary: str | None = Field(
+        None,
+        max_length=3000,
+        description="2-3 paragraph clinical summary of session content",
+    )
+    dominant_affects: list[str] = Field(
+        default_factory=list,
+        description="Primary emotional states observed (e.g., 'anxiety', 'sadness')",
+    )
+    key_themes: list[str] = Field(
+        default_factory=list, description="Major themes and concerns discussed"
+    )
+    notable_interactions: str | None = Field(
+        None,
+        max_length=1500,
+        description="Significant transference/countertransference moments",
+    )
+    interpretations: str | None = Field(
+        None,
+        max_length=1000,
+        description="Interpretations offered during session",
+    )
+    patient_reactions: str | None = Field(
+        None,
+        max_length=1000,
+        description="Patient responses to interventions",
+    )
+    enriched: bool = Field(
+        default=False, description="Flag indicating Tier 2 data has been added"
+    )
 
 
 class TherapyPlan(BaseModel):
-    """Represents a therapy plan created by the Reflection Agent."""
+    """Unified therapy plan model (Tier 4 treatment trajectory)."""
 
-    plan_id: str
+    plan_id: str = Field(default_factory=lambda: f"plan_{uuid.uuid4().hex[:12]}")
     user_id: str
-    created_at: datetime
-    updated_at: datetime
-    plan_details: dict[str, Any]  # Flexible structure for plan details
-    version: int
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    version: int = 1
     selected_therapy_style: str | None = None  # e.g., "freud", "jung", "cbt"
+    plan_details: dict[str, Any] = Field(
+        ...,
+        description="Legacy plan structure used by planning agent (focus/goals/etc)",
+    )
+    initial_goals: list[str] = Field(
+        ...,
+        min_items=1,
+        description="Therapeutic goals identified during assessment",
+    )
+    current_progress: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Qualitative assessment of progress toward goals",
+    )
+    planned_interventions: list[str] = Field(
+        ...,
+        min_items=1,
+        description="Planned therapeutic interventions or directions",
+    )
+    status: str = Field(
+        default="active",
+        pattern="^(active|paused|completed)$",
+        description="Treatment status",
+    )
     session_briefing: dict[str, Any] | None = None  # Session briefing for resumption
 
 
@@ -76,3 +133,162 @@ class DomainKnowledgeChunk(BaseModel):
     content: str
     source: str  # e.g., "freud.md", "jung.md"
     embedding: list[float] | None = None
+
+
+# ============================================================================
+# TIER 1: Static Background (Low Volatility)
+# ============================================================================
+
+
+class BasicPatientBackground(BaseModel):
+    """Core demographic and identity information."""
+
+    alias: str = Field(..., min_length=1, max_length=100, description="Patient pseudonym for confidentiality")
+    date_of_birth: datetime | None = Field(None, description="Date of birth for age calculation")
+    gender: str | None = Field(None, description="Gender identity")
+    cultural_background: str | None = Field(None, max_length=500, description="Cultural, ethnic, or religious background")
+    primary_language: str = Field(default="English", max_length=50, description="Primary language spoken")
+
+
+class FamilyConstellation(BaseModel):
+    """Family background and dynamics."""
+
+    parents: str | None = Field(None, max_length=1000, description="Information about parents (alive, deceased, relationship quality)")
+    siblings: str | None = Field(None, max_length=500, description="Siblings and birth order")
+    family_atmosphere: str | None = Field(None, max_length=1000, description="Emotional climate of family of origin")
+    significant_events: str | None = Field(None, max_length=1000, description="Major family events (trauma, loss, disruptions)")
+
+
+class EducationalWorkHistory(BaseModel):
+    """Educational and occupational background."""
+
+    education: str | None = Field(None, max_length=500, description="Educational history and achievements")
+    work_history: str | None = Field(None, max_length=1000, description="Career history and major job transitions")
+    relationship_to_work: str | None = Field(None, max_length=500, description="Psychological relationship to work (identity, conflict, satisfaction)")
+
+
+class RelationalLifeContext(BaseModel):
+    """Current relational and social context."""
+
+    relationships: str | None = Field(None, max_length=1000, description="Romantic relationships, friendships, significant others")
+    social_context: str | None = Field(None, max_length=500, description="Social network, isolation, community involvement")
+    current_situation: str | None = Field(None, max_length=1000, description="Current life circumstances and stressors")
+
+
+class AnalyticFrame(BaseModel):
+    """Therapeutic frame and preferences."""
+
+    preferred_school: str | None = Field(None, description="Preferred therapeutic approach if specified")
+    session_mode: str = Field(default="virtual", description="Session modality (virtual, in-person)")
+    boundary_notes: str | None = Field(None, max_length=500, description="Special boundary considerations")
+    frame_notes: str | None = Field(None, max_length=500, description="Other frame-related notes")
+
+
+class PatientProfile(BaseModel):
+    """
+    Tier 1: Static patient background.
+
+    Replaces UserProfile with rich structured background.
+    Created during intake, rarely updated.
+    """
+
+    user_id: str
+    basic_info: BasicPatientBackground
+    family: FamilyConstellation
+    history: EducationalWorkHistory
+    context: RelationalLifeContext
+    frame: AnalyticFrame
+    created_at: datetime
+    updated_at: datetime
+
+
+# ============================================================================
+# TIER 2: Session History (Medium Volatility)
+# ============================================================================
+
+
+class DetailedSession(Session):
+    """
+    Tier 2: Enriched session record with psychological analysis.
+
+    Extends basic Session with clinical summary data.
+    Created during session, enriched once by Reflection Agent, then immutable.
+    """
+    pass
+
+
+# ============================================================================
+# TIER 3: Dynamic Analysis (High Volatility, Versioned)
+# ============================================================================
+
+
+class CurrentFocus(BaseModel):
+    """Current therapeutic focus and salience."""
+
+    theme: str = Field(..., max_length=200, description="Central theme or concern")
+    salience: str = Field(..., max_length=500, description="Why this theme is salient now")
+
+
+class TransferenceImpressions(BaseModel):
+    """Observations about transference patterns."""
+
+    idealization: str | None = Field(None, max_length=500, description="Idealizing transference patterns")
+    devaluation: str | None = Field(None, max_length=500, description="Devaluing transference patterns")
+    boundaries: str | None = Field(None, max_length=500, description="Boundary testing or violations")
+    other_patterns: str | None = Field(None, max_length=1000, description="Other notable transference dynamics")
+
+
+class RecurringNarrative(BaseModel):
+    """A recurring story or theme in patient's discourse."""
+
+    title: str = Field(..., max_length=100, description="Short label for this narrative")
+    description: str = Field(..., max_length=1000, description="Description of the narrative and its significance")
+    first_appeared: str | None = Field(None, description="When this narrative first emerged (session ID or date)")
+
+
+class DefensiveOrganization(BaseModel):
+    """Defensive patterns and coping mechanisms."""
+
+    primary_defenses: list[str] = Field(default_factory=list, description="Main defense mechanisms (e.g., 'intellectualization', 'projection')")
+    defensive_style: str | None = Field(None, max_length=500, description="Overall defensive organization")
+    flexibility: str | None = Field(None, max_length=300, description="Rigidity vs flexibility of defenses")
+
+
+class AnalyticOrientation(BaseModel):
+    """Therapeutic stance and approach recommendations."""
+
+    pacing: str | None = Field(None, max_length=300, description="Recommended pace of intervention")
+    risk_areas: list[str] = Field(default_factory=list, description="Areas requiring caution")
+    key_questions: list[str] = Field(default_factory=list, description="Important questions to explore")
+
+
+class PatientAnalysis(BaseModel):
+    """
+    Tier 3: Dynamic clinical formulation.
+
+    The analyst's evolving understanding of the patient.
+    Versioned - new version created when understanding shifts.
+    """
+
+    current_focus: CurrentFocus
+    transference: TransferenceImpressions
+    narratives: list[RecurringNarrative] = Field(default_factory=list)
+    defenses: DefensiveOrganization
+    orientation: AnalyticOrientation
+
+
+class PatientAnalysisVersion(BaseModel):
+    """
+    Versioned wrapper for PatientAnalysis.
+
+    Tracks evolution of clinical understanding over time.
+    """
+
+    analysis_id: str = Field(default_factory=lambda: f"analysis_{uuid.uuid4().hex[:12]}")
+    user_id: str
+    version: int = Field(..., ge=1, description="Version number (1, 2, 3, ...)")
+    analysis_data: PatientAnalysis
+    created_at: datetime = Field(default_factory=datetime.now)
+    created_by_session: str | None = Field(None, description="Session ID that triggered this version")
+    change_summary: str | None = Field(None, max_length=1000, description="What changed from previous version")
+    superseded_by: str | None = Field(None, description="Analysis ID of next version (if superseded)")

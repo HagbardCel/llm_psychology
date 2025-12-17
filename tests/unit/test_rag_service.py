@@ -1,139 +1,134 @@
-import os
-import tempfile
+from __future__ import annotations
 
 import pytest
 
 from services.rag_service import RAGService
 
 
-class TestRAGService:
-    """Unit tests for FAISS-based RAGService."""
+class _StubEmbeddingUtils:
+    """
+    Deterministic embedding stub for unit tests.
 
-    def test_init(self, mock_rag_service):
-        """Test RAGService initialization."""
-        assert mock_rag_service is not None
-        assert hasattr(mock_rag_service, "retrieve_relevant_knowledge")
-        assert hasattr(mock_rag_service, "get_knowledge_by_source")
+    Produces small non-zero vectors based on keyword presence so FAISS + L2
+    normalization behave deterministically and never see a zero vector.
+    """
 
-    def test_retrieve_relevant_knowledge(self, mock_rag_service):
-        """Test retrieving relevant knowledge."""
-        mock_results = [
-            {
-                "id": "1",
-                "content": "Test content 1",
-                "source": "test.md",
-                "distance": 0.1,
-            },
-            {
-                "id": "2",
-                "content": "Test content 2",
-                "source": "test.md",
-                "distance": 0.2,
-            },
-        ]
-        mock_rag_service.retrieve_relevant_knowledge.return_value = mock_results
+    _keywords = ("apple", "banana", "cherry")
 
-        results = mock_rag_service.retrieve_relevant_knowledge("test query")
-        assert len(results) == 2
-        assert results[0]["content"] == "Test content 1"
-        assert results[0]["distance"] == 0.1
+    def generate_embedding(self, text: str) -> list[float]:
+        text_lower = text.lower()
+        # Bias term keeps vectors non-zero for normalization.
+        vec = [0.1]
+        vec.extend(1.0 if kw in text_lower else 0.0 for kw in self._keywords)
+        return vec
 
-    def test_get_knowledge_by_source(self, mock_rag_service):
-        """Test retrieving knowledge by source."""
-        mock_results = [
-            {"id": "1", "content": "Content from source", "source": "freud.md"}
-        ]
-        mock_rag_service.get_knowledge_by_source.return_value = mock_results
-
-        results = mock_rag_service.get_knowledge_by_source("freud.md")
-        assert len(results) == 1
-        assert results[0]["source"] == "freud.md"
-
-    def test_retrieve_relevant_knowledge_with_filter(self, mock_rag_service):
-        """Test retrieving relevant knowledge with source filter."""
-        mock_results = [
-            {
-                "id": "1",
-                "content": "Filtered content",
-                "source": "cbt.md",
-                "distance": 0.15,
-            }
-        ]
-        mock_rag_service.retrieve_relevant_knowledge.return_value = mock_results
-
-        results = mock_rag_service.retrieve_relevant_knowledge(
-            "test query", filter_source="cbt.md"
-        )
-        assert len(results) == 1
-        mock_rag_service.retrieve_relevant_knowledge.assert_called_once_with(
-            "test query", filter_source="cbt.md"
-        )
-
-    def test_retrieve_relevant_knowledge_error_handling(self, mock_rag_service):
-        """Test error handling in retrieve_relevant_knowledge."""
-        mock_rag_service.retrieve_relevant_knowledge.side_effect = Exception(
-            "Database error"
-        )
-
-        # The mock should raise the exception, which the real RAGService would catch
-        # In this test, we're just verifying that the mock is set up correctly
-        try:
-            results = mock_rag_service.retrieve_relevant_knowledge("test query")
-            # If we get here, the mock didn't raise the exception as expected
-            assert False, "Expected exception was not raised"
-        except Exception:
-            # This is expected - the mock raised the exception
-            pass
+    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return [self.generate_embedding(t) for t in texts]
 
 
-# Integration tests for the real RAGService
-class TestRAGServiceIntegration:
-    """Integration tests for RAGService with temporary directories."""
+def test_retrieve_relevant_knowledge_ranks_best_match_first(tmp_path):
+    domain_knowledge_path = tmp_path / "domain_knowledge"
+    vector_db_path = tmp_path / "vector_db"
+    domain_knowledge_path.mkdir()
+    vector_db_path.mkdir()
 
-    def test_init_with_temp_directories(self):
-        """Test that RAG service initializes correctly with temp directories."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            domain_knowledge_path = os.path.join(temp_dir, "domain_knowledge")
-            vector_db_path = os.path.join(temp_dir, "vector_db")
+    (domain_knowledge_path / "cbt.md").write_text(
+        "Intro\n\nApple chunk\n\nBanana chunk", encoding="utf-8"
+    )
 
-            # Create directories
-            os.makedirs(domain_knowledge_path, exist_ok=True)
-            os.makedirs(vector_db_path, exist_ok=True)
+    rag = RAGService(
+        domain_knowledge_path=str(domain_knowledge_path),
+        vector_db_path=str(vector_db_path),
+        embedding_utils=_StubEmbeddingUtils(),
+        styles_dir=None,  # isolate from repository style packs
+    )
 
-            # Create a test knowledge file
-            test_file = os.path.join(domain_knowledge_path, "test_knowledge.md")
-            with open(test_file, "w") as f:
-                f.write("# Test Knowledge\n\nThis is test knowledge content.")
+    results = rag.retrieve_relevant_knowledge("apple", n_results=2)
+    assert results
+    assert results[0]["source"] == "cbt.md"
+    assert results[0]["content"] == "Apple chunk"
 
-            # Initialize RAGService
-            rag_service = RAGService(domain_knowledge_path, vector_db_path)
 
-            # Test behavior, not internal state
-            # 1. Test that a query returns a list
-            results = rag_service.retrieve_relevant_knowledge("test query")
-            assert isinstance(results, list)
+def test_retrieve_relevant_knowledge_filter_source(tmp_path):
+    domain_knowledge_path = tmp_path / "domain_knowledge"
+    vector_db_path = tmp_path / "vector_db"
+    domain_knowledge_path.mkdir()
+    vector_db_path.mkdir()
 
-            # 2. Test that the content was loaded and can be retrieved
-            results = rag_service.retrieve_relevant_knowledge("knowledge content")
-            assert len(results) > 0
-            assert results[0]["content"] == "This is test knowledge content."
+    (domain_knowledge_path / "cbt.md").write_text(
+        "CBT intro\n\nApple chunk", encoding="utf-8"
+    )
+    (domain_knowledge_path / "freud.md").write_text(
+        "Freud intro\n\nApple in Freud", encoding="utf-8"
+    )
 
-    @pytest.mark.skip(reason="Requires ChromaDB setup")
-    def test_retrieve_relevant_knowledge_integration(self):
-        """Integration test for retrieving relevant knowledge."""
-        # This test would require a proper ChromaDB setup with loaded data
-        pass
+    rag = RAGService(
+        domain_knowledge_path=str(domain_knowledge_path),
+        vector_db_path=str(vector_db_path),
+        embedding_utils=_StubEmbeddingUtils(),
+        styles_dir=None,
+    )
 
-    def test_get_knowledge_by_source_integration(self):
-        """Integration test for getting knowledge by source."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            domain_knowledge_path = os.path.join(temp_dir, "domain_knowledge")
-            vector_db_path = os.path.join(temp_dir, "vector_db")
+    freud_only = rag.retrieve_relevant_knowledge(
+        "apple", n_results=3, filter_source="freud.md"
+    )
+    assert freud_only
+    assert all(r["source"] == "freud.md" for r in freud_only)
+    assert freud_only[0]["content"] == "Apple in Freud"
 
-            # Create directories
-            os.makedirs(domain_knowledge_path, exist_ok=True)
-            os.makedirs(vector_db_path, exist_ok=True)
 
-            # This test is limited without actual data loading
-            # In a real scenario, we'd load data and then test retrieval
-            pass
+def test_get_knowledge_by_source_returns_all_chunks(tmp_path):
+    domain_knowledge_path = tmp_path / "domain_knowledge"
+    vector_db_path = tmp_path / "vector_db"
+    domain_knowledge_path.mkdir()
+    vector_db_path.mkdir()
+
+    (domain_knowledge_path / "cbt.md").write_text(
+        "Para 1\n\nPara 2\n\nPara 3", encoding="utf-8"
+    )
+
+    rag = RAGService(
+        domain_knowledge_path=str(domain_knowledge_path),
+        vector_db_path=str(vector_db_path),
+        embedding_utils=_StubEmbeddingUtils(),
+        styles_dir=None,
+    )
+
+    chunks = rag.get_knowledge_by_source("cbt.md")
+    assert [c["content"] for c in chunks] == ["Para 1", "Para 2", "Para 3"]
+
+
+def test_index_persists_and_loads_from_disk(tmp_path):
+    domain_knowledge_path = tmp_path / "domain_knowledge"
+    vector_db_path = tmp_path / "vector_db"
+    domain_knowledge_path.mkdir()
+    vector_db_path.mkdir()
+
+    (domain_knowledge_path / "cbt.md").write_text(
+        "Intro\n\nApple chunk\n\nBanana chunk", encoding="utf-8"
+    )
+
+    rag1 = RAGService(
+        domain_knowledge_path=str(domain_knowledge_path),
+        vector_db_path=str(vector_db_path),
+        embedding_utils=_StubEmbeddingUtils(),
+        styles_dir=None,
+    )
+
+    assert (vector_db_path / "faiss_index.bin").exists()
+    assert (vector_db_path / "data.pkl").exists()
+
+    first = rag1.retrieve_relevant_knowledge("apple", n_results=1)
+    assert first
+
+    # New instance should load the persisted index (not rebuild) and still return results.
+    rag2 = RAGService(
+        domain_knowledge_path=str(domain_knowledge_path),
+        vector_db_path=str(vector_db_path),
+        embedding_utils=_StubEmbeddingUtils(),
+        styles_dir=None,
+    )
+
+    second = rag2.retrieve_relevant_knowledge("apple", n_results=1)
+    assert second
+    assert second[0]["content"] == first[0]["content"]
