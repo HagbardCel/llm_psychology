@@ -3,7 +3,7 @@ Unit tests for version module (version checking and compatibility).
 """
 
 import pytest
-from version import Version, API_VERSION, MIN_CLIENT_VERSION
+from psychoanalyst_app.version import Version, API_VERSION, MIN_CLIENT_VERSION
 
 
 class TestVersion:

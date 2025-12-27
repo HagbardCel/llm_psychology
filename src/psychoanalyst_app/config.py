@@ -1,0 +1,229 @@
+import logging
+import sys
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application configuration settings using pydantic-settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # Ignore extra fields from environment variables
+    )
+
+    # Application Configuration
+    APP_NAME: str = "Virtual LLM-Driven Psychoanalyst"
+    VERSION: str = "0.1.0"
+
+    # Environment
+    APP_ENV: str = Field(default="production")
+
+    # LLM Configuration
+    GOOGLE_API_KEY: str = Field(default="", description="Primary API key for Gemini")
+    GEMINI_API_KEY: str = Field(
+        default="", description="Deprecated alias for GOOGLE_API_KEY"
+    )
+    MODEL_NAME: str = Field(
+        default="",
+        description=(
+            "Default model name when an agent-specific override is not provided "
+            "(set via environment/.env files)"
+        ),
+    )
+    INTAKE_MODEL: str = Field(
+        default="", description="Model for intake agent (defaults to MODEL_NAME)"
+    )
+    ASSESSMENT_MODEL: str = Field(
+        default="", description="Model for assessment agent (defaults to MODEL_NAME)"
+    )
+    PSYCHOANALYST_MODEL: str = Field(
+        default="",
+        description="Model for psychoanalyst agent (defaults to MODEL_NAME)",
+    )
+    REFLECTION_MODEL: str = Field(
+        default="", description="Model for reflection agent (defaults to MODEL_NAME)"
+    )
+    MEMORY_MODEL: str = Field(
+        default="", description="Model for memory agent (defaults to MODEL_NAME)"
+    )
+    PLANNING_MODEL: str = Field(
+        default="", description="Model for planning agent (defaults to MODEL_NAME)"
+    )
+    LLM_RATE_LIMIT_ENABLED: bool = Field(
+        default=True, description="Enable client-side LLM rate limiting"
+    )
+    LLM_REQUESTS_PER_MINUTE: float = Field(
+        default=2.0, description="Allowed LLM requests per minute"
+    )
+    LLM_BURST_CAPACITY: int = Field(
+        default=2, description="Burst capacity for LLM requests"
+    )
+
+    def model_post_init(self, __context) -> None:
+        """Apply compatibility shims after settings load."""
+        if not self.GOOGLE_API_KEY and self.GEMINI_API_KEY:
+            object.__setattr__(self, "GOOGLE_API_KEY", self.GEMINI_API_KEY)
+
+    def get_model_for_agent(self, agent_type: str) -> str:
+        """Resolve the configured model for a given agent."""
+        agent_type = agent_type.upper()
+        overrides = {
+            "INTAKE": self.INTAKE_MODEL,
+            "ASSESSMENT": self.ASSESSMENT_MODEL,
+            "PSYCHOANALYST": self.PSYCHOANALYST_MODEL,
+            "REFLECTION": self.REFLECTION_MODEL,
+            "MEMORY": self.MEMORY_MODEL,
+            "PLANNING": self.PLANNING_MODEL,
+        }
+        override = overrides.get(agent_type, "")
+        model = override or self.MODEL_NAME
+        if not model:
+            raise ValueError(
+                "MODEL_NAME must be set "
+                "(or an agent-specific *_MODEL override provided)."
+            )
+        return model
+
+    # Database Configuration
+    DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
+
+    # Vector Database Configuration
+    VECTOR_DB_PATH: str = Field(default="data/vector_db")
+
+    # Domain Knowledge Configuration
+    DOMAIN_KNOWLEDGE_PATH: str = Field(default="data/domain_knowledge")
+    STYLES_DIR: str | None = Field(
+        default=None,
+        description="Optional override directory for therapy style packs",
+    )
+
+    # Embedding Configuration
+    USE_ONNX_EMBEDDINGS: bool = Field(
+        default=True, description="Use ONNX backend for faster embedding inference"
+    )
+    EMBEDDING_MODEL_NAME: str = Field(
+        default="all-MiniLM-L6-v2", description="Sentence transformer model name"
+    )
+
+    # Session Configuration
+    SESSION_DURATION_MINUTES: int = Field(default=45)
+
+    # Test Configuration
+    TEST_DATABASE_PATH: str = Field(default="data/psychoanalyst_test.db")
+    TEST_SESSION_DURATION_MINUTES: int = Field(default=1)
+
+    # Intake Session Topics
+    INTAKE_TOPICS: list[str] = [
+        "Presenting Problem",
+        "Current Symptoms",
+        "Personal History",
+        "Family Background",
+        "Relationships",
+        "Work/School",
+        "Physical Health",
+        "Mental Health History",
+        "Substance Use",
+        "Coping Mechanisms",
+        "Support System",
+        "Goals for Therapy",
+    ]
+
+    CORS_ALLOWED_ORIGINS: list[str] = Field(
+        default=["http://localhost:5173"],
+        description="List of allowed CORS origins",
+    )
+
+    # Logging Configuration
+    LOG_LEVEL: str = Field(default="INFO")
+    CONSOLE_LOG_LEVEL: str = Field(default="CRITICAL")
+    LOG_FORMAT: str = Field(
+        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    # Database Configuration
+    DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=20)
+    DATABASE_POOL_TIMEOUT: int = Field(default=30)
+
+    # Performance Configuration
+    MAX_CONCURRENT_SESSIONS: int = Field(default=10)
+    SESSION_TIMEOUT_MINUTES: int = Field(default=60)
+
+    # Session Resumption Configuration
+    BRIEFING_VALIDITY_DAYS: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Number of days a briefing is considered fresh",
+    )
+    STALE_BRIEFING_DAYS: int = Field(
+        default=90,
+        ge=1,
+        le=730,
+        description="Days after which briefing is considered stale",
+    )
+
+    # Session Resumption Content Limits
+    MAX_CONTINUITY_POINTS: int = Field(default=10, ge=1, le=20)
+    MAX_PROGRESS_HIGHLIGHTS: int = Field(default=10, ge=1, le=20)
+    MAX_UNRESOLVED_ISSUES: int = Field(default=10, ge=1, le=20)
+    MAX_KEY_THEMES: int = Field(default=10, ge=1, le=20)
+    MAX_SUGGESTED_QUESTIONS: int = Field(default=3, ge=1, le=5)
+    MAX_SESSION_GOALS: int = Field(default=3, ge=1, le=5)
+
+    # Session Resumption Quality Constraints
+    MIN_NARRATIVE_LENGTH: int = Field(default=50, ge=20)
+    MAX_NARRATIVE_LENGTH: int = Field(default=1500, le=3000)
+    MAX_OBSERVATIONS_LENGTH: int = Field(default=1000, le=2000)
+    MAX_PLAN_NOTES_LENGTH: int = Field(default=1000, le=2000)
+
+
+def setup_logging(
+    settings: Settings, log_level: str | None = None, console_log_level: str | None = None
+) -> None:
+    """
+    Configure application-wide logging with separate console and file logging.
+
+    Args:
+        log_level: Optional log level override for file logging
+        console_log_level: Log level for console output (uses config default: CRITICAL)
+    """
+    if log_level is None:
+        log_level = settings.LOG_LEVEL
+    if console_log_level is None:
+        console_log_level = settings.CONSOLE_LOG_LEVEL
+
+    # Create logs directory if it doesn't exist
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+
+    # Create formatters
+    file_formatter = logging.Formatter(settings.LOG_FORMAT)
+    console_formatter = logging.Formatter("%(levelname)s: %(message)s")
+
+    # Create handlers
+    file_handler = logging.FileHandler(logs_dir / "app.log", mode="a")
+    file_handler.setLevel(getattr(logging, log_level.upper()))
+    file_handler.setFormatter(file_formatter)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, console_log_level.upper()))
+    console_handler.setFormatter(console_formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level.upper()))
+
+    # Remove any existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+
+    # Add our handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # Set specific loggers to appropriate levels
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)

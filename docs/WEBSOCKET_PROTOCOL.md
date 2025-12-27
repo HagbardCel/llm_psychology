@@ -1,7 +1,8 @@
 # WebSocket Protocol Specification
 
-**Version**: 1.0.0
-**Date**: 2025-12-02
+**Version**: 1.2.1
+**Date**: 2025-12-22
+**Last Verified**: 2025-12-22
 **Status**: Active
 **Maintainer**: Backend Team
 
@@ -69,12 +70,14 @@ All messages follow this structure:
 
 ### Message Type Naming Convention
 
-- **Client → Server**: Imperative (requests action): `session_request`, `chat_message`
-- **Server → Client**: Descriptive (states or events): `connected`, `session_started`, `chat_response_chunk`
+- **Client → Server**: Imperative (requests action): `session_request`, `chat_message`, `end_session`
+- **Server → Client**: Descriptive (states or events): `connected`, `session_started`, `chat_response_chunk`,
+  `typing_start`, `typing_stop`, `assessment_recommendations`, `session_ended`, `error`
 
 ---
 
 ## Client → Server Messages
+Only the message types listed in this section are handled by the server. Other client message types are ignored.
 
 ### `session_request`
 
@@ -84,13 +87,20 @@ Request to start a new therapy session.
 ```json
 {
   "type": "session_request",
-  "data": {}
+  "data": {
+    "session_type": "therapy"  // Optional: "therapy" | "intake" | "assessment"
+  }
 }
 ```
 
 **Server Response**: `session_started` message
 
 **Behavior**:
+- `session_type` (optional) tells the backend which workflow agent to start.
+  - Defaults to `"therapy"` if omitted
+  - `"intake"` → Intake agent and workflow transition to INTAKE_IN_PROGRESS
+  - `"assessment"` → Assessment agent and workflow transition to ASSESSMENT_IN_PROGRESS
+  - `"therapy"` → Therapy agent and workflow transition to THERAPY_IN_PROGRESS
 - If user already has an active session, server switches to new session
 - Previous session WebSocket registration is cleaned up
 - Session ID is tracked on server side
@@ -99,7 +109,9 @@ Request to start a new therapy session.
 ```json
 {
   "type": "session_request",
-  "data": {}
+  "data": {
+    "session_type": "assessment"
+  }
 }
 ```
 
@@ -145,6 +157,43 @@ Send user message during active session.
 **Error Cases**:
 - **No active session**: Server closes connection with code 1002: "First message must be session_request"
 - **Empty message**: Silently ignored
+
+---
+
+### `end_session`
+
+Request to end the active session.
+
+**Prerequisites**: Must have active session (sent `session_request` first)
+
+**Payload**:
+```json
+{
+  "type": "end_session",
+  "data": {
+    "reason": string  // Optional: client-supplied reason
+  }
+}
+```
+
+**Server Response**: `session_ended` message
+
+**Behavior**:
+- Server updates workflow state as needed (e.g., therapy → reflection).
+- Server emits `session_ended` to confirm shutdown and client should exit.
+
+**Example**:
+```json
+{
+  "type": "end_session",
+  "data": {
+    "reason": "User ended session"
+  }
+}
+```
+
+**Error Cases**:
+- **No active session**: Server closes connection with code 1002: "No active session to end"
 
 ---
 
@@ -306,7 +355,80 @@ Streaming LLM response (multiple messages per response).
 
 ---
 
-### `typing_start` (Optional)
+### `session_ended`
+
+Indicates the server has ended the active session.
+
+**Trigger**: Client sent `end_session` or agent ended the session.
+
+**Payload**:
+```json
+{
+  "type": "session_ended",
+  "data": {
+    "reason": string,          // Human-readable reason
+    "workflow_state": string   // Workflow state after ending the session
+  }
+}
+```
+
+**Behavior**:
+- Confirms the session is over and workflow state was updated.
+
+**Example**:
+```json
+{
+  "type": "session_ended",
+  "data": {
+    "reason": "User ended session",
+    "workflow_state": "ASSESSMENT_COMPLETE"
+  }
+}
+```
+
+**Client Handling**:
+- Exit the chat UI (console should terminate its loop).
+- Optionally show the final workflow state to the user.
+
+---
+
+### `assessment_recommendations`
+
+Structured therapy style recommendations emitted at the end of the assessment chat.
+
+**Trigger**: Assessment agent completes analysis and is waiting for the user to select a style.
+
+**Payload**:
+```json
+{
+  "type": "assessment_recommendations",
+  "data": {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "user_id": "user-123",
+    "recommendations": [
+      {
+        "style_id": "freud",
+        "explanation": "Grounded in your interest in exploring unconscious conflicts.",
+        "score": 0.82
+      }
+    ]
+  }
+}
+```
+
+**Behavior**:
+- Sent once per assessment flow when the backend is awaiting a therapy style selection.
+- Recommendations are ordered by backend relevance score.
+- Message does **not** pause streaming; it is emitted alongside the chat transcript.
+
+**Client Handling**:
+- Switch UI from chat mode → selection mode using these recommendations.
+- Display `style_id` (snake case) as the canonical identifier when submitting the user's selection.
+- Ignore duplicate messages (idempotent).
+
+---
+
+### `typing_start`
 
 Indicates therapist is generating response.
 
@@ -321,14 +443,14 @@ Indicates therapist is generating response.
 ```
 
 **Behavior**:
-- Sent before LLM generation begins
-- Not currently used by server (streaming starts immediately)
+- Sent before LLM generation begins for initial greetings or background streaming.
+- Not guaranteed for every response (chat streaming may rely on `chat_response_chunk` only).
 
 **Client Handling**: Display typing indicator UI
 
 ---
 
-### `typing_stop` (Optional)
+### `typing_stop`
 
 Indicates therapist finished generating response.
 
@@ -343,8 +465,8 @@ Indicates therapist finished generating response.
 ```
 
 **Behavior**:
-- Sent after LLM generation completes
-- Not currently used by server (use `is_complete: true` instead)
+- Sent after LLM generation completes for initial greetings or background streaming.
+- Not guaranteed for every response (chat streaming may rely on `is_complete: true` instead).
 
 **Client Handling**: Hide typing indicator UI
 
@@ -453,7 +575,7 @@ Clients should implement exponential backoff:
 - Error message: "First message must be session_request"
 
 **LLM Generation Failure**:
-- Server sends `error` message
+- Server may send an `error` message (primarily for background streaming flows)
 - Connection remains open
 - Client can retry
 
@@ -475,8 +597,7 @@ Clients should implement exponential backoff:
 ### Authentication
 
 - **Current**: User ID passed as query parameter (development only)
-- **Production**: Should use JWT/session token
-- **Recommendation**: Add `Authorization` header or token-based auth
+- **Production**: Should continue using explicit `user_id` identifiers for sessions
 
 ### Data Privacy
 
@@ -542,37 +663,9 @@ console.log('[WS]', message.type, message.data);
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2.1 | 2025-12-22 | Trimmed documentation to implemented message types and updated references |
+| 1.1.0 | 2025-12-16 | Added session_type contract for `session_request` and new `assessment_recommendations` event |
 | 1.0.0 | 2025-12-02 | Initial protocol specification |
-
----
-
-## Future Enhancements (Proposed)
-
-### Version 1.1.0 (Planned)
-
-**New Message Type: `state_change`**
-
-Notify client of workflow state transitions.
-
-```json
-{
-  "type": "state_change",
-  "data": {
-    "previous_state": "INTAKE_IN_PROGRESS",
-    "new_state": "INTAKE_COMPLETE",
-    "next_action": {
-      "type": "navigate",
-      "route": "/assessment",
-      "message": "Great! Let's move to your assessment."
-    }
-  }
-}
-```
-
-**Benefits**:
-- Realtime state synchronization
-- Backend-driven navigation
-- Immediate UI updates
 
 ---
 
@@ -580,16 +673,16 @@ Notify client of workflow state transitions.
 
 ### Implementation Files
 
-- **Backend Handler**: [src/trio_server.py:108-254](../src/trio_server.py)
+- **Backend Handler**: [src/psychoanalyst_app/api/ws_handler.py](../src/psychoanalyst_app/api/ws_handler.py)
+- **Message Helpers**: [src/psychoanalyst_app/utils/ws_messages.py](../src/psychoanalyst_app/utils/ws_messages.py)
 - **Console UI Client**: [console-ui/src/console_client.py](../console-ui/src/console_client.py)
 - **Web Frontend Service**: [frontend/src/services/websocketService.ts](../frontend/src/services/websocketService.ts)
-- **Backend Models**: [src/orchestration/models.py](../src/orchestration/models.py)
+- **Backend Models**: [src/psychoanalyst_app/orchestration/models.py](../src/psychoanalyst_app/orchestration/models.py)
 
 ### Related Documentation
 
-- [ARCHITECTURE_ASSESSMENT.md](../ARCHITECTURE_ASSESSMENT.md) - Architecture analysis
-- [CLAUDE.md](../CLAUDE.md) - Development guidelines
-- [PHASE_1_IMPLEMENTATION_PLAN.md](../PHASE_1_IMPLEMENTATION_PLAN.md) - Implementation plan
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - System architecture overview
+- [design-principles.md](../design-principles.md) - Architecture and workflow invariants
 
 ---
 
@@ -603,5 +696,5 @@ For questions about this protocol:
 ---
 
 **Document Maintainer**: Backend Team
-**Last Updated**: 2025-12-02
+**Last Updated**: 2025-12-22
 **Next Review**: After Phase 1 completion

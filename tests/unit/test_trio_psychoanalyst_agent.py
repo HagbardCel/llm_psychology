@@ -5,18 +5,13 @@ Tests the psychoanalyst agent's session resumption functionality.
 """
 
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
-from models.briefing_models import BriefingStatus
-from models.data_models import (
-    AnalyticFrame,
-    BasicPatientBackground,
-    EducationalWorkHistory,
-    FamilyConstellation,
-    PatientProfile,
-    RelationalLifeContext,
+from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+from psychoanalyst_app.models.briefing_models import BriefingStatus
+from psychoanalyst_app.models.data_models import (
     TherapyPlan,
     UserProfile,
 )
@@ -25,14 +20,13 @@ from models.data_models import (
 
 
 @pytest.fixture
-def psychoanalyst_agent():
+def psychoanalyst_agent(app_config):
     """Create a psychoanalyst agent for testing."""
-    from unittest.mock import Mock
-
     # Create simple mocks
     mock_llm = Mock()
     mock_db = Mock()
     mock_rag = Mock()
+    mock_style = Mock()
 
     return TrioPsychoanalystAgent(
         llm_service=mock_llm,
@@ -40,6 +34,8 @@ def psychoanalyst_agent():
         rag_service=mock_rag,
         user_context=None,
         conversation_manager=None,
+        style_service=mock_style,
+        config=app_config,
     )
 
 
@@ -49,7 +45,7 @@ def sample_user_profile():
     return UserProfile(
         user_id="test_user_123",
         name="Test User",
-        birthdate="1990-01-01",
+        data_of_birth=datetime(1990, 1, 1),
         profession="Software Engineer",
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -220,22 +216,18 @@ async def test_get_briefing_status_invalid_no_timestamp(psychoanalyst_agent):
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_load_patient_context_includes_tiers():
+async def test_load_patient_context_includes_tiers(app_config):
     """Ensure psychoanalyst can assemble patient context from tiers."""
-    from unittest.mock import AsyncMock, Mock
-
     mock_llm = Mock()
     mock_rag = Mock()
     mock_db = Mock()
 
-    mock_db.get_patient_profile = AsyncMock(
-        return_value=PatientProfile(
+    mock_db.get_user_profile = AsyncMock(
+        return_value=UserProfile(
             user_id="test_user_123",
-            basic_info=BasicPatientBackground(alias="Alex"),
-            family=FamilyConstellation(family_atmosphere="Tense but loving"),
-            history=EducationalWorkHistory(),
-            context=RelationalLifeContext(),
-            frame=AnalyticFrame(),
+            name="Alex",
+            alias="Alex",
+            family_atmosphere="Tense but loving",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -257,13 +249,14 @@ async def test_load_patient_context_includes_tiers():
             selected_therapy_style="cbt",
         )
     )
-
     agent = TrioPsychoanalystAgent(
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,
         user_context=None,
         conversation_manager=None,
+        style_service=Mock(),
+        config=app_config,
     )
 
     context_text = await agent._load_patient_context("test_user_123")

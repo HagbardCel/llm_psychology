@@ -1,5 +1,7 @@
 # Architecture Documentation
 
+**Last Verified:** 2025-12-22
+
 ## Overview
 
 The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, modular architecture that separates business logic from interface concerns. The system uses an **orchestration-based architecture** with streaming LLM responses for real-time user interactions.
@@ -19,7 +21,7 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 │                     Client Interfaces                        │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐     │
 │  │  Local   │  │ Console  │  │  Web Frontend        │     │
-│  │   CLI    │  │    UI    │  │  (React + Socket.IO) │     │
+│  │   CLI    │  │    UI    │  │  (React + WebSocket) │     │
 │  └──────────┘  └──────────┘  └──────────────────────┘     │
 └──────────┬──────────┬─────────────────┬───────────────────┘
            │          │                 │
@@ -31,7 +33,7 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
      │  │   /api/user/*, /api/sessions/*   │  │
      │  └──────────────────────────────────┘  │
      │  ┌──────────────────────────────────┐  │
-     │  │   WebSocket Server (Socket.IO)   │  │
+     │  │     Native WebSocket Server      │  │
      │  │   Real-time bidirectional comms  │  │
      │  └──────────────────────────────────┘  │
      └────────────────┬───────────────────────┘
@@ -74,7 +76,7 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 
 The orchestration layer coordinates all therapy workflows and agent interactions.
 
-#### WorkflowEngine (`src/orchestration/workflow_engine.py`)
+#### TrioWorkflowEngine (`src/psychoanalyst_app/orchestration/trio_workflow_engine.py`)
 
 **Purpose**: Manages the therapy workflow state machine
 
@@ -105,7 +107,7 @@ NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
   → PLAN_COMPLETE → THERAPY_IN_PROGRESS (cycle)
 ```
 
-#### ConversationManager (`src/orchestration/conversation_manager.py`)
+#### TrioConversationManager (`src/psychoanalyst_app/orchestration/trio_conversation_manager.py`)
 
 **Purpose**: Manages conversation context and streaming responses
 
@@ -122,7 +124,7 @@ NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
 - Session time tracking with extension support
 - Message history preservation
 
-#### AgentOrchestrator (`src/orchestration/agent_orchestrator.py`)
+#### TrioAgentOrchestrator (`src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py`)
 
 **Purpose**: Main coordination layer that routes requests to agents
 
@@ -174,7 +176,7 @@ async def process_message(
     """
 ```
 
-#### IntakeAgent (`src/agents/intake_agent.py`)
+#### TrioIntakeAgent (`src/psychoanalyst_app/agents/trio_intake_agent.py`)
 
 **Purpose**: Collect initial user information
 
@@ -188,7 +190,7 @@ async def process_message(
 - All core topics covered
 - Sufficient context for assessment
 
-#### AssessmentAgent (`src/agents/assessment_agent.py`)
+#### TrioAssessmentAgent (`src/psychoanalyst_app/agents/trio_assessment_agent.py`)
 
 **Purpose**: Analyze intake data and recommend therapy styles
 
@@ -202,7 +204,7 @@ async def process_message(
 - TherapyStyleRecommendation objects
 - Initial TherapyPlan with selected style
 
-#### PsychoanalystAgent (`src/agents/psychoanalyst_agent.py`)
+#### TrioPsychoanalystAgent (`src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`)
 
 **Purpose**: Conduct main therapy sessions
 
@@ -218,7 +220,7 @@ async def process_message(
 - Time-aware responses
 - Graceful session closing
 
-#### ReflectionAgent (`src/agents/reflection_agent.py`)
+#### TrioReflectionAgent (`src/psychoanalyst_app/agents/trio_reflection_agent.py`)
 
 **Purpose**: Post-session reflection and plan updates
 
@@ -232,7 +234,7 @@ async def process_message(
 
 Gateways connect client interfaces to the orchestration layer.
 
-#### WebSocketGateway (`src/gateways/websocket_gateway.py`)
+#### WebSocket Handler (`src/psychoanalyst_app/api/ws_handler.py`)
 
 **Purpose**: Handle real-time WebSocket communication
 
@@ -275,7 +277,7 @@ await sio.emit("typing_stop", room=sid)
 
 Services provide low-level functionality to the system.
 
-#### DatabaseService (`src/services/db_service.py`)
+#### TrioDatabaseService (`src/psychoanalyst_app/services/trio_db_service.py`)
 
 **Purpose**: SQLite database abstraction
 
@@ -286,7 +288,7 @@ Services provide low-level functionality to the system.
 - Therapy plan storage
 - Workflow state tracking
 
-#### LLMService (`src/services/llm_service.py`)
+#### LLMService (`src/psychoanalyst_app/services/llm_service.py`)
 
 **Purpose**: Google Gemini API integration
 
@@ -296,9 +298,9 @@ Services provide low-level functionality to the system.
 - Token management
 - Error handling and retries
 
-#### RAGService (`src/services/rag_service.py`)
+#### RAGService (`src/psychoanalyst_app/services/rag_service.py`)
 
-**Purpose**: ChromaDB vector store for domain knowledge
+**Purpose**: FAISS vector index for domain knowledge
 
 **Features**:
 - Semantic search over therapy knowledge
@@ -308,7 +310,9 @@ Services provide low-level functionality to the system.
 
 ## Data Models
 
-### Core Models (`src/orchestration/models.py`)
+For the full model inventory and DTO mappings, see `docs/data-models.md`.
+
+### Core Models (`src/psychoanalyst_app/orchestration/models.py`)
 
 ```python
 @dataclass
@@ -373,11 +377,13 @@ Server → Client:
   - chat_response_chunk   Streaming message chunks
   - session_started       Session created
   - user_status           Workflow state
-  - style_selected        Style confirmed
-  - session_extended      Time extended
-  - typing_start/stop     Therapist typing
+  - connected             Connection established
+  - session_started       Session created
+  - chat_response_chunk   Streaming responses
+  - session_ended         Session ended
+  - assessment_recommendations Style recommendations
+  - typing_start/stop     Therapist typing (optional)
   - error                 Error occurred
-  - pong                  Connection OK
 ```
 
 ## Deployment
@@ -387,12 +393,16 @@ Server → Client:
 ```yaml
 # docker-compose.yml
 services:
-  unified-server:
-    build: .
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    profiles: ["production"]
     ports:
       - "8000:8000"
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - DATABASE_PATH=/app/data/psychoanalyst.db
     volumes:
       - ./data:/app/data
@@ -401,11 +411,14 @@ services:
 ### Starting the Server
 
 ```bash
-# Development
-python src/unified_server.py
+# Development (Docker)
+make run-server
+
+# Local (opt-in)
+make local-run-server
 
 # Production
-docker-compose up unified-server
+docker compose --profile production up app
 ```
 
 ## Testing
@@ -426,17 +439,17 @@ tests/
 ### Running Tests
 
 ```bash
-# All tests
-pytest
+# All tests (Docker)
+make test
 
-# Unit tests only
-pytest tests/unit/
+# Unit tests only (Docker)
+make test-unit
 
-# Integration tests only
-pytest tests/integration/
+# Integration tests only (Docker)
+make test-integration
 
 # Specific component
-pytest tests/unit/test_workflow_engine.py -v
+make docker-test-one TEST=tests/unit/test_workflow_engine.py
 ```
 
 ## Performance Considerations
@@ -469,14 +482,12 @@ Future enhancements:
 
 ### Current Implementation
 
-- User authentication via tokens (WebSocket)
 - Session isolation
 - Input validation on API endpoints
 - Error handling with safe error messages
 
 ### Future Enhancements
 
-- JWT-based authentication
 - Rate limiting
 - Encryption at rest (database)
 - HTTPS/WSS in production
@@ -517,8 +528,8 @@ Future enhancements:
 
 **WebSocket won't connect**:
 - Check CORS configuration in `UnifiedServer`
-- Verify Socket.IO client version compatibility
-- Check authentication token
+- Verify WebSocket client compatibility and URL path
+- Verify the `user_id` query parameter is provided
 
 **Streaming not working**:
 - Verify `chat_response_chunk` handler in frontend
@@ -572,5 +583,5 @@ The legacy architecture had UI-coupled agents. The new architecture:
 
 ---
 
-**Last Updated**: 2025-01-08
-**Version**: 2.0 (Orchestration Architecture)
+**Last Updated**: 2025-12-19
+**Version**: 2.1 (Trio Orchestration Architecture)

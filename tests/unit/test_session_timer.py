@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from models.data_models import Message, TherapyPlan, UserProfile, UserStatus
-from orchestration.models import ConversationContext
+from psychoanalyst_app.models.data_models import Message, TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.orchestration.models import ConversationContext
 
 
 def test_time_elapsed_calculation():

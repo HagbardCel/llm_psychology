@@ -1,0 +1,99 @@
+docker compose --profile test run --rm frontend-e2e npx playwright install chromium
+ Container psychoanalyst_api_e2e Running 
+ Container psychoanalyst_api_e2e Waiting 
+ Container psychoanalyst_api_e2e Healthy 
+ Container psychoanalyst_app-frontend-e2e-run-5990f925c737 Creating 
+ Container psychoanalyst_app-frontend-e2e-run-5990f925c737 Created 
+docker compose --profile test run --rm frontend-e2e npm run test:e2e
+ Container psychoanalyst_api_e2e Running 
+ Container psychoanalyst_api_e2e Waiting 
+ Container psychoanalyst_api_e2e Healthy 
+ Container psychoanalyst_app-frontend-e2e-run-ba0e08b9ad12 Creating 
+ Container psychoanalyst_app-frontend-e2e-run-ba0e08b9ad12 Created 
+
+> psychoanalyst-frontend@1.0.0 test:e2e
+> playwright test
+
+
+Running 3 tests using 3 workers
+
+[1A[2K[1/3] [chromium] › e2e/golden-path.spec.ts:4:3 › Golden Path (Deterministic) › profile → intake chat streams a response
+[1A[2K[2/3] [chromium] › e2e/version-check.spec.ts:8:3 › Version Check › performs compatibility check and does not block routing
+[1A[2K[3/3] [chromium] › e2e/websocket-reconnect.spec.ts:4:3 › WebSocket Reconnect › disconnect triggers reconnect UI state and restores session readiness
+[1A[2K[WebServer] (node:137) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+[WebServer] (Use `node --trace-deprecation ...` to show where the warning was created)
+
+[1A[2K  1) [chromium] › e2e/golden-path.spec.ts:4:3 › Golden Path (Deterministic) › profile → intake chat streams a response 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeEnabled[2m([22m[2m)[22m failed
+
+    Locator: getByRole('button', { name: /^continue$/i })
+    Expected: enabled
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeEnabled" with timeout 15000ms[22m
+    [2m  - waiting for getByRole('button', { name: /^continue$/i })[22m
+
+
+       7 |     // Dashboard → Profile (backend-driven)
+       8 |     const continueButton = page.getByRole('button', { name: /^continue$/i });
+    >  9 |     await expect(continueButton).toBeEnabled({ timeout: 15000 });
+         |                                  ^
+      10 |     await continueButton.click();
+      11 |
+      12 |     await page.waitForURL(/\/profile/, { timeout: 15000 });
+        at /app/e2e/golden-path.spec.ts:9:34
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/golden-path-Golden-Path-De-50bc7-ake-chat-streams-a-response-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/golden-path-Golden-Path-De-50bc7-ake-chat-streams-a-response-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/golden-path-Golden-Path-De-50bc7-ake-chat-streams-a-response-chromium/error-context.md
+
+
+[1A[2K  2) [chromium] › e2e/websocket-reconnect.spec.ts:4:3 › WebSocket Reconnect › disconnect triggers reconnect UI state and restores session readiness 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeEnabled[2m([22m[2m)[22m failed
+
+    Locator: getByRole('button', { name: /^continue$/i })
+    Expected: enabled
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeEnabled" with timeout 15000ms[22m
+    [2m  - waiting for getByRole('button', { name: /^continue$/i })[22m
+
+
+       6 |
+       7 |     const continueButton = page.getByRole('button', { name: /^continue$/i });
+    >  8 |     await expect(continueButton).toBeEnabled({ timeout: 15000 });
+         |                                  ^
+       9 |     await continueButton.click();
+      10 |
+      11 |     await page.waitForURL(/\/profile/, { timeout: 15000 });
+        at /app/e2e/websocket-reconnect.spec.ts:8:34
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/websocket-reconnect-WebSoc-9acba--restores-session-readiness-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/websocket-reconnect-WebSoc-9acba--restores-session-readiness-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/websocket-reconnect-WebSoc-9acba--restores-session-readiness-chromium/error-context.md
+
+
+[1A[2K  2 failed
+    [chromium] › e2e/golden-path.spec.ts:4:3 › Golden Path (Deterministic) › profile → intake chat streams a response 
+    [chromium] › e2e/websocket-reconnect.spec.ts:4:3 › WebSocket Reconnect › disconnect triggers reconnect UI state and restores session readiness 
+  1 passed (56.6s)
+
+make: *** [Makefile:136: test-e2e] Error 1

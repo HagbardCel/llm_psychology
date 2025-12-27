@@ -983,7 +983,7 @@ describe('TherapySession - Session Synchronization', () => {
 #### 1. CORS Testing
 
 **Prerequisites:**
-- Backend running with CORS middleware: `python src/trio_server.py`
+- Backend running with CORS middleware: `python -m psychoanalyst_app.server`
 - Frontend dev server: `npm run dev` (runs on localhost:5173)
 
 **Test Steps:**

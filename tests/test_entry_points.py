@@ -15,10 +15,11 @@ def test_server_entry_point_importable():
     # Add project root to python path
     env = os.environ.copy()
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    env["PYTHONPATH"] = project_root
+    src_path = os.path.join(project_root, "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), project_root, src_path]))
 
     result = subprocess.run(
-        [sys.executable, "-c", "import src.server"],
+        [sys.executable, "-c", "import psychoanalyst_app.server"],
         env=env,
         capture_output=True,
         text=True,
@@ -33,10 +34,11 @@ def test_main_entry_point_importable():
     """
     env = os.environ.copy()
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    env["PYTHONPATH"] = project_root
+    src_path = os.path.join(project_root, "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), project_root, src_path]))
 
     result = subprocess.run(
-        [sys.executable, "-c", "import src.main"],
+        [sys.executable, "-c", "import psychoanalyst_app.main"],
         env=env,
         capture_output=True,
         text=True,

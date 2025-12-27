@@ -4,8 +4,8 @@ on:
   push:
     branches: [master, main, develop]
     paths:
-      - 'src/models/**'
-      - 'src/orchestration/models.py'
+      - 'src/psychoanalyst_app/models/**'
+      - 'src/psychoanalyst_app/orchestration/models.py'
       - 'scripts/generate_schemas.py'
       - 'frontend/src/**/*.ts'
       - 'frontend/src/**/*.tsx'
@@ -32,6 +32,7 @@ jobs:
         run: |
           pip install uv
           uv pip install --system -r requirements.txt
+          uv pip install --system -e .
 
       - name: Generate JSON schemas
         run: make generate-schemas
@@ -128,6 +129,7 @@ jobs:
         run: |
           pip install uv
           uv pip install --system -r requirements.txt
+          uv pip install --system -e .
 
       - name: Run schema generation tests
         run: |

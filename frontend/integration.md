@@ -7,7 +7,7 @@ This React frontend is designed to work alongside the existing terminal interfac
 The application now supports two interfaces:
 
 ### 1. Terminal Interface (Existing)
-- **Path**: `python src/main.py`
+- **Path**: `python -m psychoanalyst_app`
 - **Features**: Full terminal-based interaction
 - **Use Case**: CLI users, server environments, debugging
 
@@ -41,7 +41,7 @@ Both interfaces use the same:
 ### Terminal Only
 ```bash
 cd /app
-python src/main.py
+python -m psychoanalyst_app
 ```
 
 ### Web Interface
@@ -76,7 +76,6 @@ Users can switch between terminal and web interfaces at any time:
 🔄 **Next Steps:**
 - Backend API endpoints (Task 2)
 - WebSocket integration
-- Authentication system
 - Real-time communication
 
 The terminal interface remains fully functional and available as a backup option.

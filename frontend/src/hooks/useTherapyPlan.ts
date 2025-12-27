@@ -1,19 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/apiClient';
-import type { TherapyPlan, TherapyStyle } from '../types';
-
-/**
- * Therapy plan data structure from backend
- */
-interface TherapyPlanResponse {
-  plan_id: string;
-  user_id: string;
-  therapy_style: string;
-  goals: string[];
-  session_count: number;
-  created_at: string;
-  updated_at: string;
-}
+import type { TherapyPlan } from '../types';
 
 /**
  * Therapy plan creation payload
@@ -21,21 +8,6 @@ interface TherapyPlanResponse {
 export interface CreateTherapyPlanRequest {
   user_id: string;
   therapy_style: string;
-}
-
-/**
- * Transform backend therapy plan response to frontend TherapyPlan type
- */
-function transformTherapyPlan(data: TherapyPlanResponse): TherapyPlan {
-  return {
-    id: data.plan_id,
-    userId: data.user_id,
-    therapyStyle: data.therapy_style as TherapyStyle,
-    goals: data.goals,
-    sessionCount: data.session_count,
-    createdAt: new Date(data.created_at),
-    updatedAt: new Date(data.updated_at),
-  };
 }
 
 /**
@@ -47,10 +19,10 @@ export function useTherapyPlan(userId: string) {
   return useQuery({
     queryKey: ['therapyPlan', userId],
     queryFn: async () => {
-      const response = await apiClient.get<TherapyPlanResponse>(
+      const response = await apiClient.get<TherapyPlan | null>(
         `/api/therapy/plan?user_id=${userId}`
       );
-      return transformTherapyPlan(response);
+      return response;
     },
     enabled: !!userId, // Only fetch if userId is provided
     staleTime: 1000 * 60 * 10, // 10 minutes - therapy plans change infrequently
@@ -66,14 +38,14 @@ export function useCreateTherapyPlan() {
 
   return useMutation({
     mutationFn: async (data: CreateTherapyPlanRequest) => {
-      const response = await apiClient.post<TherapyPlanResponse>(
+      const response = await apiClient.post<TherapyPlan>(
         '/api/therapy/plan',
         {
           user_id: data.user_id,
           therapy_style: data.therapy_style,
         }
       );
-      return transformTherapyPlan(response);
+      return response;
     },
     onSuccess: (data, variables) => {
       // Update cache with new therapy plan

@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useAuth } from './AuthContext';
 import type { User, Session, TherapyPlan } from '../types';
 
 /**
@@ -34,7 +33,7 @@ interface AppContextType {
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
 
-  // Current user ID (stored in sessionStorage for session-only persistence)
+  // Current user ID (stored in localStorage for persistence)
   currentUserId: string | null;
   setCurrentUserId: (userId: string | null) => void;
 
@@ -56,8 +55,6 @@ interface AppProviderProps {
  * managed by React Query hooks in individual components
  */
 export function AppProvider({ children }: AppProviderProps) {
-  const auth = useAuth();
-
   // Theme preference (persisted in localStorage)
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('theme');
@@ -70,19 +67,20 @@ export function AppProvider({ children }: AppProviderProps) {
     return stored !== null ? stored === 'true' : true;
   });
 
-  // Current user ID (persisted in sessionStorage only)
+  // Current user ID (persisted in localStorage)
   const [currentUserId, setCurrentUserIdState] = useState<string | null>(() => {
-    return sessionStorage.getItem('current_user_id');
-  });
-
-  // Synchronize currentUserId with authenticated user
-  useEffect(() => {
-    if (auth.user?.userId) {
-      setCurrentUserIdState(auth.user.userId);
-    } else if (!auth.isAuthenticated && !auth.isLoading) {
-      setCurrentUserIdState(null);
+    const existing = localStorage.getItem('current_user_id');
+    if (existing) {
+      return existing;
     }
-  }, [auth.user?.userId, auth.isAuthenticated, auth.isLoading]);
+
+    const generated =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `user_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem('current_user_id', generated);
+    return generated;
+  });
 
   // Persist theme changes
   useEffect(() => {
@@ -96,12 +94,12 @@ export function AppProvider({ children }: AppProviderProps) {
     localStorage.setItem('sidebarOpen', sidebarOpen.toString());
   }, [sidebarOpen]);
 
-  // Persist current user ID changes (session-only)
+  // Persist current user ID changes
   useEffect(() => {
     if (currentUserId) {
-      sessionStorage.setItem('current_user_id', currentUserId);
+      localStorage.setItem('current_user_id', currentUserId);
     } else {
-      sessionStorage.removeItem('current_user_id');
+      localStorage.removeItem('current_user_id');
     }
   }, [currentUserId]);
 

@@ -12,6 +12,7 @@ This test simulates a complete new patient flow against a live server:
 """
 
 import json
+import os
 import uuid
 
 import httpx
@@ -56,6 +57,13 @@ async def test_full_patient_journey_with_real_llm():
     import logging
 
     logger = logging.getLogger(__name__)
+
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key or api_key == "test_mock_api_key_for_testing":
+        pytest.fail(
+            "GOOGLE_API_KEY must be configured with a real key when running "
+            "real LLM tests (pass --no-mocks only after setting it)."
+        )
 
     if not await check_server_is_running():
         pytest.skip(f"Server is not running at {SERVER_URL}. Skipping end-to-end test.")

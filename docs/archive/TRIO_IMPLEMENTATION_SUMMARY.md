@@ -437,10 +437,10 @@ python3 validate_trio.py
 ### Starting Trio Server:
 ```bash
 # Via server.py (already uses Trio)
-python src/server.py
+python -m psychoanalyst_app.server
 
 # Or directly
-python src/trio_server.py
+python -m psychoanalyst_app.server
 ```
 
 ---

@@ -17,7 +17,7 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8000
-    command: python src/unified_server.py
+    command: python -m psychoanalyst_app.server
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]

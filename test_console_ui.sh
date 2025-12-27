@@ -15,10 +15,10 @@ else
     echo "❌ Unified server is NOT running"
     echo ""
     echo "Please start the unified server first:"
-    echo "  python src/unified_server.py"
+    echo "  python -m psychoanalyst_app.server"
     echo ""
     echo "Or with Docker:"
-    echo "  docker-compose up unified-server"
+    echo "  docker compose up api"
     exit 1
 fi
 

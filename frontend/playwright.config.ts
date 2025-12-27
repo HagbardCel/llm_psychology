@@ -52,18 +52,10 @@ export default defineConfig({
     : [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   /* Run your local dev server before starting the tests */
-  webServer: [
-    {
-      command: 'python ../src/e2e_server.py',
-      url: 'http://127.0.0.1:8000/health',
-      reuseExistingServer: false,
-      timeout: 120 * 1000,
-    },
-    {
-      command: 'npm run dev',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120 * 1000,
-    },
-  ],
+  webServer: {
+    command: 'npm run dev',
+    url: 'http://localhost:5173',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120 * 1000,
+  },
 });

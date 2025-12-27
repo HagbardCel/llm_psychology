@@ -5,31 +5,44 @@ import {
   Alert,
   Snackbar,
 } from '@mui/material';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { SessionHeader } from './SessionHeader';
 import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';
 import { ConnectionStatus } from './ConnectionStatus';
-import { useCurrentUserId } from '../contexts/AppContext';
-import { useAuth } from '../contexts/AuthContext';
+import { useAppContext, useCurrentUserId } from '../contexts/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { useTypingIndicator } from '../hooks/useTypingIndicator';
 import { apiClient } from '../services/apiClient';
 import { Message, Session, AgentType, SessionStatus } from '../types';
-import type { SessionStartedEvent } from '../types/websocket';
+import type {
+  AssessmentRecommendationsEvent,
+  SessionStartedEvent,
+  WebSocketResponse,
+} from '../types/websocket';
+import { WS_MESSAGE_TYPES } from '../types/websocket';
 
 interface TherapySessionProps {
   sessionId?: string;
+  sessionType?: 'therapy' | 'intake' | 'assessment';
+  onAssessmentRecommendations?: (
+    payload: AssessmentRecommendationsEvent
+  ) => void;
 }
 
-export function TherapySession({ sessionId }: TherapySessionProps) {
-  const { token, user: authUser } = useAuth();
+export function TherapySession({
+  sessionId,
+  sessionType = 'therapy',
+  onAssessmentRecommendations
+}: TherapySessionProps) {
   const currentUserId = useCurrentUserId();
+  const { setSidebarOpen } = useAppContext();
+  const navigate = useNavigate();
   const params = useParams<{ sessionId?: string }>();
   const effectiveSessionId = sessionId ?? params.sessionId;
   const isReadOnly = !!effectiveSessionId;
+  const effectiveSessionType = sessionType;
 
-  const userId = authUser?.userId || currentUserId || 'guest';
+  const userId = currentUserId || 'guest';
 
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,8 +84,8 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
           id: generateMessageId(),
           content: finalContent,
           role: 'assistant',
-          timestamp: new Date(),
-          sessionId: prev.id,
+          timestamp: new Date().toISOString(),
+          sessionId: prev.session_id,
         };
 
         return {
@@ -92,13 +105,21 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     sessionRequestedRef.current = true;
 
     const startedSession: Session = {
-      id: event.session_id,
-      userId: event.user_id,
+      session_id: event.session_id,
+      user_id: event.user_id,
+      timestamp: event.created_at,
+      transcript: [],
+      topics: [],
+      psychological_summary: null,
+      dominant_affects: [],
+      key_themes: [],
+      notable_interactions: null,
+      interpretations: null,
+      patient_reactions: null,
+      enriched: false,
       agentType: event.agent_type as AgentType,
       status: SessionStatus.ACTIVE,
       startTime: new Date(event.created_at),
-      transcript: [],
-      topics: [],
     };
 
     setSession(startedSession);
@@ -111,31 +132,52 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     connectionStatus,
     lastMessage,
     sendChatMessage,
-    startTyping,
-    stopTyping,
     requestSession,
     isConnected
   } = useWebSocket({
     userId,
-    authToken: token || '',
     autoConnect: !isReadOnly,
     onStreamingChunk: handleStreamingChunk,
     onSessionStarted: handleSessionStarted
   });
 
-  // Typing indicator
-  const typingIndicator = useTypingIndicator({
-    onTypingStart: startTyping,
-    onTypingStop: stopTyping,
-    typingTimeout: 1000
-  });
-
   // Handle WebSocket messages
+  const handleWebSocketMessage = useCallback(
+    (message: WebSocketResponse | null) => {
+      if (!message) return;
+
+      if (message.type === WS_MESSAGE_TYPES.ASSESSMENT_RECOMMENDATIONS) {
+        if (onAssessmentRecommendations && message.data) {
+          onAssessmentRecommendations(message.data as AssessmentRecommendationsEvent);
+        }
+        return;
+      }
+
+      if (message.type === WS_MESSAGE_TYPES.ERROR || message.error) {
+        const errorMessage =
+          message.error ||
+          (typeof message.data === 'object' && message.data
+            ? (message.data as Record<string, any>).message
+            : undefined);
+        if (errorMessage) {
+          setError(errorMessage);
+        }
+        setIsLoading(false);
+      }
+    },
+    [onAssessmentRecommendations]
+  );
+
   useEffect(() => {
     if (lastMessage) {
       handleWebSocketMessage(lastMessage);
     }
-  }, [lastMessage]);
+  }, [lastMessage, handleWebSocketMessage]);
+
+  useEffect(() => {
+    if (isReadOnly) return;
+    sessionRequestedRef.current = false;
+  }, [isReadOnly, effectiveSessionType]);
 
   useEffect(() => {
     if (!effectiveSessionId) return;
@@ -147,23 +189,20 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         setError(null);
         setIsSessionReady(false);
 
-        const response = await apiClient.get<any>(`/api/sessions/${effectiveSessionId}`);
+        const response = await apiClient.get<Session>(`/api/sessions/${effectiveSessionId}`);
 
         if (cancelled) return;
 
         const loadedSession: Session = {
-          id: response.session_id,
-          userId: response.user_id,
-          startTime: response.timestamp ? new Date(response.timestamp) : undefined,
-          transcript: (response.transcript || []).map((m: any) => ({
+          ...response,
+          transcript: (response.transcript || []).map((m) => ({
+            ...m,
             id: `${response.session_id}-${m.timestamp}-${m.role}`,
-            role: m.role,
-            content: m.content,
-            timestamp: new Date(m.timestamp),
             sessionId: response.session_id,
           })),
           topics: response.topics || [],
           status: SessionStatus.COMPLETED,
+          startTime: response.timestamp ? new Date(response.timestamp) : undefined,
         };
 
         setSession(loadedSession);
@@ -192,8 +231,14 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     sessionRequestedRef.current = true;
     setIsLoading(true);
     setIsSessionReady(false);
-    requestSession('therapy');
-  }, [isConnected, isReadOnly, isSessionReady, requestSession]);
+    requestSession(effectiveSessionType);
+  }, [
+    effectiveSessionType,
+    isConnected,
+    isReadOnly,
+    isSessionReady,
+    requestSession
+  ]);
 
   // If we disconnect, allow re-requesting a session on reconnect.
   useEffect(() => {
@@ -217,20 +262,7 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
     }, 10000);
 
     return () => clearTimeout(timeout);
-  }, [isConnected, isSessionReady]);
-
-  const handleWebSocketMessage = (message: any) => {
-    try {
-      if (message.error) {
-        setError(message.error);
-        setIsLoading(false);
-      }
-    } catch (err) {
-      console.error('Error handling WebSocket message:', err);
-      setError('Failed to process server response');
-      setIsLoading(false);
-    }
-  };
+  }, [isConnected, isReadOnly, isSessionReady]);
 
   const handleSendMessage = async (content: string) => {
     if (isReadOnly) return;
@@ -247,8 +279,8 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
         id: generateMessageId(),
         content,
         role: 'user',
-        timestamp: new Date(),
-        sessionId: session.id,
+        timestamp: new Date().toISOString(),
+        sessionId: session.session_id,
       };
 
       // Update transcript immediately for responsive UI
@@ -291,13 +323,11 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
   };
 
   const handleMenuClick = () => {
-    // TODO: Implement navigation drawer
-    console.log('Menu clicked');
+    setSidebarOpen(true);
   };
 
   const handleSettingsClick = () => {
-    // TODO: Implement settings modal
-    console.log('Settings clicked');
+    navigate('/settings');
   };
 
   return (
@@ -345,7 +375,6 @@ export function TherapySession({ sessionId }: TherapySessionProps) {
           }
           isLoading={isLoading}
           placeholder={getInputPlaceholder(session?.agentType)}
-          onTypingChange={typingIndicator.handleInputChange}
         />
       </Container>
 

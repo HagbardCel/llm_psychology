@@ -1,17 +1,25 @@
-"""
-Integration tests for version API endpoints.
-"""
+"""Integration tests for version API endpoints."""
 
-import os
-import sys
+import importlib.util
+from pathlib import Path
 
-import pytest
-from version import API_VERSION, MIN_CLIENT_VERSION
-
-# Use httpx for async HTTP requests in Trio
 import httpx
+import pytest
+from psychoanalyst_app.version import API_VERSION, MIN_CLIENT_VERSION
 
 pytestmark = pytest.mark.trio
+
+
+def _load_console_version_check():
+    module_path = Path(__file__).resolve().parents[2] / "console-ui" / "src" / "version_check.py"
+    spec = importlib.util.spec_from_file_location(
+        "console_version_check", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load console version checker at {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture
@@ -216,14 +224,8 @@ async def test_version_check_patch_difference(server_url):
 
 async def test_console_client_version_check_flow(server_url):
     """Test the console client's version-check helper against the running backend."""
-    console_ui_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../console-ui/src")
-    )
-    if console_ui_path not in sys.path:
-        sys.path.append(console_ui_path)
-
-    from version_check import check_backend_version
-
+    version_check = _load_console_version_check()
+    check_backend_version = getattr(version_check, "check_backend_version")
     compatible, message = await check_backend_version(server_url)
     assert compatible is True
     assert message

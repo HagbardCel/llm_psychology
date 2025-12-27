@@ -96,33 +96,9 @@ export interface TherapyStyleInfo { /* ... */ }
 - ✅ Types automatically sync with backend
 - ✅ Can migrate gradually
 
-### Phase 2: Field Name Adjustment
+### Phase 2: Field Name Alignment (Completed)
 
-Handle field name mismatches (snake_case → camelCase):
-
-**Issue**: Generated types have `userid` instead of `userId`
-
-**Solution 1**: Type extension
-
-```typescript
-// Extend generated type with better field names
-export interface User extends Omit<GeneratedUserProfile, 'userid'> {
-  userId: string;
-}
-```
-
-**Solution 2**: Utility function
-
-```typescript
-// Convert generated type to expected format
-export function toUser(profile: GeneratedUserProfile): User {
-  return {
-    ...profile,
-    userId: profile.userid,
-    id: profile.userid,
-  };
-}
-```
+We removed quicktype’s camelCase transformation flags, so generated DTOs now keep the backend’s snake_case keys (`user_id`, `session_id`, `created_at`, …). Manual types should simply reference those keys. If you need camelCase in UI state, derive it explicitly inside the component/hook rather than altering the API DTO.
 
 ### Phase 3: Gradual Import Updates (Optional)
 
@@ -144,87 +120,55 @@ import { UserProfile, UserStatus } from '@/types/generated/api';
 
 ### User / UserProfile
 
-| Manual Field | Generated Field | Type | Notes |
-|--------------|-----------------|------|-------|
-| `id` | `userid` | string | **Mismatch** |
-| `name` | `name` | string | ✓ Match |
-| `email` | ❌ Not in backend | string? | **Client-only** |
-| `birthdate` | `birthdate` | Date? | ✓ Match |
-| `profession` | `profession` | string? | ✓ Match |
-| `status` | `status` | UserStatus | ✓ Match |
-| `createdAt` | `createdAt` | Date | ✓ Match |
-| `lastActiveAt` | ❌ Not in backend | Date | **Client-only** |
-| ❌ Not in manual | `updatedAt` | Date | **New field** |
-
-**Action Required**:
-- Map `userid` → `id` (compatibility layer)
-- Handle `email` as client-only field
-- Handle `lastActiveAt` as client-only field
+| Manual Field | Generated Field | Notes |
+|--------------|-----------------|-------|
+| `id`, `userId` | `user_id` | Prefer keeping `user_id` everywhere. Derive camelCase only when needed for UI state. |
+| `name` | `name` | Same |
+| `email` | ❌ Not in backend | Keep client-only |
+| `data_of_birth` | `data_of_birth` | ISO string; treat as `string \| null` |
+| `profession` | `profession` | Optional string |
+| `status` | `status` | Enum |
+| `createdAt` / `updatedAt` | `created_at` / `updated_at` | Use snake_case + ISO string |
 
 ### Message
 
-| Manual Field | Generated Field | Type | Notes |
-|--------------|-----------------|------|-------|
-| `id` | ❌ Not in backend | string | **Client-only** |
-| `content` | `content` | string | ✓ Match |
-| `role` | `role` | string | ✓ Match |
-| `timestamp` | `timestamp` | Date | ✓ Match |
-| `sessionId` | ❌ Not in backend | string | **Client-only** |
-
-**Action Required**:
-- Extend generated type with `id` and `sessionId` for client use
+| Manual Field | Generated Field | Notes |
+|--------------|-----------------|-------|
+| `id`, `sessionId` | ❌ Client-only | Continue adding optional UI identifiers |
+| `content`, `role` | same | Direct match |
+| `timestamp` | `timestamp` | ISO string (no `Date` inference) |
+| `agent` | `agent` | Optional string |
 
 ### Session
 
-| Manual Field | Generated Field | Type | Notes |
-|--------------|-----------------|------|-------|
-| `id` | `sessionid` | string | **Mismatch** |
-| `userId` | `userid` | string | **Mismatch** |
-| `agentType` | ❌ Not in backend | AgentType | **Client-only** |
-| `therapyStyle` | ❌ Not in backend | TherapyStyle? | **Client-only** |
-| `status` | ❌ Not in backend | SessionStatus | **Client-only** |
-| `startTime` | ❌ Not in backend | Date | **Client-only** |
-| `endTime` | ❌ Not in backend | Date? | **Client-only** |
-| `transcript` | `transcript` | Message[] | ✓ Match |
-| `topics` | `topics` | Topic[] | ✓ Match |
-| `metadata` | ❌ Not in backend | object? | **Client-only** |
-| ❌ Not in manual | `timestamp` | Date | **New field** |
-
-**Action Required**:
-- Extend generated Session with client-only fields
-- Map `sessionid` → `id`, `userid` → `userId`
+| Manual Field | Generated Field | Notes |
+|--------------|-----------------|-------|
+| `id`, `userId` | `session_id`, `user_id` | Keep DTO keys (`session_id`, `user_id`) |
+| `transcript`, `topics` | same | Already aligned |
+| `agentType`, `therapyStyle`, `status`, `startTime`, `endTime`, `metadata` | Client-only | Keep as optional UI extensions |
+| `timestamp` | `timestamp` | ISO string |
 
 ### TherapyPlan
 
-| Manual Field | Generated Field | Type | Notes |
-|--------------|-----------------|------|-------|
-| `id` | ❌ Not in backend | string | Check `plan_id` |
-| `userId` | ❌ Not in backend | string | Check `user_id` |
-| `therapyStyle` | `selectedTherapyStyle` | string? | **Different name** |
-| `goals` | ❌ Not in backend | string[] | **Client-only** |
-| `sessionCount` | ❌ Not in backend | number | **Client-only** |
-| `createdAt` | `createdAt` | Date | ✓ Match |
-| `updatedAt` | `updatedAt` | Date | ✓ Match |
-| ❌ Not in manual | `planDetails` | object | **New field** |
-| ❌ Not in manual | `version` | number | **New field** |
-| ❌ Not in manual | `sessionBriefing` | object? | **New field** |
-
-**Action Required**:
-- Map field names
-- Extend with client-only fields
+| Manual Field | Generated Field | Notes |
+|--------------|-----------------|-------|
+| `id`, `userId` | `plan_id`, `user_id` | Keep DTO keys |
+| `therapyStyle` | `selected_therapy_style` | Use backend name or derive alias locally |
+| `sessionCount` | Client-only | Keep optional UI field |
+| Other plan fields | same | Already aligned (snake_case) |
 
 ---
 
 ## IMPLEMENTATION STEPS
 
-### Step 1: Create Compatibility Layer ✅
+### Step 1: Re-export DTOs + add UI extensions (✅)
 
 File: `frontend/src/types/index.ts`
 
 ```typescript
 // Import generated types
 import type {
-  UserProfile,
+  UserProfile as GeneratedUserProfile,
   UserStatus as GeneratedUserStatus,
   Message as GeneratedMessage,
   Session as GeneratedSession,
@@ -233,41 +177,30 @@ import type {
   WorkflowNextActionResponse,
 } from './generated/api';
 
-// Re-export generated types with extensions
-export interface User extends Omit<UserProfile, 'userid'> {
-  id: string;  // Map from userid
-  email?: string;  // Client-only
-  lastActiveAt?: Date;  // Client-only
-}
-
-export type { GeneratedUserStatus as UserStatus };
-
-export interface Message extends GeneratedMessage {
-  id?: string;  // Client-only
-  sessionId?: string;  // Client-only
-}
-
-export interface Session extends Omit<GeneratedSession, 'sessionid' | 'userid'> {
-  id: string;  // Map from sessionid
-  userId: string;  // Map from userid
-  agentType?: AgentType;  // Client-only
-  therapyStyle?: TherapyStyle;  // Client-only
-  status?: SessionStatus;  // Client-only
-  startTime?: Date;  // Client-only
-  endTime?: Date;  // Client-only
-  metadata?: Record<string, any>;  // Client-only
-}
-
-export interface TherapyPlan extends Omit<GeneratedTherapyPlan, 'planId' | 'userId'> {
-  id: string;  // Map from planId
-  userId: string;  // Map from userId
-  therapyStyle?: string;  // From selectedTherapyStyle
-  goals?: string[];  // Client-only
-  sessionCount?: number;  // Client-only
-}
-
-export type { GeneratedTopic as Topic };
+// Re-export generated DTOs directly
+export type User = GeneratedUserProfile;
+export type UserStatus = GeneratedUserStatus;
+export type Topic = GeneratedTopic;
 export type WorkflowNextAction = WorkflowNextActionResponse;
+
+// Extend DTOs with optional UI-only metadata
+export interface Message extends GeneratedMessage {
+  id?: string;
+  sessionId?: string;
+}
+
+export interface Session extends GeneratedSession {
+  agentType?: AgentType;
+  therapyStyle?: TherapyStyle;
+  status?: SessionStatus;
+  startTime?: Date;
+  endTime?: Date;
+  metadata?: Record<string, any>;
+}
+
+export interface TherapyPlan extends GeneratedTherapyPlan {
+  sessionCount?: number;
+}
 
 // Keep all client-only types
 export enum AgentType { /* existing */ }
@@ -280,50 +213,15 @@ export interface UserPreferences { /* existing */ }
 export interface TherapyStyleInfo { /* existing */ }
 ```
 
-### Step 2: Add Type Converters
+### Step 2: Update Call Sites
 
-File: `frontend/src/types/converters.ts`
+- Treat API data as snake_case. Example: `user.user_id`, not `user.userId`.
+- When camelCase is needed for UI-only state, derive it inside the component/hook (`const userId = user.user_id`) rather than mutating the DTO.
+- Update selectors, hooks, and React Query keys that previously referenced camelCase names.
 
-```typescript
-import type { UserProfile } from './generated/api';
-import type { User } from './index';
+### Step 3: Validate
 
-export function toUser(profile: UserProfile): User {
-  return {
-    ...profile,
-    id: profile.userid,
-  };
-}
-
-export function fromUser(user: User): UserProfile {
-  const { id, email, lastActiveAt, ...rest } = user;
-  return {
-    ...rest,
-    userid: id,
-  };
-}
-
-// Similar converters for other types as needed
-```
-
-### Step 3: Test Compatibility
-
-Run type check to ensure no breaks:
-
-```bash
-npm run type-check
-```
-
-### Step 4: Update API Client (if needed)
-
-If API responses use different field names, add converters:
-
-```typescript
-async function getUserProfile(userId: string): Promise<User> {
-  const profile = await api.get<UserProfile>(`/api/user/profile?user_id=${userId}`);
-  return toUser(profile);
-}
-```
+Run `npm run type-check` (or `npm run dev`) to surface any remaining camelCase references. TypeScript will highlight places that still expect renamed fields.
 
 ---
 
@@ -331,35 +229,40 @@ async function getUserProfile(userId: string): Promise<User> {
 
 ### Unit Tests
 
-Test type converters:
+Add focused tests that ensure UI-only extensions coexist with DTO keys:
 
 ```typescript
-describe('Type Converters', () => {
-  it('should convert UserProfile to User', () => {
-    const profile: UserProfile = {
-      userid: 'user-123',
-      name: 'Test User',
-      status: 'PROFILE_ONLY',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+import type { Session } from '@/types';
+import { AgentType } from '@/types';
 
-    const user = toUser(profile);
-    expect(user.id).toBe('user-123');
-    expect(user.name).toBe('Test User');
-  });
+it('supports UI metadata without redefining DTO fields', () => {
+  const session: Session = {
+    session_id: 'session-1',
+    user_id: 'user-1',
+    timestamp: new Date().toISOString(),
+    transcript: [],
+    topics: [],
+  };
+
+  session.agentType = AgentType.PSYCHOANALYST;
+  expect(session.user_id).toBe('user-1');
 });
 ```
 
 ### Integration Tests
 
-Verify API responses work with new types:
+Use existing React Query hooks / API clients directly with generated types and assert snake_case data is passed through unchanged:
 
 ```typescript
-it('should fetch and convert user profile', async () => {
-  const user = await getUserProfile('user-123');
-  expect(user).toHaveProperty('id');
-  expect(user).toHaveProperty('name');
+import type { UserProfile } from '@/types/generated/api';
+
+it('passes backend payloads through untouched', async () => {
+  const response: UserProfile = await api.user.createProfile({
+    user_id: 'user-123',
+    name: 'Test User'
+  });
+
+  expect(response.user_id).toBe('user-123');
 });
 ```
 
@@ -406,17 +309,16 @@ If issues arise:
 
 ## TIMELINE
 
-- **Day 4**: Create compatibility layer (non-breaking)
-- **Day 5**: Add type converters and test
-- **Optional**: Gradually update imports to generated types
+- **Day 4**: Re-export DTOs + add UI extensions (non-breaking)
+- **Day 5**: Update call sites to snake_case + run tests
+- **Optional**: Gradually import directly from `generated/api`
 
 ---
 
 ## STATUS
 
 - [x] Audit completed
-- [ ] Compatibility layer created
-- [ ] Type converters added
+- [x] Compatibility layer updated to snake_case DTOs
+- [x] Call sites updated / type-check clean
 - [ ] Tests passing
 - [ ] Documentation updated
-

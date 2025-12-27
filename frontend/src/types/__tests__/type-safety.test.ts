@@ -20,33 +20,31 @@ describe('Type Safety Integration', () => {
   describe('User Type', () => {
     it('should enforce required fields', () => {
       const user: User = {
-        id: 'user-123',
+        user_id: 'user-123',
         name: 'Test User',
         status: 'PROFILE_ONLY',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
       };
 
-      expect(user.id).toBeDefined();
+      expect(user.user_id).toBeDefined();
       expect(user.name).toBeDefined();
       expect(user.status).toBeDefined();
     });
 
     it('should allow optional fields', () => {
       const user: User = {
-        id: 'user-123',
+        user_id: 'user-123',
         name: 'Test User',
-        email: 'test@example.com',
-        birthdate: new Date('1990-01-01'),
+        data_of_birth: '1990-01-01T00:00:00Z',
         profession: 'Engineer',
         status: 'PROFILE_ONLY',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        lastActiveAt: new Date(),
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
       };
 
-      expect(user.email).toBe('test@example.com');
-      expect(user.lastActiveAt).toBeDefined();
+      expect(user.data_of_birth).toBeDefined();
+      expect(user.profession).toBe('Engineer');
     });
 
     it('should enforce UserStatus enum values', () => {
@@ -63,11 +61,11 @@ describe('Type Safety Integration', () => {
 
       validStatuses.forEach(status => {
         const user: User = {
-          id: 'test',
+          user_id: 'test',
           name: 'Test',
           status,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-02T00:00:00Z',
         };
 
         expect(user.status).toBe(status);
@@ -80,12 +78,14 @@ describe('Type Safety Integration', () => {
       const message: Message = {
         role: 'user',
         content: 'Hello, therapist',
-        timestamp: new Date(),
+        timestamp: '2024-01-01T00:00:00Z',
       };
 
       expect(message.role).toBe('user');
       expect(message.content).toBe('Hello, therapist');
-      expect(message.timestamp).toBeInstanceOf(Date);
+      expect(typeof message.timestamp).toBe('string');
+      // Phase 1 decision (D2): datetimes stay as ISO strings on the wire.
+      expect(new Date(message.timestamp).toISOString()).toBe('2024-01-01T00:00:00.000Z');
     });
 
     it('should allow client-only fields', () => {
@@ -94,7 +94,7 @@ describe('Type Safety Integration', () => {
         sessionId: 'session-456',
         role: 'assistant',
         content: 'How are you feeling today?',
-        timestamp: new Date(),
+        timestamp: '2024-01-01T00:00:00Z',
       };
 
       expect(message.id).toBe('msg-123');
@@ -105,19 +105,19 @@ describe('Type Safety Integration', () => {
   describe('Session Type', () => {
     it('should support session with transcript', () => {
       const session: Session = {
-        id: 'session-123',
-        userId: 'user-123',
-        timestamp: new Date(),
+        session_id: 'session-123',
+        user_id: 'user-123',
+        timestamp: '2024-01-01T00:00:00Z',
         transcript: [
           {
             role: 'user',
             content: 'I feel anxious',
-            timestamp: new Date(),
+            timestamp: '2024-01-01T00:00:00Z',
           },
           {
             role: 'assistant',
             content: 'Tell me more about that',
-            timestamp: new Date(),
+            timestamp: '2024-01-01T00:05:00Z',
           },
         ],
         topics: [
@@ -126,6 +126,13 @@ describe('Type Safety Integration', () => {
             status: 'pending',
           },
         ],
+        psychological_summary: null,
+        dominant_affects: [],
+        key_themes: [],
+        notable_interactions: null,
+        interpretations: null,
+        patient_reactions: null,
+        enriched: false,
       };
 
       expect(session.transcript).toHaveLength(2);
@@ -134,11 +141,18 @@ describe('Type Safety Integration', () => {
 
     it('should allow client-only session fields', () => {
       const session: Session = {
-        id: 'session-456',
-        userId: 'user-456',
-        timestamp: new Date(),
+        session_id: 'session-456',
+        user_id: 'user-456',
+        timestamp: '2024-01-02T00:00:00Z',
         transcript: [],
         topics: [],
+        psychological_summary: null,
+        dominant_affects: [],
+        key_themes: [],
+        notable_interactions: null,
+        interpretations: null,
+        patient_reactions: null,
+        enriched: false,
         agentType: 'PSYCHOANALYST' as AgentType,
         therapyStyle: 'freud' as TherapyStyle,
         status: 'ACTIVE' as SessionStatus,
@@ -157,35 +171,47 @@ describe('Type Safety Integration', () => {
   describe('TherapyPlan Type', () => {
     it('should support basic plan structure', () => {
       const plan: TherapyPlan = {
-        id: 'plan-123',
-        userId: 'user-123',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        plan_id: 'plan-123',
+        user_id: 'user-123',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
+        version: 1,
+        selected_therapy_style: 'freud',
+        plan_details: {},
+        initial_goals: ['goal'],
+        current_progress: 'Baseline',
+        planned_interventions: ['intervention'],
+        status: 'active',
+        session_briefing: null,
       };
 
-      expect(plan.id).toBeDefined();
-      expect(plan.userId).toBeDefined();
+      expect(plan.plan_id).toBeDefined();
+      expect(plan.user_id).toBeDefined();
     });
 
     it('should allow optional plan fields', () => {
       const plan: TherapyPlan = {
-        id: 'plan-456',
-        userId: 'user-456',
-        therapyStyle: 'jung',
-        goals: ['Reduce anxiety', 'Improve sleep'],
+        plan_id: 'plan-456',
+        user_id: 'user-456',
+        selected_therapy_style: 'jung',
         sessionCount: 10,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        planDetails: {
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
+        plan_details: {
           approach: 'analytical',
           focus: 'dreams',
         },
-        version: 1,
+        initial_goals: ['Reduce anxiety', 'Improve sleep'],
+        current_progress: 'Progressing',
+        planned_interventions: ['Technique A', 'Technique B'],
+        status: 'active',
+        version: 2,
+        session_briefing: null,
       };
 
-      expect(plan.goals).toHaveLength(2);
+      expect(plan.initial_goals).toHaveLength(2);
       expect(plan.sessionCount).toBe(10);
-      expect(plan.planDetails).toBeDefined();
+      expect(plan.plan_details).toBeDefined();
     });
   });
 
@@ -294,33 +320,30 @@ describe('Type Safety Integration', () => {
     it('should allow User objects to be created from API responses', () => {
       // Simulating API response with backend field names
       const apiResponse = {
-        userid: 'user-api-123',
+        user_id: 'user-api-123',
         name: 'API User',
         status: 'THERAPY_IN_PROGRESS' as UserStatus,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
       };
 
-      // Converting to frontend User type
-      const user: User = {
-        ...apiResponse,
-        id: apiResponse.userid,
-      };
+      // Directly assign to frontend User type (no conversion needed)
+      const user: User = apiResponse;
 
-      expect(user.id).toBe('user-api-123');
+      expect(user.user_id).toBe('user-api-123');
       expect(user.name).toBe('API User');
     });
 
     it('should maintain type safety with nested objects', () => {
       const session: Session = {
-        id: 'nested-test',
-        userId: 'user-nested',
-        timestamp: new Date(),
+        session_id: 'nested-test',
+        user_id: 'user-nested',
+        timestamp: '2024-01-01T00:00:00Z',
         transcript: [
           {
             role: 'user',
             content: 'Test message',
-            timestamp: new Date(),
+            timestamp: '2024-01-01T00:00:00Z',
             id: 'msg-nested',
           },
         ],
@@ -330,6 +353,13 @@ describe('Type Safety Integration', () => {
             status: 'pending',
           },
         ],
+        psychological_summary: null,
+        dominant_affects: [],
+        key_themes: [],
+        notable_interactions: null,
+        interpretations: null,
+        patient_reactions: null,
+        enriched: false,
       };
 
       expect(session.transcript[0].id).toBe('msg-nested');
@@ -338,36 +368,42 @@ describe('Type Safety Integration', () => {
 
     it('should handle Date types correctly', () => {
       const now = new Date();
-      const user: User = {
-        id: 'date-test',
-        name: 'Date Test',
-        birthdate: now,
-        status: 'PROFILE_ONLY',
-        createdAt: now,
-        updatedAt: now,
-        lastActiveAt: now,
+      const session: Session = {
+        session_id: 'date-session',
+        user_id: 'user-date',
+        timestamp: '2024-01-01T00:00:00Z',
+        transcript: [],
+        topics: [],
+        psychological_summary: null,
+        dominant_affects: [],
+        key_themes: [],
+        notable_interactions: null,
+        interpretations: null,
+        patient_reactions: null,
+        enriched: false,
+        startTime: now,
+        endTime: now,
       };
 
-      expect(user.birthdate).toBeInstanceOf(Date);
-      expect(user.createdAt).toBeInstanceOf(Date);
-      expect(user.lastActiveAt).toBeInstanceOf(Date);
+      expect(session.startTime).toBeInstanceOf(Date);
+      expect(session.endTime).toBeInstanceOf(Date);
     });
   });
 
   describe('Type Inference', () => {
     it('should infer correct types from object literals', () => {
       const user = {
-        id: 'infer-test',
+        user_id: 'infer-test',
         name: 'Infer Test',
         status: 'PROFILE_ONLY' as UserStatus,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z',
       };
 
       // This should type check correctly
       const typedUser: User = user;
 
-      expect(typedUser.id).toBe('infer-test');
+      expect(typedUser.user_id).toBe('infer-test');
     });
 
     it('should support partial updates', () => {
@@ -377,19 +413,19 @@ describe('Type Safety Integration', () => {
       };
 
       expect(partialUser.name).toBe('Updated Name');
-      expect(partialUser.id).toBeUndefined();
+      expect(partialUser.user_id).toBeUndefined();
     });
 
     it('should support Pick and Omit utility types', () => {
-      type UserIdentity = Pick<User, 'id' | 'name'>;
+      type UserIdentity = Pick<User, 'user_id' | 'name'>;
 
       const identity: UserIdentity = {
-        id: 'pick-test',
+        user_id: 'pick-test',
         name: 'Pick Test',
       };
 
-      expect(identity.id).toBeDefined();
-      expect((identity as any).email).toBeUndefined();
+      expect(identity.user_id).toBeDefined();
+      expect((identity as any).created_at).toBeUndefined();
     });
   });
 });

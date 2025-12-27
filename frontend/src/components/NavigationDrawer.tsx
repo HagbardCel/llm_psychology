@@ -74,8 +74,8 @@ export function NavigationDrawer({ open, onClose, variant }: NavigationDrawerPro
   const navigationItems: NavigationItem[] = [
     { label: 'Dashboard', path: '/dashboard', icon: <DashboardIcon /> },
     {
-      label: 'Current Session',
-      path: '/session/current',
+      label: 'Therapy Session',
+      path: '/session/new',
       icon: <ChatIcon />,
       locked: user.status < UserStatus.PLAN_COMPLETE
     },

@@ -8,10 +8,8 @@ import {
   WebSocketResponse,
   ConnectionStatus,
   SessionStartedEvent,
-  UserStatusEvent,
   StreamingChunkCallback,
   SessionStartedCallback,
-  UserStatusCallback,
   WS_MESSAGE_TYPES
 } from '../types/websocket';
 
@@ -29,7 +27,6 @@ export class WebSocketService {
   private onMessage: ((message: WebSocketResponse) => void) | null = null;
   private onStreamingChunk: StreamingChunkCallback | null = null;
   private onSessionStartedEvent: SessionStartedCallback | null = null;
-  private onUserStatusEvent: UserStatusCallback | null = null;
 
   constructor(config: WebSocketConfig) {
     this.config = config;
@@ -45,13 +42,8 @@ export class WebSocketService {
       this.intentionalDisconnect = false;
       this.updateConnectionStatus({ isConnected: false, isConnecting: true });
 
-      // Construct WebSocket URL with query parameters (user_id and token)
-      let wsUrl = `${this.config.url.replace(/^http/, 'ws')}/ws?user_id=${encodeURIComponent(this.config.userId)}`;
-
-      // Add token if available
-      if (this.config.authToken) {
-        wsUrl += `&token=${encodeURIComponent(this.config.authToken)}`;
-      }
+      // Construct WebSocket URL with query parameters (user_id)
+      const wsUrl = `${this.config.url.replace(/^http/, 'ws')}/ws?user_id=${encodeURIComponent(this.config.userId)}`;
 
       this.socket = new WebSocket(wsUrl);
       this.setupEventHandlers();
@@ -141,33 +133,6 @@ export class WebSocketService {
   }
 
   /**
-   * Send typing start indicator
-   */
-  startTyping(): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.sendMessage(WS_MESSAGE_TYPES.TYPING_START);
-    }
-  }
-
-  /**
-   * Send typing stop indicator
-   */
-  stopTyping(): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.sendMessage(WS_MESSAGE_TYPES.TYPING_STOP);
-    }
-  }
-
-  /**
-   * Send ping for connection testing
-   */
-  ping(): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.sendMessage(WS_MESSAGE_TYPES.PING, { timestamp: Date.now() });
-    }
-  }
-
-  /**
    * Request to start a therapy session
    */
   requestSession(sessionType: string = 'therapy'): void {
@@ -200,13 +165,6 @@ export class WebSocketService {
    */
   onSessionStarted(callback: SessionStartedCallback): void {
     this.onSessionStartedEvent = callback;
-  }
-
-  /**
-   * Set user status event callback
-   */
-  onUserStatus(callback: UserStatusCallback): void {
-    this.onUserStatusEvent = callback;
   }
 
   /**
@@ -286,10 +244,10 @@ export class WebSocketService {
         }
         break;
 
-      case WS_MESSAGE_TYPES.USER_STATUS:
-        console.log('User status received:', message.data);
-        if (this.onUserStatusEvent && message.data) {
-          this.onUserStatusEvent(message.data as UserStatusEvent);
+      case WS_MESSAGE_TYPES.ASSESSMENT_RECOMMENDATIONS:
+        console.log('Assessment recommendations received:', message.data);
+        if (this.onMessage) {
+          this.onMessage(message as WebSocketResponse);
         }
         break;
 
@@ -299,18 +257,6 @@ export class WebSocketService {
 
       case WS_MESSAGE_TYPES.TYPING_STOP:
         console.log('Therapist stopped typing');
-        break;
-
-      case WS_MESSAGE_TYPES.STYLE_SELECTED:
-        console.log('Style selected:', message.data);
-        break;
-
-      case WS_MESSAGE_TYPES.SESSION_EXTENDED:
-        console.log('Session extended:', message.data);
-        break;
-
-      case WS_MESSAGE_TYPES.PONG:
-        console.log('Received pong:', message.data);
         break;
 
       default:

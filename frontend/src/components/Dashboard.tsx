@@ -30,12 +30,33 @@ export const Dashboard = memo(function Dashboard() {
 
   // Fetch all data from backend via React Query
   const { data: user, isLoading: userLoading, error: userError } = useUserProfile(userId || '');
-  const { data: sessions, isLoading: sessionsLoading } = useSessionHistory(userId || '');
-  const { data: therapyPlan } = useTherapyPlan(userId || '');
+  const effectiveUserId = user ? userId : '';
+  const { data: sessions, isLoading: sessionsLoading } = useSessionHistory(effectiveUserId || '');
+  const { data: therapyPlan } = useTherapyPlan(effectiveUserId || '');
   const { data: nextAction, isLoading: actionLoading } = useWorkflowNextAction(
     userId || '',
-    '/dashboard'
+    '/dashboard',
+    { enabled: !!user }
   );
+
+  // Backend-driven navigation action
+  const handleContinue = useCallback(() => {
+    if (nextAction?.route) {
+      navigate(nextAction.route);
+    }
+  }, [nextAction, navigate]);
+
+  // Memoize expensive computations
+  const recentSessions = useMemo(() => sessions?.slice(0, 5) || [], [sessions]);
+  const totalSessions = useMemo(() => sessions?.length || 0, [sessions]);
+
+  // Memoize last session date
+  const lastSessionDate = useMemo(() => {
+    if (sessions && sessions[0]?.timestamp) {
+      return new Date(sessions[0].timestamp).toLocaleDateString();
+    }
+    return 'Never';
+  }, [sessions]);
 
   // Loading state
   if (userLoading || actionLoading) {
@@ -59,29 +80,26 @@ export const Dashboard = memo(function Dashboard() {
     );
   }
 
-  // No user state
+  // No user state - guide new users to create a profile
   if (!user) {
-    return null;
+    return (
+      <PageContainer title="Welcome" maxWidth="lg">
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Let&apos;s get started
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Create your profile so we can personalize your experience.
+            </Typography>
+            <Button variant="contained" size="large" onClick={() => navigate('/profile')}>
+              Continue
+            </Button>
+          </CardContent>
+        </Card>
+      </PageContainer>
+    );
   }
-
-  // Backend-driven navigation action
-  const handleContinue = useCallback(() => {
-    if (nextAction?.route) {
-      navigate(nextAction.route);
-    }
-  }, [nextAction?.route, navigate]);
-
-  // Memoize expensive computations
-  const recentSessions = useMemo(() => sessions?.slice(0, 5) || [], [sessions]);
-  const totalSessions = useMemo(() => sessions?.length || 0, [sessions]);
-
-  // Memoize last session date
-  const lastSessionDate = useMemo(() => {
-    if (sessions && sessions[0]?.startTime) {
-      return new Date(sessions[0].startTime).toLocaleDateString();
-    }
-    return 'Never';
-  }, [sessions]);
 
   return (
     <PageContainer title={`Welcome back, ${user.name}`} maxWidth="lg">
@@ -168,7 +186,7 @@ export const Dashboard = memo(function Dashboard() {
                 Therapy Style
               </Typography>
               <Typography variant="h4">
-                {therapyPlan?.therapyStyle || 'Not set'}
+                {therapyPlan?.selected_therapy_style || 'Not set'}
               </Typography>
             </CardContent>
           </Card>
@@ -197,12 +215,12 @@ export const Dashboard = memo(function Dashboard() {
             <List>
               {recentSessions.map((session) => (
                 <ListItem
-                  key={session.id}
-                  onClick={() => navigate(`/session/${session.id}`)}
+                  key={session.session_id}
+                  onClick={() => navigate(`/session/${session.session_id}`)}
                   sx={{ cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
                 >
                   <ListItemText
-                    primary={`Session on ${session.startTime ? new Date(session.startTime).toLocaleDateString() : 'Unknown date'}`}
+                    primary={`Session on ${session.timestamp ? new Date(session.timestamp).toLocaleDateString() : 'Unknown date'}`}
                     secondary={`${session.transcript.length} messages${session.topics ? ` • ${session.topics.length} topics` : ''}`}
                   />
                   <ChevronRightIcon />

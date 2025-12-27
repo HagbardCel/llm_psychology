@@ -12,7 +12,7 @@ import pytest
 import trio
 from trio_websocket import ConnectionClosed, ConnectionRejected, open_websocket_url
 
-from models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import UserProfile, UserStatus
 
 pytestmark = pytest.mark.trio
 
@@ -22,9 +22,9 @@ async def test_user(test_server_websocket) -> UserProfile:
     profile = UserProfile(
         user_id="websocket_test_user",
         name="WebSocket Test User",
-        birthdate=None,
+        data_of_birth=None,
         profession="Tester",
-        status=UserStatus.PROFILE_ONLY,
+        status=UserStatus.PLAN_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -133,6 +133,39 @@ async def test_ws_chat_response_chunk_contract(test_server_websocket, test_user)
 
         assert saw_complete, "Expected a completion chunk with is_complete=true"
         assert full_response.strip(), "Expected at least one non-empty chunk before completion"
+
+
+@pytest.mark.integration
+async def test_ws_end_session_contract(test_server_websocket, test_user):
+    ws_url = f"{test_server_websocket['ws_url']}?user_id={test_user.user_id}"
+
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+    ) as ws:
+        _ = json.loads(await ws.get_message())  # connected
+
+        await ws.send_message(
+            json.dumps({"type": "session_request", "data": {"session_type": "therapy"}})
+        )
+        _ = json.loads(await ws.get_message())  # session_started
+
+        await ws.send_message(
+            json.dumps({"type": "end_session", "data": {"reason": "User ended session"}})
+        )
+
+        session_ended = None
+        with trio.fail_after(5):
+            for _ in range(1000):
+                msg = json.loads(await ws.get_message())
+                if msg.get("type") != "session_ended":
+                    continue
+                session_ended = msg
+                break
+
+        assert session_ended is not None, "Expected a session_ended message"
+        data = session_ended.get("data", {})
+        assert data.get("reason") == "User ended session"
+        assert data.get("workflow_state") == "reflection_in_progress"
 
 
 @pytest.mark.integration

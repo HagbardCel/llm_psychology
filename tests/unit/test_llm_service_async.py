@@ -11,7 +11,7 @@ async def test_generate_structured_output_async_passes_method_to_target_callable
     We ensure LLMService.generate_structured_output_async passes `method=` to the
     underlying generate_structured_output callable (not to run_sync).
     """
-    from services.llm_service import LLMService
+    from psychoanalyst_app.services.llm_service import LLMService
 
     llm_service = LLMService.__new__(LLMService)
 

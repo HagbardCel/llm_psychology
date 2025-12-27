@@ -38,7 +38,6 @@ export class ApiClient {
   private baseUrl: string;
   private timeout: number;
   private defaultHeaders: Record<string, string>;
-  private token: string | null = null;
 
   constructor(config: ApiClientConfig = {}) {
     this.baseUrl = config.baseUrl || getApiBaseUrl();
@@ -47,20 +46,6 @@ export class ApiClient {
       'Content-Type': 'application/json',
       ...config.headers
     };
-  }
-
-  /**
-   * Set authentication token
-   */
-  setToken(token: string | null) {
-    this.token = token;
-  }
-
-  /**
-   * Get current authentication token
-   */
-  getToken(): string | null {
-    return this.token;
   }
 
   /**
@@ -76,16 +61,11 @@ export class ApiClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    // Build headers with optional authorization
+    // Build headers
     const headers: Record<string, string> = {
       ...this.defaultHeaders,
       ...(options.headers as Record<string, string> || {})
     };
-
-    // Add authorization header if token is set
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
 
     try {
       const response = await fetch(url, {
@@ -146,6 +126,13 @@ export class ApiClient {
   async put<T>(endpoint: string, data?: any): Promise<T> {
     return this.request<T>(endpoint, {
       method: 'PUT',
+      body: data ? JSON.stringify(data) : undefined
+    });
+  }
+
+  async patch<T>(endpoint: string, data?: any): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'PATCH',
       body: data ? JSON.stringify(data) : undefined
     });
   }

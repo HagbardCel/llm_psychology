@@ -9,12 +9,12 @@ from datetime import datetime
 import pytest
 import trio
 
-from container.service_container import ServiceContainer
-from models.data_models import UserProfile, UserStatus
-from orchestration.models import WorkflowState
-from orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
-from orchestration.trio_conversation_manager import TrioConversationManager
-from orchestration.trio_workflow_engine import TrioWorkflowEngine
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.orchestration.models import WorkflowState
+from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
+from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
+from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
 
 @pytest.fixture
@@ -51,7 +51,11 @@ async def conversation_manager(service_container):
 
     async with trio.open_nursery() as nursery:
         manager = TrioConversationManager(
-            llm_service, rag_service, trio_db_service, nursery=nursery
+            llm_service,
+            rag_service,
+            trio_db_service,
+            nursery=nursery,
+            config=service_container.config,
         )
         yield manager
         nursery.cancel_scope.cancel()
@@ -76,7 +80,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="orchestration_test_user",
         name="Orchestration Test User",
-        birthdate=None,
+        data_of_birth=None,
         profession="Tester",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -177,7 +181,7 @@ async def test_conversation_manager_add_message(
     # Create a session first
     import uuid
 
-    from models.data_models import Session
+    from psychoanalyst_app.models.data_models import Session
 
     session_id = str(uuid.uuid4())
     session = Session(
@@ -207,8 +211,8 @@ async def test_conversation_manager_stream_response(
     """Test streaming LLM response."""
     import uuid
 
-    from models.data_models import Session
-    from orchestration.models import ConversationContext
+    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.orchestration.models import ConversationContext
 
     # Create session
     trio_db_service = service_container.get("trio_db_service")
@@ -253,7 +257,7 @@ async def test_conversation_manager_stream_response(
 @pytest.mark.integration
 async def test_conversation_manager_rag_filter_source_and_content(conversation_manager):
     """Test that conversation-manager RAG uses correct source filter and content key."""
-    from models.data_models import TherapyPlan
+    from psychoanalyst_app.models.data_models import TherapyPlan
 
     therapy_plan = TherapyPlan(
         user_id="rag_test_user",
@@ -286,10 +290,12 @@ async def test_conversation_manager_rag_filter_source_and_content(conversation_m
 async def test_orchestrator_create_user_profile(orchestrator):
     """Test user profile creation via orchestrator."""
     user_profile = await orchestrator.create_user_profile(
-        user_id="new_test_user",
-        name="New Test User",
-        birthdate="",
-        profession="Engineer",
+        {
+            "user_id": "new_test_user",
+            "name": "New Test User",
+            "data_of_birth": "",
+            "profession": "Engineer",
+        }
     )
 
     assert user_profile.user_id == "new_test_user"

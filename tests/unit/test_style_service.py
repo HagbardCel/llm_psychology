@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from services.style_service import StylePack, StyleService
+from psychoanalyst_app.services.style_service import StylePack, StyleService
 
 
 class TestStyleService:

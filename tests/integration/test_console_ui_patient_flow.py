@@ -19,7 +19,7 @@ import pytest
 import trio
 from trio_websocket import ConnectionClosed, open_websocket_url
 
-from orchestration.models import WorkflowEvent, WorkflowState
+from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 
 
 @pytest.fixture(scope="function")
@@ -227,7 +227,7 @@ def mock_llm_service_with_context():
                     {
                         "basic_info": {
                             "alias": "Fabian",
-                            "date_of_birth": None,
+                            "data_of_birth": None,
                             "gender": None,
                             "cultural_background": None,
                             "primary_language": "English",
@@ -384,7 +384,7 @@ def mock_llm_service_with_context():
                 {
                     "basic_info": {
                         "alias": "Fabian",
-                        "date_of_birth": None,
+                        "data_of_birth": None,
                         "gender": None,
                         "cultural_background": None,
                         "primary_language": "English",
@@ -532,12 +532,13 @@ def mock_llm_service_with_context():
 @pytest.fixture(scope="function")
 def test_config(tmp_path):
     """Create test configuration."""
-    from config import settings
+    from psychoanalyst_app.config import Settings
 
     # Use temporary file database (in-memory doesn't work well with Trio threading)
     test_db_path = str(tmp_path / "test_console_ui.db")
 
     # Create a modified copy of settings
+    settings = Settings()
     mock_settings = settings.model_copy(update={"DATABASE_PATH": test_db_path})
     return mock_settings
 
@@ -547,8 +548,8 @@ async def test_server_websocket(
     test_config, mock_llm_service_with_context, mock_rag_service
 ):
     """Create and start a test server instance with WebSocket support and contextual mock LLM."""
-    from container.service_container import ServiceContainer
-    from trio_server import TrioServer
+    from psychoanalyst_app.container.service_container import ServiceContainer
+    from psychoanalyst_app.trio_server import TrioServer
 
     # Create service container with mocked services
     container = ServiceContainer(test_config)
@@ -972,7 +973,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             await trio.sleep(0.5)
 
             # Manually create therapy plan and transition state
-            from models.data_models import TherapyPlan
+            from psychoanalyst_app.models.data_models import TherapyPlan
 
             therapy_plan = TherapyPlan(
                 plan_id=str(uuid.uuid4()),

@@ -1,8 +1,12 @@
 # Type System Documentation
 
+**Last Verified:** 2025-12-22
+
 ## Overview
 
 The psychoanalyst application uses an **automated type generation system** that maintains type safety between the Python backend and TypeScript frontend. Backend Pydantic models are the single source of truth, with TypeScript types auto-generated via JSON Schema.
+
+**Docker-first note:** `make generate-schemas` and `make validate-schemas` run inside Docker by default. Local equivalents are available as `make local-generate-schemas` and `make local-validate-schemas` if you have a local Python environment.
 
 ## Architecture
 
@@ -10,7 +14,7 @@ The psychoanalyst application uses an **automated type generation system** that 
 ┌─────────────────────────────────────────────────────────────┐
 │                    BACKEND (Source of Truth)                 │
 │                                                              │
-│  Pydantic Models (src/models/)                              │
+│  Pydantic Models (src/psychoanalyst_app/models/)                              │
 │  ├─ data_models.py      - Core domain models                │
 │  ├─ api_models.py       - API request/response models       │
 │  └─ orchestration/      - Workflow models                   │
@@ -42,13 +46,12 @@ The psychoanalyst application uses an **automated type generation system** that 
                     [import & extend]
                            ↓
 ┌─────────────────────────────────────────────────────────────┐
-│              COMPATIBILITY LAYER (Manual)                    │
+│           FRONTEND TYPE EXTENSIONS (Manual Add-ons)          │
 │                                                              │
 │  frontend/src/types/index.ts                                │
-│  ├─ Re-export generated types with familiar names          │
-│  ├─ Extend with client-only fields                         │
-│  ├─ Map field names (userid → id)                          │
-│  └─ Define UI-specific types                               │
+│  ├─ Re-export generated DTOs directly (snake_case)         │
+│  ├─ Add optional UI-only fields on top of DTOs             │
+│  └─ Define client-only enums/interfaces                    │
 └─────────────────────────────────────────────────────────────┘
                            ↓
                   [Frontend Components]
@@ -61,12 +64,12 @@ The psychoanalyst application uses an **automated type generation system** that 
 **Backend Pydantic models** are the authoritative definition for all data structures that cross the API boundary.
 
 ```python
-# Backend: src/models/data_models.py
+# Backend: src/psychoanalyst_app/models/data_models.py
 class UserProfile(BaseModel):
     """Represents a user's personal information."""
     user_id: str
     name: str
-    birthdate: datetime | None = None
+    data_of_birth: datetime | None = None
     status: UserStatus = UserStatus.PROFILE_ONLY
     created_at: datetime
     updated_at: datetime
@@ -77,12 +80,13 @@ This automatically generates:
 ```typescript
 // Frontend: src/types/generated/api.ts (AUTO-GENERATED)
 export interface UserProfile {
-    userid: string;
+    user_id: string;
     name: string;
-    birthdate?: Date | null;
-    status?: UserStatus;
-    createdAt: Date;
-    updatedAt: Date;
+    data_of_birth?: string | null;  // ISO 8601 string
+    profession?: string | null;
+    status: UserStatus;
+    created_at: string;
+    updated_at: string;
 }
 ```
 
@@ -93,22 +97,11 @@ Type generation happens automatically:
 - **During development**: `npm run dev` (pre-hook)
 - **During build**: `npm run build` (pre-hook)
 - **In CI/CD**: GitHub Actions workflow
-- **On demand**: `npm run generate:types`
+- **On demand**: `npm run generate:types` (local) or `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts` (Docker-only)
 
-### 3. Backward Compatibility
+### 3. Frontend Extensions (UI-only data)
 
-The compatibility layer ensures existing code continues to work:
-
-```typescript
-// frontend/src/types/index.ts (Compatibility Layer)
-import type { UserProfile as GeneratedUserProfile } from './generated/api';
-
-export interface User extends Omit<GeneratedUserProfile, 'userid'> {
-  id: string;              // Maps from userid
-  email?: string;          // Client-only field
-  lastActiveAt?: Date;     // Client-only field
-}
-```
+`frontend/src/types/index.ts` re-exports the generated DTOs so the rest of the UI can continue to import `User`, `Session`, etc. Those aliases keep the backend’s snake_case keys and simply layer on optional client-only fields (e.g., `agentType`, derived timestamps, or view-model metadata). No renaming or conversion is needed anymore.
 
 ### 4. Client-Only Types
 
@@ -138,7 +131,7 @@ export interface AppState {
 1. **Define the Pydantic model**:
 
 ```python
-# src/models/data_models.py
+# src/psychoanalyst_app/models/data_models.py
 class NewModel(BaseModel):
     """Description of the model."""
 
@@ -199,34 +192,30 @@ make generate-schemas
 #### Using Generated Types
 
 ```typescript
-// Import from types/index.ts (compatibility layer)
+// Import from types/index.ts (snake_case DTO aliases)
 import { User, UserStatus, Message } from '@/types';
 
-// Use just like before
+// Use DTO keys directly
 const user: User = {
-  id: 'user-123',
+  user_id: 'user-123',
   name: 'Test User',
   status: 'PROFILE_ONLY',
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
 };
 ```
 
 #### Working with API Responses
 
-If backend field names differ, use converters:
+Use the generated DTOs directly—responses already arrive in snake_case with ISO strings:
 
 ```typescript
-import { toUser, fromUser } from '@/types/converters';
-import type { UserProfile } from '@/types/generated/api';
+import type { Session } from '@/types/generated/api';
 
-// Backend returns UserProfile with 'userid'
-async function fetchUser(id: string): Promise<User> {
-  const response = await fetch(`/api/users/${id}`);
-  const profile: UserProfile = await response.json();
-
-  // Convert to frontend User type
-  return toUser(profile);
+async function fetchSessions(userId: string): Promise<Session[]> {
+  const response = await fetch(`/api/sessions?user_id=${userId}`);
+  if (!response.ok) throw new Error('Failed to load sessions');
+  return response.json() as Promise<Session[]>;
 }
 ```
 
@@ -264,18 +253,18 @@ export interface MyUIState {
 
 ## Type Mapping Reference
 
-### Field Name Conversions
+### Field Name Conventions
 
-Backend snake_case → Frontend camelCase (automatic):
+We no longer rename API fields. JSON keys stay `snake_case` from backend → schema → generated TypeScript → frontend code. Examples:
 
-| Backend (Python) | Frontend (TypeScript) | Notes |
-|------------------|------------------------|-------|
-| `user_id` | `userid` | ⚠️ quicktype limitation |
-| `created_at` | `createdAt` | ✓ Converted |
-| `updated_at` | `updatedAt` | ✓ Converted |
-| `session_id` | `sessionid` | ⚠️ quicktype limitation |
+| Backend (Python) | Generated TypeScript | Notes |
+|------------------|----------------------|-------|
+| `user_id` | `user_id` | Preserved |
+| `session_id` | `session_id` | Preserved |
+| `created_at` | `created_at` | Preserved |
+| `updated_at` | `updated_at` | Preserved |
 
-**Workaround for limitations**: Compatibility layer maps `userid` → `id`
+Client code should treat these as canonical wire keys; camelCase is reserved for UI-only state.
 
 ### Type Conversions
 
@@ -285,7 +274,7 @@ Backend snake_case → Frontend camelCase (automatic):
 | `int` | `number` | ✓ Direct mapping |
 | `float` | `number` | ✓ Direct mapping |
 | `bool` | `boolean` | ✓ Direct mapping |
-| `datetime` | `Date` | ✓ Serialized as ISO string |
+| `datetime` | `string` | ISO 8601 string (no auto Date) |
 | `Optional[T]` | `T \| null` or `T?` | ✓ Handled |
 | `List[T]` | `T[]` | ✓ Array mapping |
 | `Dict[str, Any]` | `Record<string, any>` | ✓ Object mapping |
@@ -296,9 +285,8 @@ Backend snake_case → Frontend camelCase (automatic):
 | Type Category | Location | Maintenance |
 |---------------|----------|-------------|
 | **API Models** (User, Session, etc.) | `generated/api.ts` | ✅ Auto-generated |
-| **Compatibility Layer** | `types/index.ts` | 📝 Manual (extends generated) |
+| **Frontend Re-exports + UI fields** | `types/index.ts` | 📝 Manual (adds optional props) |
 | **UI Types** (AgentType, AppState) | `types/index.ts` | 📝 Manual |
-| **Type Converters** | `types/converters.ts` | 📝 Manual |
 
 ## Commands Reference
 
@@ -327,7 +315,7 @@ npm run generate:ts
 # Type check without building
 npm run type-check
 
-# Run type converter tests
+# Run type-safety tests
 npm test src/types/__tests__
 ```
 
@@ -346,23 +334,24 @@ cd frontend && npm run build
 
 ### Unit Tests
 
-Test type converters:
+Add lightweight type-safety tests to ensure our UI extensions line up with the generated DTOs:
 
 ```typescript
-// src/types/__tests__/converters.test.ts
-import { toUser, fromUser } from '../converters';
+// src/types/__tests__/type-safety.test.ts
+import type { Session } from '../index';
+import { AgentType } from '../index';
 
-it('should convert UserProfile to User', () => {
-  const profile: UserProfile = {
-    userid: 'test-123',
-    name: 'Test User',
-    status: 'PROFILE_ONLY',
-    createdAt: new Date(),
-    updatedAt: new Date(),
+it('allows UI metadata on sessions without breaking DTO fields', () => {
+  const session: Session = {
+    session_id: 'session-123',
+    user_id: 'user-123',
+    timestamp: new Date().toISOString(),
+    transcript: [],
+    topics: [],
   };
 
-  const user = toUser(profile);
-  expect(user.id).toBe('test-123');
+  session.agentType = AgentType.INTAKE;
+  expect(session.user_id).toBe('user-123');
 });
 ```
 
@@ -372,21 +361,20 @@ Verify type compatibility:
 
 ```typescript
 // src/types/__tests__/type-safety.test.ts
-it('should maintain type safety with API responses', () => {
-  const apiResponse = {
-    userid: 'api-123',
+import type { UserProfile } from '../generated/api';
+
+it('accepts backend JSON without conversion', () => {
+  const apiResponse: UserProfile = {
+    user_id: 'api-123',
     name: 'API User',
     status: 'THERAPY_IN_PROGRESS',
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    data_of_birth: null,
+    profession: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 
-  const user: User = {
-    ...apiResponse,
-    id: apiResponse.userid,
-  };
-
-  expect(user.id).toBe('api-123');
+  expect(apiResponse.user_id).toBe('api-123');
 });
 ```
 
@@ -413,14 +401,9 @@ npm run generate:types
 
 ### Field Name Mismatches
 
-**Problem**: Backend uses `user_id` but frontend expects `id`
+**Problem**: Backend uses `user_id` but a component still reads `userId`
 
-**Solution**: Use the compatibility layer or converters
-
-```typescript
-import { toUser } from '@/types/converters';
-const user = toUser(backendProfile);
-```
+**Solution**: Update the component to use the canonical snake_case key (or derive your own camelCase helper inside the component). No automatic renaming occurs, so the DTO surface stays aligned across backend/client/tests.
 
 ### Build Fails with Type Errors
 
@@ -452,8 +435,8 @@ npm run generate:types
 - **Use generated types for API data**
 - **Add JSDoc comments to Pydantic models** (they appear in TypeScript)
 - **Run type generation before committing**
-- **Use type converters for field name mapping**
-- **Test type conversions in unit tests**
+- **Keep API DTOs snake_case in the UI; convert only when deriving UI-specific state**
+- **Add lightweight type-safety tests for UI extensions**
 
 ### DON'T ❌
 
@@ -462,6 +445,7 @@ npm run generate:types
 - **Don't use `any` for API data**
 - **Don't commit generated files** (they're in `.gitignore`)
 - **Don't bypass type checking** with `as any`
+- **Don't rename API fields in-flight unless you truly need a derived UI model**
 
 ### Recommended Workflow
 

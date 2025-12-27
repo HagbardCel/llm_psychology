@@ -810,7 +810,7 @@ async def test_intake_produces_same_database_state(test_server, db_service):
    locust -f tests/performance/benchmark_api.py --headless -u 50 -r 10 -t 5m
 
    # Profile server
-   py-spy record -o profile.svg -- python src/trio_server.py
+   py-spy record -o profile.svg -- python -m psychoanalyst_app.server
    ```
 
 5. **Document baseline performance**

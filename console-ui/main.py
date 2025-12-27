@@ -9,12 +9,10 @@ import sys
 import os
 import trio
 import logging
-import json
-from typing import Optional
+import uuid
 
 # Import directly from the package
 from src.console_client import ConsoleClient
-from src.auth import authenticate
 from src.version_check import (
     check_backend_version,
     print_version_error,
@@ -40,7 +38,6 @@ async def main():
     websocket_url = os.getenv(
         "WEBSOCKET_URL", "http://localhost:8000"
     )  # Unified server on same port
-    require_auth = os.getenv("REQUIRE_AUTHENTICATION", "false").lower() == "true"
 
     print("🧠 Virtual LLM-Driven Psychoanalyst - Console Interface")
     print("=" * 60)
@@ -75,24 +72,16 @@ async def main():
             print("Continuing anyway (use at your own risk)...")
             print()
 
-        # Authenticate if required
-        if require_auth:
-            auth_token, user_id, username = await authenticate(backend_url)
-            logger.info(f"Authenticated as {username} (user_id: {user_id})")
-        else:
-            # Development mode - use environment variables or defaults
-            user_id = os.getenv("USER_ID", "console_user")
-            auth_token = os.getenv("AUTH_TOKEN", "dev_token")
-            logger.info("Running in development mode (authentication disabled)")
-            print("ℹ️  Running in development mode (authentication disabled)")
-            print()
+        user_id = os.getenv("USER_ID") or uuid.uuid4().hex
+        logger.info("Using user_id: %s", user_id)
+        print(f"ℹ️  Using user_id: {user_id}")
+        print()
 
         # Initialize console client
         client = ConsoleClient(
             backend_url=backend_url,
             websocket_url=websocket_url,
             user_id=user_id,
-            auth_token=auth_token,
         )
 
         # Start the console interface

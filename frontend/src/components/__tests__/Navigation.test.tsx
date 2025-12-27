@@ -84,4 +84,3 @@ describe('Navigation', () => {
     expect(mockOnClose).toHaveBeenCalled();
   });
 });
-

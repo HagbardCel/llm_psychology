@@ -1,16 +1,11 @@
 import logging
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import trio
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-from orchestration.models import SessionInfo, WorkflowState
-from orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
-from ui.base_ui import BaseUI
+from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
+from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
+from psychoanalyst_app.ui.base_ui import BaseUI
 
 
 # Mock dependencies
@@ -75,8 +70,10 @@ async def reproduce():
             container, workflow_engine, conversation_manager, nursery
         )
 
-        # Mock _create_session to return a dummy ID
-        orchestrator._create_session = AsyncMock(return_value="session_123")
+        # Mock session creation to return a dummy ID
+        orchestrator.session_lifecycle.create_session = AsyncMock(
+            return_value="session_123"
+        )
 
         # Mock process_message to raise an exception
         async def mock_process_message(*args, **kwargs):
@@ -84,6 +81,7 @@ async def reproduce():
             yield "chunk"  # unreachable
 
         orchestrator.process_message = mock_process_message
+        orchestrator.session_lifecycle._process_message = mock_process_message
 
         # Mock create_user_profile
         orchestrator.create_user_profile = AsyncMock()

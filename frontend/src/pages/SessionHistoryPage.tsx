@@ -70,12 +70,12 @@ export const SessionHistoryPage: React.FC = () => {
         ) : (
           <List>
             {sessions.map((session, index) => (
-              <Fragment key={session.id}>
+              <Fragment key={session.session_id}>
                 {index > 0 && <Divider />}
                 <ListItem disablePadding>
-                  <ListItemButton onClick={() => handleSessionClick(session.id)}>
+                  <ListItemButton onClick={() => handleSessionClick(session.session_id)}>
                     <ListItemText
-                      primary={`Session ${session.startTime ? `${session.startTime.toLocaleDateString()} ${session.startTime.toLocaleTimeString()}` : 'Unknown date'}`}
+                      primary={`Session ${session.timestamp ? new Date(session.timestamp).toLocaleString() : 'Unknown date'}`}
                       secondary={`${session.transcript.length} messages • ${session.topics?.length || 0} topics`}
                     />
                   </ListItemButton>

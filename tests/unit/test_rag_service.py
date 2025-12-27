@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.rag_service import RAGService
+from psychoanalyst_app.services.rag_service import RAGService
 
 
 class _StubEmbeddingUtils:

@@ -41,6 +41,8 @@ High-level project health, code quality, and improvement opportunities.
 - [IMPROVEMENT_RECOMMENDATIONS.md](project/IMPROVEMENT_RECOMMENDATIONS.md) - Prioritized improvement suggestions
 - [DELETABLE_FILES.md](project/DELETABLE_FILES.md) - Legacy code and cleanup opportunities
 - [CODEBASE_ASSESSMENT_2025-12-16.md](project/CODEBASE_ASSESSMENT_2025-12-16.md) - Holistic codebase review and improvement roadmap
+- [CODEBASE_ASSESSMENT_2025-12-22.md](project/CODEBASE_ASSESSMENT_2025-12-22.md) - Updated assessment with lean refactor plan and doc/tooling alignment
+- [CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.md](project/CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.md) - Local-first assessment focused on lean architecture and protocol alignment
 
 **Key Findings:**
 - Code quality metrics

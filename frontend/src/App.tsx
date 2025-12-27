@@ -1,15 +1,12 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { useEffect, lazy, Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import { CircularProgress, Box } from '@mui/material';
 
-import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppProvider } from './contexts/AppContext';
 import { Layout } from './components/Layout';
-import { ProtectedRoute } from './components/ProtectedRoute';
 import { VersionCheck } from './components/VersionCheck';
-import { apiClient } from './services/apiClient';
 
 // Lazy load pages for code splitting
 const Dashboard = lazy(() => import('./components/Dashboard').then(m => ({ default: m.Dashboard })));
@@ -19,8 +16,6 @@ const IntakePage = lazy(() => import('./pages/IntakePage').then(m => ({ default:
 const AssessmentPage = lazy(() => import('./pages/AssessmentPage').then(m => ({ default: m.AssessmentPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const TherapySession = lazy(() => import('./components/TherapySession').then(m => ({ default: m.TherapySession })));
-const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
-const RegisterPage = lazy(() => import('./pages/RegisterPage').then(m => ({ default: m.RegisterPage })));
 
 // Create Material-UI theme
 const theme = createTheme({
@@ -49,19 +44,6 @@ const theme = createTheme({
   },
 });
 
-/**
- * Component to synchronize API client with auth token
- */
-function ApiClientSync() {
-  const { token } = useAuth();
-
-  useEffect(() => {
-    apiClient.setToken(token);
-  }, [token]);
-
-  return null;
-}
-
 // Loading fallback component
 function LoadingFallback() {
   return (
@@ -83,96 +65,82 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <VersionCheck />
-      <AuthProvider>
-        <ApiClientSync />
-        <AppProvider>
-          <Router>
-            <Suspense fallback={<LoadingFallback />}>
-              <Routes>
-                {/* Public authentication routes */}
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/register" element={<RegisterPage />} />
-
-              {/* Protected routes */}
+      <AppProvider>
+        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Suspense fallback={<LoadingFallback />}>
+            <Routes>
               <Route
                 path="/profile"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <ProfilePage />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <ProfilePage />
+                  </Layout>
                 }
               />
               <Route
                 path="/intake"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <IntakePage />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <IntakePage />
+                  </Layout>
                 }
               />
               <Route
                 path="/assessment"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <AssessmentPage />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <AssessmentPage />
+                  </Layout>
+                }
+              />
+              <Route
+                path="/session/new"
+                element={
+                  <Layout>
+                    <TherapySession sessionType="therapy" />
+                  </Layout>
                 }
               />
               <Route
                 path="/session/:sessionId"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <TherapySession />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <TherapySession />
+                  </Layout>
                 }
               />
               <Route
                 path="/dashboard"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <Dashboard />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <Dashboard />
+                  </Layout>
                 }
               />
               <Route
                 path="/history"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <SessionHistoryPage />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <SessionHistoryPage />
+                  </Layout>
                 }
               />
               <Route
                 path="/settings"
                 element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <SettingsPage />
-                    </Layout>
-                  </ProtectedRoute>
+                  <Layout>
+                    <SettingsPage />
+                  </Layout>
                 }
               />
 
               {/* Default redirects */}
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
-              </Routes>
-            </Suspense>
-          </Router>
-        </AppProvider>
-      </AuthProvider>
+            </Routes>
+          </Suspense>
+        </Router>
+      </AppProvider>
     </ThemeProvider>
   );
 }

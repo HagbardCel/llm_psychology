@@ -27,7 +27,7 @@ If the goal is “lean & maintainable,” the shortest path is:
   - `src/main.py`: standalone terminal UI (no Docker).
   - `src/server.py`: server entry (runs `run_trio_server`).
   - `src/trio_server.py`: QuartTrio + Hypercorn server (HTTP + WebSocket).
-  - `src/e2e_server.py`: deterministic backend for Playwright E2E (no network).
+  - `src/psychoanalyst_app/e2e_server.py`: deterministic backend for Playwright E2E (no network).
 - **Architecture**
   - `src/orchestration/*`: workflow state machine + conversation manager + orchestrator.
   - `src/agents/*`: Trio agents (intake/assessment/psychoanalyst/reflection/memory/planning).
@@ -77,7 +77,7 @@ If the goal is “lean & maintainable,” the shortest path is:
 
 ### 2) Deterministic E2E story exists
 
-- `src/e2e_server.py` + `src/testing/fakes.py` is the right pattern to keep browser tests stable and no-network.
+- `src/psychoanalyst_app/e2e_server.py` + `src/psychoanalyst_app/testing/fakes.py` is the right pattern to keep browser tests stable and no-network.
 
 ### 3) Clear layering intent
 

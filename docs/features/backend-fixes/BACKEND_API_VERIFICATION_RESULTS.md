@@ -266,7 +266,7 @@ All frontend code is correctly implemented and ready to use the backend API once
 
 ### Start Backend Server
 ```bash
-python src/server.py
+python -m psychoanalyst_app.server
 ```
 
 ### Run API Verification

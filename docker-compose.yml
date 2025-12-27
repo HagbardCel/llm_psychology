@@ -32,7 +32,7 @@ x-api-base: &api-base
     - SERVER_PORT=8000
   networks:
     - app-network
-  command: python src/server.py
+  command: python -m psychoanalyst_app.server
   logging:
     driver: "json-file"
     options:
@@ -69,7 +69,14 @@ x-frontend-base: &frontend-base
     - ./frontend/public:/app/public:delegated
     - ./frontend/index.html:/app/index.html:delegated
     - ./frontend/vite.config.ts:/app/vite.config.ts:delegated
+    - ./frontend/eslint.config.js:/app/eslint.config.js:delegated
     - ./frontend/tsconfig.json:/app/tsconfig.json:delegated
+    - ./frontend/scripts:/app/scripts:delegated
+    - ./frontend/e2e:/app/e2e:delegated
+    - ./frontend/package.json:/app/package.json:delegated
+    - ./frontend/package-lock.json:/app/package-lock.json:delegated
+    - ./frontend/test-results:/app/test-results:delegated
+    - ./schemas:/app/schemas:delegated
     # Named volume for node_modules to avoid platform issues
     - node-modules:/app/node_modules
   ports:
@@ -99,10 +106,17 @@ x-frontend-test-base: &frontend-test-base
     - ./frontend/public:/app/public:delegated
     - ./frontend/index.html:/app/index.html:delegated
     - ./frontend/vite.config.ts:/app/vite.config.ts:delegated
+    - ./frontend/eslint.config.js:/app/eslint.config.js:delegated
     - ./frontend/tsconfig.json:/app/tsconfig.json:delegated
+    - ./frontend/scripts:/app/scripts:delegated
+    - ./frontend/e2e:/app/e2e:delegated
+    - ./frontend/playwright.config.ts:/app/playwright.config.ts:delegated
     - ./frontend/jest.config.js:/app/jest.config.js:delegated
     - ./frontend/package.json:/app/package.json:delegated
     - ./frontend/package-lock.json:/app/package-lock.json:delegated
+    - ./frontend/test-results:/app/test-results:delegated
+    - ./schemas:/app/schemas:delegated
+    - playwright-browsers:/root/.cache/ms-playwright
   environment:
     - NODE_ENV=test
     - VITE_API_URL=http://localhost:8000
@@ -119,6 +133,20 @@ services:
     container_name: psychoanalyst_api
     env_file:
       - ${ENV_FILE:-.env}
+
+  # ============================================
+  # Deterministic E2E API (no external dependencies)
+  # ============================================
+  api-e2e:
+    <<: *api-base
+    container_name: psychoanalyst_api_e2e
+    profiles: ["test"]
+    environment:
+      - APP_ENV=e2e
+      - PYTHONUNBUFFERED=1
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+    command: python -m psychoanalyst_app.e2e_server
     ports:
       - "8000:8000"
 
@@ -135,6 +163,21 @@ services:
     <<: *frontend-test-base
     container_name: psychoanalyst_frontend_test
     profiles: ["test"]
+
+  # ============================================
+  # Frontend E2E runner (Playwright)
+  # ============================================
+  frontend-e2e:
+    <<: *frontend-test-base
+    container_name: psychoanalyst_frontend_e2e
+    profiles: ["test"]
+    environment:
+      - NODE_ENV=test
+      - VITE_API_URL=http://api-e2e:8000
+      - VITE_WS_URL=ws://api-e2e:8000
+    depends_on:
+      api-e2e:
+        condition: service_healthy
 
   # ============================================
   # Console UI (Terminal Interface via WebSocket)
@@ -313,6 +356,7 @@ services:
       - test-data:/app/data
     environment:
       - APP_ENV=testing
+      - PYTHONPATH=/app/src
       - PYTHONUNBUFFERED=1
       - PYTEST_ARGS=${PYTEST_ARGS:-}
     env_file:
@@ -374,6 +418,9 @@ volumes:
     driver: local
   # Node modules (avoids platform-specific issues)
   node-modules:
+    driver: local
+  # Playwright browser cache (persists between runs)
+  playwright-browsers:
     driver: local
   # Isolated test data (prevents pollution)
   test-data:

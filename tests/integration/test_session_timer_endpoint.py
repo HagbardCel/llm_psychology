@@ -10,16 +10,15 @@ from datetime import datetime, timedelta
 
 @pytest.fixture
 def test_server_config(tmp_path):
-    """Create test server configuration with authentication ENABLED."""
-    from config import settings
+    """Create test server configuration."""
+    from psychoanalyst_app.config import Settings
 
     test_db_path = str(tmp_path / "timer_test_server.db")
 
+    settings = Settings()
     return settings.model_copy(
         update={
             "DATABASE_PATH": test_db_path,
-            "REQUIRE_AUTHENTICATION": True,
-            "JWT_SECRET_KEY": "test_secret_key_for_integration_tests",
             "CORS_ALLOWED_ORIGINS": ["http://localhost", "http://127.0.0.1"],
         }
     )
@@ -32,29 +31,12 @@ async def server_url(test_server_websocket):
 
 
 @pytest.fixture
-async def auth_headers(test_server_websocket):
-    """Get authentication headers for API requests."""
-    container = test_server_websocket["container"]
-    from services.auth_service import AuthService
-
-    auth_service = AuthService(
-        secret_key=container.config.JWT_SECRET_KEY,
-        algorithm=container.config.JWT_ALGORITHM,
-        access_token_expire_minutes=container.config.ACCESS_TOKEN_EXPIRE_MINUTES,
-    )
-
-    # Create a test token for user "test_user"
-    token = auth_service.create_access_token("test_user", "test_user")
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-async def active_session(test_server_websocket, auth_headers):
+async def active_session(test_server_websocket):
     """Create an active session for testing."""
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user",
         name="Test User",
@@ -65,7 +47,7 @@ async def active_session(test_server_websocket, auth_headers):
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from models.data_models import TherapyPlan
+    from psychoanalyst_app.models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_test",
         user_id="test_user",
@@ -82,7 +64,7 @@ async def active_session(test_server_websocket, auth_headers):
     await db_service.save_therapy_plan(therapy_plan)
 
     # Create session
-    from models.data_models import Session
+    from psychoanalyst_app.models.data_models import Session
     session = Session(
         session_id="test_session_123",
         user_id="test_user",
@@ -96,12 +78,11 @@ async def active_session(test_server_websocket, auth_headers):
 
 
 @pytest.mark.trio
-async def test_get_session_timer_success(server_url, auth_headers, active_session):
+async def test_get_session_timer_success(server_url, active_session):
     """Test GET /api/sessions/<session_id>/timer endpoint with valid session."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{active_session.session_id}/timer",
-            headers=auth_headers,
+            f"{server_url}/api/sessions/{active_session.session_id}/timer"
         )
 
         assert response.status_code == 200
@@ -132,12 +113,11 @@ async def test_get_session_timer_success(server_url, auth_headers, active_sessio
 
 
 @pytest.mark.trio
-async def test_get_session_timer_not_found(server_url, auth_headers):
+async def test_get_session_timer_not_found(server_url):
     """Test GET /api/sessions/<session_id>/timer with non-existent session."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/nonexistent_session/timer",
-            headers=auth_headers,
+            f"{server_url}/api/sessions/nonexistent_session/timer"
         )
 
         assert response.status_code == 404
@@ -146,24 +126,13 @@ async def test_get_session_timer_not_found(server_url, auth_headers):
 
 
 @pytest.mark.trio
-async def test_get_session_timer_requires_auth(server_url, active_session):
-    """Test that timer endpoint requires authentication."""
-    async with httpx.AsyncClient() as client:
-        # Request without auth headers
-        response = await client.get(
-            f"{server_url}/api/sessions/{active_session.session_id}/timer",
-        )
-
-        assert response.status_code == 401
-
-
 @pytest.mark.trio
-async def test_get_session_timer_with_extensions(test_server_websocket, server_url, auth_headers):
+async def test_get_session_timer_with_extensions(test_server_websocket, server_url):
     """Test timer endpoint with session extensions."""
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user_ext",
         name="Test User",
@@ -174,7 +143,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from models.data_models import TherapyPlan
+    from psychoanalyst_app.models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_ext",
         user_id="test_user_ext",
@@ -191,7 +160,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     await db_service.save_therapy_plan(therapy_plan)
 
     # Create session that started 40 minutes ago (near end of base duration)
-    from models.data_models import Session
+    from psychoanalyst_app.models.data_models import Session
     session = Session(
         session_id="test_session_ext",
         user_id="test_user_ext",
@@ -203,8 +172,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{session.session_id}/timer",
-            headers=auth_headers,
+            f"{server_url}/api/sessions/{session.session_id}/timer"
         )
 
         assert response.status_code == 200
@@ -218,12 +186,12 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
 
 
 @pytest.mark.trio
-async def test_get_session_timer_time_up(test_server_websocket, server_url, auth_headers):
+async def test_get_session_timer_time_up(test_server_websocket, server_url):
     """Test timer endpoint when session time is up."""
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user_timeup",
         name="Test User",
@@ -234,7 +202,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url, auth
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from models.data_models import TherapyPlan
+    from psychoanalyst_app.models.data_models import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_timeup",
         user_id="test_user_timeup",
@@ -251,7 +219,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url, auth
     await db_service.save_therapy_plan(therapy_plan)
 
     # Create session that started 50 minutes ago (past the 45 minute limit)
-    from models.data_models import Session
+    from psychoanalyst_app.models.data_models import Session
     session = Session(
         session_id="test_session_timeup",
         user_id="test_user_timeup",
@@ -263,8 +231,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url, auth
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{session.session_id}/timer",
-            headers=auth_headers,
+            f"{server_url}/api/sessions/{session.session_id}/timer"
         )
 
         assert response.status_code == 200

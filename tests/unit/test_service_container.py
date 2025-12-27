@@ -6,9 +6,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from config import settings
-from container.service_container import ServiceContainer
-from context.user_context import UserContext
+from psychoanalyst_app.config import Settings
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.context.user_context import UserContext
 
 
 class TestServiceContainer:
@@ -17,7 +17,7 @@ class TestServiceContainer:
     @pytest.fixture
     def container(self):
         """Create service container for testing."""
-        return ServiceContainer(settings)
+        return ServiceContainer(Settings())
 
     @pytest.fixture
     def user_context(self):
@@ -117,12 +117,13 @@ class TestServiceContainerAgentCreation:
     @pytest.fixture
     def container(self):
         """Create container with mocked services."""
-        container = ServiceContainer(settings)
+        container = ServiceContainer(Settings())
 
         # Mock services to avoid actual initialization
         container.register("trio_db_service", Mock())
         container.register("llm_service", Mock())
         container.register("rag_service", Mock())
+        container.register("style_service", Mock())
 
         return container
 
@@ -131,7 +132,7 @@ class TestServiceContainerAgentCreation:
         """Create user context for testing."""
         return UserContext("test_user")
 
-    @patch("agents.trio_intake_agent.TrioIntakeAgent")
+    @patch("psychoanalyst_app.agents.trio_intake_agent.TrioIntakeAgent")
     def test_create_intake_agent(self, mock_intake_agent, container, user_context):
         """Test Trio intake agent creation."""
         mock_agent = Mock()
@@ -141,57 +142,72 @@ class TestServiceContainerAgentCreation:
 
         assert agent is mock_agent
         mock_intake_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_intake"),
             db_service=container.get("trio_db_service"),
             user_context=user_context,
+            config=container.config,
         )
 
-    @patch("agents.trio_reflection_agent.TrioReflectionAgent")
-    @patch("agents.trio_assessment_agent.TrioAssessmentAgent")
+    @patch.object(ServiceContainer, "create_reflection_agent")
+    @patch("psychoanalyst_app.agents.trio_assessment_agent.TrioAssessmentAgent")
     def test_create_assessment_agent(
-        self, mock_assessment_agent, mock_reflection_agent, container, user_context
+        self,
+        mock_assessment_agent,
+        mock_create_reflection_agent,
+        container,
+        user_context,
     ):
         """Test Trio assessment agent creation."""
-        mock_reflection = Mock()
         mock_assessment = Mock()
-        mock_reflection_agent.return_value = mock_reflection
         mock_assessment_agent.return_value = mock_assessment
+        mock_reflection = Mock()
+        mock_create_reflection_agent.return_value = mock_reflection
 
         agent = container.create_assessment_agent(user_context)
 
         assert agent is mock_assessment
-        # Should create reflection agent first
-        mock_reflection_agent.assert_called_once()
-        # Then create assessment agent with reflection agent
+        mock_create_reflection_agent.assert_called_once_with(user_context)
         mock_assessment_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_assessment"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
             reflection_agent=mock_reflection,
+            style_service=container.get("style_service"),
         )
 
-    @patch("agents.trio_psychoanalyst_agent.TrioPsychoanalystAgent")
+    @patch.object(ServiceContainer, "create_reflection_agent")
+    @patch("psychoanalyst_app.agents.trio_psychoanalyst_agent.TrioPsychoanalystAgent")
     def test_create_psychoanalyst_agent(
-        self, mock_psychoanalyst_agent, container, user_context
+        self,
+        mock_psychoanalyst_agent,
+        mock_create_reflection_agent,
+        container,
+        user_context,
     ):
         """Test Trio psychoanalyst agent creation."""
         mock_agent = Mock()
         mock_psychoanalyst_agent.return_value = mock_agent
+        mock_reflection = Mock()
+        mock_create_reflection_agent.return_value = mock_reflection
 
         agent = container.create_psychoanalyst_agent(user_context)
 
         assert agent is mock_agent
+        mock_create_reflection_agent.assert_called_once_with(user_context)
         mock_psychoanalyst_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_psychoanalyst"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
+            reflection_agent=mock_reflection,
+            style_service=container.get("style_service"),
+            config=container.config,
         )
 
-    @patch("agents.trio_reflection_agent.TrioReflectionAgent")
-    @patch("agents.trio_planning_agent.TrioPlanningAgent")
-    @patch("agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.trio_reflection_agent.TrioReflectionAgent")
+    @patch("psychoanalyst_app.agents.trio_planning_agent.TrioPlanningAgent")
+    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
     def test_create_reflection_agent(
         self,
         mock_memory_agent,
@@ -213,19 +229,31 @@ class TestServiceContainerAgentCreation:
         assert agent is mock_reflection
         # Should create memory agent twice (once for reflection, once for planning)
         assert mock_memory_agent.call_count == 2
-        # Should create planning agent once
-        mock_planning_agent.assert_called_once()
-        # Then create reflection agent with both dependencies
+        mock_memory_agent.assert_called_with(
+            llm_service=container.get("llm_service_memory"),
+            db_service=container.get("trio_db_service"),
+            rag_service=container.get("rag_service"),
+            user_context=user_context,
+        )
+        mock_planning_agent.assert_called_once_with(
+            llm_service=container.get("llm_service_planning"),
+            db_service=container.get("trio_db_service"),
+            rag_service=container.get("rag_service"),
+            user_context=user_context,
+            memory_agent=mock_memory,
+            style_service=container.get("style_service"),
+        )
         mock_reflection_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_reflection"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
             memory_agent=mock_memory,
             planning_agent=mock_planning,
+            config=container.config,
         )
 
-    @patch("agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
     def test_create_memory_agent(self, mock_memory_agent, container, user_context):
         """Test Trio memory agent creation."""
         mock_agent = Mock()
@@ -235,14 +263,14 @@ class TestServiceContainerAgentCreation:
 
         assert agent is mock_agent
         mock_memory_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_memory"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
         )
 
-    @patch("agents.trio_planning_agent.TrioPlanningAgent")
-    @patch("agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.trio_planning_agent.TrioPlanningAgent")
+    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
     def test_create_planning_agent(
         self, mock_memory_agent, mock_planning_agent, container, user_context
     ):
@@ -257,18 +285,19 @@ class TestServiceContainerAgentCreation:
         assert agent is mock_planning
         # Should create memory agent first
         mock_memory_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_memory"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
         )
         # Then create planning agent with memory agent
         mock_planning_agent.assert_called_once_with(
-            llm_service=container.get("llm_service"),
+            llm_service=container.get("llm_service_planning"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             user_context=user_context,
             memory_agent=mock_memory,
+            style_service=container.get("style_service"),
         )
 
 
@@ -278,7 +307,7 @@ class TestServiceContainerHealthCheck:
     @pytest.fixture
     def container(self):
         """Create container for health check tests."""
-        return ServiceContainer(settings)
+        return ServiceContainer(Settings())
 
     async def test_health_check_no_services(self, container):
         """Test health check with no instantiated services."""
@@ -342,7 +371,7 @@ class TestServiceContainerShutdown:
 
     def test_shutdown_clears_instances(self):
         """Test that shutdown clears all instances."""
-        container = ServiceContainer(settings)
+        container = ServiceContainer(Settings())
         container.register("test_service", Mock())
 
         assert len(container._instances) > 0

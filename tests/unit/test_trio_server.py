@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import trio
 
-from container.service_container import ServiceContainer
-from trio_server import TrioServer
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.trio_server import TrioServer
 
 
 class TestTrioServer:
@@ -22,10 +22,6 @@ class TestTrioServer:
         # Mock Config
         mock_config = MagicMock()
         mock_config.CORS_ALLOWED_ORIGINS = ["*"]
-        mock_config.JWT_SECRET_KEY = "test_secret"
-        mock_config.JWT_ALGORITHM = "HS256"
-        mock_config.ACCESS_TOKEN_EXPIRE_MINUTES = 60
-        mock_config.REQUIRE_AUTHENTICATION = False
 
         container.config = mock_config
 
@@ -55,7 +51,7 @@ class TestTrioServer:
         server = TrioServer(mock_container, host="127.0.0.1", port=8888)
 
         # Mock the serve function to prevent actual server startup
-        with patch("trio_server.serve", new_callable=AsyncMock):
+        with patch("psychoanalyst_app.trio_server.serve", new_callable=AsyncMock):
             # Use trio.testing to start the server and cancel it quickly
             async with trio.open_nursery() as nursery:
 
@@ -113,7 +109,7 @@ class TestTrioServer:
         db_service.initialize = AsyncMock(side_effect=tracked_init)
 
         # Mock the serve function
-        with patch("trio_server.serve", new_callable=AsyncMock):
+        with patch("psychoanalyst_app.trio_server.serve", new_callable=AsyncMock):
             # Mock _initialize_orchestration to track call order
             original_init_orchestration = server._initialize_orchestration
 

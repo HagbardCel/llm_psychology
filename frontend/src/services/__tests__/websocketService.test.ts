@@ -125,8 +125,7 @@ describe('WebSocketService', () => {
     jest.clearAllMocks();
     service = new WebSocketService({
       url: 'ws://localhost:8000',
-      userId: 'test-user',
-      authToken: 'test-token'
+      userId: 'test-user'
     });
   });
 
@@ -142,7 +141,7 @@ describe('WebSocketService', () => {
 
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
       expect(mockWs.url).toBe(
-        'ws://localhost:8000/ws?user_id=test-user&token=test-token'
+        'ws://localhost:8000/ws?user_id=test-user'
       );
 
       mockWs.simulateOpen();
@@ -152,15 +151,14 @@ describe('WebSocketService', () => {
     test('converts http to ws protocol', async () => {
       service = new WebSocketService({
         url: 'http://localhost:8000',
-        userId: 'test-user',
-        authToken: 'test-token'
+        userId: 'test-user'
       });
 
       const connectPromise = service.connect();
 
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
       expect(mockWs.url).toBe(
-        'ws://localhost:8000/ws?user_id=test-user&token=test-token'
+        'ws://localhost:8000/ws?user_id=test-user'
       );
 
       mockWs.simulateOpen();
@@ -328,7 +326,6 @@ describe('WebSocketService', () => {
       service = new WebSocketService({
         url: 'ws://localhost:8000',
         userId: 'test-user',
-        authToken: 'test-token',
         reconnectDelay: 1000
       });
 
@@ -381,7 +378,6 @@ describe('WebSocketService', () => {
       service = new WebSocketService({
         url: 'ws://localhost:8000',
         userId: 'test-user',
-        authToken: 'test-token',
         reconnectAttempts: 3,
         reconnectDelay: 1000
       });

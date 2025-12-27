@@ -23,7 +23,7 @@ The phases below have been implemented in the codebase. The most important outco
 - **Phase 0 (False greens): Completed** — removed ineffective tests, fixed async assertions, added folder-based auto-marking, and eliminated hard-coded ports in shared server fixtures.
 - **Phase 1 (LLM/RAG unit tests): Completed** — LLM adapter tests use a fake chat model + Trio `MockClock`; RAG tests use deterministic embeddings and include an index persistence/load check (RAG is used in production via `TrioConversationManager` when a therapy plan exists).
 - **Phase 2 (Integration hardening): Completed** — integration suite uses an ephemeral-port TrioServer fixture and includes a WebSocket protocol contract test; removed the most brittle time-based auth sleeps.
-- **Phase 3 (Deterministic full-stack E2E): Completed** — Playwright starts `src/e2e_server.py` (deterministic backend) + `npm run dev` automatically and runs a golden path + auth guard + WebSocket reconnect test.
+- **Phase 3 (Deterministic full-stack E2E): Completed** — Playwright starts `src/psychoanalyst_app/e2e_server.py` (deterministic backend) + `npm run dev` automatically and runs a golden path + auth guard + WebSocket reconnect test.
 - **Phase 4 (Real LLM smoke): Completed** — real-service tests live under `tests/real_llm/` and are gated by the `real_llm` marker + `--no-mocks`.
 - **Phase 5 (Workflow integration): Mostly completed** — `make test-all` runs backend + frontend unit tests + deterministic E2E, and schemas are enforced via a parity test. Backend coverage enforcement is not enabled yet (would require adding `pytest-cov`).
 
@@ -45,7 +45,7 @@ The phases below have been implemented in the codebase. The most important outco
 - **Coverage thresholds:** Jest global 80% branches/functions/lines/statements.
 
 ### Full-stack deterministic E2E
-- **Backend test entrypoint:** `src/e2e_server.py` (runs the backend with deterministic LLM/RAG fakes; no API keys, no network)
+- **Backend test entrypoint:** `src/psychoanalyst_app/e2e_server.py` (runs the backend with deterministic LLM/RAG fakes; no API keys, no network)
 - **Playwright wiring:** `frontend/playwright.config.ts` starts both backend + frontend via `webServer`
 
 ### High-level observation
@@ -141,7 +141,7 @@ There is broad unit coverage across services, hooks, context, and UI components.
 ## Frontend E2E Tests (Playwright) — Assessment
 
 ### Summary
-Playwright is now **self-contained**: `frontend/playwright.config.ts` starts the deterministic backend (`src/e2e_server.py`) and the frontend dev server automatically. The suite includes a deterministic “golden path” and negative-path coverage (auth guard + WebSocket reconnect).
+Playwright is now **self-contained**: `frontend/playwright.config.ts` starts the deterministic backend (`src/psychoanalyst_app/e2e_server.py`) and the frontend dev server automatically. The suite includes a deterministic “golden path” and negative-path coverage (auth guard + WebSocket reconnect).
 
 | File | Intent | Meaningfulness | Key issues | Recommendation |
 |---|---|---:|---|---|
@@ -173,7 +173,7 @@ Playwright is now **self-contained**: `frontend/playwright.config.ts` starts the
 
 ### 1) Deterministic test environment for full-stack flows
 Implemented:
-- `src/e2e_server.py` runs a deterministic backend (no network, no API keys).
+- `src/psychoanalyst_app/e2e_server.py` runs a deterministic backend (no network, no API keys).
 - `frontend/playwright.config.ts` starts backend + frontend automatically for Playwright runs.
 - E2E coverage: `frontend/e2e/golden-path.spec.ts`, `frontend/e2e/auth-guards.spec.ts`, `frontend/e2e/websocket-reconnect.spec.ts`.
 

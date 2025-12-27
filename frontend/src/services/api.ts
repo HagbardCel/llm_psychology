@@ -5,50 +5,35 @@
 
 import { apiClient } from './apiClient';
 import {
-  User,
+  CreateSessionRequest,
+  CreateTherapyPlanRequest,
+  CreateUserProfileRequest,
+  HealthCheckResponse,
+  PatchUserProfileRequest,
   Session,
+  StatusMessageResponse,
   TherapyPlan,
   TherapyStyleInfo,
-  WorkflowNextAction
+  User,
+  UserStatusResponse,
+  WorkflowNextAction,
+  WorkflowNextActionRequest
 } from '../types';
-
-export interface CreateUserProfileRequest {
-  user_id: string;
-  name: string;
-  birthdate?: string;
-  profession?: string;
-}
-
-export interface CreateSessionRequest {
-  user_id: string;
-}
-
-export interface CreateTherapyPlanRequest {
-  user_id: string;
-  therapy_style: string;
-}
-
-export interface WorkflowNextActionRequest {
-  user_id: string;
-  current_route?: string;
-}
-
-export interface HealthCheckResponse {
-  status: string;
-  timestamp: string;
-  database: string;
-}
 
 /**
  * User API
  */
 export const userApi = {
-  async getStatus(userId: string): Promise<{ user_id: string; workflow_state: string; timestamp: string }> {
+  async getStatus(userId: string): Promise<UserStatusResponse> {
     return apiClient.get(`/api/user/status?user_id=${encodeURIComponent(userId)}`);
   },
 
   async createProfile(data: CreateUserProfileRequest): Promise<User> {
     return apiClient.post('/api/user/profile', data);
+  },
+
+  async updateProfile(data: PatchUserProfileRequest): Promise<User> {
+    return apiClient.patch('/api/user/profile', data);
   }
 };
 
@@ -68,7 +53,7 @@ export const sessionApi = {
     return apiClient.post('/api/sessions', data);
   },
 
-  async extendSession(sessionId: string): Promise<void> {
+  async extendSession(sessionId: string): Promise<StatusMessageResponse> {
     return apiClient.post(`/api/sessions/${sessionId}/extend`);
   }
 };

@@ -404,7 +404,7 @@ All components achieved "Excellent" performance ratings:
    mkdir -p data/domain_knowledge
    
    # Run migrations automatically on first startup
-   python src/main.py
+   python -m psychoanalyst_app
    ```
 
 3. **Production Configuration**:

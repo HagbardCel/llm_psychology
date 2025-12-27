@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode } from 'react';
 import {
   Box,
   AppBar,
@@ -10,6 +10,8 @@ import {
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import { NavigationDrawer } from './NavigationDrawer';
+import { WorkflowGate } from './WorkflowGate';
+import { useAppContext } from '../contexts/AppContext';
 
 export interface LayoutProps {
   children: ReactNode;
@@ -20,7 +22,7 @@ export interface LayoutProps {
  * Responsive: Permanent drawer on desktop, temporary drawer on mobile.
  */
 export function Layout({ children }: LayoutProps) {
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { sidebarOpen, setSidebarOpen } = useAppContext();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -39,7 +41,7 @@ export function Layout({ children }: LayoutProps) {
             color="inherit"
             aria-label="open drawer"
             edge="start"
-            onClick={() => setDrawerOpen(true)}
+            onClick={() => setSidebarOpen(true)}
             sx={{ mr: 2 }}
           >
             <MenuIcon />
@@ -52,8 +54,8 @@ export function Layout({ children }: LayoutProps) {
 
       {/* Navigation Drawer */}
       <NavigationDrawer
-        open={isMobile ? drawerOpen : true}
-        onClose={() => setDrawerOpen(false)}
+        open={isMobile ? sidebarOpen : true}
+        onClose={() => setSidebarOpen(false)}
         variant={isMobile ? 'temporary' : 'permanent'}
       />
 
@@ -68,6 +70,7 @@ export function Layout({ children }: LayoutProps) {
           width: { xs: '100%', md: 'calc(100% - 240px)' }
         }}
       >
+        <WorkflowGate />
         {children}
       </Box>
     </Box>

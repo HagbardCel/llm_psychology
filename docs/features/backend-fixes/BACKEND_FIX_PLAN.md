@@ -288,7 +288,7 @@ python verify_api_integration.py
 
 1. Start the backend:
    ```bash
-   python src/server.py
+   python -m psychoanalyst_app.server
    ```
 
 2. Start the frontend:

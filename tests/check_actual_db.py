@@ -75,7 +75,7 @@ def check_database(db_path):
 
         if count > 0:
             cursor.execute(
-                "SELECT user_id, name, birthdate, profession, created_at FROM user_profiles"
+                "SELECT user_id, name, data_of_birth, profession, created_at FROM user_profiles"
             )
             rows = cursor.fetchall()
             for i, row in enumerate(rows):

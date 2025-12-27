@@ -3,17 +3,6 @@ import type { ReactNode } from 'react';
 
 import { AppProvider, useAppContext } from '../AppContext';
 
-let mockAuthState: any = {
-  token: 'test-token',
-  user: { userId: 'test-user-id', username: 'test-user' },
-  isAuthenticated: true,
-  isLoading: false,
-};
-
-jest.mock('../AuthContext', () => ({
-  useAuth: () => mockAuthState,
-}));
-
 describe('AppContext', () => {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <AppProvider>{children}</AppProvider>
@@ -21,13 +10,6 @@ describe('AppContext', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    mockAuthState = {
-      token: 'test-token',
-      user: { userId: 'test-user-id', username: 'test-user' },
-      isAuthenticated: true,
-      isLoading: false,
-    };
 
     const originalGetItem = Storage.prototype.getItem;
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation(function (key: string) {
@@ -81,31 +63,16 @@ describe('AppContext', () => {
     });
   });
 
-  it('syncs currentUserId from AuthContext', async () => {
+  it('initializes currentUserId and persists it', async () => {
     const { result } = renderHook(() => useAppContext(), { wrapper });
 
     await waitFor(() => {
-      expect(result.current.currentUserId).toBe('test-user-id');
-    });
-  });
-
-  it('clears currentUserId when unauthenticated', async () => {
-    const { result, rerender } = renderHook(() => useAppContext(), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.currentUserId).toBe('test-user-id');
+      expect(result.current.currentUserId).toBeTruthy();
     });
 
-    mockAuthState = {
-      token: null,
-      user: null,
-      isAuthenticated: false,
-      isLoading: false,
-    };
-    rerender();
-
-    await waitFor(() => {
-      expect(result.current.currentUserId).toBeNull();
-    });
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      'current_user_id',
+      expect.any(String)
+    );
   });
 });

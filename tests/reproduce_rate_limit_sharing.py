@@ -1,21 +1,12 @@
-import asyncio
-import os
-import sys
-
 import trio
 
-# Add the src directory to the Python path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src"))
-)
-
-from config import settings
-from container.service_container import ServiceContainer
+from psychoanalyst_app.config import Settings
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 
 async def main():
     print("Initializing ServiceContainer...")
-    container = ServiceContainer(settings)
+    container = ServiceContainer(Settings())
 
     # We need to mock the API key if it's not set, to allow instantiation
     if not container.config.GOOGLE_API_KEY:

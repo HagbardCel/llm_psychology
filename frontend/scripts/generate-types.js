@@ -14,16 +14,43 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SCHEMAS_DIR = join(__dirname, '../../schemas');
+const DEFAULT_SCHEMA_DIRS = [
+  join(__dirname, '../../schemas'), // monorepo root
+  join(__dirname, '../schemas'), // frontend container root
+];
+const SCHEMAS_DIR = pickSchemaDir();
 const OUTPUT_FILE = join(__dirname, '../src/types/generated/api.ts');
 const OUTPUT_DIR = dirname(OUTPUT_FILE);
+
+function pickSchemaDir() {
+  const candidates = [
+    process.env.SCHEMAS_DIR,
+    ...DEFAULT_SCHEMA_DIRS,
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+    const files = readdirSync(dir)
+      .filter(f => f.endsWith('.json') && f !== 'index.json');
+    if (files.length > 0) {
+      return dir;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Find all JSON Schema files
  */
 function findSchemaFiles() {
-  if (!existsSync(SCHEMAS_DIR)) {
-    console.error(`✗ Schemas directory not found: ${SCHEMAS_DIR}`);
+  if (!SCHEMAS_DIR) {
+    console.error('✗ Schemas directory not found.');
+    console.error(
+      `  Looked in: ${DEFAULT_SCHEMA_DIRS.join(', ')}`
+    );
     console.error('  Run "make generate-schemas" from the project root first.');
     process.exit(1);
   }
@@ -65,7 +92,7 @@ function generateTypes(schemaFiles) {
       `--just-types ` +
       `--prefer-unions ` +
       `--acronym-style original ` +
-      `--nice-property-names ` +
+      `--no-date-times ` +
       `--prefer-const-values`;
 
     // Run quicktype

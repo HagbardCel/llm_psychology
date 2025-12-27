@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('Version Check', () => {
-  test('performs compatibility check and does not block login routing', async ({ page }) => {
+  test('performs compatibility check and does not block routing', async ({ page }) => {
     const versionCheckRequest = page.waitForRequest((req) => {
       return req.method() === 'POST' && req.url().includes('/api/version/check');
     });
@@ -20,9 +20,7 @@ test.describe('Version Check', () => {
     const response = await versionCheckResponse;
     expect(response.ok()).toBeTruthy();
 
-    // Unauthenticated users end up on the login page after the version check completes.
-    await expect(page).toHaveURL(/\/login/, { timeout: 15000 });
-    await expect(page.getByRole('button', { name: /^sign in$/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
 
     // A compatible backend must not show an incompatibility dialog.
     await expect(

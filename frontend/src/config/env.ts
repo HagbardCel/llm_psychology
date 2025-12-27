@@ -3,23 +3,38 @@
  * Handles environment variables in both Vite and Jest environments
  */
 
+declare const __VITE_API_URL__: string | undefined;
+declare const __VITE_WS_URL__: string | undefined;
+
 export const getApiBaseUrl = (): string => {
   // In Jest/test environment, always use localhost
-  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+  if (
+    typeof window === 'undefined' &&
+    typeof process !== 'undefined' &&
+    process.env.NODE_ENV === 'test'
+  ) {
     return 'http://localhost:8000';
   }
 
-  // In Vite/browser environment, try to get from import.meta.env
-  // We use eval to prevent Jest from trying to parse import.meta at all
-  try {
-    const getViteEnv = new Function('return typeof import !== "undefined" && import.meta && import.meta.env');
-    const viteEnv = getViteEnv();
-    if (viteEnv && viteEnv.VITE_API_URL) {
-      return viteEnv.VITE_API_URL;
-    }
-  } catch {
-    // Fallback if import.meta is not available
+  if (typeof __VITE_API_URL__ !== 'undefined' && __VITE_API_URL__) {
+    return __VITE_API_URL__;
   }
 
   return 'http://localhost:8000';
+};
+
+export const getWebSocketBaseUrl = (): string => {
+  if (
+    typeof window === 'undefined' &&
+    typeof process !== 'undefined' &&
+    process.env.NODE_ENV === 'test'
+  ) {
+    return 'ws://localhost:8000';
+  }
+
+  if (typeof __VITE_WS_URL__ !== 'undefined' && __VITE_WS_URL__) {
+    return __VITE_WS_URL__;
+  }
+
+  return 'ws://localhost:8000';
 };

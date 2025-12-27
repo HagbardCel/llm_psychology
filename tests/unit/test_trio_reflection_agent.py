@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from agents.trio_reflection_agent import TrioReflectionAgent
-from context.user_context import UserContext
-from models.data_models import Message, Session, TherapyPlan, Topic, UserProfile
-from orchestration.models import ConversationContext, WorkflowState
+from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan, Topic, UserProfile
+from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowState
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
 
@@ -117,6 +117,7 @@ async def test_generate_session_briefing_structure(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        config=mock_service_container.config,
     )
 
     # Create test data
@@ -277,6 +278,7 @@ async def test_briefing_generation_failure_propagates(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        config=mock_service_container.config,
     )
 
     # The process_reflection should raise the exception, not swallow it
@@ -357,6 +359,7 @@ async def test_process_reflection_updates_plan_with_briefing(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        config=mock_service_container.config,
     )
 
     # Create conversation context

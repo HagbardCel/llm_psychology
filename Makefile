@@ -1,37 +1,60 @@
-.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb
+.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
+.PHONY: local-format local-lint local-test local-test-unit local-test-integration local-test-all local-test-frontend local-test-e2e local-test-real-llm local-test-dev
+.PHONY: local-run local-run-server local-run-e2e local-generate-schemas local-validate-schemas
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas
 
+export PYTHONPATH := src
+
 # Default target
 help:
 	@echo "Available targets:"
 	@echo ""
-	@echo "Local Development:"
+	@echo "Default (Docker) Development:"
 	@echo "  install-uv        - Install UV package manager"
-	@echo "  install           - Install production dependencies with UV"
-	@echo "  dev-install       - Install development dependencies with UV"
-	@echo "  format            - Format code with black"
-	@echo "  lint              - Lint code with ruff"
-	@echo "  test              - Run backend tests (deterministic)"
-	@echo "  test-all          - Run backend + frontend + E2E"
-	@echo "  test-dev          - Quick tests in devContainer (fast, for active development)"
+	@echo "  install           - Build API container (installs backend deps inside Docker)"
+	@echo "  dev-install       - Build dev containers (api + console-ui + frontend)"
+	@echo "  format            - Format code with black (Docker)"
+	@echo "  lint              - Lint code with ruff (Docker)"
+	@echo "  test              - Run backend tests (Docker)"
+	@echo "  test-all          - Run backend + frontend + E2E (Docker)"
+	@echo "  test-dev          - Quick backend tests (Docker)"
 	@echo "  test-validate     - Full isolated Docker tests (pre-commit validation)"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests only"
 	@echo "  test-frontend     - Run frontend Jest unit tests"
 	@echo "  test-e2e          - Run deterministic Playwright E2E"
-	@echo "  test-real-llm     - Run real-LLM tests only"
+	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests"
 	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
 	@echo "  clean             - Clean up generated files and caches"
 	@echo "  clean-testdb      - Clean test databases only"
 	@echo "  requirements      - Generate locked requirements from .in files"
-	@echo "  sync              - Sync environment with locked requirements"
-	@echo "  run               - Run application locally"
-	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models"
-	@echo "  validate-schemas  - Validate generated JSON schemas"
+	@echo "  sync              - Rebuild containers from locked requirements"
+	@echo "  run               - Run terminal UI via Docker"
+	@echo "  run-server        - Run HTTP/WebSocket server via Docker"
+	@echo "  run-e2e           - Run deterministic e2e server via Docker"
+	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models (Docker)"
+	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
+	@echo ""
+	@echo "Local (Opt-In) Development:"
+	@echo "  local-format      - Format code with black (local)"
+	@echo "  local-lint        - Lint code with ruff (local)"
+	@echo "  local-test        - Run backend tests (local)"
+	@echo "  local-test-all    - Run backend + frontend + E2E (local)"
+	@echo "  local-test-dev    - Quick tests in devContainer (local)"
+	@echo "  local-test-unit   - Run unit tests only (local)"
+	@echo "  local-test-integration - Run integration tests only (local)"
+	@echo "  local-test-frontend - Run frontend Jest unit tests (local)"
+	@echo "  local-test-e2e    - Run deterministic Playwright E2E (local)"
+	@echo "  local-test-real-llm - Run real-LLM tests only (local)"
+	@echo "  local-run         - Run terminal UI via python -m psychoanalyst_app"
+	@echo "  local-run-server  - Run HTTP/WebSocket server entry point"
+	@echo "  local-run-e2e     - Run deterministic e2e server entry point"
+	@echo "  local-generate-schemas - Generate JSON schemas from Pydantic models (local)"
+	@echo "  local-validate-schemas - Validate generated JSON schemas (local)"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-standalone     - Run standalone terminal UI (local, no Docker)"
@@ -50,6 +73,7 @@ help:
 	@echo "  docker-logs       - View logs (usage: make docker-logs SERVICE=api)"
 	@echo "  docker-logs-api   - View API logs only (useful when running console-ui)"
 	@echo "  docker-usertest   - Run app in user-test mode (shorter sessions, test DB)"
+	@echo "  reset-usertest    - Stop usertest containers and clear usertest database"
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
 	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=prod|usertest, default: prod)"
@@ -68,59 +92,98 @@ help:
 install-uv:
 	pip install uv
 
-# Install production dependencies with UV
+# Install production dependencies inside Docker
 install:
-	uv pip install --system -r requirements.txt
+	docker compose build api
 
-# Install development dependencies with UV
+# Build dev containers (installs Python deps inside Docker images)
 dev-install:
-	uv pip install --system -r requirements-dev.txt
+	docker compose build api console-ui frontend
 
-# Format code with black
+# Format code with black (Docker)
 format:
-	black .
+	docker compose run --rm api black .
 
-# Lint code with ruff
+# Lint code with ruff (Docker)
 lint:
-	ruff check .
+	docker compose run --rm api ruff check .
 
-# Run all tests
+# Run all tests (Docker)
 test:
-	pytest -m "not real_llm"
+	docker compose --profile test run --rm test
 
-# Run unit tests only
+# Run unit tests only (Docker)
 test-unit:
-	pytest -m unit
+	docker compose --profile test run --rm test pytest -m unit
 
-# Run integration tests only
+# Run integration tests only (Docker)
 test-integration:
-	pytest -m integration
+	docker compose --profile test run --rm test pytest -m integration
 
-# Run full suite (deterministic CI-grade)
-# Note: Runs locally (or inside devcontainer). For Docker usage, use 'make docker-test-all'
+# Run full suite (deterministic CI-grade, Docker)
 test-all:
-	pytest -m "not real_llm"
+	$(MAKE) test
 	$(MAKE) test-frontend
 	$(MAKE) test-e2e
 
-# Frontend unit tests (Jest)
+# Frontend unit tests (Jest, Docker)
 test-frontend:
-	npm --prefix frontend test
+	docker compose --profile test run --rm frontend-test npm test -- --ci --colors=false
 
-# Deterministic full-stack E2E (Playwright)
+# Deterministic full-stack E2E (Playwright, Docker)
 test-e2e:
-	npm --prefix frontend run test:e2e
+	docker compose --profile test run --rm frontend-e2e npx playwright install chromium
+	docker compose --profile test run --rm frontend-e2e npm run test:e2e
 
-# Real LLM/RAG smoke tests (requires secrets / external services)
+# Real LLM/RAG smoke tests (Docker, requires secrets / external services)
 test-real-llm:
-	pytest -m real_llm --no-mocks
+	$(MAKE) check-usertest-key
+	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
+	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 
-# Run devcontainer setup tests
+# Run devcontainer setup tests (local only)
 test-devcontainer:
 	python scripts/devcontainer_test.py
 
-# Quick tests in devContainer (fast, for TDD workflow)
+# Quick tests in devContainer (Docker)
 test-dev:
+	@echo "🚀 Running quick tests in Docker..."
+	@echo "Perfect for: Active development, TDD, debugging"
+	@echo ""
+	docker compose --profile test run --rm test pytest -m "not real_llm" -x --tb=short -q
+
+# Local equivalents (opt-in)
+local-format:
+	black .
+
+local-lint:
+	ruff check .
+
+local-test:
+	pytest -m "not real_llm"
+
+local-test-unit:
+	pytest -m unit
+
+local-test-integration:
+	pytest -m integration
+
+local-test-all:
+	pytest -m "not real_llm"
+	$(MAKE) local-test-frontend
+	$(MAKE) local-test-e2e
+
+local-test-frontend:
+	npm --prefix frontend test
+
+local-test-e2e:
+	npm --prefix frontend run test:e2e
+
+local-test-real-llm:
+	$(MAKE) check-usertest-key
+	@set -a && . ./.env.usertest && set +a && pytest -m real_llm --no-mocks
+
+local-test-dev:
 	@echo "🚀 Running quick tests in devContainer..."
 	@echo "Perfect for: Active development, TDD, debugging"
 	@echo ""
@@ -136,8 +199,9 @@ test-validate:
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks:
 	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
-	@echo "⚠️  Requires valid API keys in .env.test"
+	@echo "⚠️  Requires valid API keys in .env.test and .env.usertest"
 	@echo ""
+	$(MAKE) check-usertest-key
 	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
 	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
 
@@ -181,26 +245,63 @@ clean-testdb:
 	fi
 	@echo "✓ Test databases cleaned"
 
+# Reset usertest DB and containers
+reset-usertest:
+	@echo "Resetting usertest environment..."
+	@docker compose --profile usertest --profile usertest-console --profile usertest-web --profile usertest-all down --remove-orphans
+	@rm -rf data/psychoanalyst_usertest.db 2>/dev/null || true
+	@# Use Docker to remove files created by Docker containers (no sudo needed)
+	@if [ -d "data/vector_db_usertest" ]; then \
+		echo "Removing Docker-created usertest vector DB files..."; \
+		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db_usertest" 2>/dev/null || true; \
+	fi
+	@echo "✓ Usertest environment reset"
+
 # Generate locked requirements from .in files with UV
 requirements:
 	uv pip compile requirements.in -o requirements.txt
 	uv pip compile requirements-dev.in -o requirements-dev.txt
 
 # Sync environment with locked requirements using UV
-sync:
-	uv pip sync requirements.txt requirements-dev.txt
+sync: dev-install
+	@echo "Docker images rebuilt using locked requirements."
 
-# Run the application locally
+# Run the application via Docker
 run:
-	python src/main.py
+	docker compose run --rm api python -m psychoanalyst_app
 
-# Generate JSON Schemas from Pydantic models
+run-server:
+	docker compose run --rm api python -m psychoanalyst_app.server
+
+run-e2e:
+	docker compose run --rm api python -m psychoanalyst_app.e2e_server
+
+local-run:
+	python -m psychoanalyst_app
+
+local-run-server:
+	python -m psychoanalyst_app.server
+
+local-run-e2e:
+	python -m psychoanalyst_app.e2e_server
+
+# Generate JSON Schemas from Pydantic models (Docker)
 generate-schemas:
-	@echo "🔧 Generating JSON schemas from Pydantic models..."
+	@echo "🔧 Generating JSON schemas from Pydantic models (Docker)..."
+	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" api \
+		env PYTHONPATH=/app/src python -m psychoanalyst_app.schemas.generate_schemas \
+		--output-dir /app/schemas
+
+# Validate generated schemas (comprehensive validation, Docker)
+validate-schemas:
+	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/scripts:/app/scripts" api \
+		env PYTHONPATH=/app/src python scripts/validate_schemas.py
+
+local-generate-schemas:
+	@echo "🔧 Generating JSON schemas from Pydantic models (local)..."
 	python scripts/generate_schemas.py
 
-# Validate generated schemas (comprehensive validation)
-validate-schemas:
+local-validate-schemas:
 	python scripts/validate_schemas.py
 
 # ============================================
@@ -222,22 +323,18 @@ docker-down:
 # Run tests in isolated Docker environment
 # NOTE: This is usually not needed - use 'make test' for local testing
 # Docker tests are mainly for CI/CD or when you need complete isolation
-docker-test:
-	docker compose --profile test run --rm test
+docker-test: test
 
 # Run specific test file
 docker-test-one:
 	docker compose --profile test run --rm test pytest $(TEST)
 
 # Run frontend tests in Docker
-docker-test-frontend:
-	docker compose --profile test run --rm frontend-test npm test
+docker-test-frontend: test-frontend
 
 # Run all tests in Docker (Backend + Frontend)
 # Note: E2E tests are skipped as they require a browser environment
-docker-test-all:
-	$(MAKE) docker-test
-	$(MAKE) docker-test-frontend
+docker-test-all: test-all
 
 # Shell into API container
 docker-shell:
@@ -261,10 +358,11 @@ docker-logs-api:
 
 # Run app in user-test mode (manual testing with test settings)
 docker-usertest:
+	$(MAKE) check-usertest-key
 	@echo "Starting app in user-test mode..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
+	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
 	docker compose --profile usertest up --build --remove-orphans usertest
 
@@ -348,16 +446,17 @@ ui-standalone:
 	@echo "🖥️  Starting Standalone Terminal UI..."
 	@echo "Running locally with direct Python execution"
 	@echo ""
-	python src/main.py
+	python -m psychoanalyst_app
 
 # Standalone Terminal UI (usertest mode)
 ui-standalone-test:
+	$(MAKE) check-usertest-key
 	@echo "🖥️  Starting Standalone Terminal UI (Usertest Mode)..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
+	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
-	@set -a && . ./.env.usertest && set +a && python src/main.py
+	@set -a && . ./.env.usertest && set +a && python -m psychoanalyst_app
 
 # Console UI Service (WebSocket client)
 ui-console:
@@ -371,10 +470,11 @@ ui-console:
 
 # Console UI Service (usertest mode)
 ui-console-test:
+	$(MAKE) check-usertest-key
 	@echo "💻 Starting Console UI Service (Usertest Mode)..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
+	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
 	@echo ""
@@ -390,12 +490,13 @@ ui-web:
 
 # Web UI (usertest mode)
 ui-web-test:
+	$(MAKE) check-usertest-key
 	@echo "🌐 Starting Web UI (Usertest Mode)..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
 	@echo "- API Server: http://localhost:8001"
 	@echo "- Frontend: http://localhost:5174"
-	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
+	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
 	docker compose --profile usertest-web up --build --remove-orphans api-usertest frontend-usertest
 
@@ -413,13 +514,14 @@ ui-all:
 
 # All UI modes (usertest mode)
 ui-all-test:
+	$(MAKE) check-usertest-key
 	@echo "🎯 Starting All UI Modes (Usertest Mode)..."
 	@echo "- Using test database: data/psychoanalyst_usertest.db"
 	@echo "- Session duration: 10 minutes"
 	@echo "- API Server: http://localhost:8000"
 	@echo "- Console Client: Terminal"
 	@echo "- Frontend: http://localhost:5173"
-	@echo "- Make sure to set your GEMINI_API_KEY in .env.usertest"
+	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
 	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
 	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
@@ -477,4 +579,12 @@ devcontainer-open:
 		echo "1. Open this folder in VSCode"; \
 		echo "2. Press Ctrl+Shift+P"; \
 		echo "3. Run 'Dev Containers: Reopen in Container'"; \
+	fi
+check-usertest-key:
+	@set -a && . ./.env.usertest && set +a && \
+	if [ -z "$${GOOGLE_API_KEY:-}" ] || [ "$${GOOGLE_API_KEY}" = "test_mock_api_key_for_testing" ]; then \
+		echo "❌ GOOGLE_API_KEY is not configured in .env.usertest."; \
+		echo "   Please edit .env.usertest and provide your real API key before running user-test commands."; \
+		echo "   (This profile uses real Gemini responses: MODEL_NAME=$${MODEL_NAME:-unset})"; \
+		exit 1; \
 	fi

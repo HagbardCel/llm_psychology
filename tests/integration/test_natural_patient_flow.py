@@ -16,8 +16,8 @@ import pytest
 import trio
 from trio_websocket import open_websocket_url
 
-from config import settings
-from orchestration.models import WorkflowState
+from psychoanalyst_app.config import Settings
+from psychoanalyst_app.orchestration.models import WorkflowState
 
 # Mark all tests in this file as Trio tests
 pytestmark = pytest.mark.trio
@@ -30,20 +30,11 @@ def test_settings(use_real_llm, tmp_path):
     Use a longer duration to prevent timeout during slow test execution.
     Use a temporary database.
     """
-    # Create a modified copy of settings
-    # We need to modify the global settings object for the test duration
-    # This is a bit hacky but necessary since the agents read from global settings
-    original_duration = settings.SESSION_DURATION_MINUTES
-    original_db_path = settings.DATABASE_PATH
-
+    settings = Settings()
     settings.SESSION_DURATION_MINUTES = 2.0  # 2 minutes
     settings.DATABASE_PATH = str(tmp_path / "test_flow.db")
 
     yield settings
-
-    # Restore original settings
-    settings.SESSION_DURATION_MINUTES = original_duration
-    settings.DATABASE_PATH = original_db_path
 
 
 @pytest.fixture
@@ -183,7 +174,7 @@ def mock_llm_service_natural_flow():
                     {
                         "basic_info": {
                             "alias": "Guest",
-                            "date_of_birth": None,
+                            "data_of_birth": None,
                             "gender": None,
                             "cultural_background": None,
                             "primary_language": "English",
@@ -335,7 +326,7 @@ def mock_llm_service_natural_flow():
                 {
                     "basic_info": {
                         "alias": "Guest",
-                        "date_of_birth": None,
+                        "data_of_birth": None,
                         "gender": None,
                         "cultural_background": None,
                         "primary_language": "English",
@@ -441,8 +432,8 @@ async def test_server(
     """
     Start a test server with the appropriate LLM service (real or mock).
     """
-    from container.service_container import ServiceContainer
-    from trio_server import TrioServer
+    from psychoanalyst_app.container.service_container import ServiceContainer
+    from psychoanalyst_app.trio_server import TrioServer
 
     # Create service container
     container = ServiceContainer(test_settings)

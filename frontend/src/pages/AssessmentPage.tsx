@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Grid,
   Card,
@@ -11,6 +11,7 @@ import {
   Alert,
   Divider
 } from '@mui/material';
+import { useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '../components/shared';
 import { TherapySession } from '../components/TherapySession';
 import { useCurrentUserId } from '../contexts/AppContext';
@@ -22,9 +23,10 @@ import { ApiRequestError } from '../services/apiClient';
 type AssessmentMode = 'chat' | 'selection';
 
 interface StyleRecommendation {
-  style: TherapyStyle;
+  style: string;
   reason: string;
   description: string;
+  score?: number;
 }
 
 /**
@@ -36,42 +38,33 @@ interface StyleRecommendation {
 export function AssessmentPage() {
   const userId = useCurrentUserId();
   const { data: user } = useUserProfile(userId || '');
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const location = useLocation();
   const [mode, setMode] = useState<AssessmentMode>('chat');
   const [recommendations, setRecommendations] = useState<StyleRecommendation[]>([]);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Listen for assessment completion (custom event from backend WebSocket)
-  useEffect(() => {
-    const handleAssessmentComplete = (event: CustomEvent) => {
-      const { recommended_styles } = event.detail;
-
-      // Transform backend recommendations to UI format
-      const styleRecommendations: StyleRecommendation[] = recommended_styles.map(
-        (rec: { style: TherapyStyle; reason: string }) => ({
-          style: rec.style,
-          reason: rec.reason,
-          description: getStyleDescription(rec.style)
-        })
-      );
+  const handleRecommendations = useCallback(
+    (payload: {
+      recommendations?: Array<{ style_id: string; explanation: string; score?: number }>;
+    }) => {
+      const styleRecommendations =
+        payload.recommendations?.map((rec) => ({
+          style: rec.style_id,
+          reason: rec.explanation,
+          description: getStyleDescription(rec.style_id),
+          score: rec.score
+        })) || [];
 
       setRecommendations(styleRecommendations);
       setMode('selection');
-    };
+      setError(null);
+    },
+    []
+  );
 
-    window.addEventListener(
-      'assessment-complete',
-      handleAssessmentComplete as EventListener
-    );
-    return () =>
-      window.removeEventListener(
-        'assessment-complete',
-        handleAssessmentComplete as EventListener
-      );
-  }, []);
-
-  const handleStyleSelect = async (style: TherapyStyle) => {
+  const handleStyleSelect = async (style: string) => {
     if (!user) return;
 
     setIsCreatingPlan(true);
@@ -79,13 +72,13 @@ export function AssessmentPage() {
 
     try {
       await api.therapy.createPlan({
-        user_id: user.id,
-        therapy_style: style
+        user_id: user.user_id,
+        therapy_style: style.toLowerCase() as TherapyStyle
       });
 
-      // Navigate to dashboard
-      // (Backend handles status update via workflow state machine)
-      navigate('/dashboard');
+      await queryClient.invalidateQueries({
+        queryKey: ['workflow', 'next-action', user.user_id, location.pathname]
+      });
     } catch (err) {
       if (err instanceof ApiRequestError) {
         const errorMessage = err.body?.detail || err.body?.message || err.statusText;
@@ -106,7 +99,10 @@ export function AssessmentPage() {
         subtitle="Let's explore which therapeutic approach suits you best"
         maxWidth="lg"
       >
-        <TherapySession />
+        <TherapySession
+          sessionType="assessment"
+          onAssessmentRecommendations={handleRecommendations}
+        />
       </PageContainer>
     );
   }
@@ -173,7 +169,8 @@ export function AssessmentPage() {
 }
 
 // Helper functions
-function getStyleDescription(style: TherapyStyle): string {
+function getStyleDescription(style: string): string {
+  const normalized = style.toLowerCase() as TherapyStyle;
   const descriptions = {
     [TherapyStyle.FREUD]:
       'Psychoanalytic approach focusing on unconscious processes, childhood experiences, and dream analysis.',
@@ -182,7 +179,7 @@ function getStyleDescription(style: TherapyStyle): string {
     [TherapyStyle.CBT]:
       'Cognitive Behavioral Therapy focusing on identifying and changing negative thought patterns.'
   };
-  return descriptions[style] || 'A personalized therapeutic approach.';
+  return descriptions[normalized] || 'A personalized therapeutic approach.';
 }
 
 function capitalizeStyle(style: string): string {

@@ -2,8 +2,8 @@
 
 import pytest
 
-from config import Settings
-from container.service_container import ServiceContainer
+from psychoanalyst_app.config import Settings
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 
 def _clear_agent_model_env(monkeypatch):
@@ -23,32 +23,32 @@ def _clear_agent_model_env(monkeypatch):
 def test_agent_specific_models_from_config(monkeypatch):
     """Test that agents get correct model configurations from env vars."""
     _clear_agent_model_env(monkeypatch)
-    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
-    monkeypatch.setenv("INTAKE_MODEL", "gemini-pro")
-    monkeypatch.setenv("PSYCHOANALYST_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("MODEL_NAME", "default-model")
+    monkeypatch.setenv("INTAKE_MODEL", "intake-model")
+    monkeypatch.setenv("PSYCHOANALYST_MODEL", "psychoanalyst-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
 
-    container = ServiceContainer()
+    container = ServiceContainer(Settings())
 
     # Test intake agent gets specific model
     intake_service = container.get("llm_service_intake")
-    assert intake_service.model_name == "gemini-pro"
+    assert intake_service.model_name == "intake-model"
 
     # Test psychoanalyst agent gets specific model
     psychoanalyst_service = container.get("llm_service_psychoanalyst")
-    assert psychoanalyst_service.model_name == "gemini-2.5-pro"
+    assert psychoanalyst_service.model_name == "psychoanalyst-model"
 
 
 def test_fallback_to_default_model(monkeypatch):
     """Test that missing agent models fall back to MODEL_NAME."""
     _clear_agent_model_env(monkeypatch)
-    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
+    monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
     # Don't set INTAKE_MODEL - should fall back to MODEL_NAME
 
-    container = ServiceContainer()
+    container = ServiceContainer(Settings())
     intake_service = container.get("llm_service_intake")
-    assert intake_service.model_name == "gemini-2.5-flash"
+    assert intake_service.model_name == "default-model"
 
 
 def test_all_agent_models_configurable(monkeypatch):
@@ -63,7 +63,7 @@ def test_all_agent_models_configurable(monkeypatch):
     monkeypatch.setenv("PLANNING_MODEL", "planning-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
 
-    container = ServiceContainer()
+    container = ServiceContainer(Settings())
 
     assert container.get("llm_service_intake").model_name == "intake-model"
     assert container.get("llm_service_assessment").model_name == "assessment-model"
@@ -78,7 +78,7 @@ def test_all_agent_models_configurable(monkeypatch):
 def test_config_class_fields(monkeypatch):
     """Test that Settings class properly loads agent model fields."""
     _clear_agent_model_env(monkeypatch)
-    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
+    monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "test-intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "test-assessment-model")
 
@@ -93,16 +93,16 @@ def test_config_class_fields(monkeypatch):
 def test_default_llm_service_unchanged(monkeypatch):
     """Test that default llm_service still uses MODEL_NAME."""
     _clear_agent_model_env(monkeypatch)
-    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
-    monkeypatch.setenv("INTAKE_MODEL", "gemini-pro")
+    monkeypatch.setenv("MODEL_NAME", "default-model")
+    monkeypatch.setenv("INTAKE_MODEL", "intake-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
 
-    container = ServiceContainer()
+    container = ServiceContainer(Settings())
 
     # Default service should still use MODEL_NAME
     default_service = container.get("llm_service")
-    assert default_service.model_name == "gemini-2.5-flash"
+    assert default_service.model_name == "default-model"
 
     # Agent-specific service should use INTAKE_MODEL
     intake_service = container.get("llm_service_intake")
-    assert intake_service.model_name == "gemini-pro"
+    assert intake_service.model_name == "intake-model"

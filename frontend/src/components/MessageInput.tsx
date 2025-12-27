@@ -5,6 +5,8 @@ import {
   IconButton,
   Paper,
   CircularProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import MicIcon from '@mui/icons-material/Mic';
@@ -26,6 +28,7 @@ export function MessageInput({
   onTypingChange,
 }: MessageInputProps) {
   const [message, setMessage] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
   const textFieldRef = useRef<HTMLInputElement>(null);
 
   const handleSend = () => {
@@ -43,13 +46,11 @@ export function MessageInput({
   };
 
   const handleVoiceInput = () => {
-    // TODO: Implement voice input functionality
-    console.log('Voice input not yet implemented');
+    setNotice('Voice input is not supported in this build.');
   };
 
   const handleFileAttach = () => {
-    // TODO: Implement file attachment functionality
-    console.log('File attachment not yet implemented');
+    setNotice('File attachments are not supported in this build.');
   };
 
   return (
@@ -134,6 +135,17 @@ export function MessageInput({
           </span>
         </Box>
       )}
+
+      <Snackbar
+        open={Boolean(notice)}
+        autoHideDuration={4000}
+        onClose={() => setNotice(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="info" onClose={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 }

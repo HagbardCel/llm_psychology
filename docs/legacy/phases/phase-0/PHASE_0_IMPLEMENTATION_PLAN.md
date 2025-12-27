@@ -626,7 +626,7 @@ describe('WebSocketService', () => {
 ### Manual Verification
 
 #### Prerequisites
-1. **Backend Running:** `cd /app && python src/trio_server.py`
+1. **Backend Running:** `cd /app && python -m psychoanalyst_app.server`
 2. **Frontend Running:** `cd /app/frontend && npm run dev`
 
 #### Test Steps

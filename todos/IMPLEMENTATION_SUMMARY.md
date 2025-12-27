@@ -130,7 +130,7 @@ make -f todos/Makefile.web web-stop   # Stop all
 - **Auto-restart**: Services recover from failures
 
 ### 4. **Dual Interface Support**
-- **Terminal preserved**: `python src/main.py` still works
+- **Terminal preserved**: `python -m psychoanalyst_app` still works
 - **Shared data**: Same database across interfaces
 - **Seamless switching**: Users can move between interfaces
 

@@ -207,7 +207,6 @@ The following documentation files must be updated to reflect the multi-model con
 - [ ] **[.env.example]** - Add commented examples for agent-specific model configuration
 - [ ] **[docs/README.md](file:///app/docs/README.md)** - Add section on multi-model configuration in "Configuration" section
 - [ ] **[docs/TECH_STACK.md](file:///app/docs/TECH_STACK.md)** - Document multi-model support under "LLM Integration"
-- [ ] **[CLAUDE.md](file:///app/CLAUDE.md)** - Add agent-specific model configuration to "Configuration" section
 
 ### .env.example Content
 
@@ -266,15 +265,4 @@ The application supports configuring different Gemini models for different agent
 - Each agent can use a dedicated model via environment variables
 - Falls back to `MODEL_NAME` if agent-specific model is not configured
 - Enables cost optimization by using cheaper models for simpler tasks
-```
-
-**For CLAUDE.md** - Add to "Configuration" section:
-
-```markdown
-### Multi-Model Configuration (Optional)
-
-Configure different LLM models for different agents via environment variables:
-- `INTAKE_MODEL`, `ASSESSMENT_MODEL`, `PSYCHOANALYST_MODEL`, etc.
-- See `.env.example` for recommended configurations
-- Defaults to `MODEL_NAME` if not specified
 ```

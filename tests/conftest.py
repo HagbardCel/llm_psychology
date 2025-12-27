@@ -1,8 +1,8 @@
 import os
-import sys
 from unittest.mock import Mock
 
 import pytest
+from datetime import datetime
 
 # NOTE: Do not import app modules at top-level unless needed for fixtures.
 # This file is imported by pytest during collection.
@@ -16,13 +16,8 @@ def _get_free_tcp_port(host: str = "127.0.0.1") -> int:
         return sock.getsockname()[1]
 
 
-# Add the src and scripts directories to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-
-# Import after path manipulation
-from context.user_context import UserContext
-from models.data_models import Message, Session, TherapyPlan, UserProfile
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan, UserProfile
 
 # Note: DatabaseService and db_service fixture removed (obsolete asyncio version)
 # Trio tests use trio_db_service fixture instead (see app_config fixture below)
@@ -39,7 +34,7 @@ def mock_google_api_key(monkeypatch, request):
 
     monkeypatch.setenv("GOOGLE_API_KEY", "test_mock_api_key_for_testing")
     # Also set other optional env vars that might be checked
-    monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
+    monkeypatch.setenv("MODEL_NAME", "test-model")
     monkeypatch.setenv("DATABASE_PATH", ":memory:")
     return "test_mock_api_key_for_testing"
 
@@ -95,7 +90,7 @@ def mock_llm_service():
             return {
                 "basic_info": {
                     "alias": alias,
-                    "date_of_birth": None,
+                    "data_of_birth": None,
                     "gender": None,
                     "cultural_background": None,
                     "primary_language": "English",
@@ -270,7 +265,7 @@ def sample_user_profile():
     return UserProfile(
         user_id="test_user_123",
         name="Test User",
-        birthdate="1990-01-01",
+        data_of_birth=datetime(1990, 1, 1),
         profession="Software Engineer",
         created_at="2024-01-01T00:00:00",
         updated_at="2024-01-01T00:00:00",
@@ -377,20 +372,15 @@ def user_context():
 @pytest.fixture
 def test_config():
     """Create test configuration."""
-    from config import settings
+    from psychoanalyst_app.config import Settings
 
-    # We can't easily modify the global settings object safely for tests
-    # without side effects. But for now we'll just return the settings
-    # object as is, assuming it's configured correctly or we'd need a way
-    # to override it. For backward compatibility with tests expecting a
-    # Config object with attributes:
-    return settings
+    return Settings()
 
 
 @pytest.fixture
 def app_config(tmp_path):
     """Create test configuration for Trio tests (alias for test_config)."""
-    from config import settings
+    from psychoanalyst_app.config import Settings
 
     # Use temporary file for test database (in-memory doesn't work well
     # with Trio's threading)
@@ -402,6 +392,7 @@ def app_config(tmp_path):
     # However, the ServiceContainer takes a config object.
 
     # Create a mock or modified copy
+    settings = Settings()
     mock_settings = settings.model_copy(
         update={
             "DATABASE_PATH": test_db_path,
@@ -414,11 +405,11 @@ def app_config(tmp_path):
 @pytest.fixture
 async def trio_db_service(app_config):
     """Create a TrioDatabaseService with in-memory database for testing."""
-    from services.migration_service import MigrationService
-    from services.trio_db_service import TrioDatabaseService
+    from psychoanalyst_app.services.migration_service import MigrationService
+    from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
     # Use shared cache from config so tables persist across connections
-    migration_service = MigrationService(app_config)
+    migration_service = MigrationService(app_config.DATABASE_PATH)
     db = TrioDatabaseService(app_config.DATABASE_PATH, migration_service)
     await db.initialize()
 
@@ -431,7 +422,7 @@ async def trio_db_service(app_config):
 @pytest.fixture
 async def mock_service_container(app_config, mock_llm_service, mock_rag_service):
     """Create a ServiceContainer with mocked LLM and RAG services for Trio tests."""
-    from container.service_container import ServiceContainer
+    from psychoanalyst_app.container.service_container import ServiceContainer
 
     container = ServiceContainer(app_config)
 
@@ -452,20 +443,19 @@ async def mock_service_container(app_config, mock_llm_service, mock_rag_service)
 @pytest.fixture
 def test_server_config(tmp_path):
     """Create test server configuration."""
-    from config import settings
+    from psychoanalyst_app.config import Settings
 
     # Use temporary database
     test_db_path = str(tmp_path / "test_server.db")
 
+    settings = Settings()
     return settings.model_copy(
         update={
             "DATABASE_PATH": test_db_path,
-            "REQUIRE_AUTHENTICATION": False,  # Disable auth for most integration tests
-            "JWT_SECRET_KEY": "test_secret_key_for_integration_tests",
             "CORS_ALLOWED_ORIGINS": [
                 "http://localhost",
                 "http://127.0.0.1",
-            ],  # Specific origins for auth support
+            ],
         }
     )
 
@@ -482,9 +472,8 @@ async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_s
     """
     import trio
 
-    from config import settings
-    from container.service_container import ServiceContainer
-    from trio_server import TrioServer
+    from psychoanalyst_app.container.service_container import ServiceContainer
+    from psychoanalyst_app.trio_server import TrioServer
 
     # Create service container with mocked services
     container = ServiceContainer(test_server_config)
@@ -572,3 +561,9 @@ def pytest_collection_modifyitems(config, items):
         if "/tests/integration/" in path:
             if not _has_marker(item, "unit") and not _has_marker(item, "integration"):
                 item.add_marker(pytest.mark.integration)
+
+    if not config.getoption("--no-mocks"):
+        skip_reason = "Real LLM tests require --no-mocks to hit live services."
+        for item in items:
+            if item.get_closest_marker("real_llm"):
+                item.add_marker(pytest.mark.skip(reason=skip_reason))

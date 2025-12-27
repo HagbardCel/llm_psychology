@@ -1,0 +1,516 @@
+"""
+TrioPlanningAgent: Trio-native specialized agent for therapy plan creation and adjustment.
+
+This agent is responsible for:
+- Creating initial therapy plans based on intake sessions
+- Updating therapy plans based on session progress
+- Integrating memory insights into planning decisions
+- Managing therapy style-specific planning approaches
+- Tracking plan evolution and effectiveness
+
+Pure Trio implementation using structured concurrency.
+"""
+
+import logging
+import uuid
+from datetime import datetime
+from typing import Any
+
+import trio
+
+from psychoanalyst_app.agents.planning.analysis import (
+    assess_update_necessity,
+    calculate_effectiveness_score,
+    create_planning_strategy,
+    generate_effectiveness_assessment,
+    generate_update_rationale,
+    identify_plan_changes,
+    prioritize_recommendations,
+    recommend_goal_adjustments,
+    recommend_technique_adjustments,
+    recommend_theme_adjustments,
+    recommend_therapy_style,
+)
+from psychoanalyst_app.agents.planning.formatting import extract_session_text, split_bullets
+from psychoanalyst_app.agents.planning.models import PlanEvolution, PlanningStrategy
+from psychoanalyst_app.agents.planning.extractors import (
+    generate_initial_plan_details,
+    generate_updated_plan_details,
+    get_relevant_knowledge,
+)
+from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.exceptions import PlanningError
+from psychoanalyst_app.models.data_models import Session, TherapyPlan
+from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.rag_service import RAGService
+from psychoanalyst_app.services.style_service import StyleService
+from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+logger = logging.getLogger(__name__)
+
+
+class TrioPlanningAgent:
+    """
+    Trio-native agent specialized in therapy plan creation and strategic adjustments.
+
+    This agent creates comprehensive therapy plans by:
+    - Analyzing intake sessions and user context
+    - Integrating memory insights and patterns
+    - Applying therapy style-specific approaches
+    - Tracking plan effectiveness and evolution
+    - Making data-driven plan adjustments
+
+    Uses Trio's structured concurrency for all async operations.
+    """
+
+    def __init__(
+        self,
+        llm_service: LLMService,
+        db_service: TrioDatabaseService,
+        rag_service: RAGService,
+        user_context: UserContext,
+        memory_agent: TrioMemoryAgent,
+        style_service: StyleService | None = None,
+    ):
+        """
+        Initialize the Trio Planning Agent.
+
+        Args:
+            llm_service: LLM service for plan generation (synchronous)
+            db_service: Trio database service for plan storage
+            rag_service: RAG service for domain knowledge (synchronous)
+            user_context: User context for this planning session
+            memory_agent: Trio memory agent for therapeutic context
+        """
+        self.llm_service = llm_service
+        self.db_service = db_service
+        self.rag_service = rag_service
+        self.user_context = user_context
+        self.memory_agent = memory_agent
+        if style_service is None:
+            raise ValueError("style_service is required")
+        self.style_service = style_service
+
+        # Planning state
+        self.current_strategy: PlanningStrategy | None = None
+        self.plan_evolution: list[PlanEvolution] = []
+
+        logger.info(f"TrioPlanningAgent initialized for user {user_context.user_id}")
+
+    async def create_initial_plan(
+        self, intake_session: Session, selected_style: str | None = None
+    ) -> TherapyPlan:
+        """
+        Create comprehensive initial therapy plan using Trio.
+
+        This operation is shielded from cancellation to ensure data integrity.
+        Even if the client disconnects, the plan creation will complete and
+        be saved to the database.
+
+        Args:
+            intake_session: The completed intake session
+            selected_style: Optional therapy style preference
+
+        Returns:
+            TherapyPlan: The created initial therapy plan
+
+        Raises:
+            PlanningError: If plan creation fails
+        """
+        logger.info(f"Creating initial therapy plan for {self.user_context.user_id}")
+
+        try:
+            # Shield entire plan creation from cancellation for data integrity
+            with trio.CancelScope(shield=True):
+                logger.debug(
+                    "TrioPlanningAgent.create_initial_plan started (shielded)"
+                )
+                # Analyze intake session with memory agent
+                session_context = await self.memory_agent.analyze_session_context(
+                    intake_session
+                )
+                logger.debug("TrioPlanningAgent analyzed session context")
+
+                # Get relevant domain knowledge (run in thread)
+                session_text = extract_session_text(intake_session)
+                relevant_knowledge = await get_relevant_knowledge(
+                    self.rag_service,
+                    self.style_service,
+                    session_text,
+                    selected_style,
+                )
+                logger.debug("TrioPlanningAgent got relevant knowledge")
+
+                # Determine therapy style if not specified
+                if not selected_style:
+                    selected_style = recommend_therapy_style(
+                        session_context, relevant_knowledge
+                    )
+
+                # Create planning strategy
+                strategy = create_planning_strategy(
+                    self.style_service, selected_style, session_context
+                )
+                self.current_strategy = strategy
+
+                # Generate plan using LLM (run in thread)
+                logger.debug("TrioPlanningAgent generating plan details via LLM")
+                plan_details = await generate_initial_plan_details(
+                    self.llm_service,
+                    self.style_service,
+                    intake_session,
+                    session_context,
+                    strategy,
+                    relevant_knowledge,
+                )
+                logger.debug("TrioPlanningAgent generated plan details")
+
+                # Create therapy plan object
+                plan_id = str(uuid.uuid4())
+                initial_goals = split_bullets(plan_details.get("goals", ""))
+                if not initial_goals:
+                    raise PlanningError("Failed to derive initial goals for TherapyPlan")
+                planned_interventions = split_bullets(
+                    plan_details.get("techniques", "")
+                )
+                if not planned_interventions:
+                    planned_interventions = ["Supportive listening"]
+
+                therapy_plan = TherapyPlan(
+                    plan_id=plan_id,
+                    user_id=self.user_context.user_id,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                    plan_details=plan_details,
+                    initial_goals=initial_goals,
+                    current_progress="Baseline established",
+                    planned_interventions=planned_interventions,
+                    status="active",
+                    version=1,
+                    selected_therapy_style=selected_style,
+                )
+
+                # Save plan to database
+                success = await self.db_service.save_therapy_plan(therapy_plan)
+                if not success:
+                    raise PlanningError("Failed to save therapy plan to database")
+
+                # Record plan creation
+                evolution = PlanEvolution(
+                    plan_id=plan_id,
+                    version=1,
+                    changes=["initial_plan_created"],
+                    rationale="Initial therapy plan based on intake session analysis",
+                )
+                self.plan_evolution.append(evolution)
+
+                logger.info(f"Initial therapy plan created: {plan_id}")
+                logger.debug("TrioPlanningAgent plan created %s", plan_id)
+                return therapy_plan
+
+        except Exception as e:
+            logger.error(f"Failed to create initial therapy plan: {e}", exc_info=True)
+            raise PlanningError(f"Initial plan creation failed: {e}")
+
+    async def update_plan(
+        self, session: Session, current_plan: TherapyPlan, force_update: bool = False
+    ) -> TherapyPlan:
+        """
+        Update therapy plan based on session progress and memory insights using Trio.
+
+        Args:
+            session: The completed therapy session
+            current_plan: The current therapy plan
+            force_update: Whether to force an update regardless of assessment
+
+        Returns:
+            TherapyPlan: The updated therapy plan
+
+        Raises:
+            PlanningError: If plan update fails
+        """
+        logger.info(f"Updating therapy plan {current_plan.plan_id}")
+
+        try:
+            # Analyze current session
+            session_context = await self.memory_agent.analyze_session_context(session)
+
+            # Get therapeutic memory for pattern analysis
+            memory = await self.memory_agent.get_therapeutic_memory()
+
+            # Assess if plan update is needed
+            update_needed = force_update or assess_update_necessity(
+                session_context, memory, current_plan
+            )
+
+            if not update_needed:
+                logger.info("No plan update needed based on current assessment")
+                return current_plan
+
+            # Get relevant knowledge for update (run in thread)
+            session_text = extract_session_text(session)
+            relevant_knowledge = await get_relevant_knowledge(
+                self.rag_service,
+                self.style_service,
+                session_text,
+                current_plan.selected_therapy_style,
+            )
+
+            # Generate updated plan details (run in thread)
+            updated_details = await generate_updated_plan_details(
+                self.llm_service,
+                self.style_service,
+                self.memory_agent,
+                session,
+                session_context,
+                memory,
+                current_plan,
+                relevant_knowledge,
+            )
+
+            # Identify specific changes made
+            changes = identify_plan_changes(
+                current_plan.plan_details, updated_details
+            )
+
+            # Create updated therapy plan
+            new_plan_id = str(uuid.uuid4())
+            updated_plan = TherapyPlan(
+                plan_id=new_plan_id,
+                user_id=self.user_context.user_id,
+                created_at=current_plan.created_at,
+                updated_at=datetime.now(),
+                plan_details=updated_details,
+                initial_goals=current_plan.initial_goals,
+                current_progress=current_plan.current_progress,
+                planned_interventions=current_plan.planned_interventions,
+                status=current_plan.status,
+                version=current_plan.version + 1,
+                selected_therapy_style=current_plan.selected_therapy_style,
+                session_briefing=current_plan.session_briefing,
+            )
+
+            # Save updated plan
+            success = await self.db_service.save_therapy_plan(updated_plan)
+            if not success:
+                raise PlanningError("Failed to save updated therapy plan to database")
+
+            # Record plan evolution
+            evolution = PlanEvolution(
+                plan_id=new_plan_id,
+                version=updated_plan.version,
+                changes=changes,
+                rationale=generate_update_rationale(session_context, memory, changes),
+            )
+            self.plan_evolution.append(evolution)
+
+            logger.info(f"Therapy plan updated to version {updated_plan.version}")
+            return updated_plan
+
+        except Exception as e:
+            logger.error(f"Failed to update therapy plan: {e}", exc_info=True)
+            raise PlanningError(f"Plan update failed: {e}")
+
+    async def assess_plan_effectiveness(self, plan: TherapyPlan) -> dict[str, Any]:
+        """
+        Assess the effectiveness of a therapy plan based on progress indicators using Trio.
+
+        Args:
+            plan: The therapy plan to assess
+
+        Returns:
+            Dict containing effectiveness assessment
+        """
+        logger.debug(f"Assessing effectiveness of plan {plan.plan_id}")
+
+        try:
+            # Get therapeutic memory
+            memory = await self.memory_agent.get_therapeutic_memory()
+
+            # Get recent context for progress assessment
+            recent_context = await self.memory_agent.get_recent_context(num_sessions=3)
+
+            # Analyze patterns since plan creation
+            patterns = await self.memory_agent.identify_patterns()
+
+            # Calculate effectiveness metrics
+            effectiveness_score = calculate_effectiveness_score(
+                plan, memory, recent_context, patterns
+            )
+
+            # Identify strengths and areas for improvement
+            assessment = generate_effectiveness_assessment(
+                plan, memory, recent_context, effectiveness_score
+            )
+
+            return {
+                "plan_id": plan.plan_id,
+                "version": plan.version,
+                "effectiveness_score": effectiveness_score,
+                "strengths": assessment.get("strengths", []),
+                "improvement_areas": assessment.get("improvement_areas", []),
+                "recommendations": assessment.get("recommendations", []),
+                "progress_indicators": recent_context.get("insights", []),
+                "assessment_timestamp": datetime.now().isoformat(),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to assess plan effectiveness: {e}", exc_info=True)
+            return {
+                "plan_id": plan.plan_id,
+                "version": plan.version,
+                "effectiveness_score": 0.5,  # Neutral score
+                "error": str(e),
+                "assessment_timestamp": datetime.now().isoformat(),
+            }
+
+    async def recommend_plan_adjustments(
+        self, plan: TherapyPlan
+    ) -> list[dict[str, Any]]:
+        """
+        Recommend specific adjustments to improve therapy plan effectiveness using Trio.
+
+        Args:
+            plan: The therapy plan to analyze
+
+        Returns:
+            List of recommended adjustments
+        """
+        logger.debug(f"Generating recommendations for plan {plan.plan_id}")
+
+        try:
+            # Assess current effectiveness
+            effectiveness = await self.assess_plan_effectiveness(plan)
+
+            # Get therapeutic memory and patterns
+            memory = await self.memory_agent.get_therapeutic_memory()
+            patterns = await self.memory_agent.identify_patterns()
+
+            # Generate specific recommendations
+            recommendations = []
+
+            # Analyze theme focus alignment
+            theme_recommendations = recommend_theme_adjustments(plan, patterns)
+            recommendations.extend(theme_recommendations)
+
+            # Analyze technique effectiveness
+            technique_recommendations = recommend_technique_adjustments(plan, memory)
+            recommendations.extend(technique_recommendations)
+
+            # Analyze goal progression
+            goal_recommendations = recommend_goal_adjustments(plan, effectiveness)
+            recommendations.extend(goal_recommendations)
+
+            # Prioritize recommendations
+            prioritized_recommendations = prioritize_recommendations(recommendations)
+
+            logger.info(f"Generated {len(prioritized_recommendations)} recommendations")
+            return prioritized_recommendations
+
+        except Exception as e:
+            logger.error(f"Failed to generate recommendations: {e}", exc_info=True)
+            return []
+
+    def get_plan_evolution_summary(self) -> dict[str, Any]:
+        """
+        Get summary of therapy plan evolution over time.
+
+        Returns:
+            Dict containing evolution summary
+        """
+        if not self.plan_evolution:
+            return {
+                "total_versions": 0,
+                "evolution_timeline": [],
+                "common_changes": [],
+                "effectiveness_trend": "unknown",
+            }
+
+        # Analyze evolution patterns
+        all_changes = []
+        effectiveness_scores = []
+
+        for evolution in self.plan_evolution:
+            all_changes.extend(evolution.changes)
+            if evolution.effectiveness_score > 0:
+                effectiveness_scores.append(evolution.effectiveness_score)
+
+        # Calculate trend
+        effectiveness_trend = "stable"
+        if len(effectiveness_scores) >= 2:
+            if effectiveness_scores[-1] > effectiveness_scores[0]:
+                effectiveness_trend = "improving"
+            elif effectiveness_scores[-1] < effectiveness_scores[0]:
+                effectiveness_trend = "declining"
+
+        # Count common changes
+        change_counts = {}
+        for change in all_changes:
+            change_counts[change] = change_counts.get(change, 0) + 1
+
+        common_changes = sorted(
+            change_counts.items(), key=lambda x: x[1], reverse=True
+        )[:5]
+
+        return {
+            "total_versions": len(self.plan_evolution),
+            "evolution_timeline": [
+                {
+                    "version": evo.version,
+                    "changes": evo.changes,
+                    "rationale": evo.rationale,
+                    "timestamp": evo.timestamp.isoformat(),
+                }
+                for evo in self.plan_evolution
+            ],
+            "common_changes": [change for change, count in common_changes],
+            "effectiveness_trend": effectiveness_trend,
+            "current_strategy": {
+                "therapy_style": (
+                    self.current_strategy.therapy_style
+                    if self.current_strategy
+                    else None
+                ),
+                "focus_areas": (
+                    self.current_strategy.focus_areas if self.current_strategy else []
+                ),
+            },
+        }
+
+    async def health_check(self) -> bool:
+        """
+        Perform health check on the planning agent using Trio.
+
+        Returns:
+            bool: True if healthy, False otherwise
+        """
+        try:
+            # Test memory agent connectivity
+            if not await self.memory_agent.health_check():
+                return False
+
+            # Test database connectivity
+            plans = await self.db_service.get_latest_therapy_plan(
+                self.user_context.user_id
+            )
+
+            # Test LLM service (run in thread)
+            test_prompt = "Respond with 'OK' if you can process this request."
+            response = await trio.to_thread.run_sync(
+                self.llm_service.generate_response, test_prompt
+            )
+            return "OK" in response or "ok" in response.lower()
+
+        except Exception as e:
+            logger.error(f"TrioPlanningAgent health check failed: {e}")
+            return False
+
+    def __str__(self) -> str:
+        """String representation of planning agent."""
+        return f"TrioPlanningAgent(user={self.user_context.user_id}, style={self.current_strategy.therapy_style if self.current_strategy else 'none'})"
+
+    def __repr__(self) -> str:
+        """Detailed representation of planning agent."""
+        evolution_count = len(self.plan_evolution)
+        return f"TrioPlanningAgent(user='{self.user_context.user_id}', evolutions={evolution_count})"

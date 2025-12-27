@@ -58,11 +58,18 @@ describe('SessionHistoryPage', () => {
     mockUseSessionHistory.mockReturnValue({
       data: [
         {
-          id: 'session-1',
-          userId: 'test-user-id',
-          transcript: [{ role: 'user', content: 'Hi', timestamp: new Date() }],
+          session_id: 'session-1',
+          user_id: 'test-user-id',
+          timestamp: '2024-01-01T00:00:00Z',
+          transcript: [{ role: 'user', content: 'Hi', timestamp: '2024-01-01T00:00:00Z' }],
           topics: [],
-          startTime: new Date(),
+          psychological_summary: null,
+          dominant_affects: [],
+          key_themes: [],
+          notable_interactions: null,
+          interpretations: null,
+          patient_reactions: null,
+          enriched: false,
         },
       ],
       isLoading: false,

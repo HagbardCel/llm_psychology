@@ -2,13 +2,59 @@
 requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "psychoanalyst-app"
+version = "0.1.0"
+description = "Virtual LLM-driven psychoanalyst backend services"
+requires-python = ">=3.11"
+authors = [{ name = "Psychoanalyst Team" }]
+dependencies = [
+    "langchain==1.0.8",
+    "langchain-google-genai",
+    "langchain-community",
+    "faiss-cpu>=1.7.4",
+    "sentence-transformers[onnx]>=3.2.0",
+    "huggingface-hub",
+    "torchvision",
+    "torchaudio",
+    "python-dotenv",
+    "pydantic",
+    "pydantic-settings",
+    "typing-extensions==4.15.0",
+    "PyJWT>=2.8.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt==3.1.7",
+    "python-multipart>=0.0.6",
+    "trio",
+    "quart",
+    "hypercorn",
+    "trio-websocket",
+    "quart-trio",
+    "quart-cors",
+]
+
+[project.scripts]
+psychoanalyst-app = "psychoanalyst_app.__main__:cli"
+psychoanalyst-server = "psychoanalyst_app.server:cli"
+psychoanalyst-e2e-server = "psychoanalyst_app.e2e_server:cli"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"psychoanalyst_app" = ["styles/**/*", "prompts/**/*", "data/domain_knowledge/**/*"]
+
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py311']
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
@@ -22,7 +68,7 @@ select = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

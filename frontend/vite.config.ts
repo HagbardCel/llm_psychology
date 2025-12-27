@@ -49,6 +49,10 @@ function generateTypesPlugin() {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    __VITE_API_URL__: JSON.stringify(process.env.VITE_API_URL || ''),
+    __VITE_WS_URL__: JSON.stringify(process.env.VITE_WS_URL || ''),
+  },
   plugins: [
     generateTypesPlugin(),
     react(),

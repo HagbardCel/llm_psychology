@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
 FROM base AS dependencies
 
 # Copy requirements files
-COPY requirements.txt ./
+COPY requirements.txt pyproject.toml ./
 
 # Install production dependencies with UV, using the PyTorch CPU index as an additional source.
 # This ensures that torch, torchvision, and torchaudio are fetched as CPU-only builds.
@@ -37,21 +37,16 @@ FROM dependencies AS development
 COPY requirements-dev.txt ./
 RUN uv pip install --system -r requirements-dev.txt
 
-# Copy application source code
-COPY src/ ./src/
-
-# Copy scripts directory (needed for test_schema_generation.py)
-COPY scripts/ ./scripts/
-
-# Copy configuration files
+# Copy application source code and configuration
 COPY pyproject.toml pytest.ini ./
-
-# Copy tests and validation scripts
+COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY tests/ ./tests/
 COPY deployment_validation.py ./
-
-# Copy data directory
 COPY data/ ./data/
+
+# Install the backend package in editable mode for live reload
+RUN uv pip install --system -e .
 
 # Set environment for development
 ENV PYTHONUNBUFFERED=1 \
@@ -61,19 +56,20 @@ ENV PYTHONUNBUFFERED=1 \
 VOLUME /app/data
 
 # Command to run the application
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "psychoanalyst_app.server"]
 
 # ============================================
 # Production stage: Minimal final image
 # ============================================
 FROM dependencies AS production
 
-# Copy configuration files
+# Copy the application code and configuration
 COPY pyproject.toml ./
-
-# Copy the application code
 COPY src/ ./src/
 COPY data/ ./data/
+
+# Install the backend package
+RUN uv pip install --system .
 
 # Set environment for production
 ENV PYTHONUNBUFFERED=1 \
@@ -83,4 +79,4 @@ ENV PYTHONUNBUFFERED=1 \
 VOLUME /app/data
 
 # Command to run the application
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "psychoanalyst_app.server"]

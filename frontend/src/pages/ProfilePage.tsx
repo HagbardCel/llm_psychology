@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button, Alert, Snackbar, CircularProgress } from '@mui/material';
 import { PageContainer, FormField } from '../components/shared';
 import { useCurrentUserId } from '../contexts/AppContext';
-import { useUserProfile, useUpdateUserProfile } from '../hooks/useUserProfile';
+import { useCreateUserProfile, useUserProfile, useUpdateUserProfile } from '../hooks/useUserProfile';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
 
 /**
@@ -18,7 +18,9 @@ export function ProfilePage() {
   const { data: user, isLoading: userLoading } = useUserProfile(userId || '');
 
   // Mutation for updating profile
-  const { mutateAsync: updateProfile, isPending } = useUpdateUserProfile();
+  const { mutateAsync: createProfile, isPending: isCreating } = useCreateUserProfile();
+  const { mutateAsync: updateProfile, isPending: isUpdating } = useUpdateUserProfile();
+  const isPending = isCreating || isUpdating;
 
   // Get next action for navigation
   const { data: nextAction, refetch: refetchNextAction } = useWorkflowNextAction(
@@ -31,7 +33,7 @@ export function ProfilePage() {
 
   const [formData, setFormData] = useState({
     name: '',
-    birthdate: '',
+    data_of_birth: '',
     profession: ''
   });
 
@@ -40,7 +42,7 @@ export function ProfilePage() {
     if (user) {
       setFormData({
         name: user.name || '',
-        birthdate: user.birthdate || '',
+        data_of_birth: user.data_of_birth || '',
         profession: user.profession || ''
       });
     }
@@ -55,10 +57,10 @@ export function ProfilePage() {
       newErrors.name = 'Name is required';
     }
 
-    if (formData.birthdate) {
-      const date = new Date(formData.birthdate);
+    if (formData.data_of_birth) {
+      const date = new Date(formData.data_of_birth);
       if (isNaN(date.getTime())) {
-        newErrors.birthdate = 'Invalid date format';
+        newErrors.data_of_birth = 'Invalid date format';
       }
     }
 
@@ -76,10 +78,15 @@ export function ProfilePage() {
     setError(null);
 
     try {
-      await updateProfile({
+      const action = user ? updateProfile : createProfile;
+      const payload = {
         user_id: userId || `user_${Date.now()}`,
-        ...formData
-      });
+        name: formData.name.trim(),
+        data_of_birth: formData.data_of_birth || undefined,
+        profession: formData.profession || undefined,
+      };
+
+      await action(payload);
 
       setSuccess(true);
 
@@ -126,9 +133,9 @@ export function ProfilePage() {
         <FormField
           label="Birthdate"
           type="date"
-          value={formData.birthdate}
-          onChange={(value) => setFormData({ ...formData, birthdate: value })}
-          error={errors.birthdate}
+          value={formData.data_of_birth}
+          onChange={(value) => setFormData({ ...formData, data_of_birth: value })}
+          error={errors.data_of_birth}
           disabled={isPending}
           helperText="Optional - helps us personalize your experience"
         />

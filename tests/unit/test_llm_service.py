@@ -4,8 +4,8 @@ import pytest
 import trio
 import trio.testing
 
-from exceptions import LLMServiceError
-from services.llm_service import LLMService, TrioRateLimiter
+from psychoanalyst_app.exceptions import LLMServiceError
+from psychoanalyst_app.services.llm_service import LLMService, TrioRateLimiter
 
 
 class _FakeChatModel:
@@ -51,7 +51,7 @@ class _FakeChatModel:
 
 @pytest.fixture
 def fake_chat_model(monkeypatch) -> _FakeChatModel:
-    import services.llm_service as llm_module
+    import psychoanalyst_app.services.llm_service as llm_module
 
     fake = _FakeChatModel()
     monkeypatch.setattr(
@@ -119,21 +119,25 @@ def test_generate_response_wraps_exceptions(fake_chat_model):
 
 
 @pytest.mark.trio
-async def test_generate_response_stream_collects_non_empty_chunks(fake_chat_model, monkeypatch):
-    import services.llm_service as llm_module
-
-    async def _run_sync(fn, *args, **kwargs):
-        return fn(*args, **kwargs)
-
-    monkeypatch.setattr(llm_module.trio.to_thread, "run_sync", _run_sync)
-
+async def test_stream_response_yields_non_empty_chunks(fake_chat_model):
     service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
     fake_chat_model.stream_chunk_contents = ["a", "", "b"]
 
-    chunks = await service.generate_response_stream("Hello", context=None)
-    assert chunks == ["a", "b"]
+    chunks: list[str] = []
+    async for chunk in service.stream_response("Hello", context=None):
+        chunks.append(chunk)
 
+    assert chunks == ["a", "b"]
     assert len(fake_chat_model.stream_calls) == 1
+
+
+@pytest.mark.trio
+async def test_generate_response_stream_collects_chunks(fake_chat_model):
+    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    fake_chat_model.stream_chunk_contents = ["x", "y"]
+
+    chunks = await service.generate_response_stream("Hello", context=None)
+    assert chunks == ["x", "y"]
 
 
 def test_generate_structured_output_uses_with_structured_output(fake_chat_model):

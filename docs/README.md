@@ -20,7 +20,7 @@ The system has been completely redesigned with a clean architecture that separat
 - **Triple Interface Support**: Choose between standalone terminal, networked console, or modern React web interface
 - **Streaming Responses**: Real-time word-by-word responses for natural conversation flow
 - **Agent-Based Workflow**: Sequential therapeutic process (Intake → Assessment → Sessions → Reflection)
-- **RAG-Enhanced Responses**: Context-aware therapy using domain knowledge and ChromaDB vector storage
+- **RAG-Enhanced Responses**: Context-aware therapy using domain knowledge and FAISS vector storage
 - **Multiple Therapy Styles**: Freudian, Jungian, and CBT approaches with style-specific prompts
 - **Session Continuity**: Resume sessions across different interfaces with shared database
 - **WebSocket + REST API**: Real-time bidirectional communication with HTTP fallback
@@ -78,8 +78,10 @@ Backend Pydantic → JSON Schema → TypeScript Types → Frontend
 **Commands**:
 ```bash
 # Generate types
-make generate-schemas           # Backend: Pydantic → JSON Schema
-cd frontend && npm run generate:types  # Frontend: JSON Schema → TypeScript
+make generate-schemas           # Backend: Pydantic → JSON Schema (Docker)
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
+# Local alternative:
+# cd frontend && npm run generate:types  # Frontend: JSON Schema → TypeScript
 
 # Types auto-generate during:
 npm run dev    # Development
@@ -121,6 +123,23 @@ REFLECTION_MODEL=gemini-2.5-flash
 
 See [.env.example](.env.example) for complete configuration options.
 
+## 🐳 Docker-Only Workflow (Recommended)
+
+This repository supports Docker-first execution for development and testing.
+If you're in a Docker-only environment, use these commands:
+
+```bash
+make dev-install          # Build dev images
+make docker-up            # Start api + frontend + console-ui
+make test                 # Run backend tests in Docker
+make test-frontend        # Run frontend tests in Docker
+docker compose run --rm api python scripts/validate_schemas.py
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
+```
+
+Local Python/Node commands (for example, `python -m psychoanalyst_app`) are optional
+and intended for devcontainer or non-Docker setups.
+
 ## 🎨 Choosing Your Interface
 
 This application supports **three interface modes**, each optimized for different use cases:
@@ -137,13 +156,16 @@ This application supports **three interface modes**, each optimized for differen
 **How to run**:
 ```bash
 # Normal mode (45 min sessions, production database)
-python src/main.py
+make local-run
 # OR
 make ui-standalone
 
 # Usertest mode (10 min sessions, test database)
 make ui-standalone-test
 ```
+
+**Note**: This mode requires a local Python environment. In Docker-only setups,
+use `make ui-console` or `make ui-web` instead.
 
 ---
 
@@ -235,7 +257,8 @@ The launcher will guide you through:
 
 | What You Want | Command | Notes |
 |---------------|---------|-------|
-| Quick local test | `python src/main.py` | No Docker, fastest |
+| Quick Docker session | `make run` | Runs terminal UI in Docker |
+| Quick local session (opt-in) | `make local-run` | Requires local Python env |
 | Test WebSocket | `make ui-console` | Terminal with networking |
 | Use web interface | `make ui-web` | Browser-based |
 | Try everything | `make ui-all` | All UIs at once |
@@ -247,26 +270,24 @@ The launcher will guide you through:
 ## 🖥️ Standalone Terminal UI (Detailed)
 
 ### Quick Start
+> 💡 Packages are installed inside the Docker images. If you want to run backend modules directly on your machine (without a container), export `PYTHONPATH=src` first so Python can resolve `psychoanalyst_app` from the repo tree.
 ```bash
-cd /app
-python src/main.py
+make run
 ```
 
 ### Alternative Methods
 ```bash
-# Using Make
-make run
+# Using Docker Compose directly
+docker compose run --rm api python -m psychoanalyst_app
 
-# Using Docker Compose
-make docker-run
-# OR
-docker-compose run --rm app python src/main.py
+# Local (opt-in)
+make local-run
 ```
 
 ### Development Setup
 ```bash
-make dev-install    # Install development dependencies
-make sync          # Sync environment with requirements
+make dev-install    # Build api/console/frontend images (installs deps inside Docker)
+make sync          # Rebuild containers from locked requirements
 ```
 
 ## 🌐 Web Interface (React-Based)
@@ -329,19 +350,21 @@ docker-compose -f todos/docker-compose.web.yml up --build
 ### Web Architecture
 - **Frontend**: React 18 + TypeScript + Vite + Material-UI
 - **Features**: Progressive Web App (PWA), real-time WebSocket communication
-- **Backend**: FastAPI REST server + WebSocket server
+- **Backend**: Quart REST server + native WebSocket server
 - **Integration**: Shared SQLite database with terminal interface
 
 ## 🔧 Development Commands
 
 ### Code Quality
 ```bash
-make format         # Format code with black
-make lint           # Lint with ruff  
-make test           # Run all tests
-make test-unit      # Unit tests only
-make test-integration  # Integration tests only
+make format         # Format code with black (Docker)
+make lint           # Lint with ruff (Docker)
+make test           # Run all tests (Docker)
+make test-unit      # Unit tests only (Docker)
+make test-integration  # Integration tests only (Docker)
 ```
+Local equivalents are available via `make local-format`, `make local-lint`, and
+`make local-test*`.
 
 ### Dependency Management
 ```bash
@@ -356,30 +379,31 @@ The project provides multiple testing workflows for different purposes.
 
 ### Testing Philosophy: Hybrid Approach
 
-This project uses a **hybrid testing strategy** that balances speed and reliability:
+This project uses a **Docker-first testing strategy** with optional local/devcontainer
+shortcuts for faster iteration:
 
-1. **DevContainer Testing** (90% of tests) - Fast iteration during development
-2. **Docker Isolated Testing** (10% of tests) - Pre-commit validation and CI/CD
+1. **Docker Testing (default)** - Consistent, containerized execution
+2. **Local/DevContainer Testing (opt-in)** - Faster feedback when you have a local env
 
-### DevContainer Testing (Active Development)
+### Local/DevContainer Testing (Opt-In)
 
-**For daily development work:**
+**For daily development work with a local Python environment:**
 
 ```bash
-# Quick tests in devContainer (RECOMMENDED for development)
-make test-dev
+# Quick tests locally (RECOMMENDED for fast iteration)
+make local-test-dev
 
-# Run all tests
-make test
+# Run all tests locally
+make local-test
 
-# Run specific test types
-make test-unit          # Unit tests only
-make test-integration   # Integration tests only
+# Run specific test types locally
+make local-test-unit          # Unit tests only
+make local-test-integration   # Integration tests only
 
-# Run specific test file
+# Run specific test file locally
 pytest tests/unit/test_db_service.py -v
 
-# Run with coverage
+# Run with coverage locally
 pytest --cov=src --cov-report=html
 
 # Debug tests (use VSCode Test Explorer)
@@ -399,11 +423,11 @@ pytest --cov=src --cov-report=html
 **For validation before commits:**
 
 ```bash
+# Full test suite (Docker, default)
+make test
+
 # Full isolated test suite (recommended before committing)
 make test-validate
-
-# Or use the docker-test command directly
-make docker-test
 
 # Run specific test in Docker
 make docker-test-one TEST=tests/unit/test_db_service.py
@@ -442,7 +466,7 @@ When you want to manually test the application with test settings (shorter sessi
 **Option 1: Local execution with test environment**
 ```bash
 # Set up .env.usertest first (copy from .env.example and add your API key)
-APP_ENV=testing python src/main.py
+APP_ENV=testing make local-run
 ```
 
 **Option 2: Docker user-test mode (RECOMMENDED)**
@@ -461,7 +485,7 @@ make docker-usertest
 1. Copy your API key to `.env.usertest`:
    ```bash
    # Edit .env.usertest and set:
-   GEMINI_API_KEY=your_actual_api_key_here
+   GOOGLE_API_KEY=your_actual_api_key_here
    ```
 2. Adjust test settings if needed (session duration, logging, etc.)
 
@@ -479,12 +503,12 @@ make clean
 
 | Scenario | Command | Why |
 |----------|---------|-----|
-| **Active development (TDD, debugging)** | `make test-dev` | Instant feedback in devContainer |
-| **Run all tests locally** | `make test` | Full test suite in devContainer |
+| **Active development (TDD, debugging)** | `make local-test-dev` | Instant feedback in devContainer/local |
+| **Run all tests locally** | `make local-test` | Full test suite without Docker |
+| **Run all tests (Docker)** | `make test` | Default Docker test runner |
 | **Pre-commit validation** | `make test-validate` | Isolated Docker environment |
-| **CI/CD pipeline** | `make docker-test` | Same as test-validate |
 | **Manually test with shorter sessions** | `make docker-usertest` | Real app with test settings |
-| **Quick manual test without Docker** | `APP_ENV=testing python src/main.py` | Lightweight, fast startup |
+| **Quick manual test without Docker** | `make local-run` | Lightweight, fast startup |
 | **Install automated testing on commits** | `make install-hooks` | Set up pre-commit hooks |
 | **Clean test data** | `make clean-testdb` | Remove test databases |
 
@@ -497,7 +521,7 @@ make clean
 │                                                          │
 │  1. Write code in VSCode devContainer                   │
 │     ↓                                                    │
-│  2. Run tests in devContainer (make test-dev)           │
+│  2. Run tests locally (make local-test-dev)             │
 │     ↓                                                    │
 │  3. Debug failures with VSCode debugger                 │
 │     ↓                                                    │
@@ -550,7 +574,7 @@ tests/
 
 Both interfaces share the same SQLite database, enabling seamless switching:
 
-1. **Start session in CLI**: `python src/main.py`
+1. **Start session in CLI**: `make run` (Docker) or `make local-run`
 2. **Switch to web**: Access http://localhost:5173 (same user profile)
 3. **Resume conversations**: All session history maintained
 4. **Switch back to CLI**: Full continuity preserved
@@ -570,14 +594,16 @@ Style selection occurs during assessment phase and can be updated through reflec
 ```
 /app/
 ├── src/                        # Core application code
-│   ├── agents/                # Therapeutic agents (Intake, Assessment, etc.)
-│   ├── services/              # Service layer (DB, LLM, RAG, Style)
-│   ├── models/                # Pydantic data models
-│   ├── styles/                # Therapy style configs and prompts
-│   ├── ui/                    # User interface implementations
-│   ├── unified_server.py      # Unified HTTP + WebSocket server
-│   ├── server.py              # Server entry point
-│   └── main.py                # CLI application entry point
+│   └── psychoanalyst_app/      # Backend package
+│       ├── agents/             # Therapeutic agents (Intake, Assessment, etc.)
+│       ├── services/           # Service layer (DB, LLM, RAG, Style)
+│       ├── models/             # Pydantic data models
+│       ├── styles/             # Therapy style configs and prompts
+│       ├── ui/                 # User interface implementations
+│       ├── trio_server.py      # Unified HTTP + WebSocket server
+│       ├── server.py           # Server entry point
+│       ├── e2e_server.py       # Deterministic E2E server
+│       └── main.py             # CLI application entry point
 ├── frontend/                   # React web application
 │   ├── src/                   # React components and logic
 │   ├── Dockerfile             # Production frontend container
@@ -586,7 +612,7 @@ Style selection occurs during assessment phase and can be updated through reflec
 ├── tests/                      # Test suite (unit + integration)
 ├── data/                      # Runtime data directory
 │   ├── psychoanalyst.db       # SQLite database
-│   ├── vector_db/             # ChromaDB vector storage
+│   ├── vector_db/             # FAISS vector storage
 │   └── domain_knowledge/       # Therapeutic knowledge base
 ├── todos/                     # Web interface deployment configs
 │   ├── docker-compose.web*.yml
@@ -644,7 +670,7 @@ make docker-usertest
 
 ## 📈 Next Steps
 
-1. **First Run**: Start with CLI interface: `python src/main.py`
+1. **First Run**: Start with CLI interface: `make run` (Docker) or `make local-run`
 2. **Web Experience**: Launch web interface: `./todos/start-web-development.sh`
 3. **Explore Styles**: Try different therapeutic approaches during assessment
 4. **Integration Testing**: Switch between interfaces during active sessions
@@ -655,15 +681,19 @@ make docker-usertest
 Comprehensive documentation is available in the `docs/` directory:
 
 - **[Architecture Guide](docs/ARCHITECTURE.md)**: Deep dive into system design, orchestration layer, agents, and data flow
+- **[Design Principles](docs/design-principles.md)**: Project-level decisions and non-negotiable engineering patterns
+- **[Data Models](docs/data-models.md)**: Domain models, DTOs, and structured LLM outputs
 - **[Quick Start Guide](docs/QUICKSTART.md)**: Get up and running in minutes with step-by-step instructions
-- **[Development Guide](CLAUDE.md)**: Contributing, testing, and development workflows
-- **API Reference**: REST and WebSocket API documentation (see Architecture Guide)
+- **[User Journey](docs/user_journey.md)**: End-to-end workflow stages and agent responsibilities
+- **API Reference**: [HTTP Contract](docs/contracts/HTTP_API_CONTRACT.md) and [WebSocket Protocol](docs/WEBSOCKET_PROTOCOL.md)
 
 ### Key Topics
 
 - **Orchestration Architecture**: How the workflow engine, conversation manager, and agent orchestrator work together
 - **Streaming Responses**: Real-time LLM output delivery
 - **State Machine**: Workflow states and valid transitions
+- **User Flow**: Intake → Assessment → Therapy → Reflection lifecycle
+- **Data Models**: Core entities, DTOs, and schema/type generation
 - **RAG Integration**: How domain knowledge enhances therapy sessions
 - **Testing**: Comprehensive test suite with 1,900+ lines of tests
 - **Deployment**: Production setup and scaling considerations
@@ -672,7 +702,7 @@ Comprehensive documentation is available in the `docs/` directory:
 
 - **Health Checks**: http://localhost:8000/health
 - **Clean Reset**: `make -f todos/Makefile.web web-clean`
-- **Terminal Fallback**: `python src/main.py` always available
+- **Terminal Fallback**: `make local-run` (local) or `make run` (Docker)
 - **Logs**: `make -f todos/Makefile.web web-logs`
 
 ---

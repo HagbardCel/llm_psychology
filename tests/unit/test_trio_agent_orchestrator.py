@@ -3,16 +3,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.data_models import UserProfile, UserStatus
-from orchestration.models import AgentResponse, WorkflowState
-from orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
+from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
+from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
 
 
 @pytest.fixture
 def mock_dependencies():
+    workflow_engine = AsyncMock()
+    workflow_engine.get_user_state.return_value = WorkflowState.NEW
     return {
         "service_container": MagicMock(),
-        "workflow_engine": AsyncMock(),
+        "workflow_engine": workflow_engine,
         "conversation_manager": MagicMock(),
         "nursery": MagicMock(),
     }
@@ -39,7 +41,7 @@ async def test_handle_agent_response_await_selection(orchestrator, mock_dependen
     )
 
     # Execute the method (method signature requires user_id, session_id, agent_response)
-    await orchestrator._handle_agent_response("test_user", "test_session", response)
+    await orchestrator.response_handler.handle("test_user", "test_session", response)
 
     # Verify no transition was called
     mock_dependencies["workflow_engine"].transition.assert_not_called()
@@ -55,7 +57,7 @@ async def test_handle_agent_response_transition(orchestrator, mock_dependencies)
         metadata={},
     )
 
-    await orchestrator._handle_agent_response("test_user", "test_session", response)
+    await orchestrator.response_handler.handle("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_called_once_with(
         "test_user", WorkflowState.INTAKE_IN_PROGRESS
@@ -69,7 +71,7 @@ async def test_handle_agent_response_continue(orchestrator, mock_dependencies):
         content="Test content", next_action="continue", next_state=None, metadata={}
     )
 
-    await orchestrator._handle_agent_response("test_user", "test_session", response)
+    await orchestrator.response_handler.handle("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_not_called()
 
@@ -84,7 +86,7 @@ async def test_handle_agent_response_complete(orchestrator, mock_dependencies):
         metadata={"result": "success"},
     )
 
-    await orchestrator._handle_agent_response("test_user", "test_session", response)
+    await orchestrator.response_handler.handle("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_not_called()
 
@@ -182,7 +184,7 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
     mock_db_service.get_user_profile.return_value = profile
 
     # Mock existing plan
-    from models.data_models import TherapyPlan
+    from psychoanalyst_app.models.data_models import TherapyPlan
 
     existing_plan = TherapyPlan(
         plan_id="existing_plan_id",

@@ -10,7 +10,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from models.data_models import (
+from psychoanalyst_app.models.data_models import (
     AnalyticFrame,
     AnalyticOrientation,
     BasicPatientBackground,
@@ -22,12 +22,12 @@ from models.data_models import (
     Message,
     PatientAnalysis,
     PatientAnalysisVersion,
-    PatientProfile,
     RecurringNarrative,
     RelationalLifeContext,
     TherapyPlan,
     Topic,
     TransferenceImpressions,
+    UserProfile,
 )
 
 
@@ -43,7 +43,7 @@ class TestBasicPatientBackground:
         """Test creating valid basic patient background."""
         background = BasicPatientBackground(
             alias="TestPatient",
-            date_of_birth=datetime(1990, 5, 15),
+            data_of_birth=datetime(1990, 5, 15),
             gender="non-binary",
             cultural_background="Second-generation Chinese-American",
             primary_language="English",
@@ -82,11 +82,11 @@ class TestBasicPatientBackground:
         """Test that optional fields can be None."""
         background = BasicPatientBackground(
             alias="Test",
-            date_of_birth=None,
+            data_of_birth=None,
             gender=None,
             cultural_background=None,
         )
-        assert background.date_of_birth is None
+        assert background.data_of_birth is None
         assert background.gender is None
 
 
@@ -122,52 +122,41 @@ class TestFamilyConstellation:
         assert "deceased" in family.parents
 
 
-class TestPatientProfile:
-    """Tests for complete PatientProfile model."""
+class TestUserProfile:
+    """Tests for flattened UserProfile model."""
 
-    def test_valid_patient_profile(self):
-        """Test creating valid complete patient profile."""
-        profile = PatientProfile(
+    def test_valid_user_profile(self):
+        """Test creating valid user profile."""
+        profile = UserProfile(
             user_id="user123",
-            basic_info=BasicPatientBackground(alias="Alex"),
-            family=FamilyConstellation(),
-            history=EducationalWorkHistory(),
-            context=RelationalLifeContext(),
-            frame=AnalyticFrame(),
+            name="Alex",
+            alias="Alex",
+            data_of_birth=datetime(1990, 5, 15),
+            profession="Engineer",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
         assert profile.user_id == "user123"
-        assert profile.basic_info.alias == "Alex"
+        assert profile.alias == "Alex"
 
     def test_json_serialization_roundtrip(self):
         """Test JSON serialization and deserialization."""
-        original = PatientProfile(
+        original = UserProfile(
             user_id="user123",
-            basic_info=BasicPatientBackground(
-                alias="Test", cultural_background="Test culture"
-            ),
-            family=FamilyConstellation(parents="Test parents"),
-            history=EducationalWorkHistory(),
-            context=RelationalLifeContext(),
-            frame=AnalyticFrame(),
+            name="Test",
+            alias="Test",
+            cultural_background="Test culture",
+            parents="Test parents",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
 
-        # Serialize to JSON
         json_str = original.model_dump_json()
-        json_dict = json.loads(json_str)
-
-        # Deserialize back
-        restored = PatientProfile.model_validate(json_dict)
+        restored = UserProfile.model_validate_json(json_str)
 
         assert restored.user_id == original.user_id
-        assert restored.basic_info.alias == original.basic_info.alias
-        assert (
-            restored.basic_info.cultural_background
-            == original.basic_info.cultural_background
-        )
+        assert restored.alias == original.alias
+        assert restored.cultural_background == original.cultural_background
 
 
 # ============================================================================
@@ -447,13 +436,11 @@ class TestModelIntegration:
     def test_complete_patient_file_structure(self):
         """Test creating complete patient file with all tiers."""
         # Tier 1: Patient Profile
-        profile = PatientProfile(
+        profile = UserProfile(
             user_id="user123",
-            basic_info=BasicPatientBackground(alias="Alex"),
-            family=FamilyConstellation(parents="Test"),
-            history=EducationalWorkHistory(),
-            context=RelationalLifeContext(),
-            frame=AnalyticFrame(),
+            name="Alex",
+            alias="Alex",
+            parents="Test",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -494,34 +481,29 @@ class TestModelIntegration:
 
     def test_serialization_preserves_nested_structure(self):
         """Test that serialization preserves nested model structure."""
-        profile = PatientProfile(
+        profile = UserProfile(
             user_id="user123",
-            basic_info=BasicPatientBackground(
-                alias="Test",
-                cultural_background="Test culture",
-                primary_language="Spanish",
-            ),
-            family=FamilyConstellation(
-                parents="Test parents",
-                siblings="Test siblings",
-            ),
-            history=EducationalWorkHistory(education="PhD"),
-            context=RelationalLifeContext(
-                current_situation="Test situation"
-            ),
-            frame=AnalyticFrame(session_mode="in-person"),
+            name="Test",
+            alias="Test",
+            cultural_background="Test culture",
+            primary_language="Spanish",
+            parents="Test parents",
+            siblings="Test siblings",
+            education="PhD",
+            current_situation="Test situation",
+            session_mode="in-person",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
 
         # Serialize and restore
         json_str = profile.model_dump_json()
-        restored = PatientProfile.model_validate_json(json_str)
+        restored = UserProfile.model_validate_json(json_str)
 
         # Check nested fields preserved
-        assert restored.basic_info.cultural_background == "Test culture"
-        assert restored.basic_info.primary_language == "Spanish"
-        assert restored.family.parents == "Test parents"
-        assert restored.history.education == "PhD"
-        assert restored.context.current_situation == "Test situation"
-        assert restored.frame.session_mode == "in-person"
+        assert restored.cultural_background == "Test culture"
+        assert restored.primary_language == "Spanish"
+        assert restored.parents == "Test parents"
+        assert restored.education == "PhD"
+        assert restored.current_situation == "Test situation"
+        assert restored.session_mode == "in-person"

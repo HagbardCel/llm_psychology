@@ -4,25 +4,23 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { WebSocketService } from '../services/websocketService';
+import { getWebSocketBaseUrl } from '../config/env';
 import {
   ConnectionStatus,
   WebSocketResponse,
   WebSocketConfig,
   StreamingChunkCallback,
-  SessionStartedCallback,
-  UserStatusCallback
+  SessionStartedCallback
 } from '../types/websocket';
 
 interface UseWebSocketOptions {
   url?: string;
   userId: string;
-  authToken: string;
   autoConnect?: boolean;
   reconnectAttempts?: number;
   reconnectDelay?: number;
   onStreamingChunk?: StreamingChunkCallback;
   onSessionStarted?: SessionStartedCallback;
-  onUserStatus?: UserStatusCallback;
 }
 
 interface UseWebSocketReturn {
@@ -30,26 +28,21 @@ interface UseWebSocketReturn {
   lastMessage: WebSocketResponse | null;
   sendMessage: (type: string, data?: Record<string, any>) => void;
   sendChatMessage: (message: string) => void;
-  startTyping: () => void;
-  stopTyping: () => void;
   connect: () => Promise<boolean>;
   disconnect: () => void;
   requestSession: (sessionType?: string) => void;
-  ping: () => void;
   isConnected: boolean;
 }
 
 export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn => {
   const {
-    url = 'ws://localhost:8000',
+    url = getWebSocketBaseUrl(),
     userId,
-    authToken,
     autoConnect = true,
     reconnectAttempts = 5,
     reconnectDelay = 1000,
     onStreamingChunk,
-    onSessionStarted,
-    onUserStatus
+    onSessionStarted
   } = options;
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
@@ -65,7 +58,6 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     const config: WebSocketConfig = {
       url,
       userId,
-      authToken,
       reconnectAttempts,
       reconnectDelay
     };
@@ -83,23 +75,49 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     if (onSessionStarted) {
       serviceRef.current.onSessionStarted(onSessionStarted);
     }
-    if (onUserStatus) {
-      serviceRef.current.onUserStatus(onUserStatus);
-    }
-
     return () => {
       if (serviceRef.current) {
         serviceRef.current.disconnect();
         serviceRef.current = null;
       }
     };
-  }, [url, userId, authToken, reconnectAttempts, reconnectDelay, onStreamingChunk, onSessionStarted, onUserStatus]);
+  }, [url, userId, reconnectAttempts, reconnectDelay, onStreamingChunk, onSessionStarted]);
 
   // Auto-connect if enabled
   useEffect(() => {
     if (autoConnect && serviceRef.current) {
       serviceRef.current.connect();
     }
+  }, [autoConnect]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleOffline = () => {
+      setConnectionStatus((prev) => ({
+        ...prev,
+        isConnected: false,
+        isConnecting: false,
+        connectionError: 'Offline',
+      }));
+      serviceRef.current?.disconnect();
+    };
+
+    const handleOnline = () => {
+      if (autoConnect && serviceRef.current) {
+        serviceRef.current.connect();
+      }
+    };
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
   }, [autoConnect]);
 
   const connect = useCallback(async (): Promise<boolean> => {
@@ -125,27 +143,9 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     }
   }, []);
 
-  const startTyping = useCallback((): void => {
-    if (serviceRef.current) {
-      serviceRef.current.startTyping();
-    }
-  }, []);
-
-  const stopTyping = useCallback((): void => {
-    if (serviceRef.current) {
-      serviceRef.current.stopTyping();
-    }
-  }, []);
-
   const requestSession = useCallback((sessionType: string = 'therapy'): void => {
     if (serviceRef.current) {
       serviceRef.current.requestSession(sessionType);
-    }
-  }, []);
-
-  const ping = useCallback((): void => {
-    if (serviceRef.current) {
-      serviceRef.current.ping();
     }
   }, []);
 
@@ -154,12 +154,9 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     lastMessage,
     sendMessage,
     sendChatMessage,
-    startTyping,
-    stopTyping,
     connect,
     disconnect,
     requestSession,
-    ping,
     isConnected: connectionStatus.isConnected
   };
 };

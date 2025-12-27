@@ -8,7 +8,8 @@ This document describes the chronological flow of a user session within the appl
 
 The session begins when a client connects to the WebSocket endpoint (`/ws?user_id=<user_id>`).
 
-- **Entry Point:** `TrioServer.ws_endpoint` in `src/trio_server.py`.
+- **Entry Point:** WebSocket handler in `src/psychoanalyst_app/api/ws_handler.py`
+  (registered by `TrioServer` in `src/psychoanalyst_app/trio_server.py`).
 - **User Check:** The system checks `trio_db_service` for an existing `UserProfile`.
   - **New User:** If no profile exists, a guest profile is auto-created with status `PROFILE_ONLY`.
   - **Persistence:** `UserProfile` is saved to the `user_profiles` table.
@@ -128,7 +129,7 @@ The session can be closed in two ways:
 
 ## 4. Database Schema Summary
 
-Data is persisted in `app/src/data/trio.db` (SQLite) via `TrioDatabaseService`.
+Data is persisted in `data/psychoanalyst.db` (SQLite) via `TrioDatabaseService`.
 
 | Table               | Key Content                                         | Updated By                        |
 | :------------------ | :-------------------------------------------------- | :-------------------------------- |

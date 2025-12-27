@@ -11,7 +11,15 @@ import type { WorkflowNextAction } from '../types';
  * @param currentRoute - Current route the user is on
  * @returns React Query result with next action instructions
  */
-export function useWorkflowNextAction(userId: string, currentRoute: string) {
+interface WorkflowNavigationOptions {
+  enabled?: boolean;
+}
+
+export function useWorkflowNextAction(
+  userId: string,
+  currentRoute: string,
+  options: WorkflowNavigationOptions = {}
+) {
   return useQuery({
     queryKey: ['workflow', 'next-action', userId, currentRoute],
     queryFn: async () => {
@@ -24,7 +32,7 @@ export function useWorkflowNextAction(userId: string, currentRoute: string) {
       );
       return response;
     },
-    enabled: !!userId, // Only fetch if userId is provided
+    enabled: !!userId && (options.enabled ?? true), // Only fetch if userId is provided and gate enabled
     staleTime: 0, // Always check for workflow changes - no caching
     gcTime: 1000 * 60, // Keep in memory for 1 minute after becoming inactive
     refetchOnMount: true, // Always refetch when component mounts

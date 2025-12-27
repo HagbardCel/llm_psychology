@@ -923,7 +923,7 @@ describe('Backend API Contract', () => {
 **Run before any implementation**:
 ```bash
 # Start backend first
-cd /app && python src/trio_server.py
+cd /app && python -m psychoanalyst_app.server
 
 # In separate terminal
 cd frontend && npm test backend-contract.test.ts

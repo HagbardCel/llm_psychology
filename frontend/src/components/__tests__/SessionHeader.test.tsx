@@ -9,13 +9,21 @@ describe('SessionHeader', () => {
   const mockOnEndSession = jest.fn();
 
   const createMockSession = (overrides?: Partial<Session>): Session => ({
-    id: 'session-123',
-    userId: 'user-123',
+    session_id: 'session-123',
+    user_id: 'user-123',
+    timestamp: new Date('2024-01-15T14:30:00').toISOString(),
+    transcript: [],
+    topics: [],
+    psychological_summary: null,
+    dominant_affects: [],
+    key_themes: [],
+    notable_interactions: null,
+    interpretations: null,
+    patient_reactions: null,
+    enriched: false,
     agentType: AgentType.PSYCHOANALYST,
     status: SessionStatus.ACTIVE,
     startTime: new Date('2024-01-15T14:30:00'),
-    transcript: [],
-    topics: [],
     ...overrides,
   });
 

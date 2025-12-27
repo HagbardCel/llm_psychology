@@ -257,9 +257,9 @@ async with trio.open_nursery() as nursery:
 #### Prompts Used
 
 **Assessment Prompts (per style):**
-- `src/styles/freud/assessment_prompt.txt`
-- `src/styles/jung/assessment_prompt.txt`
-- `src/styles/cbt/assessment_prompt.txt`
+- `src/psychoanalyst_app/styles/freud/assessment_prompt.txt`
+- `src/psychoanalyst_app/styles/jung/assessment_prompt.txt`
+- `src/psychoanalyst_app/styles/cbt/assessment_prompt.txt`
 
 Each prompt contains:
 - Style philosophy
@@ -378,7 +378,7 @@ AgentResponse(
 #### Prompts Used
 
 **Style-Specific Therapist Prompts:**
-- `src/styles/{style_id}/psychoanalyst_prompt.txt`
+- `src/psychoanalyst_app/styles/{style_id}/psychoanalyst_prompt.txt`
 
 **Freud Example:**
 ```
@@ -657,7 +657,7 @@ AgentResponse(
 - Progress indicators
 
 **Reflection Prompts (from StyleService):**
-- `src/styles/{style_id}/reflection_prompt.txt`
+- `src/psychoanalyst_app/styles/{style_id}/reflection_prompt.txt`
 - Style-specific analysis guidance
 
 **Briefing Generation Prompt:**
@@ -1344,7 +1344,7 @@ await run_migrations()
 
 #### 1. Agent System Prompts
 
-**Location:** `src/styles/{style_id}/psychoanalyst_prompt.txt`
+**Location:** `src/psychoanalyst_app/styles/{style_id}/psychoanalyst_prompt.txt`
 
 **Purpose:** Define therapist personality and approach
 
@@ -1413,7 +1413,7 @@ Continue the therapeutic conversation based on the above context.
 
 #### 3. Assessment Prompts
 
-**Location:** `src/styles/{style_id}/assessment_prompt.txt`
+**Location:** `src/psychoanalyst_app/styles/{style_id}/assessment_prompt.txt`
 
 **Purpose:** Evaluate patient fit for therapy style
 
@@ -1453,7 +1453,7 @@ OUTPUT FORMAT:
 
 #### 4. Reflection Prompts
 
-**Location:** `src/styles/{style_id}/reflection_prompt.txt`
+**Location:** `src/psychoanalyst_app/styles/{style_id}/reflection_prompt.txt`
 
 **Purpose:** Guide post-session analysis
 

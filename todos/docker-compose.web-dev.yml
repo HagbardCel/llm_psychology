@@ -19,7 +19,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - APP_ENV=development
-    command: python src/unified_server.py
+    command: python -m psychoanalyst_app.server
     restart: unless-stopped
 
   # React frontend (development with hot reload)

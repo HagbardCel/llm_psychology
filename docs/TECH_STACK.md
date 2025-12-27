@@ -3,6 +3,7 @@
 This document outlines the technologies used in the Virtual LLM-Driven Psychoanalyst application, rationale for technology choices, and version requirements.
 
 **Last Updated:** 2025-12-04
+**Last Verified:** 2025-12-22
 **System Version:** 2.0 (Trio Architecture)
 
 ## 📊 Stack Overview
@@ -23,7 +24,7 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 ├───────────────┬───────────────┬───────────────┬─────────┤
 │               │               │               │         │
 ┌───────┐  ┌────────┐  ┌──────────┐  ┌────────┐  ┌──────┐
-│SQLite │  │ChromaDB│  │Google    │  │Pydantic│  │Trio  │
+│SQLite │  │ FAISS  │  │Google    │  │Pydantic│  │Trio  │
 │  DB   │  │ Vector │  │Gemini API│  │Schemas │  │ Core │
 └───────┘  └────────┘  └──────────┘  └────────┘  └──────┘
 ```
@@ -99,14 +100,14 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 - Schema defined in `src/services/trio_db_service.py`
 - Migration scripts in `src/services/migration_service.py`
 
-#### ChromaDB 0.4.0+
-**Purpose:** Vector database for RAG (Retrieval-Augmented Generation)
+#### FAISS
+**Purpose:** Vector index for RAG (Retrieval-Augmented Generation)
 **Storage:** `data/vector_db/`
 **Rationale:**
 - Embedding storage for therapeutic knowledge base
 - Fast similarity search for context retrieval
-- Python-native implementation
-- Simple API, minimal configuration
+- Local, file-backed index with low overhead
+- Explicit control over similarity metrics and persistence
 
 ---
 
@@ -252,7 +253,7 @@ The application supports configuring different Gemini models for different agent
 - Built-in to React
 - Simple for our use case
 - No additional dependencies needed
-- Good for auth state, theme, etc.
+- Good for user/session state, theme, etc.
 
 ---
 
@@ -263,7 +264,7 @@ The application supports configuring different Gemini models for different agent
 **Version:** 1.5.0 or higher
 **Rationale:**
 - Promise-based API
-- Interceptors for auth
+- Interceptors for request headers
 - Request/response transformation
 - Better error handling than fetch
 
@@ -382,7 +383,7 @@ The application supports configuring different Gemini models for different agent
 ```
 Pydantic Models (Python)
         ↓
-JSON Schema Generation (make generate-schemas)
+JSON Schema Generation (make generate-schemas, Docker)
         ↓
 TypeScript Type Generation (quicktype)
         ↓
@@ -404,7 +405,9 @@ TypeScript Interfaces (frontend/src/types/generated/)
 make generate-schemas
 
 # Frontend generates TypeScript types
-cd frontend && npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
+# Local alternative:
+# cd frontend && npm run generate:types
 ```
 
 ---

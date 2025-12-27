@@ -68,7 +68,7 @@ The frontend integrates with the Python backend API through:
 **Terminal Interface (Original):**
 ```bash
 cd /app
-python src/main.py
+python -m psychoanalyst_app
 ```
 
 **Web Interface:**

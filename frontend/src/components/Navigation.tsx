@@ -18,7 +18,6 @@ import {
   History as HistoryIcon,
   Settings as SettingsIcon,
   Info as InfoIcon,
-  ExitToApp as LogoutIcon,
   Person as PersonIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -84,7 +83,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
     {
       text: 'New Session',
       icon: <PsychologyIcon />,
-      path: '/session',
+      path: '/session/new',
       enabled: user?.status === UserStatus.PLAN_COMPLETE,
     },
     {
@@ -175,26 +174,6 @@ export function Navigation({ open, onClose }: NavigationProps) {
         ))}
       </List>
 
-      <Divider />
-
-      {user && (
-        <List>
-          <ListItem disablePadding>
-            <ListItemButton
-              onClick={() => {
-                // TODO: Implement logout functionality
-                console.log('Logout clicked');
-                onClose();
-              }}
-            >
-              <ListItemIcon>
-                <LogoutIcon />
-              </ListItemIcon>
-              <ListItemText primary="Sign Out" />
-            </ListItemButton>
-          </ListItem>
-        </List>
-      )}
     </Drawer>
   );
 }

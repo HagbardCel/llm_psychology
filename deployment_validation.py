@@ -6,7 +6,6 @@ This script validates that the psychoanalyst application is ready for deployment
 by checking all critical components and dependencies.
 """
 
-import sys
 import os
 import importlib
 import sqlite3
@@ -14,9 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 import json
-
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+import sys
 
 
 class DeploymentValidator:
@@ -195,7 +192,7 @@ class DeploymentValidator:
         test_name = "Configuration"
 
         try:
-            from config import Config
+            from psychoanalyst_app.config import Config
 
             # Check critical configuration attributes
             required_config = [
@@ -247,7 +244,7 @@ class DeploymentValidator:
         test_name = "ServiceContainer"
 
         try:
-            from container.service_container import ServiceContainer
+            from psychoanalyst_app.container.service_container import ServiceContainer
             from unittest.mock import Mock
             import tempfile
 
@@ -279,7 +276,7 @@ class DeploymentValidator:
                     return False
 
             # Test agent creation
-            from context.user_context import UserContext
+            from psychoanalyst_app.context.user_context import UserContext
 
             user_context = UserContext("test_user")
 
@@ -335,7 +332,7 @@ class DeploymentValidator:
         test_name = "Database Setup"
 
         try:
-            from services.db_service import DatabaseService
+            from psychoanalyst_app.services.db_service import DatabaseService
             import tempfile
 
             # Create temporary database
@@ -345,13 +342,13 @@ class DeploymentValidator:
             db_service = DatabaseService(temp_db)
 
             # Test basic operations
-            from models.data_models import UserProfile
+            from psychoanalyst_app.models.data_models import UserProfile
             from datetime import datetime
 
             test_profile = UserProfile(
                 user_id="validation_test_user",
                 name="Test User",
-                birthdate="1990-01-01",
+                data_of_birth="1990-01-01",
                 profession="Validator",
                 created_at=datetime.now().isoformat(),
                 updated_at=datetime.now().isoformat(),
@@ -389,8 +386,8 @@ class DeploymentValidator:
         test_name = "Migration System"
 
         try:
-            from services.migration_service import MigrationService
-            from services.db_service import DatabaseService
+            from psychoanalyst_app.services.migration_service import MigrationService
+            from psychoanalyst_app.services.db_service import DatabaseService
             import tempfile
             import shutil
 
@@ -462,9 +459,9 @@ SELECT 'Validation migration completed' as result;
         test_name = "Agent Coordination"
 
         try:
-            from container.service_container import ServiceContainer
-            from context.user_context import UserContext
-            from models.data_models import Session, Message
+            from psychoanalyst_app.container.service_container import ServiceContainer
+            from psychoanalyst_app.context.user_context import UserContext
+            from psychoanalyst_app.models.data_models import Session, Message
             from datetime import datetime
             from unittest.mock import Mock
             import tempfile
@@ -577,7 +574,7 @@ SELECT 'Validation migration completed' as result;
 
         try:
             # Test exception imports
-            from exceptions import (
+            from psychoanalyst_app.exceptions import (
                 PsychoanalystError,
                 DatabaseError,
                 AgentError,
@@ -608,8 +605,8 @@ SELECT 'Validation migration completed' as result;
                     return False
 
             # Test error handling function
-            from main import handle_workflow_error
-            from ui.textual_ui import ConsoleUI
+            from psychoanalyst_app.main import handle_workflow_error
+            from psychoanalyst_app.ui.textual_ui import ConsoleUI
             from unittest.mock import AsyncMock
 
             # This should not raise an exception

@@ -307,7 +307,7 @@ SQLite-based persistence layer with the following tables:
    docker-compose up --build
    
    # Interactive development
-   docker-compose run --rm app python src/main.py
+   docker compose run --rm app python -m psychoanalyst_app
    ```
 
 4. **Local Development** (without Docker):
@@ -315,7 +315,7 @@ SQLite-based persistence layer with the following tables:
    python -m venv venv
    source venv/bin/activate
    pip install -r requirements.txt
-   python src/main.py
+   python -m psychoanalyst_app
    ```
 
 ### Code Organization Guidelines
@@ -422,7 +422,7 @@ python -m pytest tests/
 4. Maintain the async interface for consistency with the TextualUI
 
 ### Adding New Therapy Styles
-1. Create a new style directory in `../src/styles/` with the style name (e.g., `../src/styles/ifs/`)
+1. Create a new style directory in `../src/psychoanalyst_app/styles/` with the style name (e.g., `../src/psychoanalyst_app/styles/ifs/`)
 2. Add the required style files:
    - `knowledge.md`: Domain knowledge for RAG system
    - `description.txt`: Patient-friendly description for UI selection

@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""
+Generate JSON Schema files from Pydantic models.
+
+This script exports all API-facing Pydantic models to JSON Schema format
+for TypeScript type generation.
+"""
+
+import argparse
+import json
+import sys
+from dataclasses import MISSING, asdict, fields, is_dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Type, get_args, get_origin
+
+from pydantic import BaseModel, Field, create_model
+
+# Import all models
+from psychoanalyst_app.models.data_models import UserStatus
+from psychoanalyst_app.models.http_models import (
+    CreateSessionRequestDTO,
+    CreateTherapyPlanRequestDTO,
+    CreateUserProfileRequestDTO,
+    HealthCheckResponseDTO,
+    MessageDTO,
+    PatchUserProfileRequestDTO,
+    SessionTimerResponseDTO,
+    SessionDTO,
+    StatusMessageResponseDTO,
+    TherapyPlanDTO,
+    TherapyStyleDTO,
+    TopicDTO,
+    UpdateUserProfileRequestDTO,
+    UserProfileDTO,
+    UserStatusResponseDTO,
+)
+from psychoanalyst_app.models.api_models import (
+    WorkflowDisplayAction,
+    WorkflowNextActionRequest,
+    WorkflowNextActionResponse,
+)
+from psychoanalyst_app.models.version_models import (
+    VersionCheckRequest,
+    VersionCheckResponse,
+    VersionInfo,
+)
+from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUTPUT_DIR = REPO_ROOT / "schemas"
+
+
+def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
+    """
+    Convert a dataclass to a Pydantic model for schema generation.
+
+    Args:
+        dataclass_type: Dataclass type to convert
+
+    Returns:
+        Pydantic BaseModel class with equivalent fields
+    """
+    if not is_dataclass(dataclass_type):
+        raise ValueError(f"{dataclass_type} is not a dataclass")
+
+    # Build field definitions for Pydantic
+    field_definitions = {}
+    for field in fields(dataclass_type):
+        field_type = field.type
+        
+        # Correctly handle default vs default_factory
+        if field.default_factory is not MISSING:
+            default = Field(default_factory=field.default_factory)
+        elif field.default is not MISSING:
+            default = field.default
+        else:
+            default = ...
+
+        field_definitions[field.name] = (field_type, default)
+
+    # Create Pydantic model
+    model_name = f"{dataclass_type.__name__}Model"
+    pydantic_model = create_model(
+        model_name, __module__=__name__, __doc__=dataclass_type.__doc__, **field_definitions
+    )
+
+    return pydantic_model
+
+
+def enhance_schema_for_typescript(schema: dict, model: Type[BaseModel]) -> dict:
+    """
+    Enhance schema with TypeScript-friendly metadata.
+
+    Args:
+        schema: Generated JSON schema
+        model: Pydantic model type
+
+    Returns:
+        Enhanced schema dictionary
+    """
+    # Add metadata for better TypeScript generation
+    if "properties" in schema:
+        for field_name, field_info in model.model_fields.items():
+            if field_name in schema["properties"]:
+                field_type = field_info.annotation
+
+                # Check if field is an Enum
+                if isinstance(field_type, type) and issubclass(field_type, Enum):
+                    schema["properties"][field_name]["tsType"] = "enum"
+                    schema["properties"][field_name]["enumValues"] = [
+                        e.value for e in field_type
+                    ]
+
+    return schema
+
+
+def generate_schema(
+    model: Type[BaseModel], output_dir: Path, schema_name: str | None = None
+) -> None:
+    """
+    Generate JSON Schema for a single model.
+
+    Args:
+        model: Pydantic model to generate schema for
+        output_dir: Directory to write schema file to
+        schema_name: Optional custom schema name (defaults to model.__name__)
+    """
+    name = schema_name or model.__name__
+
+    # Generate base schema
+    schema = model.model_json_schema()
+
+    # Add metadata
+    schema["$schema"] = "http://json-schema.org/draft-07/schema#"
+    schema["$id"] = f"https://psychoanalyst.app/schemas/{name}.json"
+    schema["title"] = name
+
+    # Enhance for TypeScript
+    schema = enhance_schema_for_typescript(schema, model)
+
+    # Write to file
+    output_file = output_dir / f"{name}.json"
+    with open(output_file, "w") as f:
+        json.dump(schema, f, indent=2)
+
+    print(f"✓ Generated schema: {output_file.name}")
+
+
+def generate_enum_schema(enum_type: Type[Enum], output_dir: Path) -> None:
+    """
+    Generate JSON Schema for an enum.
+
+    Args:
+        enum_type: Enum type to generate schema for
+        output_dir: Directory to write schema file to
+    """
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": f"https://psychoanalyst.app/schemas/{enum_type.__name__}.json",
+        "title": enum_type.__name__,
+        "description": enum_type.__doc__ or f"{enum_type.__name__} enum",
+        "type": "string",
+        "enum": [e.value for e in enum_type],
+    }
+
+    output_file = output_dir / f"{enum_type.__name__}.json"
+    with open(output_file, "w") as f:
+        json.dump(schema, f, indent=2)
+
+    print(f"✓ Generated enum schema: {output_file.name}")
+
+
+def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
+    """Generate JSON Schemas for all API models."""
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Remove previous schema files to avoid stale models
+    for existing in output_dir.glob("*.json"):
+        existing.unlink()
+
+    print(f"Generating schemas in {output_dir.absolute()}...\n")
+
+    # Pydantic models (model, optional schema name override)
+    pydantic_models: list[tuple[Type[BaseModel], str | None]] = [
+        (UserProfileDTO, "UserProfile"),
+        (MessageDTO, "Message"),
+        (TopicDTO, "Topic"),
+        (SessionDTO, "Session"),
+        (TherapyPlanDTO, "TherapyPlan"),
+        (SessionTimerResponseDTO, "SessionTimerResponse"),
+        (HealthCheckResponseDTO, "HealthCheckResponse"),
+        (CreateUserProfileRequestDTO, "CreateUserProfileRequest"),
+        (UpdateUserProfileRequestDTO, "UpdateUserProfileRequest"),
+        (PatchUserProfileRequestDTO, "PatchUserProfileRequest"),
+        (CreateSessionRequestDTO, "CreateSessionRequest"),
+        (CreateTherapyPlanRequestDTO, "CreateTherapyPlanRequest"),
+        (UserStatusResponseDTO, "UserStatusResponse"),
+        (TherapyStyleDTO, None),
+        (StatusMessageResponseDTO, "StatusMessageResponse"),
+        (WorkflowNextActionRequest, None),
+        (WorkflowDisplayAction, None),
+        (WorkflowNextActionResponse, None),
+        (VersionInfo, None),
+        (VersionCheckRequest, None),
+        (VersionCheckResponse, None),
+    ]
+
+    # Enums
+    enums: list[Type[Enum]] = [
+        UserStatus,
+        WorkflowState,
+        WorkflowEvent,
+    ]
+
+    print("Generating Pydantic model schemas...")
+    for model, schema_name in pydantic_models:
+        try:
+            generate_schema(model, output_dir, schema_name=schema_name)
+        except Exception as e:
+            print(f"✗ Failed to generate schema for {model.__name__}: {e}")
+
+    print("\nGenerating enum schemas...")
+    for enum_type in enums:
+        try:
+            generate_enum_schema(enum_type, output_dir)
+        except Exception as e:
+            print(f"✗ Failed to generate enum schema for {enum_type.__name__}: {e}")
+
+    # Generate index file
+    all_models = [schema_name or m.__name__ for m, schema_name in pydantic_models] + [
+        e.__name__ for e in enums
+    ]
+
+    index = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Psychoanalyst API Schema Index",
+        "description": "Index of all API data models",
+        "version": "1.0.0",
+        "generated_at": datetime.now().isoformat(),
+        "models": sorted(all_models),
+    }
+
+    with open(output_dir / "index.json", "w") as f:
+        json.dump(index, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print(f"✓ Successfully generated {len(all_models)} schemas")
+    print(f"  Output directory: {output_dir.absolute()}")
+    print(f"  Index file: index.json")
+    print(f"{'='*60}")
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point that can be used by CLI scripts or tests."""
+    parser = argparse.ArgumentParser(description="Generate JSON schemas from Pydantic models")
+    parser.add_argument(
+        "--output-dir",
+        default=str(OUTPUT_DIR),
+        help="Directory to write schema files to (default: ./schemas)",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        generate_all_schemas(Path(args.output_dir))
+    except Exception as exc:
+        print(f"\n✗ Schema generation failed: {exc}", file=sys.stderr)
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

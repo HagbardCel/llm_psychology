@@ -184,7 +184,7 @@ docker-compose -f todos/docker-compose.web-dev.yml build frontend-dev --no-cache
 ## Integration with Existing System
 
 ### Dual Interface Support
-- **Terminal Interface:** `python src/main.py` (unchanged)
+- **Terminal Interface:** `python -m psychoanalyst_app` (unchanged)
 - **Web Interface:** Docker-based services (new)
 - **Shared Data:** Same SQLite database and user profiles
 - **Session Continuity:** Can resume sessions across interfaces
@@ -216,4 +216,4 @@ Both interfaces use the same:
 - **Logs:** `make -f todos/Makefile.web web-logs`
 - **Health Checks:** Check API at http://localhost:8000/health
 - **Clean Reset:** `make -f todos/Makefile.web web-clean`
-- **Terminal Fallback:** `python src/main.py` always available
+- **Terminal Fallback:** `python -m psychoanalyst_app` always available

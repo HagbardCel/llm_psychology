@@ -9,10 +9,10 @@ from datetime import datetime
 import pytest
 import trio
 
-from config import settings
-from container.service_container import ServiceContainer
-from models.data_models import UserProfile, UserStatus
-from trio_server import TrioServer
+from psychoanalyst_app.config import Settings
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.trio_server import TrioServer
 
 
 @pytest.fixture
@@ -23,10 +23,10 @@ def app_config(tmp_path):
     test_db_path = str(tmp_path / "test_trio_flow.db")
 
     # Create a modified copy of settings
+    settings = Settings()
     mock_settings = settings.model_copy(
         update={
             "DATABASE_PATH": test_db_path,
-            "REQUIRE_AUTHENTICATION": False,  # Disable auth for internal flow tests
         }
     )
     return mock_settings
@@ -70,7 +70,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_123",
         name="Test User",
-        birthdate=None,
+        data_of_birth=None,
         profession="Software Engineer",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -103,7 +103,7 @@ async def test_trio_database_service_save_and_retrieve_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_456",
         name="Jane Doe",
-        birthdate=None,
+        data_of_birth=None,
         profession="Doctor",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -158,9 +158,10 @@ async def test_create_session_endpoint_success(trio_server, test_user):
         data = await response.get_json()
         assert "session_id" in data
         assert data["user_id"] == test_user.user_id
-        assert data["type"] == "therapy"
-        assert data["status"] == "created"
-        assert "timestamp" in data
+        assert isinstance(data["transcript"], list)
+        assert data["transcript"][0]["role"] == "system"
+        assert isinstance(data["timestamp"], str)
+        datetime.fromisoformat(data["timestamp"])
 
 
 @pytest.mark.trio
@@ -176,7 +177,7 @@ async def test_create_session_endpoint_missing_user_id(trio_server):
 
         data = await response.get_json()
         assert "error" in data
-        assert "User ID is required" in data["error"]
+        assert "Invalid request" in data["error"]
 
 
 @pytest.mark.trio
@@ -226,6 +227,73 @@ async def test_create_session_and_verify_in_database(trio_server, test_user):
 
 @pytest.mark.trio
 @pytest.mark.integration
+async def test_get_sessions_returns_dtos(trio_server, test_user):
+    """Ensure GET /api/sessions returns DTO-shaped payloads."""
+    app = trio_server.app
+
+    async with app.test_client() as client:
+        await client.post("/api/sessions", json={"user_id": test_user.user_id})
+
+        response = await client.get(f"/api/sessions?user_id={test_user.user_id}")
+
+        assert response.status_code == 200
+
+        sessions = await response.get_json()
+        assert isinstance(sessions, list)
+        assert sessions, "Expected at least one session"
+
+        session = sessions[0]
+        assert session["user_id"] == test_user.user_id
+        assert "session_id" in session
+        assert isinstance(session["timestamp"], str)
+        datetime.fromisoformat(session["timestamp"])
+        assert isinstance(session["transcript"], list)
+        assert isinstance(session["topics"], list)
+        assert isinstance(session["dominant_affects"], list)
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_get_therapy_plan_returns_null_when_missing(trio_server, test_user):
+    """GET /api/therapy/plan should return null when no plan exists."""
+    app = trio_server.app
+
+    async with app.test_client() as client:
+        response = await client.get(f"/api/therapy/plan?user_id={test_user.user_id}")
+
+        assert response.status_code == 200
+        data = await response.get_json()
+        assert data is None
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_create_and_get_therapy_plan(trio_server, test_user):
+    """Therapy plan endpoints should return DTO payloads."""
+    app = trio_server.app
+
+    async with app.test_client() as client:
+        create_response = await client.post(
+            "/api/therapy/plan",
+            json={"user_id": test_user.user_id, "therapy_style": "freud"},
+        )
+
+        assert create_response.status_code == 201
+        created_plan = await create_response.get_json()
+        assert created_plan["user_id"] == test_user.user_id
+        assert created_plan["selected_therapy_style"] == "freud"
+        datetime.fromisoformat(created_plan["created_at"])
+
+        get_response = await client.get(
+            f"/api/therapy/plan?user_id={test_user.user_id}"
+        )
+
+        assert get_response.status_code == 200
+        plan = await get_response.get_json()
+        assert plan["plan_id"] == created_plan["plan_id"]
+        assert plan["status"] == "active"
+@pytest.mark.trio
+@pytest.mark.integration
 async def test_structured_concurrency_with_nursery(service_container):
     """Test that Trio structured concurrency works with database operations."""
     trio_db_service = service_container.get("trio_db_service")
@@ -237,7 +305,7 @@ async def test_structured_concurrency_with_nursery(service_container):
         user_profile = UserProfile(
             user_id=user_id,
             name=f"User {user_id}",
-            birthdate=None,
+            data_of_birth=None,
             profession="Test",
             status=UserStatus.PROFILE_ONLY,
             created_at=datetime.now(),

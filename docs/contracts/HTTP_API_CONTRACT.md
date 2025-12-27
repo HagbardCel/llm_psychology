@@ -1,0 +1,221 @@
+# HTTP API Contract (Phase 1)
+
+This document is the authoritative HTTP contract for Phase 1 (“Contract Stabilization”).
+
+## Global Rules
+
+- **Key naming**: `snake_case` for all JSON keys.
+- **Datetime encoding**: ISO 8601 strings (timezone offset or `Z` recommended).
+- **Errors**: JSON body with a single `error` string.
+  - Shape: `{ "error": "<message>" }`
+
+## DTOs (Wire Shapes)
+
+These shapes are what all clients should assume on the wire.
+
+### `UserProfileDTO`
+
+- `user_id`: `string`
+- `name`: `string`
+- `alias`: `string | null`
+- `data_of_birth`: `string | null` (ISO 8601)
+- `gender`: `string | null`
+- `cultural_background`: `string | null`
+- `primary_language`: `string`
+- `profession`: `string | null`
+- `status`: `string` (enum value)
+- `parents`: `string | null`
+- `siblings`: `string | null`
+- `family_atmosphere`: `string | null`
+- `significant_events`: `string | null`
+- `education`: `string | null`
+- `work_history`: `string | null`
+- `relationship_to_work`: `string | null`
+- `relationships`: `string | null`
+- `social_context`: `string | null`
+- `current_situation`: `string | null`
+- `preferred_school`: `string | null`
+- `session_mode`: `string`
+- `boundary_notes`: `string | null`
+- `frame_notes`: `string | null`
+- `created_at`: `string` (ISO 8601)
+- `updated_at`: `string` (ISO 8601)
+
+### `MessageDTO`
+
+- `role`: `string`
+- `content`: `string`
+- `timestamp`: `string` (ISO 8601)
+- `agent`: `string | null`
+
+### `TopicDTO`
+
+- `name`: `string`
+- `status`: `string`
+
+### `SessionDTO`
+
+- `session_id`: `string`
+- `user_id`: `string`
+- `timestamp`: `string` (ISO 8601)
+- `transcript`: `MessageDTO[]`
+- `topics`: `TopicDTO[]`
+- `psychological_summary`: `string | null`
+- `dominant_affects`: `string[]`
+- `key_themes`: `string[]`
+- `notable_interactions`: `string | null`
+- `interpretations`: `string | null`
+- `patient_reactions`: `string | null`
+- `enriched`: `boolean`
+
+### `TherapyPlanDTO`
+
+- `plan_id`: `string`
+- `user_id`: `string`
+- `created_at`: `string` (ISO 8601)
+- `updated_at`: `string` (ISO 8601)
+- `version`: `number`
+- `selected_therapy_style`: `string | null`
+- `plan_details`: `object`
+- `initial_goals`: `string[]`
+- `current_progress`: `string`
+- `planned_interventions`: `string[]`
+- `status`: `"active" | "paused" | "completed"` (string)
+- `session_briefing`: `object | null`
+
+### `HealthCheckResponse`
+
+- `status`: `"healthy" | "unhealthy"`
+- `service`: `string`
+- `database`: `"healthy" | "unhealthy"`
+- `timestamp`: `string` (ISO 8601)
+
+### `VersionInfoDTO`
+
+- `api_version`: `string`
+- `min_client_version`: `string`
+- `server_time`: `string` (ISO 8601)
+
+### `VersionCheckResponseDTO`
+
+- `compatible`: `boolean`
+- `api_version`: `string`
+- `client_version`: `string`
+- `message`: `string`
+- `upgrade_required`: `boolean`
+- `upgrade_recommended`: `boolean`
+
+### `SessionTimerResponse`
+
+- `session_id`: `string`
+- `elapsed_minutes`: `number`
+- `remaining_minutes`: `number`
+- `total_duration_minutes`: `number`
+- `extensions_used`: `number`
+- `max_extensions`: `number`
+- `can_extend`: `boolean`
+- `is_time_up`: `boolean`
+- `timestamp`: `string` (ISO 8601)
+
+### `UserStatusResponse`
+
+- `user_id`: `string`
+- `workflow_state`: `string` (enum value)
+- `timestamp`: `string` (ISO 8601)
+
+### `TherapyStyleDTO`
+
+- `style`: `string`
+- `name`: `string`
+- `description`: `string`
+
+### `StatusMessageResponse`
+
+- `message`: `string`
+- `session_id`: `string | null`
+
+## Endpoints
+
+### `GET /health`
+
+- **200**: `HealthCheckResponse`
+
+### `GET /api/user/profile?user_id=...`
+
+- **200**: `UserProfileDTO`
+- **400**: `{ "error": "User ID is required" }`
+- **404**: `{ "error": "User profile not found" }` (or equivalent)
+
+### `POST /api/user/profile`
+
+- Request: `{ "user_id": "...", "name": "...", "data_of_birth"?: "...", "profession"?: "..." }`
+- **201**: `UserProfileDTO`
+- **400**: `{ "error": "<validation message>" }`
+
+### `PUT /api/user/profile`
+
+- Request: Full profile payload; omitted optional fields are set to `null`.
+- **200**: `UserProfileDTO`
+- **400**: `{ "error": "<validation message>" }`
+- **404**: `{ "error": "User profile not found" }`
+
+### `PATCH /api/user/profile`
+
+- Request: Partial profile payload; only provided fields are updated.
+- **200**: `UserProfileDTO`
+- **400**: `{ "error": "<validation message>" }`
+- **404**: `{ "error": "User profile not found" }`
+
+### `GET /api/user/status?user_id=...`
+
+- **200**: `UserStatusResponse`
+- **400**: `{ "error": "User ID is required" }`
+- **404**: `{ "error": "User not found: <id>" }` (or equivalent)
+
+### `GET /api/sessions?user_id=...`
+
+- **200**: `SessionDTO[]`
+- **400**: `{ "error": "User ID is required" }`
+
+### `GET /api/sessions/<session_id>`
+
+- **200**: `SessionDTO`
+- **404**: `{ "error": "Session not found" }`
+
+### `POST /api/sessions`
+
+- Request: `{ "user_id": "..." }`
+- **201**: `SessionDTO`
+- **400**: `{ "error": "User ID is required" }`
+- **404**: `{ "error": "User profile not found" }`
+
+### `GET /api/therapy/plan?user_id=...`
+
+- **200**: `TherapyPlanDTO` or `null` (returns `null` when no plan exists for the user)
+- **400**: `{ "error": "User ID is required" }`
+
+### `POST /api/therapy/plan`
+
+- Request: `{ "user_id": "...", "therapy_style": "..." }`
+- **201**: `TherapyPlanDTO`
+- **400**: `{ "error": "user_id and therapy_style are required" }` (or equivalent)
+- **404**: `{ "error": "User profile not found" }` (or equivalent)
+
+### `GET /api/therapy/styles`
+
+- **200**: `TherapyStyleDTO[]`
+
+### `GET /api/sessions/<session_id>/timer`
+
+- **200**: `SessionTimerResponse`
+- **404**: `{ "error": "<not found message>" }` (or equivalent)
+
+### `GET /api/version`
+
+- **200**: `VersionInfoDTO`
+
+### `POST /api/version/check`
+
+- Request: `{ "client_version": "...", "client_type": "console" | "web" }`
+- **200**: `VersionCheckResponseDTO`
+- **400**: `{ "error": "Invalid request", "details": [...] }` (or other invalid request shapes)

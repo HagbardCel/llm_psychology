@@ -10,22 +10,22 @@ from datetime import datetime
 import pytest
 import trio
 
-from agents.trio_assessment_agent import TrioAssessmentAgent
-from agents.trio_intake_agent import TrioIntakeAgent
-from agents.trio_memory_agent import TrioMemoryAgent
-from agents.trio_planning_agent import TrioPlanningAgent
-from agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
-from agents.trio_reflection_agent import TrioReflectionAgent
-from container.service_container import ServiceContainer
-from context.user_context import UserContext
-from models.data_models import (
+from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
+from psychoanalyst_app.agents.trio_intake_agent import TrioIntakeAgent
+from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
+from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
+from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.data_models import (
     Message,
     Session,
     Topic,
     UserProfile,
     UserStatus,
 )
-from orchestration.models import ConversationContext, WorkflowState
+from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowState
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_agents",
         name="Agent Test User",
-        birthdate=None,
+        data_of_birth=None,
         profession="Tester",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -100,6 +100,12 @@ async def test_session(service_container, test_user):
 def user_context(test_user):
     """Create user context."""
     return UserContext(user_id=test_user.user_id)
+
+
+@pytest.fixture
+def style_service(service_container):
+    """Provide style service for agent injections."""
+    return service_container.get("style_service")
 
 
 # ===== TrioMemoryAgent Tests =====
@@ -171,7 +177,9 @@ async def test_memory_agent_get_therapeutic_memory(
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_planning_agent_initialization(service_container, user_context):
+async def test_planning_agent_initialization(
+    service_container, user_context, style_service
+):
     """Test TrioPlanningAgent initialization."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -182,7 +190,12 @@ async def test_planning_agent_initialization(service_container, user_context):
     )
 
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     assert planning_agent is not None
@@ -192,7 +205,7 @@ async def test_planning_agent_initialization(service_container, user_context):
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_planning_agent_create_initial_plan(
-    service_container, user_context, test_session
+    service_container, user_context, test_session, style_service
 ):
     """Test creating initial therapy plan."""
     llm_service = service_container.get("llm_service")
@@ -204,7 +217,12 @@ async def test_planning_agent_create_initial_plan(
     )
 
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     # Create initial plan
@@ -227,7 +245,9 @@ async def test_intake_agent_initialization(service_container, user_context):
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
 
-    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+    intake_agent = TrioIntakeAgent(
+        llm_service, trio_db_service, user_context, config=service_container.config
+    )
 
     assert intake_agent is not None
     assert intake_agent.session_duration > 0
@@ -245,7 +265,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
     guest_user = UserProfile(
         user_id="guest_test_user",
         name="Guest",
-        birthdate=None,
+        data_of_birth=None,
         profession="",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -254,7 +274,9 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
     await trio_db_service.save_user_profile(guest_user)
 
     user_context = UserContext(user_id=guest_user.user_id)
-    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+    intake_agent = TrioIntakeAgent(
+        llm_service, trio_db_service, user_context, config=service_container.config
+    )
 
     # Create session
     session_id = str(uuid.uuid4())
@@ -301,7 +323,7 @@ async def test_intake_agent_guest_name_collection(service_container):
     guest_user = UserProfile(
         user_id="guest_name_test",
         name="Guest",
-        birthdate=None,
+        data_of_birth=None,
         profession="",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -310,7 +332,9 @@ async def test_intake_agent_guest_name_collection(service_container):
     await trio_db_service.save_user_profile(guest_user)
 
     user_context = UserContext(user_id=guest_user.user_id)
-    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+    intake_agent = TrioIntakeAgent(
+        llm_service, trio_db_service, user_context, config=service_container.config
+    )
 
     # Create session
     session_id = str(uuid.uuid4())
@@ -360,7 +384,7 @@ async def test_intake_agent_tier1_extraction(service_container):
     test_user = UserProfile(
         user_id="tier1_test_user",
         name="Sarah Johnson",
-        birthdate=None,
+        data_of_birth=None,
         profession="",
         status=UserStatus.INTAKE_IN_PROGRESS,
         created_at=datetime.now(),
@@ -369,7 +393,9 @@ async def test_intake_agent_tier1_extraction(service_container):
     await trio_db_service.save_user_profile(test_user)
 
     user_context = UserContext(user_id=test_user.user_id)
-    intake_agent = TrioIntakeAgent(llm_service, trio_db_service, user_context)
+    intake_agent = TrioIntakeAgent(
+        llm_service, trio_db_service, user_context, config=service_container.config
+    )
 
     # Create a rich intake conversation with patient information
     session_id = str(uuid.uuid4())
@@ -481,26 +507,19 @@ async def test_intake_agent_tier1_extraction(service_container):
     assert response.next_action == "transition"
     assert response.next_state == WorkflowState.INTAKE_COMPLETE
 
-    # Verify patient profile was extracted and saved
-    patient_profile = await trio_db_service.get_patient_profile(test_user.user_id)
+    # Verify user profile was extracted and saved
+    user_profile = await trio_db_service.get_user_profile(test_user.user_id)
 
-    assert patient_profile is not None
-    assert patient_profile.user_id == test_user.user_id
+    assert user_profile is not None
+    assert user_profile.user_id == test_user.user_id
 
     # Verify basic info
-    assert patient_profile.basic_info is not None
-    assert patient_profile.basic_info.alias == "Sarah Johnson"
+    assert user_profile.alias == "Sarah Johnson"
     # Note: Other fields may be null if not mentioned in conversation
 
-    # Verify sub-models exist (even if fields are null)
-    assert patient_profile.family is not None
-    assert patient_profile.history is not None
-    assert patient_profile.context is not None
-    assert patient_profile.frame is not None
-
     # Verify timestamps
-    assert patient_profile.created_at is not None
-    assert patient_profile.updated_at is not None
+    assert user_profile.created_at is not None
+    assert user_profile.updated_at is not None
 
 
 # ===== TrioReflectionAgent Tests =====
@@ -508,7 +527,9 @@ async def test_intake_agent_tier1_extraction(service_container):
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_reflection_agent_initialization(service_container, user_context):
+async def test_reflection_agent_initialization(
+    service_container, user_context, style_service
+):
     """Test TrioReflectionAgent initialization."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -519,7 +540,12 @@ async def test_reflection_agent_initialization(service_container, user_context):
     )
 
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     reflection_agent = TrioReflectionAgent(
@@ -529,6 +555,7 @@ async def test_reflection_agent_initialization(service_container, user_context):
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     assert reflection_agent is not None
@@ -538,7 +565,7 @@ async def test_reflection_agent_initialization(service_container, user_context):
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_reflection_agent_create_initial_plan(
-    service_container, user_context, test_session
+    service_container, user_context, test_session, style_service
 ):
     """Test reflection agent coordinating plan creation."""
     llm_service = service_container.get("llm_service")
@@ -550,7 +577,12 @@ async def test_reflection_agent_create_initial_plan(
     )
 
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     reflection_agent = TrioReflectionAgent(
@@ -560,6 +592,7 @@ async def test_reflection_agent_create_initial_plan(
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     # Create plan through reflection agent
@@ -572,7 +605,7 @@ async def test_reflection_agent_create_initial_plan(
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_reflection_agent_session_enrichment(
-    service_container, user_context, test_session
+    service_container, user_context, test_session, style_service
 ):
     """Test reflection agent enriching session with Tier 2 psychological data."""
     llm_service = service_container.get("llm_service")
@@ -606,7 +639,7 @@ async def test_reflection_agent_session_enrichment(
 
     from unittest.mock import AsyncMock
 
-    from models.structured_output_models import Tier2Enrichment
+    from psychoanalyst_app.models.structured_output_models import Tier2Enrichment
 
     original_structured = llm_service.generate_structured_output_async
 
@@ -628,7 +661,12 @@ async def test_reflection_agent_session_enrichment(
     )
 
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     reflection_agent = TrioReflectionAgent(
@@ -638,6 +676,7 @@ async def test_reflection_agent_session_enrichment(
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     # Generate comprehensive reflection (which triggers enrichment)
@@ -677,7 +716,9 @@ async def test_reflection_agent_session_enrichment(
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_assessment_agent_initialization(service_container, user_context):
+async def test_assessment_agent_initialization(
+    service_container, user_context, style_service
+):
     """Test TrioAssessmentAgent initialization."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -685,11 +726,22 @@ async def test_assessment_agent_initialization(service_container, user_context):
 
     # Create a mock reflection agent
     reflection_agent = TrioReflectionAgent(
-        llm_service, trio_db_service, rag_service, user_context, None, None
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        None,
+        None,
+        config=service_container.config,
     )
 
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        reflection_agent,
+        style_service=style_service,
     )
 
     assert assessment_agent is not None
@@ -698,7 +750,7 @@ async def test_assessment_agent_initialization(service_container, user_context):
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_assessment_agent_process_assessment(
-    service_container, user_context, test_session
+    service_container, user_context, test_session, style_service
 ):
     """Test conducting assessment via orchestrator interface."""
     llm_service = service_container.get("llm_service")
@@ -707,11 +759,22 @@ async def test_assessment_agent_process_assessment(
 
     # Create a mock reflection agent
     reflection_agent = TrioReflectionAgent(
-        llm_service, trio_db_service, rag_service, user_context, None, None
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        None,
+        None,
+        config=service_container.config,
     )
 
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        reflection_agent,
+        style_service=style_service,
     )
 
     # Create context
@@ -740,14 +803,21 @@ async def test_assessment_agent_process_assessment(
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_psychoanalyst_agent_initialization(service_container, user_context):
+async def test_psychoanalyst_agent_initialization(
+    service_container, user_context, style_service
+):
     """Test TrioPsychoanalystAgent initialization."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
     rag_service = service_container.get("rag_service")
 
     psychoanalyst_agent = TrioPsychoanalystAgent(
-        llm_service, trio_db_service, rag_service, user_context
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        style_service=style_service,
+        config=service_container.config,
     )
 
     assert psychoanalyst_agent is not None
@@ -759,7 +829,9 @@ async def test_psychoanalyst_agent_initialization(service_container, user_contex
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_full_agent_workflow(service_container, test_user, test_session):
+async def test_full_agent_workflow(
+    service_container, test_user, test_session, style_service
+):
     """Test complete workflow through all agents."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -775,7 +847,12 @@ async def test_full_agent_workflow(service_container, test_user, test_session):
 
     # Step 2: Planning agent creates plan
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
     therapy_plan = await planning_agent.create_initial_plan(test_session, "cbt")
     assert therapy_plan is not None
@@ -788,6 +865,7 @@ async def test_full_agent_workflow(service_container, test_user, test_session):
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
     comprehensive_reflection = await reflection_agent.generate_comprehensive_reflection(
         test_session, therapy_plan
@@ -797,14 +875,21 @@ async def test_full_agent_workflow(service_container, test_user, test_session):
 
     # Step 4: Psychoanalyst agent is ready to conduct therapy
     psychoanalyst_agent = TrioPsychoanalystAgent(
-        llm_service, trio_db_service, rag_service, user_context
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        style_service=style_service,
+        config=service_container.config,
     )
     assert psychoanalyst_agent is not None
 
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_concurrent_agent_operations(service_container, test_user, test_session):
+async def test_concurrent_agent_operations(
+    service_container, test_user, test_session, style_service
+):
     """Test concurrent operations across multiple agents."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -815,7 +900,12 @@ async def test_concurrent_agent_operations(service_container, test_user, test_se
         llm_service, trio_db_service, rag_service, user_context
     )
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
 
     results = []
@@ -848,7 +938,7 @@ async def test_concurrent_agent_operations(service_container, test_user, test_se
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_assessment_agent_process_selection(
-    service_container, user_context, test_session
+    service_container, user_context, test_session, style_service
 ):
     """Test processing selection via orchestrator interface."""
     llm_service = service_container.get("llm_service")
@@ -860,7 +950,12 @@ async def test_assessment_agent_process_selection(
         llm_service, trio_db_service, rag_service, user_context
     )
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
     reflection_agent = TrioReflectionAgent(
         llm_service,
@@ -869,10 +964,16 @@ async def test_assessment_agent_process_selection(
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        reflection_agent,
+        style_service=style_service,
     )
 
     # Create context
@@ -898,19 +999,21 @@ async def test_assessment_agent_process_selection(
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_assessment_agent_creates_tier3_and_tier4(service_container):
+async def test_assessment_agent_creates_tier3_and_tier4(
+    service_container, style_service
+):
     """Test assessment agent creating initial Tier 3 & 4 data."""
-    from models.data_models import PatientProfile, UserProfile, UserStatus
+    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
 
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
     rag_service = service_container.get("rag_service")
 
-    # Create test user with Tier 1 (PatientProfile)
+    # Create test user with Tier 1 user profile fields
     test_user = UserProfile(
         user_id="tier34_test_user",
         name="Test Patient",
-        birthdate=None,
+        data_of_birth=None,
         profession="Engineer",
         status=UserStatus.INTAKE_COMPLETE,
         created_at=datetime.now(),
@@ -918,50 +1021,33 @@ async def test_assessment_agent_creates_tier3_and_tier4(service_container):
     )
     await trio_db_service.save_user_profile(test_user)
 
-    # Create Tier 1 patient profile
-    from models.data_models import (
-        AnalyticFrame,
-        BasicPatientBackground,
-        EducationalWorkHistory,
-        FamilyConstellation,
-        RelationalLifeContext,
+    # Create Tier 1 user profile fields
+    updated_profile = test_user.model_copy(
+        update={
+            "alias": "Test Patient",
+            "gender": "Non-binary",
+            "cultural_background": "Asian-American",
+            "primary_language": "English",
+            "parents": "Mother supportive, father distant",
+            "siblings": "One younger sister",
+            "family_atmosphere": "Generally warm but with occasional conflict",
+            "significant_events": "Parents divorced when patient was 10",
+            "education": "BS in Computer Science",
+            "work_history": "Software engineer for 5 years",
+            "relationship_to_work": "Source of both pride and stress",
+            "relationships": "Single, few close friends",
+            "social_context": "Somewhat isolated due to work demands",
+            "current_situation": "High work stress, seeking better balance",
+            "preferred_school": None,
+            "session_mode": "virtual",
+            "boundary_notes": None,
+            "frame_notes": None,
+            "updated_at": datetime.now(),
+        }
     )
-
-    patient_profile = PatientProfile(
-        user_id=test_user.user_id,
-        basic_info=BasicPatientBackground(
-            alias="Test Patient",
-            date_of_birth=None,
-            gender="Non-binary",
-            cultural_background="Asian-American",
-            primary_language="English",
-        ),
-        family=FamilyConstellation(
-            parents="Mother supportive, father distant",
-            siblings="One younger sister",
-            family_atmosphere="Generally warm but with occasional conflict",
-            significant_events="Parents divorced when patient was 10",
-        ),
-        history=EducationalWorkHistory(
-            education="BS in Computer Science",
-            work_history="Software engineer for 5 years",
-            relationship_to_work="Source of both pride and stress",
-        ),
-        context=RelationalLifeContext(
-            relationships="Single, few close friends",
-            social_context="Somewhat isolated due to work demands",
-            current_situation="High work stress, seeking better balance",
-        ),
-        frame=AnalyticFrame(
-            preferred_school=None,
-            session_mode="virtual",
-            boundary_notes=None,
-            frame_notes=None,
-        ),
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+    await trio_db_service.update_user_profile(
+        updated_profile, change_summary="Test Tier 1 setup"
     )
-    await trio_db_service.save_patient_profile(patient_profile)
 
     # Create intake session
     intake_session_id = str(uuid.uuid4())
@@ -1051,8 +1137,8 @@ async def test_assessment_agent_creates_tier3_and_tier4(service_container):
 
     from unittest.mock import AsyncMock
 
-    from models.data_models import PatientAnalysis
-    from models.structured_output_models import Tier4Extract
+    from psychoanalyst_app.models.data_models import PatientAnalysis
+    from psychoanalyst_app.models.structured_output_models import Tier4Extract
 
     original_structured = llm_service.generate_structured_output_async
 
@@ -1074,7 +1160,12 @@ async def test_assessment_agent_creates_tier3_and_tier4(service_container):
         llm_service, trio_db_service, rag_service, user_context
     )
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
     reflection_agent = TrioReflectionAgent(
         llm_service,
@@ -1083,10 +1174,16 @@ async def test_assessment_agent_creates_tier3_and_tier4(service_container):
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     assessment_agent = TrioAssessmentAgent(
-        llm_service, trio_db_service, rag_service, user_context, reflection_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        reflection_agent,
+        style_service=style_service,
     )
 
     # Create context
@@ -1138,12 +1235,11 @@ async def test_assessment_agent_creates_tier3_and_tier4(service_container):
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_reflection_agent_tier3_versioning(service_container):
+async def test_reflection_agent_tier3_versioning(service_container, style_service):
     """Test Tier 3 versioning through reflection agent."""
     import json
 
-    from models.data_models import (
-        PatientProfile,
+    from psychoanalyst_app.models.data_models import (
         Session,
         TherapyPlan,
         UserProfile,
@@ -1158,7 +1254,7 @@ async def test_reflection_agent_tier3_versioning(service_container):
     test_user = UserProfile(
         user_id="tier3_versioning_test",
         name="Versioning Test Patient",
-        birthdate=None,
+        data_of_birth=None,
         profession="Designer",
         status=UserStatus.PLAN_COMPLETE,
         created_at=datetime.now(),
@@ -1166,53 +1262,36 @@ async def test_reflection_agent_tier3_versioning(service_container):
     )
     await trio_db_service.save_user_profile(test_user)
 
-    # Create Tier 1 patient profile (required for reflection)
-    from models.data_models import (
-        AnalyticFrame,
-        BasicPatientBackground,
-        EducationalWorkHistory,
-        FamilyConstellation,
-        RelationalLifeContext,
+    # Create Tier 1 user profile fields (required for reflection)
+    updated_profile = test_user.model_copy(
+        update={
+            "alias": "Versioning Test Patient",
+            "gender": "Female",
+            "cultural_background": "European-American",
+            "primary_language": "English",
+            "parents": "Both parents present, mother anxious",
+            "siblings": "Only child",
+            "family_atmosphere": "Tense, high expectations",
+            "significant_events": "Mother's anxiety was formative influence",
+            "education": "MFA in Design",
+            "work_history": "Freelance designer for 3 years",
+            "relationship_to_work": "Creative outlet but financially unstable",
+            "relationships": "In long-term relationship, some conflict",
+            "social_context": "Small circle of close friends",
+            "current_situation": "Career uncertainty causing anxiety",
+            "preferred_school": "psychodynamic",
+            "session_mode": "virtual",
+            "boundary_notes": None,
+            "frame_notes": None,
+            "updated_at": datetime.now(),
+        }
     )
-
-    patient_profile = PatientProfile(
-        user_id=test_user.user_id,
-        basic_info=BasicPatientBackground(
-            alias="Versioning Test Patient",
-            date_of_birth=None,
-            gender="Female",
-            cultural_background="European-American",
-            primary_language="English",
-        ),
-        family=FamilyConstellation(
-            parents="Both parents present, mother anxious",
-            siblings="Only child",
-            family_atmosphere="Tense, high expectations",
-            significant_events="Mother's anxiety was formative influence",
-        ),
-        history=EducationalWorkHistory(
-            education="MFA in Design",
-            work_history="Freelance designer for 3 years",
-            relationship_to_work="Creative outlet but financially unstable",
-        ),
-        context=RelationalLifeContext(
-            relationships="In long-term relationship, some conflict",
-            social_context="Small circle of close friends",
-            current_situation="Career uncertainty causing anxiety",
-        ),
-        frame=AnalyticFrame(
-            preferred_school="psychodynamic",
-            session_mode="virtual",
-            boundary_notes=None,
-            frame_notes=None,
-        ),
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+    await trio_db_service.update_user_profile(
+        updated_profile, change_summary="Test Tier 1 setup"
     )
-    await trio_db_service.save_patient_profile(patient_profile)
 
     # Create initial Tier 3 (version 1)
-    from models.data_models import (
+    from psychoanalyst_app.models.data_models import (
         AnalyticOrientation,
         CurrentFocus,
         DefensiveOrganization,
@@ -1341,8 +1420,8 @@ async def test_reflection_agent_tier3_versioning(service_container):
 
     from unittest.mock import AsyncMock
 
-    from models.data_models import PatientAnalysis
-    from models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.data_models import PatientAnalysis
+    from psychoanalyst_app.models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
 
     tier2_data = {
         "psychological_summary": (
@@ -1455,7 +1534,12 @@ async def test_reflection_agent_tier3_versioning(service_container):
         llm_service, trio_db_service, rag_service, user_context
     )
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
     reflection_agent = TrioReflectionAgent(
         llm_service,
@@ -1464,6 +1548,7 @@ async def test_reflection_agent_tier3_versioning(service_container):
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     # Run reflection (should create Tier 3 v2)
@@ -1523,12 +1608,13 @@ async def test_reflection_agent_tier3_versioning(service_container):
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_reflection_agent_tier3_no_update_when_stable(service_container):
+async def test_reflection_agent_tier3_no_update_when_stable(
+    service_container, style_service
+):
     """Test Tier 3 not updated when session doesn't warrant change."""
     import json
 
-    from models.data_models import (
-        PatientProfile,
+    from psychoanalyst_app.models.data_models import (
         Session,
         TherapyPlan,
         UserProfile,
@@ -1543,7 +1629,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(service_container):
     test_user = UserProfile(
         user_id="tier3_stable_test",
         name="Stable Test Patient",
-        birthdate=None,
+        data_of_birth=None,
         profession="Accountant",
         status=UserStatus.PLAN_COMPLETE,
         created_at=datetime.now(),
@@ -1551,53 +1637,36 @@ async def test_reflection_agent_tier3_no_update_when_stable(service_container):
     )
     await trio_db_service.save_user_profile(test_user)
 
-    # Create Tier 1 patient profile
-    from models.data_models import (
-        AnalyticFrame,
-        BasicPatientBackground,
-        EducationalWorkHistory,
-        FamilyConstellation,
-        RelationalLifeContext,
+    # Create Tier 1 user profile fields
+    updated_profile = test_user.model_copy(
+        update={
+            "alias": "Stable Test Patient",
+            "gender": "Male",
+            "cultural_background": "American",
+            "primary_language": "English",
+            "parents": "Both parents, stable upbringing",
+            "siblings": "Two siblings",
+            "family_atmosphere": "Supportive",
+            "significant_events": None,
+            "education": "BA in Accounting",
+            "work_history": "Accountant for 10 years",
+            "relationship_to_work": "Stable and satisfying",
+            "relationships": "Married, supportive partner",
+            "social_context": "Good social network",
+            "current_situation": "General life stress, minor anxiety",
+            "preferred_school": "cbt",
+            "session_mode": "in-person",
+            "boundary_notes": None,
+            "frame_notes": None,
+            "updated_at": datetime.now(),
+        }
     )
-
-    patient_profile = PatientProfile(
-        user_id=test_user.user_id,
-        basic_info=BasicPatientBackground(
-            alias="Stable Test Patient",
-            date_of_birth=None,
-            gender="Male",
-            cultural_background="American",
-            primary_language="English",
-        ),
-        family=FamilyConstellation(
-            parents="Both parents, stable upbringing",
-            siblings="Two siblings",
-            family_atmosphere="Supportive",
-            significant_events=None,
-        ),
-        history=EducationalWorkHistory(
-            education="BA in Accounting",
-            work_history="Accountant for 10 years",
-            relationship_to_work="Stable and satisfying",
-        ),
-        context=RelationalLifeContext(
-            relationships="Married, supportive partner",
-            social_context="Good social network",
-            current_situation="General life stress, minor anxiety",
-        ),
-        frame=AnalyticFrame(
-            preferred_school="cbt",
-            session_mode="in-person",
-            boundary_notes=None,
-            frame_notes=None,
-        ),
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+    await trio_db_service.update_user_profile(
+        updated_profile, change_summary="Test Tier 1 setup"
     )
-    await trio_db_service.save_patient_profile(patient_profile)
 
     # Create initial Tier 3 (version 1)
-    from models.data_models import (
+    from psychoanalyst_app.models.data_models import (
         AnalyticOrientation,
         CurrentFocus,
         DefensiveOrganization,
@@ -1706,7 +1775,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(service_container):
 
     from unittest.mock import AsyncMock
 
-    from models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
 
     tier2_data = {
         "psychological_summary": (
@@ -1742,7 +1811,12 @@ async def test_reflection_agent_tier3_no_update_when_stable(service_container):
         llm_service, trio_db_service, rag_service, user_context
     )
     planning_agent = TrioPlanningAgent(
-        llm_service, trio_db_service, rag_service, user_context, memory_agent
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
     )
     reflection_agent = TrioReflectionAgent(
         llm_service,
@@ -1751,6 +1825,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(service_container):
         user_context,
         memory_agent,
         planning_agent,
+        config=service_container.config,
     )
 
     # Run reflection (should NOT create Tier 3 v2)

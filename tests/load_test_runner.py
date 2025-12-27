@@ -12,7 +12,6 @@ This script provides practical load testing for the new architecture:
 import concurrent.futures
 import os
 import statistics
-import sys
 import tempfile
 import time
 from datetime import datetime
@@ -20,14 +19,11 @@ from typing import Any
 
 import psutil
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 from unittest.mock import Mock
 
-from container.service_container import ServiceContainer
-from context.user_context import UserContext
-from models.data_models import Message, Session
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.data_models import Message, Session
 
 
 class LoadTestRunner:
@@ -62,15 +58,14 @@ class LoadTestRunner:
 
         # Create test configuration
         # Create test configuration using settings model
-        from config import settings
+        from psychoanalyst_app.config import Settings
 
+        settings = Settings()
         # Create a modified copy of settings for the load test
         self.config = settings.model_copy(
             update={
                 "DATABASE_PATH": self.temp_db.name,
                 "GOOGLE_API_KEY": "load_test_api_key",
-                "EMBEDDING_MODEL_NAME": "gemini-2.5-flash",
-                # Assuming this maps to MODEL_NAME or similar
                 "DOMAIN_KNOWLEDGE_PATH": self.temp_domain_dir,
                 "VECTOR_DB_PATH": self.temp_vector_dir,
                 "DATABASE_POOL_SIZE": max(10, self.num_workers * 2),

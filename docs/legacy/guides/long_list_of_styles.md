@@ -128,7 +128,7 @@ This document outlines additional therapy styles that could be integrated into t
 
 ### Technical Implementation
 - Each new style would follow the established "Style Pack" architecture
-- New directories in `src/styles/` with the same standardized file structure
+- New directories in `src/psychoanalyst_app/styles/` with the same standardized file structure
 - Updates to the `StyleService` would automatically detect new styles
 - RAG system would load new knowledge from the style's `knowledge.md` file
 

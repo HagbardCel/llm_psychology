@@ -1,20 +1,27 @@
 /**
  * Frontend Type Definitions
  *
- * This file provides a compatibility layer between generated backend types
- * and frontend usage. It re-exports generated types with familiar names and
- * extends them with client-only fields as needed.
- *
- * IMPORTANT: API model types are now imported from generated/api.ts
- * Client-only types (UI state, etc.) are defined here.
+ * API DTOs remain snake_case to mirror the backend contract. Client-only
+ * state uses camelCase fields and is defined alongside the generated types.
  */
 
 import type {
+  CreateSessionRequest as GeneratedCreateSessionRequest,
+  CreateTherapyPlanRequest as GeneratedCreateTherapyPlanRequest,
+  CreateUserProfileRequest as GeneratedCreateUserProfileRequest,
+  HealthCheckResponse as GeneratedHealthCheckResponse,
+  PatchUserProfileRequest as GeneratedPatchUserProfileRequest,
   UserProfile as GeneratedUserProfile,
   UserStatus as GeneratedUserStatus,
   Message as GeneratedMessage,
   Session as GeneratedSession,
   Topic as GeneratedTopic,
+  TherapyPlan as GeneratedTherapyPlan,
+  TherapyStyleDTO as GeneratedTherapyStyleInfo,
+  UpdateUserProfileRequest as GeneratedUpdateUserProfileRequest,
+  UserStatusResponse as GeneratedUserStatusResponse,
+  StatusMessageResponse as GeneratedStatusMessageResponse,
+  WorkflowNextActionRequest as GeneratedWorkflowNextActionRequest,
   WorkflowNextActionResponse,
 } from './generated/api';
 
@@ -22,27 +29,13 @@ import type {
 // API MODELS (Generated from Backend)
 // ============================================================================
 
-/**
- * User profile with client extensions
- * Backend type: UserProfile
- */
-export interface User extends Omit<GeneratedUserProfile, 'userid'> {
-  /** User ID (mapped from userid) */
-  id: string;
-  /** Email address (client-only, not in backend) */
-  email?: string;
-  /** Last activity timestamp (client-only) */
-  lastActiveAt?: Date;
-}
+/** User profile returned by the API */
+export type User = GeneratedUserProfile;
 
-/**
- * User status enum (directly from backend)
- */
+/** User status enum (directly from backend) */
 export type UserStatus = GeneratedUserStatus;
 
-/**
- * Explicitly re-export UserStatus values for convenience
- */
+/** Convenience constants for user status comparisons */
 export const UserStatus = {
   PROFILE_ONLY: 'PROFILE_ONLY' as UserStatus,
   INTAKE_IN_PROGRESS: 'INTAKE_IN_PROGRESS' as UserStatus,
@@ -54,74 +47,68 @@ export const UserStatus = {
   PLAN_COMPLETE: 'PLAN_COMPLETE' as UserStatus,
 } as const;
 
-/**
- * Topic (directly from backend)
- */
+/** Topic (directly from backend) */
 export type Topic = GeneratedTopic;
 
-/**
- * Message with client extensions
- * Backend type: Message
- */
+/** Message DTO with UI extensions */
 export interface Message extends GeneratedMessage {
-  /** Message ID (client-generated) */
+  /** Client-generated identifier (UI-only) */
   id?: string;
-  /** Associated session ID (client-only) */
+  /** Associated session ID (UI-only) */
   sessionId?: string;
 }
 
-/**
- * Session with client extensions
- * Backend type: Session
- */
-export interface Session extends Omit<GeneratedSession, 'sessionid' | 'userid'> {
-  /** Session ID (mapped from sessionid) */
-  id: string;
-  /** User ID (mapped from userid) */
-  userId: string;
-  /** Agent type handling this session (client-only) */
+/** Session DTO with UI extensions */
+export interface Session extends GeneratedSession {
+  /** Agent handling this session (UI-only) */
   agentType?: AgentType;
-  /** Selected therapy style (client-only) */
+  /** Selected therapy style (UI-only) */
   therapyStyle?: TherapyStyle;
-  /** Session status (client-only) */
+  /** Session status for UI flow */
   status?: SessionStatus;
-  /** Session start time (client-only) */
+  /** Derived start time (UI-only) */
   startTime?: Date;
-  /** Session end time (client-only) */
+  /** Derived end time (UI-only) */
   endTime?: Date;
-  /** Additional metadata (client-only) */
+  /** Additional metadata (UI-only) */
   metadata?: Record<string, any>;
 }
 
-/**
- * Therapy plan with client extensions
- * Backend type: TherapyPlan
- */
-export interface TherapyPlan {
-  /** Plan ID */
-  id: string;
-  /** User ID */
-  userId: string;
-  /** Selected therapy style */
-  therapyStyle?: string;
-  /** Therapy goals (client-only) */
-  goals?: string[];
-  /** Number of sessions (client-only) */
+/** Therapy plan DTO with UI extensions */
+export interface TherapyPlan extends GeneratedTherapyPlan {
+  /** Client-only summary fields */
   sessionCount?: number;
-  /** Creation timestamp */
-  createdAt: Date;
-  /** Last update timestamp */
-  updatedAt: Date;
-  /** Plan details from backend */
-  planDetails?: Record<string, any>;
-  /** Plan version */
-  version?: number;
 }
 
-/**
- * Workflow next action (from backend)
- */
+/** Workflow next action (from backend) */
 export type WorkflowNextAction = WorkflowNextActionResponse;
+
+/** Workflow next action request (from backend) */
+export type WorkflowNextActionRequest = GeneratedWorkflowNextActionRequest;
+
+/** User status response (from backend) */
+export type UserStatusResponse = GeneratedUserStatusResponse;
+
+/** Health check response (from backend) */
+export type HealthCheckResponse = GeneratedHealthCheckResponse;
+
+/** User profile create request (from backend) */
+export type CreateUserProfileRequest = GeneratedCreateUserProfileRequest;
+
+/** User profile update request (from backend) */
+export type UpdateUserProfileRequest = GeneratedUpdateUserProfileRequest;
+
+/** User profile patch request (from backend) */
+export type PatchUserProfileRequest = GeneratedPatchUserProfileRequest;
+
+/** Session create request (from backend) */
+export type CreateSessionRequest = GeneratedCreateSessionRequest;
+
+/** Therapy plan create request (from backend) */
+export type CreateTherapyPlanRequest = GeneratedCreateTherapyPlanRequest;
+
+/** Status message response (from backend) */
+export type StatusMessageResponse = GeneratedStatusMessageResponse;
 
 // ============================================================================
 // CLIENT-ONLY TYPES (UI State, Not in Backend)
@@ -201,8 +188,4 @@ export interface UserPreferences {
 /**
  * Therapy style display information
  */
-export interface TherapyStyleInfo {
-  style: string;
-  name: string;
-  description: string;
-}
+export type TherapyStyleInfo = GeneratedTherapyStyleInfo;

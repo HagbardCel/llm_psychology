@@ -1,46 +1,18 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Alert, AlertTitle, Button } from '@mui/material';
+import { Alert } from '@mui/material';
 import { PageContainer, LoadingOverlay } from '../components/shared';
 import { TherapySession } from '../components/TherapySession';
 import { useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
-import { UserStatus } from '../types';
 
 /**
- * IntakePage provides the interface for the intake assessment.
- * Uses the TherapySession component with the Intake agent.
+ * IntakePage renders the intake agent session.
+ * The WorkflowGate ensures users land here only when appropriate.
  */
 export function IntakePage() {
   const userId = useCurrentUserId();
-  const { data: user, isLoading: userLoading } = useUserProfile(userId || '');
-  const navigate = useNavigate();
-  const [error, setError] = useState<string | null>(null);
+  const { isLoading, error } = useUserProfile(userId || '');
 
-  useEffect(() => {
-    if (userLoading || !user) return;
-
-    if (user.status !== UserStatus.INTAKE_IN_PROGRESS) {
-      console.warn(
-        `User status is ${user.status}, but IntakePage expects INTAKE_IN_PROGRESS. Proceeding anyway.`
-      );
-    }
-  }, [user, userLoading]);
-
-  if (error) {
-    return (
-      <PageContainer title="Intake Assessment" maxWidth="md">
-        <Alert severity="error">
-          {error}
-          <Button onClick={() => window.location.reload()} sx={{ ml: 2 }}>
-            Retry
-          </Button>
-        </Alert>
-      </PageContainer>
-    );
-  }
-
-  if (userLoading) {
+  if (isLoading) {
     return <LoadingOverlay message="Preparing your intake session..." fullScreen />;
   }
 
@@ -50,23 +22,12 @@ export function IntakePage() {
       subtitle="Tell me about what brings you here today"
       maxWidth="lg"
     >
-      <TherapySession />
-
-      {/* Show completion prompt when intake is done */}
-      {user?.status === UserStatus.INTAKE_COMPLETE && (
-        <Alert severity="success" sx={{ mt: 2 }}>
-          <AlertTitle>Intake Complete!</AlertTitle>
-          You've completed the intake assessment.
-          <Button
-            variant="contained"
-            size="small"
-            sx={{ ml: 2 }}
-            onClick={() => navigate('/assessment')}
-          >
-            Proceed to Assessment
-          </Button>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error instanceof Error ? error.message : 'Failed to load your profile. Reload the page to try again.'}
         </Alert>
       )}
+      <TherapySession sessionType="intake" />
     </PageContainer>
   );
 }

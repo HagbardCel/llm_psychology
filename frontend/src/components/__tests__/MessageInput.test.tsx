@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MessageInput } from '../MessageInput';
 
@@ -8,8 +8,6 @@ describe('MessageInput', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Mock console.log to avoid noise in tests
-    jest.spyOn(console, 'log').mockImplementation();
   });
 
   afterEach(() => {
@@ -64,7 +62,9 @@ describe('MessageInput', () => {
       render(<MessageInput onSendMessage={mockOnSendMessage} />);
 
       const input = screen.getByPlaceholderText('Type your message...');
-      await user.type(input, 'Hello world');
+      await act(async () => {
+        await user.type(input, 'Hello world');
+      });
 
       expect(input).toHaveValue('Hello world');
     });
@@ -79,7 +79,9 @@ describe('MessageInput', () => {
       );
 
       const input = screen.getByPlaceholderText('Type your message...');
-      await user.type(input, 'Hello');
+      await act(async () => {
+        await user.type(input, 'Hello');
+      });
 
       expect(mockOnTypingChange).toHaveBeenCalled();
       expect(mockOnTypingChange).toHaveBeenLastCalledWith('Hello');
@@ -90,7 +92,9 @@ describe('MessageInput', () => {
       render(<MessageInput onSendMessage={mockOnSendMessage} />);
 
       const input = screen.getByPlaceholderText('Type your message...');
-      await user.type(input, 'Hello');
+      await act(async () => {
+        await user.type(input, 'Hello');
+      });
 
       expect(input).toHaveValue('Hello');
       // No error should occur
@@ -106,8 +110,10 @@ describe('MessageInput', () => {
       const sendButtons = screen.getAllByRole('button');
       const sendButton = sendButtons[sendButtons.length - 1]; // Last button is send
 
-      await user.type(input, 'Hello');
-      await user.click(sendButton);
+      await act(async () => {
+        await user.type(input, 'Hello');
+        await user.click(sendButton);
+      });
 
       expect(mockOnSendMessage).toHaveBeenCalledWith('Hello');
     });
@@ -120,8 +126,10 @@ describe('MessageInput', () => {
       const sendButtons = screen.getAllByRole('button');
       const sendButton = sendButtons[sendButtons.length - 1];
 
-      await user.type(input, '  Hello world  ');
-      await user.click(sendButton);
+      await act(async () => {
+        await user.type(input, '  Hello world  ');
+        await user.click(sendButton);
+      });
 
       expect(mockOnSendMessage).toHaveBeenCalledWith('Hello world');
     });
@@ -134,8 +142,10 @@ describe('MessageInput', () => {
       const sendButtons = screen.getAllByRole('button');
       const sendButton = sendButtons[sendButtons.length - 1];
 
-      await user.type(input, 'Hello');
-      await user.click(sendButton);
+      await act(async () => {
+        await user.type(input, 'Hello');
+        await user.click(sendButton);
+      });
 
       expect(input).toHaveValue('');
     });
@@ -159,7 +169,9 @@ describe('MessageInput', () => {
       const sendButtons = screen.getAllByRole('button');
       const sendButton = sendButtons[sendButtons.length - 1];
 
-      await user.type(input, '   ');
+      await act(async () => {
+        await user.type(input, '   ');
+      });
 
       // Button should remain disabled for whitespace-only input
       expect(sendButton).toBeDisabled();
@@ -171,7 +183,9 @@ describe('MessageInput', () => {
       render(<MessageInput onSendMessage={mockOnSendMessage} />);
 
       const input = screen.getByPlaceholderText('Type your message...');
-      await user.type(input, 'Hello{Enter}');
+      await act(async () => {
+        await user.type(input, 'Hello{Enter}');
+      });
 
       expect(mockOnSendMessage).toHaveBeenCalledWith('Hello');
     });
@@ -281,33 +295,43 @@ describe('MessageInput', () => {
       const sendButtons = screen.getAllByRole('button');
       const sendButton = sendButtons[sendButtons.length - 1];
 
-      await user.type(input, 'Hello');
+      await act(async () => {
+        await user.type(input, 'Hello');
+      });
 
       expect(sendButton).not.toBeDisabled();
     });
 
-    it('should log message when voice button clicked', async () => {
+    it('should show notice when voice button clicked', async () => {
       const user = userEvent.setup();
       render(<MessageInput onSendMessage={mockOnSendMessage} />);
 
       const buttons = screen.getAllByRole('button');
       const voiceButton = buttons[1]; // Second button is voice
 
-      await user.click(voiceButton);
+      await act(async () => {
+        await user.click(voiceButton);
+      });
 
-      expect(console.log).toHaveBeenCalledWith('Voice input not yet implemented');
+      expect(
+        await screen.findByText('Voice input is not supported in this build.')
+      ).toBeInTheDocument();
     });
 
-    it('should log message when attachment button clicked', async () => {
+    it('should show notice when attachment button clicked', async () => {
       const user = userEvent.setup();
       render(<MessageInput onSendMessage={mockOnSendMessage} />);
 
       const buttons = screen.getAllByRole('button');
       const attachButton = buttons[0]; // First button is attachment
 
-      await user.click(attachButton);
+      await act(async () => {
+        await user.click(attachButton);
+      });
 
-      expect(console.log).toHaveBeenCalledWith('File attachment not yet implemented');
+      expect(
+        await screen.findByText('File attachments are not supported in this build.')
+      ).toBeInTheDocument();
     });
   });
 

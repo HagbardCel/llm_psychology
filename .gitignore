@@ -147,6 +147,7 @@ src/data/psychoanalyst_test.db
 # Log files
 logs/
 *.log
+out_test_*
 
 # Cache directories
 .root/.cache/

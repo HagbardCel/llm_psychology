@@ -24,34 +24,62 @@ cp .env.example .env
 Edit `.env` and add your Gemini API key:
 
 ```bash
-GEMINI_API_KEY=your_api_key_here
+GOOGLE_API_KEY=your_api_key_here
 DATABASE_PATH=data/psychoanalyst.db
 ```
 
-### 3. Start the Server
+If you need to reset the local databases during early development, run:
 
 ```bash
-# Start the unified server (HTTP API + WebSocket)
-docker-compose up unified-server
-
-# Or run locally (requires Python 3.11+)
-python src/unified_server.py
+python scripts/purge_databases.py
 ```
 
-The server will start on `http://localhost:8000`
+### 3. Build Dev Containers (Installs Dependencies Inside Docker)
+
+Run:
+
+```bash
+make dev-install
+```
+
+This builds the API/console/frontend Docker images and installs all Python dependencies *inside* those containers (packages are not installed globally on your host). If you want to run backend modules directly on your machine, add the repo’s `src/` folder to `PYTHONPATH` so Python can find the package without installing it:
+
+```bash
+export PYTHONPATH=src
+```
+
+### 4. Start the Server
+
+```bash
+# Start the unified server (HTTP API + WebSocket, Docker)
+make run-server
+
+# Or use Docker Compose directly
+docker compose up api
+
+# Local (opt-in)
+make local-run-server
+```
+
+The server listens on `http://localhost:8000`.
 
 ## Using the Platform
 
 ### Option 1: Web Frontend (Recommended)
 
-1. Navigate to the frontend directory:
+1. Start the web UI with Docker:
+```bash
+make ui-web
+```
+
+2. Open `http://localhost:5173` in your browser
+
+**Local (opt-in):**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-
-2. Open `http://localhost:5173` in your browser
 
 3. Features:
    - Real-time streaming responses
@@ -68,7 +96,7 @@ curl -X POST http://localhost:8000/api/user/profile \
   -H "Content-Type: application/json" \
   -d '{
     "name": "John Doe",
-    "birthdate": "1990-01-01",
+    "data_of_birth": "1990-01-01",
     "profession": "Engineer"
   }'
 ```
@@ -121,36 +149,39 @@ Response:
 ### Option 3: WebSocket Integration
 
 ```javascript
-import { io } from 'socket.io-client';
+// Native WebSocket client (no Socket.IO)
+const ws = new WebSocket('ws://localhost:8000/ws?user_id=user_abc123');
 
-// Connect
-const socket = io('http://localhost:8000', {
-  auth: {
-    user_id: 'user_abc123',
-    token: 'auth_token'
+ws.addEventListener('open', () => {
+  // Start a session first
+  ws.send(
+    JSON.stringify({
+      type: 'session_request',
+      data: { session_type: 'therapy' }
+    })
+  );
+});
+
+ws.addEventListener('message', (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.type === 'chat_response_chunk') {
+    const { chunk, is_complete } = message.data || {};
+    if (!is_complete) {
+      displayChunk(chunk);
+    } else {
+      console.log('Response complete');
+    }
   }
 });
 
-// Listen for streaming responses
-socket.on('chat_response_chunk', (data) => {
-  if (!data.is_complete) {
-    // Accumulate chunks
-    currentMessage += data.chunk;
-    displayChunk(data.chunk);
-  } else {
-    // Response complete
-    console.log('Full response:', data.full_response);
-  }
-});
-
-// Send a message
-socket.emit('message', {
-  type: 'chat_message',
-  data: {
-    message: 'I need help with anxiety',
-    session_id: 'session_xyz789'
-  }
-});
+// Send a chat message (after session_started)
+ws.send(
+  JSON.stringify({
+    type: 'chat_message',
+    data: { message: 'I need help with anxiety' }
+  })
+);
 ```
 
 ## Complete Therapy Workflow
@@ -309,23 +340,12 @@ water often represents the unconscious. What comes to mind?"
 
 ### Time Management
 
-- Default session: 50 minutes
-- Max 2 extensions of 5 minutes each
-- Warnings at 10 and 5 minutes remaining
+- Default session: 45 minutes (configurable via `SESSION_DURATION_MINUTES`)
+- Max 2 extensions of 5 minutes each (tracked in session context)
+- Session timer is available via the HTTP endpoint:
 
-```javascript
-// Extend session via WebSocket
-socket.emit('message', {
-  type: 'session_extension',
-  data: {
-    session_id: 'session_xyz789'
-  }
-});
-
-// Response
-socket.on('session_extended', (data) => {
-  console.log('Session extended by', data.additional_minutes, 'minutes');
-});
+```bash
+GET /api/sessions/session_xyz789/timer
 ```
 
 ### Ending a Session
@@ -336,8 +356,8 @@ Sessions automatically end when:
 - Agent determines session complete
 
 ```bash
-# Via API
-curl -X POST http://localhost:8000/api/sessions/session_xyz789/end
+# Via WebSocket
+{"type": "end_session", "data": {"reason": "User ended session"}}
 ```
 
 ## Advanced Features
@@ -364,12 +384,19 @@ Real-time chunk-by-chunk message delivery:
 ```javascript
 let currentMessage = '';
 
-socket.on('chat_response_chunk', (data) => {
-  if (!data.is_complete) {
-    currentMessage += data.chunk;
-    updateUI(data.chunk); // Update UI incrementally
+ws.addEventListener('message', (event) => {
+  const message = JSON.parse(event.data);
+  if (message.type !== 'chat_response_chunk') {
+    return;
+  }
+
+  const { chunk, is_complete } = message.data || {};
+  if (!is_complete) {
+    currentMessage += chunk;
+    updateUI(chunk); // Update UI incrementally
   } else {
-    finalizeMessage(data.full_response);
+    finalizeMessage(currentMessage);
+    currentMessage = '';
   }
 });
 ```
@@ -395,7 +422,7 @@ Returns:
 
 **Solutions**:
 - Check server is running on port 8000
-- Verify CORS settings in `src/unified_server.py`
+- Verify CORS settings in `src/psychoanalyst_app/trio_server.py`
 - Check browser console for errors
 - Try `ws://localhost:8000` vs `http://localhost:8000`
 
@@ -407,7 +434,7 @@ Returns:
 - Check `chat_response_chunk` event handler
 - Verify LLM service streaming is enabled
 - Check network tab for WebSocket frames
-- Ensure Socket.IO client version >= 4.0
+- Ensure the client uses native WebSocket (no Socket.IO)
 
 ### Invalid State Transition
 
@@ -415,7 +442,7 @@ Returns:
 
 **Solutions**:
 - Check current workflow state: `GET /api/user/status`
-- Review valid transitions in `src/orchestration/workflow_engine.py`
+- Review valid transitions in `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
 - Ensure proper sequence (can't skip intake/assessment)
 
 ### API Key Issues
@@ -423,9 +450,9 @@ Returns:
 **Problem**: LLM not responding
 
 **Solutions**:
-- Verify `GEMINI_API_KEY` in `.env`
+- Verify `GOOGLE_API_KEY` in `.env` (or `GEMINI_API_KEY` as a legacy alias)
 - Check API quota/limits
-- View logs: `docker-compose logs unified-server`
+- View logs: `docker compose logs -f api`
 
 ## Production Deployment
 
@@ -433,7 +460,7 @@ Returns:
 
 ```bash
 # Required
-GEMINI_API_KEY=your_production_key
+GOOGLE_API_KEY=your_production_key
 DATABASE_PATH=/app/data/psychoanalyst.db
 
 # Optional
@@ -453,7 +480,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - DATABASE_PATH=/app/data/psychoanalyst.db
     volumes:
       - ./data:/app/data
@@ -473,7 +500,6 @@ For production load:
 
 - [Architecture Documentation](./ARCHITECTURE.md) - Deep dive into system design
 - [API Reference](./API.md) - Complete API documentation
-- [Development Guide](../CLAUDE.md) - Contributing and development
 
 ## Support
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 # Imports from scripts directory (added to path by conftest.py)
-from generate_schemas import (
+from psychoanalyst_app.schemas.generate_schemas import (
     dataclass_to_pydantic,
     enhance_schema_for_typescript,
     generate_enum_schema,
@@ -15,8 +15,9 @@ from generate_schemas import (
 )
 
 # Imports from src directory (added to path by conftest.py)
-from models.data_models import Message, UserProfile, UserStatus
-from orchestration.models import AgentResponse, WorkflowState
+from psychoanalyst_app.models.data_models import UserStatus
+from psychoanalyst_app.models.http_models import MessageDTO, UserProfileDTO
+from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 
 
 @pytest.mark.unit
@@ -25,7 +26,7 @@ class TestSchemaGeneration:
 
     def test_generate_pydantic_schema(self, tmp_path):
         """Test generating schema from Pydantic model."""
-        generate_schema(UserProfile, tmp_path)
+        generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
 
         schema_file = tmp_path / "UserProfile.json"
         assert schema_file.exists(), "Schema file should be created"
@@ -83,7 +84,7 @@ class TestSchemaGeneration:
 
     def test_schema_has_metadata(self, tmp_path):
         """Test that generated schemas have proper metadata."""
-        generate_schema(Message, tmp_path)
+        generate_schema(MessageDTO, tmp_path, schema_name="Message")
 
         schema_file = tmp_path / "Message.json"
         with open(schema_file) as f:
@@ -93,10 +94,11 @@ class TestSchemaGeneration:
         assert schema["$schema"] == "http://json-schema.org/draft-07/schema#"
         assert "$id" in schema
         assert schema["$id"].startswith("https://psychoanalyst.app/schemas/")
+        assert schema["title"] == "Message"
 
     def test_enum_enhancement_for_typescript(self, tmp_path):
         """Test that enum fields are enhanced with TypeScript metadata."""
-        generate_schema(UserProfile, tmp_path)
+        generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
 
         schema_file = tmp_path / "UserProfile.json"
         with open(schema_file) as f:
@@ -112,24 +114,24 @@ class TestSchemaGeneration:
 
     def test_optional_fields_handled_correctly(self, tmp_path):
         """Test that optional fields are properly represented."""
-        generate_schema(UserProfile, tmp_path)
+        generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
 
         schema_file = tmp_path / "UserProfile.json"
         with open(schema_file) as f:
             schema = json.load(f)
 
-        # birthdate is optional
-        birthdate_field = schema["properties"]["birthdate"]
-        assert "anyOf" in birthdate_field or "type" not in birthdate_field
+        # data_of_birth is optional
+        data_of_birth_field = schema["properties"]["data_of_birth"]
+        assert "anyOf" in data_of_birth_field or "type" not in data_of_birth_field
 
         # It should have a default value or be nullable
-        assert "default" in birthdate_field or any(
-            item.get("type") == "null" for item in birthdate_field.get("anyOf", [])
+        assert "default" in data_of_birth_field or any(
+            item.get("type") == "null" for item in data_of_birth_field.get("anyOf", [])
         )
 
     def test_datetime_fields_serialized_as_strings(self, tmp_path):
         """Test that datetime fields are serialized as ISO strings."""
-        generate_schema(UserProfile, tmp_path)
+        generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
 
         schema_file = tmp_path / "UserProfile.json"
         with open(schema_file) as f:
@@ -211,9 +213,9 @@ class TestSchemaIntegration:
 
             # Create a sample UserProfile instance
             from datetime import datetime
-            from models.data_models import UserProfile
+            from psychoanalyst_app.models.http_models import UserProfileDTO
 
-            user = UserProfile(
+            user = UserProfileDTO(
                 user_id="test-123",
                 name="Test User",
                 status=UserStatus.PROFILE_ONLY,

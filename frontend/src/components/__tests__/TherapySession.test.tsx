@@ -4,27 +4,14 @@ import { BrowserRouter } from 'react-router-dom';
 import { TherapySession } from '../TherapySession';
 import { AppProvider } from '../../contexts/AppContext';
 import type { SessionStartedEvent } from '../../types/websocket';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 const mockSendChatMessage = jest.fn();
-const mockStartTyping = jest.fn();
-const mockStopTyping = jest.fn();
 const mockRequestSession = jest.fn();
 
 let mockIsConnected = true;
 let mockConnectionStatus = { isConnected: true, isConnecting: false };
 let mockLastMessage: any = null;
-
-jest.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({
-    token: 'test-token',
-    user: { userId: 'test-user-id', username: 'test-user' },
-    isAuthenticated: true,
-    isLoading: false,
-    login: jest.fn(),
-    register: jest.fn(),
-    logout: jest.fn(),
-  }),
-}));
 
 jest.mock('../../hooks/useWebSocket', () => ({
   useWebSocket: jest.fn((_config) => {
@@ -32,18 +19,10 @@ jest.mock('../../hooks/useWebSocket', () => ({
       connectionStatus: mockConnectionStatus,
       lastMessage: mockLastMessage,
       sendChatMessage: mockSendChatMessage,
-      startTyping: mockStartTyping,
-      stopTyping: mockStopTyping,
       requestSession: mockRequestSession,
       isConnected: mockIsConnected,
     };
   }),
-}));
-
-jest.mock('../../hooks/useTypingIndicator', () => ({
-  useTypingIndicator: jest.fn(() => ({
-    handleInputChange: jest.fn(),
-  })),
 }));
 
 jest.mock('../SessionHeader', () => ({
@@ -110,10 +89,11 @@ describe('TherapySession', () => {
     mockIsConnected = true;
     mockConnectionStatus = { isConnected: true, isConnecting: false };
     mockLastMessage = null;
+    localStorage.setItem('current_user_id', 'test-user-id');
   });
 
   function emitSessionStarted(overrides?: Partial<SessionStartedEvent>) {
-    const useWebSocketCall = require('../../hooks/useWebSocket').useWebSocket.mock.calls[0][0];
+    const useWebSocketCall = (useWebSocket as jest.MockedFunction<typeof useWebSocket>).mock.calls[0][0];
     const onSessionStarted = useWebSocketCall.onSessionStarted;
 
     const event: SessionStartedEvent = {
@@ -132,7 +112,7 @@ describe('TherapySession', () => {
   }
 
   function emitStreamingChunk(chunk: string, isComplete: boolean, fullResponse?: string) {
-    const useWebSocketCall = require('../../hooks/useWebSocket').useWebSocket.mock.calls[0][0];
+    const useWebSocketCall = (useWebSocket as jest.MockedFunction<typeof useWebSocket>).mock.calls[0][0];
     const onStreamingChunk = useWebSocketCall.onStreamingChunk;
 
     act(() => {

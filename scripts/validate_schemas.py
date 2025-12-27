@@ -10,15 +10,11 @@ This script performs comprehensive validation of generated JSON schemas:
 """
 
 import json
-import sys
 from pathlib import Path
 from typing import List, Tuple
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from models.data_models import UserProfile, UserStatus, Message, TherapyPlan
-from orchestration.models import WorkflowState, WorkflowEvent
+from psychoanalyst_app.models.data_models import UserProfile, UserStatus, Message, TherapyPlan
+from psychoanalyst_app.orchestration.models import WorkflowState, WorkflowEvent
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
 

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Card,
   CardContent,
@@ -38,7 +37,6 @@ export function SettingsPage() {
   const { data: user } = useUserProfile(userId || '');
   const { data: sessions } = useSessionHistory(userId || '');
   const { data: therapyPlan } = useTherapyPlan(userId || '');
-  const navigate = useNavigate();
 
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(
     (localStorage.getItem('theme') as 'light' | 'dark') || 'light'
@@ -53,6 +51,7 @@ export function SettingsPage() {
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [isResetting, setIsResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const resetAvailable = false;
 
   const handleThemeChange = (newTheme: 'light' | 'dark') => {
     setThemeMode(newTheme);
@@ -80,13 +79,18 @@ export function SettingsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `therapy-data-${user?.id}-${Date.now()}.json`;
+    a.download = `therapy-data-${user?.user_id}-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const handleResetProgress = async () => {
     if (!user) return;
+
+    if (!resetAvailable) {
+      setError('Reset progress is not available in this build.');
+      return;
+    }
 
     // Validation: Must type "RESET" exactly
     if (resetConfirmText !== 'RESET') {
@@ -98,22 +102,7 @@ export function SettingsPage() {
     setError(null);
 
     try {
-      // TODO: Replace with actual backend endpoint when implemented
-      // await fetch(`${import.meta.env.VITE_API_URL}/api/user/reset-progress`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ user_id: user.id })
-      // });
-
-      // Note: This should be implemented as a backend API call
-      // For now, just navigate to profile page
-      console.warn(
-        `[TODO] User ${user?.id} requested progress reset at ${new Date().toISOString()}`
-      );
-      console.warn('[TODO] Implement backend API endpoint for reset-progress');
-
-      // Navigate to profile
-      navigate('/profile');
+      setError('Reset progress is not available in this build.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reset progress');
       console.error('Reset progress error:', err);
@@ -233,10 +222,16 @@ export function SettingsPage() {
             color="error"
             startIcon={<DeleteIcon />}
             onClick={() => setShowResetDialog(true)}
+            disabled={!resetAvailable}
             sx={{ mt: 2 }}
           >
             Reset Progress
           </Button>
+          {!resetAvailable && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Progress reset is not yet available. Your data remains unchanged.
+            </Alert>
+          )}
         </CardContent>
       </Card>
 

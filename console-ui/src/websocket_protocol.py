@@ -9,7 +9,7 @@ in docs/WEBSOCKET_PROTOCOL.md.
 from typing import Final
 
 # Protocol Version
-WS_PROTOCOL_VERSION: Final[str] = "1.0"
+WS_PROTOCOL_VERSION: Final[str] = "1.2.1"
 
 
 # Client → Server Message Types
@@ -18,7 +18,7 @@ class ClientMessageTypes:
 
     SESSION_REQUEST: Final[str] = "session_request"
     CHAT_MESSAGE: Final[str] = "chat_message"
-    PING: Final[str] = "ping"
+    END_SESSION: Final[str] = "end_session"
 
 
 # Server → Client Message Types
@@ -30,11 +30,9 @@ class ServerMessageTypes:
     CHAT_RESPONSE_CHUNK: Final[str] = "chat_response_chunk"
     TYPING_START: Final[str] = "typing_start"
     TYPING_STOP: Final[str] = "typing_stop"
-    USER_STATUS: Final[str] = "user_status"
-    STYLE_SELECTED: Final[str] = "style_selected"
-    SESSION_EXTENDED: Final[str] = "session_extended"
+    SESSION_ENDED: Final[str] = "session_ended"
+    ASSESSMENT_RECOMMENDATIONS: Final[str] = "assessment_recommendations"
     ERROR: Final[str] = "error"
-    PONG: Final[str] = "pong"
 
 
 # Connection States
@@ -55,7 +53,6 @@ class ErrorCodes:
     INVALID_MESSAGE_FORMAT: Final[str] = "invalid_message_format"
     MISSING_REQUIRED_FIELD: Final[str] = "missing_required_field"
     SESSION_NOT_FOUND: Final[str] = "session_not_found"
-    UNAUTHORIZED: Final[str] = "unauthorized"
     INTERNAL_ERROR: Final[str] = "internal_error"
     RATE_LIMIT_EXCEEDED: Final[str] = "rate_limit_exceeded"
 
@@ -63,15 +60,13 @@ class ErrorCodes:
 # Convenience aliases for backward compatibility and easier imports
 MSG_SESSION_REQUEST = ClientMessageTypes.SESSION_REQUEST
 MSG_CHAT_MESSAGE = ClientMessageTypes.CHAT_MESSAGE
-MSG_PING = ClientMessageTypes.PING
+MSG_END_SESSION = ClientMessageTypes.END_SESSION
 
 MSG_CONNECTED = ServerMessageTypes.CONNECTED
 MSG_SESSION_STARTED = ServerMessageTypes.SESSION_STARTED
 MSG_CHAT_RESPONSE_CHUNK = ServerMessageTypes.CHAT_RESPONSE_CHUNK
 MSG_TYPING_START = ServerMessageTypes.TYPING_START
 MSG_TYPING_STOP = ServerMessageTypes.TYPING_STOP
-MSG_USER_STATUS = ServerMessageTypes.USER_STATUS
-MSG_STYLE_SELECTED = ServerMessageTypes.STYLE_SELECTED
-MSG_SESSION_EXTENDED = ServerMessageTypes.SESSION_EXTENDED
+MSG_SESSION_ENDED = ServerMessageTypes.SESSION_ENDED
+MSG_ASSESSMENT_RECOMMENDATIONS = ServerMessageTypes.ASSESSMENT_RECOMMENDATIONS
 MSG_ERROR = ServerMessageTypes.ERROR
-MSG_PONG = ServerMessageTypes.PONG
