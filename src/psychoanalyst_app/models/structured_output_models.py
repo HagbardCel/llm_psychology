@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,7 +36,7 @@ class BasicPatientBackgroundPatch(BaseModel):
     data_of_birth: datetime | None = None
     gender: str | None = None
     cultural_background: str | None = Field(default=None, max_length=500)
-    primary_language: str | None = Field(default=None, max_length=50)
+    primary_language: str = Field(default="English", max_length=50)
 
 
 class FamilyConstellationPatch(BaseModel):
@@ -68,7 +68,7 @@ class AnalyticFramePatch(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     preferred_school: str | None = None
-    session_mode: str | None = None
+    session_mode: str = "virtual"
     boundary_notes: str | None = Field(default=None, max_length=500)
     frame_notes: str | None = Field(default=None, max_length=500)
 
@@ -119,3 +119,44 @@ class SessionAnalysis(BaseModel):
     emotional_state: str = Field(..., min_length=1)
     insights: list[str] = Field(default_factory=list)
     progress_indicators: list[str] = Field(default_factory=list)
+
+
+class StructuredUserProfileOutput(BaseModel):
+    """Structured profile payload aligned with UserProfile fields."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str | None = None
+    alias: str | None = Field(default=None, max_length=100)
+    data_of_birth: datetime | None = None
+    gender: str | None = None
+    cultural_background: str | None = Field(default=None, max_length=500)
+    primary_language: str | None = Field(default=None, max_length=50)
+    profession: str | None = None
+    parents: str | None = Field(default=None, max_length=1000)
+    siblings: str | None = Field(default=None, max_length=500)
+    family_atmosphere: str | None = Field(default=None, max_length=1000)
+    significant_events: str | None = Field(default=None, max_length=1000)
+    education: str | None = Field(default=None, max_length=500)
+    work_history: str | None = Field(default=None, max_length=1000)
+    relationship_to_work: str | None = Field(default=None, max_length=500)
+    relationships: str | None = Field(default=None, max_length=1000)
+    social_context: str | None = Field(default=None, max_length=500)
+    current_situation: str | None = Field(default=None, max_length=1000)
+    preferred_school: str | None = None
+    session_mode: str | None = None
+    boundary_notes: str | None = Field(default=None, max_length=500)
+    frame_notes: str | None = Field(default=None, max_length=500)
+
+
+class StructuredTherapyPlanOutput(BaseModel):
+    """Structured plan payload aligned with TherapyPlan content fields."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    selected_therapy_style: str | None = None
+    plan_details: dict[str, Any]
+    initial_goals: list[str] = Field(..., min_length=1)
+    current_progress: str = Field(..., min_length=1, max_length=2000)
+    planned_interventions: list[str] = Field(..., min_length=1)
+    status: Literal["active", "paused", "completed"] = "active"

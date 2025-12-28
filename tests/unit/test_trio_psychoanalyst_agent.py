@@ -32,8 +32,6 @@ def psychoanalyst_agent(app_config):
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,
-        user_context=None,
-        conversation_manager=None,
         style_service=mock_style,
         config=app_config,
     )
@@ -253,8 +251,6 @@ async def test_load_patient_context_includes_tiers(app_config):
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,
-        user_context=None,
-        conversation_manager=None,
         style_service=Mock(),
         config=app_config,
     )

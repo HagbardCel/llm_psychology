@@ -143,7 +143,6 @@ class TestServiceContainerAgentCreation:
         assert agent is mock_agent
         mock_intake_agent.assert_called_once_with(
             llm_service=container.get("llm_service_intake"),
-            db_service=container.get("trio_db_service"),
             user_context=user_context,
             config=container.config,
         )
@@ -199,7 +198,6 @@ class TestServiceContainerAgentCreation:
             llm_service=container.get("llm_service_psychoanalyst"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
-            user_context=user_context,
             reflection_agent=mock_reflection,
             style_service=container.get("style_service"),
             config=container.config,

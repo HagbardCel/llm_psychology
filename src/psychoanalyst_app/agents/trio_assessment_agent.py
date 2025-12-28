@@ -56,10 +56,6 @@ class TrioAssessmentAgent:
     """
     Agent for assessing user needs and recommending therapy styles.
 
-    This agent has two modes:
-    1. Legacy mode: Direct method calls (for backward compatibility)
-    2. Orchestrator mode: Returns AgentResponse for orchestration layer
-
     Uses Trio's structured concurrency for all async operations.
     """
 
@@ -68,7 +64,7 @@ class TrioAssessmentAgent:
         llm_service: LLMService,
         db_service: TrioDatabaseService,
         rag_service: RAGService,
-        user_context: UserContext | None = None,
+        user_context: UserContext,
         reflection_agent=None,
         style_service: StyleService | None = None,
     ):
@@ -79,7 +75,7 @@ class TrioAssessmentAgent:
             llm_service: The LLM service for generating responses (synchronous)
             db_service: The Trio database service for storing therapy plans
             rag_service: The RAG service for retrieving domain knowledge (synchronous)
-            user_context: User context (optional, for legacy mode)
+            user_context: User context
             reflection_agent: TrioReflectionAgent for dependency injection
         """
         self.llm_service = llm_service

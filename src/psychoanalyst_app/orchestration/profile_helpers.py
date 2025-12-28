@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 
 def parse_date_of_birth(value: str | datetime | None) -> datetime | None:
@@ -80,3 +81,28 @@ def merge_user_profile(
         created_at=created_at,
         updated_at=datetime.now(),
     )
+
+
+async def ensure_user_profile(
+    trio_db_service: TrioDatabaseService,
+    user_id: str,
+    defaults: dict[str, Any] | None = None,
+) -> UserProfile:
+    """Ensure a user profile exists, applying defaults without transitions."""
+    existing_profile = await trio_db_service.get_user_profile(user_id)
+    updates = dict(defaults or {})
+    data_of_birth = updates.get("data_of_birth")
+    if isinstance(data_of_birth, str) and data_of_birth:
+        updates["data_of_birth"] = parse_date_of_birth(data_of_birth)
+
+    user_profile = merge_user_profile(
+        existing_profile=existing_profile,
+        user_id=user_id,
+        updates=updates,
+    )
+
+    success = await trio_db_service.update_user_profile(user_profile)
+    if not success:
+        raise ValueError("Failed to save user profile to database")
+
+    return user_profile

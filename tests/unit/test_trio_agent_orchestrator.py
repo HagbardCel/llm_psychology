@@ -92,6 +92,25 @@ async def test_handle_agent_response_complete(orchestrator, mock_dependencies):
 
 
 @pytest.mark.trio
+async def test_process_message_propagates_exceptions(orchestrator, mock_dependencies):
+    """Test that process_message propagates helper exceptions."""
+    mock_dependencies["workflow_engine"].get_user_state.return_value = (
+        WorkflowState.INTAKE_IN_PROGRESS
+    )
+    orchestrator.session_lifecycle.create_session = AsyncMock(
+        return_value="session_123"
+    )
+    orchestrator.conversation_manager.add_message = AsyncMock()
+    orchestrator.conversation_manager.get_context = AsyncMock(
+        side_effect=RuntimeError("boom")
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async for _ in orchestrator.process_message("user_123", "hi", None):
+            pass
+
+
+@pytest.mark.trio
 async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     """Test successful therapy plan creation via orchestrator."""
     # Setup mocks

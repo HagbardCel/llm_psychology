@@ -14,9 +14,8 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.briefing_models import BriefingStatus
-from psychoanalyst_app.models.data_models import Session, TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import AgentResponse, ConversationContext, WorkflowState
 from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
     build_continuation_prompt,
@@ -36,10 +35,6 @@ class TrioPsychoanalystAgent:
     """
     Trio-native agent responsible for conducting therapy sessions.
 
-    This agent has two modes:
-    1. Legacy mode: Full session management (limited support in Trio version)
-    2. Orchestrator mode: Pure business logic, returns prompts
-
     Uses Trio's structured concurrency for all async operations.
     """
 
@@ -48,8 +43,6 @@ class TrioPsychoanalystAgent:
         llm_service: LLMService,
         db_service: TrioDatabaseService,
         rag_service: RAGService,
-        user_context: UserContext | None = None,
-        conversation_manager: Any | None = None,
         reflection_agent: Any | None = None,
         style_service: StyleService | None = None,
         config: Settings | None = None,
@@ -61,16 +54,12 @@ class TrioPsychoanalystAgent:
             llm_service: The LLM service for generating responses (synchronous)
             db_service: The Trio database service for storing sessions
             rag_service: The RAG service for retrieving domain knowledge (synchronous)
-            user_context: User context (optional, for legacy mode)
-            conversation_manager: Conversation manager for streaming (optional)
             reflection_agent: Reflection agent (optional; used for on-demand Tier 2 enrichment)
             config: Application settings
         """
         self.llm_service = llm_service
         self.db_service = db_service
         self.rag_service = rag_service
-        self.user_context = user_context
-        self.conversation_manager = conversation_manager
         self.reflection_agent = reflection_agent
         if config is None:
             raise ValueError("config is required")
@@ -605,99 +594,6 @@ class TrioPsychoanalystAgent:
             )
             return None
 
-    # ===== LEGACY INTERFACE (limited support) =====
-
-    async def get_initial_prompt_legacy(self, therapy_plan: TherapyPlan) -> str:
-        """
-        Get the initial prompt for the therapy session using Trio.
-
-        Args:
-            therapy_plan: Therapy plan
-
-        Returns:
-            Initial prompt string
-        """
-        selected_style = therapy_plan.selected_therapy_style
-
-        # Get user profile for personalization
-        user_profile = await self.db_service.get_user_profile(self.user_context.user_id)
-        user_name = user_profile.name if user_profile else "Client"
-
-        # Get plan context
-        plan_context = await self._build_plan_context(therapy_plan)
-
-        # Get style instructions
-        style_instructions = "Conduct a general psychoanalytic session."
-        if selected_style and self.style_service.get_style_pack(selected_style):
-            style_instructions = self.style_service.get_psychoanalyst_prompt(selected_style)
-
-        return build_initial_prompt(
-            user_name=user_name,
-            plan_context=plan_context,
-            style_instructions=style_instructions,
-        )
-
-    async def handle_user_message(
-        self, message: str, session: Session, therapy_plan: TherapyPlan
-    ) -> str:
-        """
-        Handle a user message and generate a therapy response using Trio.
-
-        Args:
-            message: User's message
-            session: Current session
-            therapy_plan: Therapy plan
-
-        Returns:
-            LLM response string
-        """
-        selected_style = therapy_plan.selected_therapy_style if therapy_plan else None
-
-        # Get relevant RAG knowledge
-        recent_context = " ".join([msg.content for msg in session.transcript[-3:]])
-
-        # Retrieve knowledge (run in thread)
-        if selected_style:
-            knowledge_source = self.style_service.get_knowledge_source(selected_style)
-            context_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                recent_context,
-                1,  # n_results
-                knowledge_source,  # filter_source
-            )
-        else:
-            context_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                recent_context,
-                1,  # n_results
-            )
-
-        # Build response prompt
-        plan_context = await self._build_plan_context(therapy_plan)
-        context_messages = [
-            {"role": msg.role, "content": msg.content} for msg in session.transcript
-        ]
-
-        # Get style instructions
-        style_instructions = "Conduct a general psychoanalytic session."
-        if selected_style and self.style_service.get_style_pack(selected_style):
-            style_instructions = self.style_service.get_psychoanalyst_prompt(selected_style)
-
-        knowledge_text = (
-            context_knowledge[0]["content"] if context_knowledge else "None"
-        )
-
-        response_prompt = build_continuation_prompt(
-            plan_context=plan_context,
-            additional_knowledge=knowledge_text,
-            time_prompt="",
-            style_instructions=style_instructions,
-        )
-
-        # Generate response (run in thread)
-        return await trio.to_thread.run_sync(
-            self.llm_service.generate_response, response_prompt, context_messages
-        )
 
     async def get_closing_response(self, therapy_plan: TherapyPlan) -> str:
         """

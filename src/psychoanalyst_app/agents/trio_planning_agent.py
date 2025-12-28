@@ -42,6 +42,10 @@ from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.exceptions import PlanningError
 from psychoanalyst_app.models.data_models import Session, TherapyPlan
+from psychoanalyst_app.models.structured_output_models import StructuredTherapyPlanOutput
+from psychoanalyst_app.orchestration.agent_output_validators import (
+    build_therapy_plan_output,
+)
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
 from psychoanalyst_app.services.style_service import StyleService
@@ -126,69 +130,22 @@ class TrioPlanningAgent:
                 logger.debug(
                     "TrioPlanningAgent.create_initial_plan started (shielded)"
                 )
-                # Analyze intake session with memory agent
-                session_context = await self.memory_agent.analyze_session_context(
-                    intake_session
+                structured_plan = await self.build_structured_plan_output(
+                    intake_session, selected_style
                 )
-                logger.debug("TrioPlanningAgent analyzed session context")
-
-                # Get relevant domain knowledge (run in thread)
-                session_text = extract_session_text(intake_session)
-                relevant_knowledge = await get_relevant_knowledge(
-                    self.rag_service,
-                    self.style_service,
-                    session_text,
-                    selected_style,
-                )
-                logger.debug("TrioPlanningAgent got relevant knowledge")
-
-                # Determine therapy style if not specified
-                if not selected_style:
-                    selected_style = recommend_therapy_style(
-                        session_context, relevant_knowledge
-                    )
-
-                # Create planning strategy
-                strategy = create_planning_strategy(
-                    self.style_service, selected_style, session_context
-                )
-                self.current_strategy = strategy
-
-                # Generate plan using LLM (run in thread)
-                logger.debug("TrioPlanningAgent generating plan details via LLM")
-                plan_details = await generate_initial_plan_details(
-                    self.llm_service,
-                    self.style_service,
-                    intake_session,
-                    session_context,
-                    strategy,
-                    relevant_knowledge,
-                )
-                logger.debug("TrioPlanningAgent generated plan details")
-
-                # Create therapy plan object
-                plan_id = str(uuid.uuid4())
-                initial_goals = split_bullets(plan_details.get("goals", ""))
-                if not initial_goals:
-                    raise PlanningError("Failed to derive initial goals for TherapyPlan")
-                planned_interventions = split_bullets(
-                    plan_details.get("techniques", "")
-                )
-                if not planned_interventions:
-                    planned_interventions = ["Supportive listening"]
 
                 therapy_plan = TherapyPlan(
-                    plan_id=plan_id,
+                    plan_id=str(uuid.uuid4()),
                     user_id=self.user_context.user_id,
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
-                    plan_details=plan_details,
-                    initial_goals=initial_goals,
-                    current_progress="Baseline established",
-                    planned_interventions=planned_interventions,
-                    status="active",
+                    plan_details=structured_plan.plan_details,
+                    initial_goals=structured_plan.initial_goals,
+                    current_progress=structured_plan.current_progress,
+                    planned_interventions=structured_plan.planned_interventions,
+                    status=structured_plan.status,
                     version=1,
-                    selected_therapy_style=selected_style,
+                    selected_therapy_style=structured_plan.selected_therapy_style,
                 )
 
                 # Save plan to database
@@ -198,20 +155,88 @@ class TrioPlanningAgent:
 
                 # Record plan creation
                 evolution = PlanEvolution(
-                    plan_id=plan_id,
+                    plan_id=therapy_plan.plan_id,
                     version=1,
                     changes=["initial_plan_created"],
                     rationale="Initial therapy plan based on intake session analysis",
                 )
                 self.plan_evolution.append(evolution)
 
-                logger.info(f"Initial therapy plan created: {plan_id}")
-                logger.debug("TrioPlanningAgent plan created %s", plan_id)
+                logger.info(
+                    "Initial therapy plan created: %s", therapy_plan.plan_id
+                )
+                logger.debug(
+                    "TrioPlanningAgent plan created %s", therapy_plan.plan_id
+                )
                 return therapy_plan
 
         except Exception as e:
             logger.error(f"Failed to create initial therapy plan: {e}", exc_info=True)
             raise PlanningError(f"Initial plan creation failed: {e}")
+
+    async def build_structured_plan_output(
+        self,
+        intake_session: Session,
+        selected_style: str | None = None,
+    ) -> StructuredTherapyPlanOutput:
+        """Generate a structured therapy plan payload without persistence."""
+        # Analyze intake session with memory agent
+        session_context = await self.memory_agent.analyze_session_context(
+            intake_session
+        )
+        logger.debug("TrioPlanningAgent analyzed session context")
+
+        # Get relevant domain knowledge (run in thread)
+        session_text = extract_session_text(intake_session)
+        relevant_knowledge = await get_relevant_knowledge(
+            self.rag_service,
+            self.style_service,
+            session_text,
+            selected_style,
+        )
+        logger.debug("TrioPlanningAgent got relevant knowledge")
+
+        # Determine therapy style if not specified
+        if not selected_style:
+            selected_style = recommend_therapy_style(
+                session_context, relevant_knowledge
+            )
+
+        # Create planning strategy
+        strategy = create_planning_strategy(
+            self.style_service, selected_style, session_context
+        )
+        self.current_strategy = strategy
+
+        # Generate plan using LLM (run in thread)
+        logger.debug("TrioPlanningAgent generating plan details via LLM")
+        plan_details = await generate_initial_plan_details(
+            self.llm_service,
+            self.style_service,
+            intake_session,
+            session_context,
+            strategy,
+            relevant_knowledge,
+        )
+        logger.debug("TrioPlanningAgent generated plan details")
+
+        initial_goals = split_bullets(plan_details.get("goals", ""))
+        if not initial_goals:
+            raise PlanningError("Failed to derive initial goals for TherapyPlan")
+        planned_interventions = split_bullets(plan_details.get("techniques", ""))
+        if not planned_interventions:
+            planned_interventions = ["Supportive listening"]
+
+        return build_therapy_plan_output(
+            {
+                "selected_therapy_style": selected_style,
+                "plan_details": plan_details,
+                "initial_goals": initial_goals,
+                "current_progress": "Baseline established",
+                "planned_interventions": planned_interventions,
+                "status": "active",
+            }
+        )
 
     async def update_plan(
         self, session: Session, current_plan: TherapyPlan, force_update: bool = False

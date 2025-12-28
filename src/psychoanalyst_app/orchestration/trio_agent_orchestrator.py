@@ -26,10 +26,16 @@ from psychoanalyst_app.orchestration.orchestrator_helpers import (
     AgentResponseHandler,
     SessionLifecycleManager,
 )
-from psychoanalyst_app.orchestration.profile_helpers import (
-    merge_user_profile,
-    parse_date_of_birth,
+from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
+from psychoanalyst_app.orchestration.process_messages import (
+    ensure_profile_for_new_state,
+    ensure_session,
+    finalize_agent_response,
+    record_user_message,
+    resolve_agent_and_context,
+    stream_agent_response,
 )
+from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
@@ -114,56 +120,40 @@ class TrioAgentOrchestrator:
         Raises:
             ValueError: If user or session not found
         """
+        state = None
         try:
-            logger.info(f"Processing message for user {user_id}")
+            logger.info("Processing message for user %s", user_id)
 
-            # Get or create session
-            if not session_id:
-                session_id = await self.session_lifecycle.create_session(user_id)
-                logger.info(f"Created new session: {session_id}")
+            session_id = await ensure_session(
+                self.session_lifecycle, user_id, session_id
+            )
 
-            # Add user message to history (skip empty messages used for
-            # initial greetings)
-            if message.strip():
-                await self.conversation_manager.add_message(session_id, "user", message)
+            await record_user_message(
+                self.conversation_manager, session_id, message
+            )
 
-            # Get workflow state
             state = await self.workflow_engine.get_user_state(user_id)
-            logger.info(f"User {user_id} workflow state: {state}")
+            logger.info("User %s workflow state: %s", user_id, state)
 
-            # Special handling for NEW state: create placeholder user profile
-            if state == WorkflowState.NEW:
-                logger.info(f"Processing NEW user state for {user_id}")
+            await ensure_profile_for_new_state(
+                self.service_container, user_id, state
+            )
 
-                # Check if profile exists, if not create guest profile
-                try:
-                    user_profile = await self.service_container.get(
-                        "trio_db_service"
-                    ).get_user_profile(user_id)
-                    if not user_profile:
-                        logger.info(f"Creating guest profile for {user_id}")
-                        await self.create_user_profile(
-                            {"user_id": user_id, "name": "Guest"}
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error checking/creating guest profile: {e}", exc_info=True
-                    )
+            agent_type, agent, context = await resolve_agent_and_context(
+                self.workflow_engine,
+                self.conversation_manager,
+                self._get_or_create_agent,
+                user_id,
+                session_id,
+                state,
+            )
+            logger.info("Routing to agent: %s", agent_type)
 
-            # Get appropriate agent
-            agent_type = self.workflow_engine.get_current_agent(state)
-            logger.info(f"Routing to agent: {agent_type}")
-
-            # Get conversation context
-            context = await self.conversation_manager.get_context(session_id)
-
-            # Get or create agent instance
-            agent = await self._get_or_create_agent(agent_type, user_id)
-
-            # Call agent to process message and get response
             agent_response = await agent.process_message(message, context)
             logger.info(
-                f"Agent {agent_type} returned action: {agent_response.next_action}"
+                "Agent %s returned action: %s",
+                agent_type,
+                agent_response.next_action,
             )
             logger.debug(
                 "Agent response: action=%s state=%s direct=%s",
@@ -172,63 +162,33 @@ class TrioAgentOrchestrator:
                 (agent_response.metadata or {}).get("is_direct_response"),
             )
 
-            # Use the agent's configured LLM service for streaming to keep parity
-            agent_llm_service = getattr(agent, "llm_service", None)
-            if agent_llm_service is None:
-                agent_llm_service = self.service_container.get("llm_service")
+            async for chunk in stream_agent_response(
+                self.conversation_manager,
+                self.service_container,
+                agent_type,
+                agent,
+                agent_response,
+                context,
+            ):
+                yield chunk
 
-            # Stream the agent's content
-            metadata = agent_response.metadata or {}
-            if metadata.get("is_direct_response"):
-                # Stream static content directly
-                async for chunk in self.conversation_manager.stream_static_response(
-                    agent_response.content, context, agent=agent_type
-                ):
-                    yield chunk
-            else:
-                # Stream through LLM (content is a prompt)
-                async for chunk in self.conversation_manager.stream_response(
-                    agent_response.content,
-                    context,
-                    agent=agent_type,
-                    llm_service=agent_llm_service,
-                ):
-                    yield chunk
+            await finalize_agent_response(
+                self.service_container,
+                self.response_handler,
+                user_id,
+                session_id,
+                agent_response,
+            )
 
-            # Handle state transitions based on agent response
-            await self.response_handler.handle(user_id, session_id, agent_response)
-
-        except Exception as e:
-            import traceback
-
-            # Get full stacktrace
-            tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-
-            # Log the error
+        except Exception:
             logger.error(
-                f"CRITICAL ERROR processing message for user {user_id}: "
-                f"{type(e).__name__}: {e}",
+                "Error processing message (user=%s, session=%s, state=%s)",
+                user_id,
+                session_id,
+                state,
                 exc_info=True,
             )
-            logger.error(
-                f"Error occurred at session_id: "
-                f"{session_id if 'session_id' in locals() else 'NOT_SET'}"
-            )
-            logger.error(
-                f"User state: {state if 'state' in locals() else 'NOT_RETRIEVED'}"
-            )
-
-            # Return detailed error with stacktrace for debugging
-            error_msg = f"""
-ERROR: {type(e).__name__}: {str(e)}
-
-Session ID: {session_id if "session_id" in locals() else "NOT_SET"}
-User State: {state if "state" in locals() else "NOT_RETRIEVED"}
-
-STACKTRACE:
-{tb_str}
-"""
-            yield error_msg
+            raise
 
     async def start_session(
         self,
@@ -286,37 +246,20 @@ STACKTRACE:
             if not user_id:
                 raise ValueError("user_id is required for profile creation")
 
-            data_of_birth = profile_data.get("data_of_birth")
-            if isinstance(data_of_birth, str) and data_of_birth:
-                parsed = parse_date_of_birth(data_of_birth)
-                if parsed is None:
-                    logger.warning(
-                        "Invalid data_of_birth format: %s",
-                        data_of_birth,
-                    )
-                else:
-                    profile_data = {**profile_data, "data_of_birth": parsed}
-
             trio_db_service = self.service_container.get("trio_db_service")
             existing_profile = await trio_db_service.get_user_profile(user_id)
             prior_status = (
                 existing_profile.status if existing_profile else UserStatus.PROFILE_ONLY
             )
 
-            user_profile = merge_user_profile(
-                existing_profile=existing_profile,
-                user_id=user_id,
-                updates=profile_data,
+            user_profile = await ensure_user_profile(
+                trio_db_service, user_id, profile_data
             )
 
-            # Save to database
-            success = await trio_db_service.update_user_profile(user_profile)
-
-            if not success:
-                raise ValueError("Failed to save user profile to database")
-
-            # If this is the initial profile completion, advance to intake.
-            if prior_status == UserStatus.PROFILE_ONLY:
+            if (
+                prior_status == UserStatus.PROFILE_ONLY
+                and is_profile_complete(user_profile)
+            ):
                 await self.workflow_engine.transition(
                     user_id,
                     WorkflowState.INTAKE_IN_PROGRESS,
@@ -324,14 +267,18 @@ STACKTRACE:
                 )
                 updated = await trio_db_service.get_user_profile(user_id)
                 if updated:
-                    logger.info(f"Created user profile for {user_id}: {updated.name}")
+                    logger.info(
+                        "Created user profile for %s: %s",
+                        user_id,
+                        updated.name,
+                    )
                     return updated
 
-            logger.info(f"Updated user profile for {user_id}: {user_profile.name}")
+            logger.info("Updated user profile for %s: %s", user_id, user_profile.name)
             return user_profile
 
-        except Exception as e:
-            logger.error(f"Error creating user profile: {e}", exc_info=True)
+        except Exception:
+            logger.error("Error creating user profile", exc_info=True)
             raise
 
     async def create_therapy_plan(

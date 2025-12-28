@@ -7,11 +7,8 @@ the user's background, current concerns, and therapy goals.
 Pure Trio implementation using structured concurrency.
 """
 
-import json
 import logging
 from datetime import datetime
-
-import trio
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.context.user_context import UserContext
@@ -20,6 +17,9 @@ from psychoanalyst_app.models.data_models import (
     UserStatus,
 )
 from psychoanalyst_app.models.structured_output_models import PatientProfileExtract
+from psychoanalyst_app.orchestration.agent_output_validators import (
+    build_user_profile_output,
+)
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
@@ -33,7 +33,6 @@ from psychoanalyst_app.prompts.intake_prompts import (
     TIER1_EXTRACTION_PROMPT,
 )
 from psychoanalyst_app.services.llm_service import LLMService
-from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,6 @@ class TrioIntakeAgent:
     def __init__(
         self,
         llm_service: LLMService,
-        db_service: TrioDatabaseService,
         user_context: UserContext,
         config: Settings,
     ):
@@ -57,12 +55,10 @@ class TrioIntakeAgent:
 
         Args:
             llm_service: The LLM service for generating responses (synchronous)
-            db_service: The Trio database service for storing sessions
             user_context: User context
             config: Application settings
         """
         self.llm_service = llm_service
-        self.db_service = db_service
         self.user_context = user_context
         self.session_duration = config.SESSION_DURATION_MINUTES
         self.intake_topics = config.INTAKE_TOPICS
@@ -111,6 +107,7 @@ class TrioIntakeAgent:
             next_action = "continue"
             next_state = None
             prompt = ""
+            structured_profile = None
 
             # Handle Guest user (initial name collection)
             # Check if name is Guest OR status is PROFILE_ONLY (new user)
@@ -142,16 +139,24 @@ class TrioIntakeAgent:
                     # User provided name - update profile and start intake
                     new_name = message.strip()
                     context.user_profile.name = new_name
-                    # Also update status to INTAKE_IN_PROGRESS in the profile object
-                    # so that subsequent logic (if any) sees the new status
-                    context.user_profile.status = UserStatus.INTAKE_IN_PROGRESS
-
-                    await self.db_service.save_user_profile(context.user_profile)
+                    structured_profile = build_user_profile_output({"name": new_name})
 
                     # Build standard initial prompt with new name
                     prompt = self._build_initial_prompt(context)
                     next_action = "transition"
                     next_state = WorkflowState.INTAKE_IN_PROGRESS
+                    return AgentResponse(
+                        content=prompt,
+                        next_action=next_action,
+                        next_state=next_state,
+                        metadata={
+                            "topics_covered": context.topics_covered,
+                            "time_remaining_minutes": context.time_remaining_minutes,
+                            "can_extend": context.can_extend,
+                            "is_time_up": context.is_time_up,
+                            "user_profile": structured_profile,
+                        },
+                    )
 
             # Standard intake flow
             elif len(context.message_history) == 0:
@@ -172,20 +177,13 @@ class TrioIntakeAgent:
                     )
 
                     if tier1_updates:
-                        updated_profile = context.user_profile.model_copy(
-                            update={
-                                **tier1_updates,
-                                "updated_at": datetime.now(),
-                            }
-                        )
-                        await self.db_service.update_user_profile(
-                            updated_profile, change_summary="Intake Tier 1 update"
-                        )
+                        structured_profile = build_user_profile_output(tier1_updates)
                         logger.info(
-                            "Saved Tier 1 user profile details for %s",
-                            updated_profile.user_id,
+                            "Extracted Tier 1 user profile details for %s",
+                            context.user_profile.user_id,
                         )
                     else:
+                        structured_profile = None
                         logger.warning(
                             "Failed to extract Tier 1 data from intake conversation"
                         )
@@ -220,6 +218,7 @@ class TrioIntakeAgent:
                     "time_remaining_minutes": context.time_remaining_minutes,
                     "can_extend": context.can_extend,
                     "is_time_up": context.is_time_up,
+                    "user_profile": structured_profile,
                 },
             )
 

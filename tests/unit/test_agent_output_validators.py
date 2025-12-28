@@ -1,0 +1,56 @@
+from datetime import datetime
+
+from psychoanalyst_app.models.data_models import UserProfile
+from psychoanalyst_app.orchestration.agent_output_validators import (
+    build_therapy_plan_output,
+    build_user_profile_output,
+    is_profile_complete,
+)
+
+
+def test_build_user_profile_output_defaults():
+    output = build_user_profile_output({"name": "Alice"})
+
+    assert output.name == "Alice"
+    assert output.primary_language == "English"
+    assert output.session_mode == "virtual"
+
+
+def test_build_user_profile_output_parses_date():
+    output = build_user_profile_output({"data_of_birth": "1990-01-02"})
+
+    assert isinstance(output.data_of_birth, datetime)
+
+
+def test_is_profile_complete_requires_non_guest_name():
+    incomplete = UserProfile(
+        user_id="guest_user",
+        name="Guest",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    complete = UserProfile(
+        user_id="user_123",
+        name="Alex",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+
+    assert is_profile_complete(incomplete) is False
+    assert is_profile_complete(complete) is True
+
+
+def test_build_therapy_plan_output():
+    output = build_therapy_plan_output(
+        {
+            "selected_therapy_style": "cbt",
+            "plan_details": {"focus": "test"},
+            "initial_goals": ["Goal 1"],
+            "current_progress": "Baseline established",
+            "planned_interventions": ["Supportive listening"],
+            "status": "active",
+        }
+    )
+
+    assert output.selected_therapy_style == "cbt"
+    assert output.plan_details["focus"] == "test"

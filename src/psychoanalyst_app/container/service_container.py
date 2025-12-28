@@ -545,7 +545,6 @@ class ServiceContainer:
         try:
             agent = TrioIntakeAgent(
                 llm_service=self._get_llm_service_for_agent("INTAKE"),
-                db_service=self.get("trio_db_service"),
                 user_context=user_context,
                 config=self.config,
             )
@@ -587,7 +586,6 @@ class ServiceContainer:
                 llm_service=self._get_llm_service_for_agent("PSYCHOANALYST"),
                 db_service=self.get("trio_db_service"),
                 rag_service=self.get("rag_service"),
-                user_context=user_context,
                 reflection_agent=reflection_agent,
                 style_service=self.get("style_service"),
                 config=self.config,

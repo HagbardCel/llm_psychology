@@ -25,6 +25,10 @@ from psychoanalyst_app.models.data_models import (
     UserProfile,
     UserStatus,
 )
+from psychoanalyst_app.models.structured_output_models import (
+    StructuredTherapyPlanOutput,
+    StructuredUserProfileOutput,
+)
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowState
 
 
@@ -235,6 +239,37 @@ async def test_planning_agent_create_initial_plan(
     assert therapy_plan.version == 1
 
 
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_planning_agent_build_structured_output(
+    service_container, user_context, test_session, style_service
+):
+    """Test that planning agent returns structured plan output."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+
+    planning_agent = TrioPlanningAgent(
+        llm_service,
+        trio_db_service,
+        rag_service,
+        user_context,
+        memory_agent,
+        style_service=style_service,
+    )
+
+    structured_plan = await planning_agent.build_structured_plan_output(
+        test_session, "cbt"
+    )
+
+    assert isinstance(structured_plan, StructuredTherapyPlanOutput)
+    assert structured_plan.selected_therapy_style == "cbt"
+
+
 # ===== TrioIntakeAgent Tests =====
 
 
@@ -243,10 +278,9 @@ async def test_planning_agent_create_initial_plan(
 async def test_intake_agent_initialization(service_container, user_context):
     """Test TrioIntakeAgent initialization."""
     llm_service = service_container.get("llm_service")
-    trio_db_service = service_container.get("trio_db_service")
 
     intake_agent = TrioIntakeAgent(
-        llm_service, trio_db_service, user_context, config=service_container.config
+        llm_service, user_context, config=service_container.config
     )
 
     assert intake_agent is not None
@@ -275,7 +309,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
 
     user_context = UserContext(user_id=guest_user.user_id)
     intake_agent = TrioIntakeAgent(
-        llm_service, trio_db_service, user_context, config=service_container.config
+        llm_service, user_context, config=service_container.config
     )
 
     # Create session
@@ -333,7 +367,7 @@ async def test_intake_agent_guest_name_collection(service_container):
 
     user_context = UserContext(user_id=guest_user.user_id)
     intake_agent = TrioIntakeAgent(
-        llm_service, trio_db_service, user_context, config=service_container.config
+        llm_service, user_context, config=service_container.config
     )
 
     # Create session
@@ -366,11 +400,10 @@ async def test_intake_agent_guest_name_collection(service_container):
     assert response.next_action == "transition"
     assert response.next_state == WorkflowState.INTAKE_IN_PROGRESS
     assert context.user_profile.name == "John Smith"
-    assert context.user_profile.status == UserStatus.INTAKE_IN_PROGRESS
-
-    # Verify profile was saved to database
-    updated_profile = await trio_db_service.get_user_profile(guest_user.user_id)
-    assert updated_profile.name == "John Smith"
+    structured_profile = response.metadata.get("user_profile")
+    assert structured_profile is not None
+    assert isinstance(structured_profile, StructuredUserProfileOutput)
+    assert structured_profile.name == "John Smith"
 
 
 @pytest.mark.trio
@@ -394,7 +427,7 @@ async def test_intake_agent_tier1_extraction(service_container):
 
     user_context = UserContext(user_id=test_user.user_id)
     intake_agent = TrioIntakeAgent(
-        llm_service, trio_db_service, user_context, config=service_container.config
+        llm_service, user_context, config=service_container.config
     )
 
     # Create a rich intake conversation with patient information
@@ -507,19 +540,13 @@ async def test_intake_agent_tier1_extraction(service_container):
     assert response.next_action == "transition"
     assert response.next_state == WorkflowState.INTAKE_COMPLETE
 
-    # Verify user profile was extracted and saved
-    user_profile = await trio_db_service.get_user_profile(test_user.user_id)
-
-    assert user_profile is not None
-    assert user_profile.user_id == test_user.user_id
-
-    # Verify basic info
-    assert user_profile.alias == "Sarah Johnson"
+    structured_profile = response.metadata.get("user_profile")
+    assert structured_profile is not None
+    assert isinstance(structured_profile, StructuredUserProfileOutput)
+    assert structured_profile.alias == "Sarah Johnson"
     # Note: Other fields may be null if not mentioned in conversation
 
-    # Verify timestamps
-    assert user_profile.created_at is not None
-    assert user_profile.updated_at is not None
+    # Verify timestamps are managed by persistence (not intake agent)
 
 
 # ===== TrioReflectionAgent Tests =====
@@ -815,7 +842,6 @@ async def test_psychoanalyst_agent_initialization(
         llm_service,
         trio_db_service,
         rag_service,
-        user_context,
         style_service=style_service,
         config=service_container.config,
     )
@@ -878,7 +904,6 @@ async def test_full_agent_workflow(
         llm_service,
         trio_db_service,
         rag_service,
-        user_context,
         style_service=style_service,
         config=service_container.config,
     )

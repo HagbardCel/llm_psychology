@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 
 from quart import websocket
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
 from psychoanalyst_app.utils.ws_messages import chat_chunk_message, connected_message, session_started_message
 
 logger = logging.getLogger(__name__)
@@ -38,14 +37,11 @@ def register_ws_handler(app, server) -> None:
 
         user_profile = await server.db_service.get_user_profile(user_id)
         if not user_profile:
-            user_profile = UserProfile(
-                user_id=user_id,
-                name=user_id,
-                status=UserStatus.PROFILE_ONLY,
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
+            user_profile = await ensure_user_profile(
+                server.db_service,
+                user_id,
+                {"name": user_id},
             )
-            await server.db_service.save_user_profile(user_profile)
             logger.info("Auto-created profile for new user: %s", user_id)
 
         await websocket.send(
@@ -159,5 +155,8 @@ async def _handle_chat_message_ws(
         logger.warning("Received invalid JSON in session %s", session_id)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error(
-            "Error handling chat message in session %s: %s", session_id, exc, exc_info=True
+            "Error handling chat message in session %s: %s",
+            session_id,
+            exc,
+            exc_info=True,
         )
