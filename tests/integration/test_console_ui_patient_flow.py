@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 from unittest.mock import Mock
 
+import httpx
 import pytest
 import trio
 from trio_websocket import ConnectionClosed, open_websocket_url
@@ -214,6 +215,13 @@ def mock_llm_service_with_context():
         return chunks
 
     llm.generate_response_stream = mock_stream
+
+    async def mock_stream_response(prompt, *args, **kwargs):
+        chunks = await mock_stream(prompt, *args, **kwargs)
+        for chunk in chunks:
+            yield chunk
+
+    llm.stream_response = mock_stream_response
     llm.generate_response = Mock(return_value="This is a generated response.")
 
     # Structured outputs: used by Tier extraction/enrichment paths.
@@ -630,11 +638,24 @@ async def test_complete_patient_journey_intake_to_therapy(
     # Test data
     user_id = f"console_test_{uuid.uuid4().hex[:8]}"
 
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{test_server_websocket['url']}/api/user/register",
+            json={
+                "user_id": user_id,
+                "name": "Fabian",
+                "primary_language": "English",
+                "session_mode": "virtual",
+            },
+        )
+        assert response.status_code == 201, response.text
+
     # Track received events
     received_events = {
         "connected": [],
         "session_started": [],
         "chat_response_chunk": [],
+        "workflow_next_action": [],
         "typing_start": [],
         "typing_stop": [],
         "error": [],
@@ -705,40 +726,18 @@ async def test_complete_patient_journey_intake_to_therapy(
             # Give receiver time to start
             await trio.sleep(0.1)
 
-            # Request intake session
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "session_request",
-                        "data": {"user_id": user_id, "session_type": "therapy"},
-                    }
-                )
-            )
-
             # Wait for session_started event
             await trio.sleep(0.3)
             assert (
                 len(received_events["session_started"]) > 0
             ), "Should receive session_started"
 
-            session_data = received_events["session_started"][0]
+            session_data = received_events["session_started"][-1]
             assert "session_id" in session_data["data"]
             session_id = session_data["data"]["session_id"]
             user_status = session_data["data"].get("user_status", "unknown")
 
             logger.info(f"✓ Session started: {session_id}, status: {user_status}")
-
-            # Check if initial message was sent
-            if session_data["data"].get("has_initial_message"):
-                # Wait for initial message chunks
-                await trio.sleep(0.3)
-                initial_chunks = [
-                    c
-                    for c in received_events["chat_response_chunk"]
-                    if c.get("data", {}).get("is_complete") == True
-                ]
-                assert len(initial_chunks) > 0, "Should receive initial greeting"
-                logger.info("✓ Received initial greeting message")
 
             # Clear chunk buffer for next message
             received_events["chat_response_chunk"].clear()
@@ -918,26 +917,9 @@ async def test_complete_patient_journey_intake_to_therapy(
             assert state == WorkflowState.INTAKE_COMPLETE
             logger.info(f"✓ Transitioned to {state.value}")
 
-            # Start assessment session
-            received_events["session_started"].clear()
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "session_request",
-                        "data": {"user_id": user_id, "session_type": "therapy"},
-                    }
-                )
-            )
-
-            await trio.sleep(0.3)
-
-            # Verify assessment session started
-            assert (
-                len(received_events["session_started"]) > 0
-            ), "Should start assessment session"
-            assessment_session_data = received_events["session_started"][0]
-            assessment_session_id = assessment_session_data["data"]["session_id"]
-            logger.info(f"✓ Assessment session started: {assessment_session_id}")
+            # Continue with the existing session for assessment
+            assessment_session_id = session_id
+            logger.info(f"✓ Assessment uses existing session: {assessment_session_id}")
 
             # Transition to ASSESSMENT_IN_PROGRESS
             await orchestrator.workflow_engine.transition(
@@ -952,25 +934,9 @@ async def test_complete_patient_journey_intake_to_therapy(
             # Wait for recommendations message
             await trio.sleep(0.5)
 
-            # Select therapy style
+            # Select therapy style (handled via workflow step, not chat)
             selected_style = "cbt"
             logger.info(f"Selecting therapy style: {selected_style}")
-
-            # Send style selection
-            received_events["chat_response_chunk"].clear()
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "chat_message",
-                        "data": {
-                            "message": f"I would like to try {selected_style.upper()}",
-                            "session_id": assessment_session_id,
-                        },
-                    }
-                )
-            )
-
-            await trio.sleep(0.5)
 
             # Manually create therapy plan and transition state
             from psychoanalyst_app.models.data_models import TherapyPlan
@@ -1016,28 +982,10 @@ async def test_complete_patient_journey_intake_to_therapy(
                 user_id, WorkflowState.THERAPY_IN_PROGRESS, WorkflowEvent.START_THERAPY
             )
 
-            # Start therapy session
-            received_events["session_started"].clear()
+            # Continue with the existing session for therapy
             received_events["chat_response_chunk"].clear()
-
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "session_request",
-                        "data": {"user_id": user_id, "session_type": "therapy"},
-                    }
-                )
-            )
-
-            await trio.sleep(0.3)
-
-            # Verify therapy session started
-            assert (
-                len(received_events["session_started"]) > 0
-            ), "Should start therapy session"
-            therapy_session_data = received_events["session_started"][0]
-            therapy_session_id = therapy_session_data["data"]["session_id"]
-            logger.info(f"✓ Therapy session started: {therapy_session_id}")
+            therapy_session_id = session_id
+            logger.info(f"✓ Therapy uses existing session: {therapy_session_id}")
 
             # Wait for initial greeting if present
             await trio.sleep(0.3)
@@ -1180,6 +1128,18 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
     # Test data
     user_id = f"intake_test_{uuid.uuid4().hex[:8]}"
 
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{test_server_websocket['url']}/api/user/register",
+            json={
+                "user_id": user_id,
+                "name": "Fabian",
+                "primary_language": "English",
+                "session_mode": "virtual",
+            },
+        )
+        assert response.status_code == 201, response.text
+
     # Track received events
     received_events = {
         "connected": [],
@@ -1255,40 +1215,18 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             # Give receiver time to start
             await trio.sleep(0.1)
 
-            # Request intake session
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "session_request",
-                        "data": {"user_id": user_id, "session_type": "therapy"},
-                    }
-                )
-            )
-
             # Wait for session_started event
             await trio.sleep(0.3)
             assert (
                 len(received_events["session_started"]) > 0
             ), "Should receive session_started"
 
-            session_data = received_events["session_started"][0]
+            session_data = received_events["session_started"][-1]
             assert "session_id" in session_data["data"]
             session_id = session_data["data"]["session_id"]
             user_status = session_data["data"].get("user_status", "unknown")
 
             logger.info(f"✓ Session started: {session_id}, status: {user_status}")
-
-            # Check if initial message was sent
-            if session_data["data"].get("has_initial_message"):
-                # Wait for initial message chunks
-                await trio.sleep(0.3)
-                initial_chunks = [
-                    c
-                    for c in received_events["chat_response_chunk"]
-                    if c.get("data", {}).get("is_complete") == True
-                ]
-                assert len(initial_chunks) > 0, "Should receive initial greeting"
-                logger.info("✓ Received initial greeting message")
 
             # Clear chunk buffer for next message
             received_events["chat_response_chunk"].clear()

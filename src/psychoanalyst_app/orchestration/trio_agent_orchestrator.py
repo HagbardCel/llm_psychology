@@ -7,7 +7,6 @@ using Trio's structured concurrency.
 """
 
 import logging
-import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
@@ -16,7 +15,12 @@ import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.api_models import (
+    RequiredWorkflowAction,
+    WorkflowNextActionDTO,
+)
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
     WorkflowEvent,
@@ -25,8 +29,8 @@ from psychoanalyst_app.orchestration.models import (
 from psychoanalyst_app.orchestration.orchestrator_helpers import (
     AgentResponseHandler,
     SessionLifecycleManager,
+    persist_therapy_plan_from_output,
 )
-from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.process_messages import (
     ensure_profile_for_new_state,
     ensure_session,
@@ -38,6 +42,7 @@ from psychoanalyst_app.orchestration.process_messages import (
 from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
+from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 
 # Agent imports moved to factory methods to avoid circular dependency
 
@@ -82,6 +87,7 @@ class TrioAgentOrchestrator:
             conversation_manager=self.conversation_manager,
             nursery=self.nursery,
             get_agent=self._get_or_create_agent,
+            emit_next_action=self.emit_workflow_next_action,
         )
         self.session_lifecycle = SessionLifecycleManager(
             service_container=self.service_container,
@@ -90,6 +96,7 @@ class TrioAgentOrchestrator:
             nursery=self.nursery,
             process_message=self.process_message,
             run_reflection=self.response_handler.run_reflection,
+            emit_next_action=self.emit_workflow_next_action,
         )
         self.response_handler.attach_session_callbacks(
             create_session=self.session_lifecycle.create_session,
@@ -156,9 +163,10 @@ class TrioAgentOrchestrator:
                 agent_response.next_action,
             )
             logger.debug(
-                "Agent response: action=%s state=%s direct=%s",
+                "Agent response: action=%s state=%s event=%s direct=%s",
                 agent_response.next_action,
                 agent_response.next_state,
+                agent_response.workflow_event,
                 (agent_response.metadata or {}).get("is_direct_response"),
             )
 
@@ -179,6 +187,13 @@ class TrioAgentOrchestrator:
                 session_id,
                 agent_response,
             )
+            try:
+                await self.emit_workflow_next_action(user_id, session_id)
+            except Exception:
+                logger.warning(
+                    "Failed to emit workflow next action after agent response",
+                    exc_info=True,
+                )
 
         except Exception:
             logger.error(
@@ -218,6 +233,10 @@ class TrioAgentOrchestrator:
             send_initial_message=send_initial_message,
         )
 
+    def send_initial_greeting(self, user_id: str, session_id: str) -> None:
+        """Schedule the initial greeting for a session."""
+        self.session_lifecycle.send_initial_greeting(user_id, session_id)
+
     async def get_user_state(self, user_id: str) -> WorkflowState:
         """
         Get current workflow state for a user.
@@ -229,6 +248,112 @@ class TrioAgentOrchestrator:
             Current workflow state
         """
         return await self.workflow_engine.get_user_state(user_id)
+
+    def get_active_session_id(self, user_id: str) -> str | None:
+        """Return the active session ID for a user if available."""
+        return self.session_lifecycle.get_active_session_id(user_id)
+
+    def is_session_active(self, user_id: str, session_id: str) -> bool:
+        """Return whether a session is active for a user."""
+        return self.session_lifecycle.is_session_active(user_id, session_id)
+
+    async def ensure_session_for_user(
+        self,
+        user_id: str,
+        session_type: str,
+        *,
+        send_initial_message: bool = False,
+    ) -> SessionInfo:
+        """Ensure a session exists for a user, creating one if needed."""
+        return await self.session_lifecycle.ensure_session(
+            user_id,
+            session_type=session_type,
+            send_initial_message=send_initial_message,
+        )
+
+    async def get_workflow_next_action(
+        self,
+        user_id: str,
+        session_id: str | None = None,
+        session: SessionInfo | None = None,
+    ) -> WorkflowNextActionDTO:
+        """
+        Build the next action instruction for a user using the resolver.
+
+        Args:
+            user_id: User identifier
+            session: Optional active session context
+
+        Returns:
+            WorkflowNextActionDTO describing the required action
+        """
+        trio_db_service = self.service_container.get("trio_db_service")
+        profile = await trio_db_service.get_user_profile(user_id)
+        plan = await trio_db_service.get_latest_therapy_plan(user_id)
+        workflow_state = await self.workflow_engine.get_user_state(user_id)
+        if session is None and session_id:
+            session = await self.session_lifecycle.get_session_info(
+                user_id, session_id
+            )
+        return resolve_next_action(
+            user_id=user_id,
+            profile=profile,
+            plan=plan,
+            workflow_state=workflow_state,
+            session=session,
+        )
+
+    async def emit_workflow_next_action(
+        self, user_id: str, session_id: str | None = None
+    ) -> None:
+        """
+        Send the workflow next action event to the WebSocket session if available.
+        """
+        resolved_session_id = (
+            session_id or self.session_lifecycle.get_active_session_id(user_id)
+        )
+        if not resolved_session_id:
+            return
+        try:
+            action = await self.get_workflow_next_action(
+                user_id, session_id=resolved_session_id
+            )
+            await self.conversation_manager.send_json_message(
+                resolved_session_id,
+                "workflow_next_action",
+                action.model_dump(mode="json"),
+            )
+            if action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE:
+                await self.response_handler.emit_assessment_recommendations(
+                    resolved_session_id, user_id
+                )
+            if action.required_action in (
+                RequiredWorkflowAction.START_INTAKE,
+                RequiredWorkflowAction.CONTINUE_THERAPY,
+            ):
+                if not self.conversation_manager.has_initial_greeting_sent(
+                    resolved_session_id
+                ):
+                    self.send_initial_greeting(user_id, resolved_session_id)
+        except Exception:
+            logger.warning(
+                "Failed to emit workflow next action (user=%s, session=%s)",
+                user_id,
+                resolved_session_id,
+                exc_info=True,
+            )
+
+    async def emit_assessment_recommendations(
+        self, user_id: str, session_id: str
+    ) -> None:
+        """Send cached assessment recommendations if available."""
+        await self.response_handler.emit_assessment_recommendations(
+            session_id, user_id
+        )
+
+    async def ensure_assessment_job(self, user_id: str, session_id: str) -> None:
+        """Ensure assessment jobs are running when required."""
+        await self.response_handler.ensure_assessment_job(user_id, session_id)
 
     async def create_user_profile(
         self, profile_data: dict[str, Any]
@@ -316,43 +441,57 @@ class TrioAgentOrchestrator:
 
             # Check if plan already exists
             existing_plan = await trio_db_service.get_latest_therapy_plan(user_id)
-            if existing_plan and existing_plan.version == 1:
+            if existing_plan:
+                if (
+                    existing_plan.selected_therapy_style
+                    and existing_plan.selected_therapy_style != therapy_style
+                ):
+                    raise ValueError(
+                        "Therapy plan already exists with a different style"
+                    )
+                if not existing_plan.selected_therapy_style:
+                    existing_plan.selected_therapy_style = therapy_style
+                    existing_plan.updated_at = datetime.now()
+                    success = await trio_db_service.save_therapy_plan(existing_plan)
+                    if not success:
+                        raise RuntimeError(
+                            "Failed to update therapy plan with selected style"
+                        )
                 logger.info(
-                    f"Therapy plan already exists for {user_id}, returning existing"
+                    "Therapy plan already exists for %s, returning existing",
+                    user_id,
                 )
                 return existing_plan
 
-            # Create minimal therapy plan (version 1).
-            # Tier 4 fields must always be present.
-            plan = TherapyPlan(
-                plan_id=str(uuid.uuid4()),
+            intake_sessions = await self.session_lifecycle.find_intake_sessions(
+                user_id
+            )
+            if not intake_sessions:
+                raise ValueError(
+                    f"Intake session not found for user {user_id}"
+                )
+            if len(intake_sessions) > 1:
+                raise ValueError(
+                    f"Multiple intake sessions found for user {user_id}"
+                )
+            intake_session = intake_sessions[0]
+
+            reflection_agent = await self._get_or_create_agent(
+                "REFLECTION", user_id
+            )
+            plan_output = await reflection_agent.create_initial_plan_with_style(
+                intake_session, therapy_style
+            )
+            plan = await persist_therapy_plan_from_output(
+                trio_db_service=trio_db_service,
                 user_id=user_id,
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-                plan_details={
-                    "focus": "To be refined in early sessions",
-                    "goals": "Stabilize presenting concerns",
-                    "techniques": "Supportive listening; clarification",
-                    "themes": "Presenting concerns; therapeutic alliance",
-                    "timeline": "Ongoing assessment with regular reviews",
-                },
-                initial_goals=["Stabilize presenting concerns"],
-                current_progress="Baseline established",
-                planned_interventions=["Supportive listening", "Clarification"],
-                status="active",
-                version=1,
-                selected_therapy_style=therapy_style,
+                plan_output=plan_output,
             )
 
-            # Save plan
-            success = await trio_db_service.save_therapy_plan(plan)
-            if not success:
-                raise RuntimeError("Failed to save therapy plan to database")
-
-            # Update user status to PLAN_COMPLETE
-            profile.status = UserStatus.PLAN_COMPLETE
-            profile.updated_at = datetime.now()
-            await trio_db_service.save_user_profile(profile)
+            await self.workflow_engine.transition(
+                user_id,
+                WorkflowState.PLAN_COMPLETE,
+            )
 
             logger.info(
                 f"Created therapy plan for {user_id} with style {therapy_style}"

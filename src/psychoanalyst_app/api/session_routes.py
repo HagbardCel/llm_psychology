@@ -9,12 +9,19 @@ from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
 
 from psychoanalyst_app.api.http_errors import validation_error_response
-from psychoanalyst_app.api.request_utils import require_user_id
+from psychoanalyst_app.api.request_utils import (
+    require_session_id,
+    require_user_id,
+    validate_session_for_user,
+)
 from psychoanalyst_app.models.http_models import (
     CreateSessionRequestDTO,
     SessionTimerResponseDTO,
     StatusMessageResponseDTO,
     session_to_dto,
+)
+from psychoanalyst_app.orchestration.orchestrator_helpers import (
+    session_type_for_workflow_state,
 )
 
 
@@ -28,6 +35,12 @@ def create_session_routes(server) -> Blueprint:
         user_id, error = require_user_id()
         if error:
             return error
+        session_id, error = require_session_id()
+        if error:
+            return error
+        session_error = await validate_session_for_user(server, user_id, session_id)
+        if session_error:
+            return session_error
         sessions = await server.db_service.get_user_sessions(user_id)
         payload = [
             session_to_dto(session).model_dump(mode="json") for session in sessions
@@ -37,8 +50,21 @@ def create_session_routes(server) -> Blueprint:
     @bp.route("/<session_id>", methods=["GET"])
     async def get_session(session_id):
         """Get a specific session."""
+        user_id, error = require_user_id()
+        if error:
+            return error
+        active_session_id, error = require_session_id()
+        if error:
+            return error
+        session_error = await validate_session_for_user(
+            server, user_id, active_session_id
+        )
+        if session_error:
+            return session_error
         session = await server.db_service.get_session(session_id)
         if not session:
+            return jsonify({"error": "Session not found"}), 404
+        if session.user_id != user_id:
             return jsonify({"error": "Session not found"}), 404
         dto = session_to_dto(session)
         return jsonify(dto.model_dump(mode="json"))
@@ -58,8 +84,18 @@ def create_session_routes(server) -> Blueprint:
         if not user_profile:
             return jsonify({"error": "User profile not found"}), 404
 
+        workflow_state = await server.orchestrator.get_user_state(
+            session_request.user_id
+        )
+        session_type = session_type_for_workflow_state(workflow_state)
         session_info = await server.orchestrator.start_session(
-            session_request.user_id, send_initial_message=False
+            session_request.user_id,
+            session_type=session_type,
+            send_initial_message=False,
+        )
+        await server.orchestrator.ensure_assessment_job(
+            session_request.user_id,
+            session_info.session_id,
         )
         created_session = await server.db_service.get_session(session_info.session_id)
         if not created_session:
@@ -75,6 +111,17 @@ def create_session_routes(server) -> Blueprint:
     @bp.route("/<session_id>/extend", methods=["POST"])
     async def extend_session(session_id):
         """Extend a session (placeholder)."""
+        user_id, error = require_user_id()
+        if error:
+            return error
+        active_session_id, error = require_session_id()
+        if error:
+            return error
+        session_error = await validate_session_for_user(
+            server, user_id, active_session_id
+        )
+        if session_error:
+            return session_error
         dto = StatusMessageResponseDTO(
             message="Session extended",
             session_id=session_id,
@@ -84,6 +131,19 @@ def create_session_routes(server) -> Blueprint:
     @bp.route("/<session_id>/timer", methods=["GET"])
     async def get_session_timer(session_id):
         """Get session timing information."""
+        user_id, error = require_user_id()
+        if error:
+            return error
+        active_session_id, error = require_session_id()
+        if error:
+            return error
+        if active_session_id != session_id:
+            return jsonify({"error": "Session ID does not match active session"}), 400
+        session_error = await validate_session_for_user(
+            server, user_id, active_session_id
+        )
+        if session_error:
+            return session_error
         try:
             context = await server.conversation_manager.get_context(session_id)
             elapsed_minutes = context.time_elapsed_minutes

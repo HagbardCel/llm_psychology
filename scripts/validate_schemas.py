@@ -10,6 +10,7 @@ This script performs comprehensive validation of generated JSON schemas:
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -230,4 +231,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import sys
+    raise SystemExit(main())

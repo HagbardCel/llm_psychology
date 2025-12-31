@@ -93,18 +93,7 @@ async def reproduce():
 
         print("Starting session...")
         session_info = await orchestrator.start_session(user_id)
-
-        if session_info.has_initial_message:
-            print("Waiting for initial message completion...")
-            with trio.move_on_after(5) as cancel_scope:
-                await ws.completion_event.wait()
-
-            if cancel_scope.cancelled_caught:
-                print("TIMEOUT: UI hung waiting for completion event!")
-            else:
-                print("Success: Completion event received.")
-        else:
-            print("No initial message scheduled.")
+        print("No initial greeting scheduled (send_initial_message not requested).")
 
 
 if __name__ == "__main__":

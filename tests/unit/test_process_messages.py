@@ -10,7 +10,7 @@ from psychoanalyst_app.orchestration.process_messages import finalize_agent_resp
 
 
 @pytest.mark.trio
-async def test_finalize_agent_response_blocks_incomplete_profile():
+async def test_finalize_agent_response_forwards_incomplete_profile():
     trio_db_service = AsyncMock()
     trio_db_service.get_user_profile.return_value = UserProfile(
         user_id="guest_user",
@@ -39,6 +39,10 @@ async def test_finalize_agent_response_blocks_incomplete_profile():
         agent_response,
     )
 
-    assert agent_response.next_state is None
-    assert agent_response.next_action == "continue"
-    response_handler.handle.assert_called_once()
+    assert agent_response.next_state == WorkflowState.INTAKE_IN_PROGRESS
+    assert agent_response.next_action == "transition"
+    response_handler.handle.assert_called_once_with(
+        "guest_user",
+        "session_123",
+        agent_response,
+    )

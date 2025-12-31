@@ -5,6 +5,7 @@ import { lazy, Suspense } from 'react';
 import { CircularProgress, Box } from '@mui/material';
 
 import { AppProvider } from './contexts/AppContext';
+import { WebSocketProvider } from './contexts/WebSocketContext';
 import { Layout } from './components/Layout';
 import { VersionCheck } from './components/VersionCheck';
 
@@ -66,80 +67,82 @@ function App() {
       <CssBaseline />
       <VersionCheck />
       <AppProvider>
-        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              <Route
-                path="/profile"
-                element={
-                  <Layout>
-                    <ProfilePage />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/intake"
-                element={
-                  <Layout>
-                    <IntakePage />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/assessment"
-                element={
-                  <Layout>
-                    <AssessmentPage />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/session/new"
-                element={
-                  <Layout>
-                    <TherapySession sessionType="therapy" />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/session/:sessionId"
-                element={
-                  <Layout>
-                    <TherapySession />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/dashboard"
-                element={
-                  <Layout>
-                    <Dashboard />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/history"
-                element={
-                  <Layout>
-                    <SessionHistoryPage />
-                  </Layout>
-                }
-              />
-              <Route
-                path="/settings"
-                element={
-                  <Layout>
-                    <SettingsPage />
-                  </Layout>
-                }
-              />
+        <WebSocketProvider>
+          <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Suspense fallback={<LoadingFallback />}>
+              <Routes>
+                <Route
+                  path="/profile"
+                  element={
+                    <Layout>
+                      <ProfilePage />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/intake"
+                  element={
+                    <Layout>
+                      <IntakePage />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/assessment"
+                  element={
+                    <Layout>
+                      <AssessmentPage />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/session/new"
+                  element={
+                    <Layout>
+                      <TherapySession />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/session/:sessionId"
+                  element={
+                    <Layout>
+                      <TherapySession />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <Layout>
+                      <Dashboard />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/history"
+                  element={
+                    <Layout>
+                      <SessionHistoryPage />
+                    </Layout>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <Layout>
+                      <SettingsPage />
+                    </Layout>
+                  }
+                />
 
-              {/* Default redirects */}
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
-            </Routes>
-          </Suspense>
-        </Router>
+                {/* Default redirects */}
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </Suspense>
+          </Router>
+        </WebSocketProvider>
       </AppProvider>
     </ThemeProvider>
   );

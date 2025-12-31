@@ -40,5 +40,10 @@ def session_started_message(session_info: Any) -> dict[str, Any]:
     return ws_message("session_started", data)
 
 
+def workflow_next_action_message(payload: dict[str, Any]) -> dict[str, Any]:
+    """Encapsulate the workflow_next_action event payload."""
+    return ws_message("workflow_next_action", payload)
+
+
 def error_message(message: str) -> dict[str, Any]:
     return ws_message("error", {"message": message})

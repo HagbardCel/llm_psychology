@@ -1,110 +1,140 @@
-"""Workflow navigation routes."""
+"""Workflow-driven navigation endpoints."""
 
 from __future__ import annotations
+
+import logging
 
 from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
 
 from psychoanalyst_app.api.http_errors import validation_error_response
-from psychoanalyst_app.models.api_models import WorkflowNextActionRequest, WorkflowNextActionResponse
+from psychoanalyst_app.api.request_utils import (
+    require_session_id,
+    require_user_id,
+    validate_session_for_user,
+)
+from psychoanalyst_app.models.http_models import (
+    WorkflowCompleteProfileRequestDTO,
+    WorkflowSelectTherapyStyleRequestDTO,
+)
 from psychoanalyst_app.orchestration.models import WorkflowState
 
 
 def create_workflow_routes(server) -> Blueprint:
     """Create blueprint for workflow navigation endpoints."""
+    logger = logging.getLogger(__name__)
     bp = Blueprint("workflow", __name__, url_prefix="/api/workflow")
-    @bp.route("/next-action", methods=["POST"])
+
+    @bp.route("/next", methods=["GET"])
     async def get_next_action():
-        """Determine next action for frontend based on user's workflow state."""
+        """Return the next workflow action for a user."""
+        user_id, error = require_user_id()
+        if error:
+            return error
+        session_id, error = require_session_id()
+        if error:
+            return error
+
+        session_error = await validate_session_for_user(
+            server, user_id, session_id
+        )
+        if session_error:
+            return session_error
+
+        action = await server.orchestrator.get_workflow_next_action(
+            user_id,
+            session_id=session_id,
+        )
+        return jsonify(action.model_dump(mode="json")), 200
+
+    @bp.route("/complete_profile", methods=["POST"])
+    async def complete_profile():
+        """Create or update a profile and return the next action."""
         data = await request.get_json() or {}
         try:
-            req = WorkflowNextActionRequest(**data)
+            profile_request = WorkflowCompleteProfileRequestDTO(**data)
         except ValidationError as error:
             return validation_error_response(error)
 
-        profile = await server.db_service.get_user_profile(req.user_id)
-        if not profile:
-            response = determine_next_action(
-                WorkflowState.NEW,
-                profile,
-                req.current_route,
-            )
-            return jsonify(response.model_dump()), 200
-
-        workflow_state = server.workflow_engine.USER_STATUS_TO_WORKFLOW_STATE.get(
-            profile.status, WorkflowState.NEW
+        session_error = await validate_session_for_user(
+            server, profile_request.user_id, profile_request.session_id
         )
-        response = determine_next_action(workflow_state, profile, req.current_route)
-        return jsonify(response.model_dump()), 200
+        if session_error:
+            return session_error
+
+        state = await server.orchestrator.get_user_state(profile_request.user_id)
+        if state not in (
+            WorkflowState.NEW,
+            WorkflowState.INTAKE_IN_PROGRESS,
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "Profile completion is only allowed during intake",
+                        "workflow_state": state.value,
+                    }
+                ),
+                400,
+            )
+
+        try:
+            profile = await server.orchestrator.create_user_profile(
+                profile_request.model_dump()
+            )
+        except ValueError as exc:
+            logger.error("Validation error completing profile: %s", exc)
+            return jsonify({"error": str(exc)}), 400
+
+        action = await server.orchestrator.get_workflow_next_action(
+            profile.user_id, session_id=profile_request.session_id
+        )
+        await server.orchestrator.emit_workflow_next_action(
+            profile.user_id, profile_request.session_id
+        )
+        return jsonify(action.model_dump(mode="json")), 200
+
+    @bp.route("/select_therapy_style", methods=["POST"])
+    async def select_therapy_style():
+        """Persist selected therapy style and return the next action."""
+        data = await request.get_json() or {}
+        try:
+            style_request = WorkflowSelectTherapyStyleRequestDTO(**data)
+        except ValidationError as error:
+            return validation_error_response(error)
+
+        session_error = await validate_session_for_user(
+            server, style_request.user_id, style_request.session_id
+        )
+        if session_error:
+            return session_error
+
+        state = await server.orchestrator.get_user_state(style_request.user_id)
+        if state != WorkflowState.ASSESSMENT_COMPLETE:
+            return (
+                jsonify(
+                    {
+                        "error": "Therapy style selection is only allowed after assessment",
+                        "workflow_state": state.value,
+                    }
+                ),
+                400,
+            )
+
+        try:
+            await server.orchestrator.create_therapy_plan(
+                style_request.user_id, style_request.selected_therapy_style
+            )
+        except ValueError as exc:
+            logger.error("Validation error selecting therapy style: %s", exc)
+            status = 404 if "not found" in str(exc).lower() else 400
+            return jsonify({"error": str(exc)}), status
+
+        action = await server.orchestrator.get_workflow_next_action(
+            style_request.user_id, session_id=style_request.session_id
+        )
+        await server.orchestrator.emit_workflow_next_action(
+            style_request.user_id, style_request.session_id
+        )
+        return jsonify(action.model_dump(mode="json")), 200
 
     return bp
-
-
-def determine_next_action(
-    workflow_state: WorkflowState, profile, current_route: str | None = None
-) -> WorkflowNextActionResponse:
-    """Map workflow state to frontend action."""
-    canonical_routes = {
-        "/profile",
-        "/intake",
-        "/assessment",
-        "/dashboard",
-        "/session/new",
-    }
-
-    state_action_map = {
-        WorkflowState.NEW: ("navigate", "/profile", "User needs to create profile"),
-        WorkflowState.INTAKE_IN_PROGRESS: (
-            "navigate",
-            "/intake",
-            "User needs to complete intake",
-        ),
-        WorkflowState.INTAKE_COMPLETE: (
-            "navigate",
-            "/assessment",
-            "User needs assessment",
-        ),
-        WorkflowState.ASSESSMENT_IN_PROGRESS: (
-            "navigate",
-            "/assessment",
-            "User is completing assessment",
-        ),
-        WorkflowState.ASSESSMENT_COMPLETE: (
-            "navigate",
-            "/assessment",
-            "User needs to select therapy style",
-        ),
-        WorkflowState.PLAN_COMPLETE: (
-            "navigate",
-            "/session/new",
-            "User can start therapy session",
-        ),
-        WorkflowState.THERAPY_IN_PROGRESS: ("wait", None, "Session in progress"),
-        WorkflowState.REFLECTION_IN_PROGRESS: ("wait", None, "Reflection in progress"),
-    }
-
-    action_type, route, reason = state_action_map.get(
-        workflow_state,
-        ("navigate", "/profile", "Unknown state - redirecting to profile"),
-    )
-
-    if action_type == "navigate":
-        if route and current_route == route:
-            return WorkflowNextActionResponse(
-                action="wait", route=route, reason=reason
-            )
-
-        if (
-            route
-            and current_route
-            and current_route not in canonical_routes
-            and route != current_route
-        ):
-            # Log indirectly through server logger in calling code if needed.
-            return WorkflowNextActionResponse(
-                action="navigate", route=route, reason=reason
-            )
-
-        return WorkflowNextActionResponse(action="navigate", route=route, reason=reason)
-
-    return WorkflowNextActionResponse(action=action_type, reason=reason)

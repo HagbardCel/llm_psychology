@@ -4,23 +4,29 @@ import { BrowserRouter } from 'react-router-dom';
 import { TherapySession } from '../TherapySession';
 import { AppProvider } from '../../contexts/AppContext';
 import type { SessionStartedEvent } from '../../types/websocket';
-import { useWebSocket } from '../../hooks/useWebSocket';
 
 const mockSendChatMessage = jest.fn();
-const mockRequestSession = jest.fn();
+const mockRegisterStreamingChunkHandler = jest.fn();
+const mockRegisterSessionStartedHandler = jest.fn();
+const mockRegisterWorkflowNextActionHandler = jest.fn();
 
 let mockIsConnected = true;
 let mockConnectionStatus = { isConnected: true, isConnecting: false };
 let mockLastMessage: any = null;
+let streamingHandler: ((chunk: string, isComplete: boolean, fullResponse?: string) => void) | null = null;
+let sessionStartedHandler: ((event: SessionStartedEvent) => void) | null = null;
+let workflowNextActionHandler: ((event: any) => void) | null = null;
 
-jest.mock('../../hooks/useWebSocket', () => ({
-  useWebSocket: jest.fn((_config) => {
+jest.mock('../../contexts/WebSocketContext', () => ({
+  useWebSocketContext: jest.fn(() => {
     return {
       connectionStatus: mockConnectionStatus,
       lastMessage: mockLastMessage,
       sendChatMessage: mockSendChatMessage,
-      requestSession: mockRequestSession,
       isConnected: mockIsConnected,
+      registerStreamingChunkHandler: mockRegisterStreamingChunkHandler,
+      registerSessionStartedHandler: mockRegisterSessionStartedHandler,
+      registerWorkflowNextActionHandler: mockRegisterWorkflowNextActionHandler,
     };
   }),
 }));
@@ -89,34 +95,48 @@ describe('TherapySession', () => {
     mockIsConnected = true;
     mockConnectionStatus = { isConnected: true, isConnecting: false };
     mockLastMessage = null;
+    streamingHandler = null;
+    sessionStartedHandler = null;
+    workflowNextActionHandler = null;
+    mockRegisterStreamingChunkHandler.mockImplementation((handler) => {
+      streamingHandler = handler;
+      return () => {
+        streamingHandler = null;
+      };
+    });
+    mockRegisterSessionStartedHandler.mockImplementation((handler) => {
+      sessionStartedHandler = handler;
+      return () => {
+        sessionStartedHandler = null;
+      };
+    });
+    mockRegisterWorkflowNextActionHandler.mockImplementation((handler) => {
+      workflowNextActionHandler = handler;
+      return () => {
+        workflowNextActionHandler = null;
+      };
+    });
     localStorage.setItem('current_user_id', 'test-user-id');
   });
 
   function emitSessionStarted(overrides?: Partial<SessionStartedEvent>) {
-    const useWebSocketCall = (useWebSocket as jest.MockedFunction<typeof useWebSocket>).mock.calls[0][0];
-    const onSessionStarted = useWebSocketCall.onSessionStarted;
-
     const event: SessionStartedEvent = {
       session_id: 'server-session-id',
       agent_type: 'PSYCHOANALYST',
       workflow_state: 'therapy_in_progress',
       created_at: new Date().toISOString(),
       user_id: 'test-user-id',
-      has_initial_message: false,
       ...overrides,
     };
 
     act(() => {
-      onSessionStarted(event);
+      sessionStartedHandler?.(event);
     });
   }
 
   function emitStreamingChunk(chunk: string, isComplete: boolean, fullResponse?: string) {
-    const useWebSocketCall = (useWebSocket as jest.MockedFunction<typeof useWebSocket>).mock.calls[0][0];
-    const onStreamingChunk = useWebSocketCall.onStreamingChunk;
-
     act(() => {
-      onStreamingChunk(chunk, isComplete, fullResponse);
+      streamingHandler?.(chunk, isComplete, fullResponse);
     });
   }
 
@@ -133,19 +153,7 @@ describe('TherapySession', () => {
     expect(screen.getByTestId('connection-status')).toBeInTheDocument();
   });
 
-  it('requests a session when connected', async () => {
-    render(
-      <TestWrapper>
-        <TherapySession />
-      </TestWrapper>
-    );
-
-    await waitFor(() => {
-      expect(mockRequestSession).toHaveBeenCalledWith('therapy');
-    });
-  });
-
-  it('disables input until session_started is received', () => {
+  it('disables input until the initial greeting completes', () => {
     render(
       <TestWrapper>
         <TherapySession />
@@ -155,7 +163,7 @@ describe('TherapySession', () => {
     expect(screen.getByTestId('send-message-btn')).toBeDisabled();
   });
 
-  it('enables input after session_started', async () => {
+  it('enables input after the initial greeting completes', async () => {
     render(
       <TestWrapper>
         <TherapySession />
@@ -163,6 +171,8 @@ describe('TherapySession', () => {
     );
 
     emitSessionStarted();
+    emitStreamingChunk('Hello', false);
+    emitStreamingChunk('', true, 'Hello');
 
     await waitFor(() => {
       expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
@@ -177,6 +187,8 @@ describe('TherapySession', () => {
     );
 
     emitSessionStarted();
+    emitStreamingChunk('Hello', false);
+    emitStreamingChunk('', true, 'Hello');
 
     await waitFor(() => {
       expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
@@ -249,6 +261,8 @@ describe('TherapySession', () => {
     );
 
     emitSessionStarted();
+    emitStreamingChunk('Hello', false);
+    emitStreamingChunk('', true, 'Hello');
 
     await waitFor(() => {
       expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
@@ -261,7 +275,7 @@ describe('TherapySession', () => {
     });
   });
 
-  it('does not request a session when disconnected', async () => {
+  it('renders disconnected status when socket is down', async () => {
     mockIsConnected = false;
     mockConnectionStatus = { isConnected: false, isConnecting: false };
 
@@ -274,7 +288,5 @@ describe('TherapySession', () => {
     await waitFor(() => {
       expect(screen.getByText('Disconnected')).toBeInTheDocument();
     });
-
-    expect(mockRequestSession).not.toHaveBeenCalled();
   });
 });

@@ -2,29 +2,36 @@ import { useState, FormEvent, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Alert, Snackbar, CircularProgress } from '@mui/material';
 import { PageContainer, FormField } from '../components/shared';
-import { useCurrentUserId } from '../contexts/AppContext';
-import { useCreateUserProfile, useUserProfile, useUpdateUserProfile } from '../hooks/useUserProfile';
+import { useAppContext } from '../contexts/AppContext';
+import { useCreateUserProfile, useRegisterUserProfile, useUserProfile, useUpdateUserProfile } from '../hooks/useUserProfile';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
+import { routeForRequiredAction } from '../utils/workflow';
 
 /**
  * ProfilePage allows users to create or update their profile.
  * Refactored to use React Query for server state management.
  */
 export function ProfilePage() {
-  const userId = useCurrentUserId();
+  const { currentUserId: userId, currentSessionId: sessionId, setCurrentSessionId } =
+    useAppContext();
   const navigate = useNavigate();
 
   // Fetch user data from backend via React Query
-  const { data: user, isLoading: userLoading } = useUserProfile(userId || '');
+  const { data: user, isLoading: userLoading } = useUserProfile(
+    userId || '',
+    sessionId || ''
+  );
 
   // Mutation for updating profile
   const { mutateAsync: createProfile, isPending: isCreating } = useCreateUserProfile();
+  const { mutateAsync: registerProfile, isPending: isRegistering } = useRegisterUserProfile();
   const { mutateAsync: updateProfile, isPending: isUpdating } = useUpdateUserProfile();
-  const isPending = isCreating || isUpdating;
+  const isPending = isCreating || isUpdating || isRegistering;
 
   // Get next action for navigation
   const { data: nextAction, refetch: refetchNextAction } = useWorkflowNextAction(
     userId || '',
+    sessionId || '',
     '/profile'
   );
 
@@ -34,7 +41,9 @@ export function ProfilePage() {
   const [formData, setFormData] = useState({
     name: '',
     data_of_birth: '',
-    profession: ''
+    profession: '',
+    primary_language: 'English',
+    session_mode: 'virtual',
   });
 
   // Initialize form with user data when loaded
@@ -43,7 +52,9 @@ export function ProfilePage() {
       setFormData({
         name: user.name || '',
         data_of_birth: user.data_of_birth || '',
-        profession: user.profession || ''
+        profession: user.profession || '',
+        primary_language: user.primary_language || 'English',
+        session_mode: user.session_mode || 'virtual',
       });
     }
   }, [user]);
@@ -55,6 +66,12 @@ export function ProfilePage() {
 
     if (!formData.name.trim()) {
       newErrors.name = 'Name is required';
+    }
+    if (!formData.primary_language.trim()) {
+      newErrors.primary_language = 'Primary language is required';
+    }
+    if (!formData.session_mode.trim()) {
+      newErrors.session_mode = 'Session mode is required';
     }
 
     if (formData.data_of_birth) {
@@ -78,23 +95,38 @@ export function ProfilePage() {
     setError(null);
 
     try {
-      const action = user ? updateProfile : createProfile;
+      let nextActionOverride = nextAction;
       const payload = {
         user_id: userId || `user_${Date.now()}`,
         name: formData.name.trim(),
         data_of_birth: formData.data_of_birth || undefined,
         profession: formData.profession || undefined,
+        primary_language: formData.primary_language.trim(),
+        session_mode: formData.session_mode.trim(),
       };
 
-      await action(payload);
+      if (user) {
+        if (!sessionId) {
+          setError('Session is required to update your profile. Please reconnect.');
+          return;
+        }
+        await updateProfile({ ...payload, session_id: sessionId });
+      } else if (!sessionId) {
+        const response = await registerProfile(payload);
+        setCurrentSessionId(response.session.session_id);
+        nextActionOverride = response.workflow_next_action;
+      } else {
+        await createProfile({ ...payload, session_id: sessionId });
+      }
 
       setSuccess(true);
 
       // Backend-driven navigation - check next action
-      const refreshed = await refetchNextAction();
-      const route = refreshed.data?.route || nextAction?.route;
-      if (route && route !== '/profile') {
-        setTimeout(() => navigate(route), 1500);
+      const refreshed = sessionId ? await refetchNextAction() : null;
+      const next = refreshed?.data || nextActionOverride;
+      const targetRoute = routeForRequiredAction(next?.required_action);
+      if (targetRoute && targetRoute !== '/profile') {
+        setTimeout(() => navigate(targetRoute), 1500);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save profile');
@@ -128,6 +160,25 @@ export function ProfilePage() {
           error={errors.name}
           required
           disabled={isPending}
+        />
+
+        <FormField
+          label="Primary Language"
+          value={formData.primary_language}
+          onChange={(value) => setFormData({ ...formData, primary_language: value })}
+          error={errors.primary_language}
+          required
+          disabled={isPending}
+        />
+
+        <FormField
+          label="Session Mode"
+          value={formData.session_mode}
+          onChange={(value) => setFormData({ ...formData, session_mode: value })}
+          error={errors.session_mode}
+          required
+          disabled={isPending}
+          helperText="Example: virtual or in_person"
         />
 
         <FormField

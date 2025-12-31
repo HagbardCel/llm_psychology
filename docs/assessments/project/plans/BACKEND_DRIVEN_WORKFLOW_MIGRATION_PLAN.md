@@ -45,7 +45,7 @@ Example `required_action` values:
 - `select_therapy_style`
 - `start_intake`
 - `continue_therapy`
-- `none`
+- `wait`
 
 ### 2) New HTTP Endpoints
 Replace legacy profile/plan endpoints with explicit step-completion endpoints:

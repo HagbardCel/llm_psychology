@@ -23,7 +23,7 @@ from psychoanalyst_app.orchestration.agent_output_validators import (
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
-    WorkflowState,
+    WorkflowEvent,
     direct_agent_response,
 )
 from psychoanalyst_app.prompts.intake_prompts import (
@@ -105,7 +105,7 @@ class TrioIntakeAgent:
 
             # Determine next action and state
             next_action = "continue"
-            next_state = None
+            workflow_event = None
             prompt = ""
             structured_profile = None
 
@@ -122,12 +122,12 @@ class TrioIntakeAgent:
                     # Initial greeting for guest - send directly to user, not to LLM
                     prompt = GUEST_WELCOME_PROMPT
                     next_action = "continue"
-                    next_state = None
+                    workflow_event = None
                     # Mark as direct response so orchestrator doesn't send to LLM
                     return direct_agent_response(
                         content=prompt,
                         next_action=next_action,
-                        next_state=next_state,
+                        workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
                             "time_remaining_minutes": context.time_remaining_minutes,
@@ -144,11 +144,11 @@ class TrioIntakeAgent:
                     # Build standard initial prompt with new name
                     prompt = self._build_initial_prompt(context)
                     next_action = "transition"
-                    next_state = WorkflowState.INTAKE_IN_PROGRESS
+                    workflow_event = WorkflowEvent.START_INTAKE
                     return AgentResponse(
                         content=prompt,
                         next_action=next_action,
-                        next_state=next_state,
+                        workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
                             "time_remaining_minutes": context.time_remaining_minutes,
@@ -163,7 +163,7 @@ class TrioIntakeAgent:
                 # Initial greeting (should not happen if name collection worked, but good fallback)
                 prompt = self._build_initial_prompt(context)
                 next_action = "continue"
-                next_state = None
+                workflow_event = None
             else:
                 # Continue conversation
                 prompt = self._build_continuation_prompt(message, context)
@@ -189,36 +189,37 @@ class TrioIntakeAgent:
                         )
 
                     next_action = "transition"
-                    next_state = WorkflowState.INTAKE_COMPLETE
+                    workflow_event = WorkflowEvent.COMPLETE_INTAKE
                 elif context.is_time_up:
                     # Time is up but intake is not complete.
                     # We should NOT transition to INTAKE_COMPLETE.
                     # Instead, we end the session but keep the state as INTAKE_IN_PROGRESS
                     # so the next session continues intake.
                     next_action = "continue"
-                    next_state = None
+                    workflow_event = None
                     prompt = (
                         "Our time is up for today. We will continue this intake "
                         "in our next session."
                     )
                 else:
                     next_action = "continue"
-                    next_state = None
+                    workflow_event = None
 
             logger.info(
-                f"Intake Agent returning: action={next_action}, state={next_state}"
+                f"Intake Agent returning: action={next_action}, event={workflow_event}"
             )
 
             return AgentResponse(
                 content=prompt,
                 next_action=next_action,
-                next_state=next_state,
+                workflow_event=workflow_event,
                 metadata={
                     "topics_covered": context.topics_covered,
                     "time_remaining_minutes": context.time_remaining_minutes,
                     "can_extend": context.can_extend,
                     "is_time_up": context.is_time_up,
                     "user_profile": structured_profile,
+                    "intake_complete": is_complete,
                 },
             )
 
@@ -231,7 +232,7 @@ class TrioIntakeAgent:
                     "Could you please repeat that?"
                 ),
                 next_action="continue",
-                next_state=None,
+                workflow_event=None,
                 metadata={"error": str(e)},
             )
 

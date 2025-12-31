@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from psychoanalyst_app.models.api_models import WorkflowNextActionDTO
 from psychoanalyst_app.models.data_models import Session, TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowState
 
@@ -128,6 +129,11 @@ class HealthCheckResponseDTO(BaseHTTPModel):
     timestamp: datetime
 
 
+class UserRegisterResponseDTO(BaseHTTPModel):
+    session: SessionDTO
+    workflow_next_action: WorkflowNextActionDTO
+
+
 class CreateUserProfileRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
@@ -135,7 +141,7 @@ class CreateUserProfileRequestDTO(BaseModel):
     data_of_birth: datetime | None = None
     gender: str | None = None
     cultural_background: str | None = None
-    primary_language: str | None = None
+    primary_language: str = Field(..., min_length=1)
     profession: str | None = None
     parents: str | None = None
     siblings: str | None = None
@@ -148,13 +154,18 @@ class CreateUserProfileRequestDTO(BaseModel):
     social_context: str | None = None
     current_situation: str | None = None
     preferred_school: str | None = None
-    session_mode: str | None = None
+    session_mode: str = Field(..., min_length=1)
     boundary_notes: str | None = None
     frame_notes: str | None = None
 
 
+class WorkflowCompleteProfileRequestDTO(CreateUserProfileRequestDTO):
+    session_id: str = Field(..., min_length=1)
+
+
 class UpdateUserProfileRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
     alias: str | None = None
     data_of_birth: datetime | None = None
@@ -162,7 +173,6 @@ class UpdateUserProfileRequestDTO(BaseModel):
     cultural_background: str | None = None
     primary_language: str | None = None
     profession: str | None = None
-    status: UserStatus | str | None = None
     parents: str | None = None
     siblings: str | None = None
     family_atmosphere: str | None = None
@@ -183,6 +193,7 @@ class PatchUserProfileRequestDTO(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     user_id: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
     name: str | None = None
     alias: str | None = None
     data_of_birth: datetime | None = None
@@ -190,7 +201,6 @@ class PatchUserProfileRequestDTO(BaseModel):
     cultural_background: str | None = None
     primary_language: str | None = None
     profession: str | None = None
-    status: UserStatus | str | None = None
     parents: str | None = None
     siblings: str | None = None
     family_atmosphere: str | None = None
@@ -211,9 +221,10 @@ class CreateSessionRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
 
 
-class CreateTherapyPlanRequestDTO(BaseModel):
+class WorkflowSelectTherapyStyleRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
-    therapy_style: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
+    selected_therapy_style: str = Field(..., min_length=1)
 
 
 def user_profile_to_dto(profile: UserProfile) -> UserProfileDTO:

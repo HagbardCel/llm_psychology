@@ -66,6 +66,7 @@ class TrioConversationManager:
         self.nursery = nursery
         self.websockets: dict[str, Any] = {}
         self._websocket_ready_events: dict[str, trio.Event] = {}
+        self._initial_greeting_sent: set[str] = set()
         self.config = config
 
     def register_websocket(self, session_id: str, ws: Any):
@@ -76,6 +77,7 @@ class TrioConversationManager:
             event = trio.Event()
             self._websocket_ready_events[session_id] = event
         event.set()
+        self._initial_greeting_sent.discard(session_id)
         logger.info(f"Registered websocket for session {session_id}")
 
     def unregister_websocket(self, session_id: str):
@@ -85,6 +87,14 @@ class TrioConversationManager:
         if session_id in self._websocket_ready_events:
             del self._websocket_ready_events[session_id]
         logger.info(f"Unregistered websocket for session {session_id}")
+
+    def mark_initial_greeting_sent(self, session_id: str) -> None:
+        """Record that the initial greeting has been sent for a session."""
+        self._initial_greeting_sent.add(session_id)
+
+    def has_initial_greeting_sent(self, session_id: str) -> bool:
+        """Check whether the initial greeting has been sent for a session."""
+        return session_id in self._initial_greeting_sent
 
     async def wait_for_websocket(self, session_id: str, *, timeout_seconds: float) -> bool:
         """Wait until a websocket is registered for the given session."""

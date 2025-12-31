@@ -10,6 +10,7 @@ jest.mock('react-router-dom', () => ({
 
 jest.mock('../../contexts/AppContext', () => ({
   useCurrentUserId: () => 'test-user-id',
+  useCurrentSessionId: () => 'test-session-id',
 }));
 
 const mockUseUserProfile = jest.fn();
@@ -84,7 +85,16 @@ describe('Dashboard', () => {
     mockUseSessionHistory.mockReturnValue({ data: [], isLoading: false, error: null });
     mockUseTherapyPlan.mockReturnValue({ data: null, isLoading: false, error: null });
     mockUseWorkflowNextAction.mockReturnValue({
-      data: { action: 'navigate', route: '/profile', display: { primary_action: { label: 'Continue' } } },
+      data: {
+        user_id: 'test-user-id',
+        workflow_state: 'NEW',
+        required_action: 'complete_profile',
+        required_fields: ['name'],
+        defaults: null,
+        prompt: 'Complete your profile.',
+        blocking: true,
+        timestamp: new Date().toISOString(),
+      },
       isLoading: false,
       error: null,
     });
@@ -93,8 +103,7 @@ describe('Dashboard', () => {
 
     expect(screen.getByRole('heading', { name: 'Welcome back, Test User' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Complete Profile' }));
     expect(mockNavigate).toHaveBeenCalledWith('/profile');
   });
 });
-

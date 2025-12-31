@@ -12,7 +12,6 @@ Pure Trio implementation using structured concurrency.
 """
 
 import logging
-import uuid
 from datetime import datetime
 from typing import Any
 
@@ -104,20 +103,19 @@ class TrioPlanningAgent:
 
     async def create_initial_plan(
         self, intake_session: Session, selected_style: str | None = None
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Create comprehensive initial therapy plan using Trio.
 
         This operation is shielded from cancellation to ensure data integrity.
-        Even if the client disconnects, the plan creation will complete and
-        be saved to the database.
+        Even if the client disconnects, the plan output will still complete.
 
         Args:
             intake_session: The completed intake session
             selected_style: Optional therapy style preference
 
         Returns:
-            TherapyPlan: The created initial therapy plan
+            StructuredTherapyPlanOutput: The structured plan payload (no persistence)
 
         Raises:
             PlanningError: If plan creation fails
@@ -133,42 +131,11 @@ class TrioPlanningAgent:
                 structured_plan = await self.build_structured_plan_output(
                     intake_session, selected_style
                 )
-
-                therapy_plan = TherapyPlan(
-                    plan_id=str(uuid.uuid4()),
-                    user_id=self.user_context.user_id,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                    plan_details=structured_plan.plan_details,
-                    initial_goals=structured_plan.initial_goals,
-                    current_progress=structured_plan.current_progress,
-                    planned_interventions=structured_plan.planned_interventions,
-                    status=structured_plan.status,
-                    version=1,
-                    selected_therapy_style=structured_plan.selected_therapy_style,
-                )
-
-                # Save plan to database
-                success = await self.db_service.save_therapy_plan(therapy_plan)
-                if not success:
-                    raise PlanningError("Failed to save therapy plan to database")
-
-                # Record plan creation
-                evolution = PlanEvolution(
-                    plan_id=therapy_plan.plan_id,
-                    version=1,
-                    changes=["initial_plan_created"],
-                    rationale="Initial therapy plan based on intake session analysis",
-                )
-                self.plan_evolution.append(evolution)
-
                 logger.info(
-                    "Initial therapy plan created: %s", therapy_plan.plan_id
+                    "Initial therapy plan output created for user %s",
+                    self.user_context.user_id,
                 )
-                logger.debug(
-                    "TrioPlanningAgent plan created %s", therapy_plan.plan_id
-                )
-                return therapy_plan
+                return structured_plan
 
         except Exception as e:
             logger.error(f"Failed to create initial therapy plan: {e}", exc_info=True)
@@ -240,7 +207,7 @@ class TrioPlanningAgent:
 
     async def update_plan(
         self, session: Session, current_plan: TherapyPlan, force_update: bool = False
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Update therapy plan based on session progress and memory insights using Trio.
 
@@ -250,7 +217,7 @@ class TrioPlanningAgent:
             force_update: Whether to force an update regardless of assessment
 
         Returns:
-            TherapyPlan: The updated therapy plan
+            StructuredTherapyPlanOutput: The updated plan payload (no persistence)
 
         Raises:
             PlanningError: If plan update fails
@@ -271,7 +238,16 @@ class TrioPlanningAgent:
 
             if not update_needed:
                 logger.info("No plan update needed based on current assessment")
-                return current_plan
+                return build_therapy_plan_output(
+                    {
+                        "selected_therapy_style": current_plan.selected_therapy_style,
+                        "plan_details": current_plan.plan_details,
+                        "initial_goals": current_plan.initial_goals,
+                        "current_progress": current_plan.current_progress,
+                        "planned_interventions": current_plan.planned_interventions,
+                        "status": current_plan.status,
+                    }
+                )
 
             # Get relevant knowledge for update (run in thread)
             session_text = extract_session_text(session)
@@ -299,39 +275,32 @@ class TrioPlanningAgent:
                 current_plan.plan_details, updated_details
             )
 
-            # Create updated therapy plan
-            new_plan_id = str(uuid.uuid4())
-            updated_plan = TherapyPlan(
-                plan_id=new_plan_id,
-                user_id=self.user_context.user_id,
-                created_at=current_plan.created_at,
-                updated_at=datetime.now(),
-                plan_details=updated_details,
-                initial_goals=current_plan.initial_goals,
-                current_progress=current_plan.current_progress,
-                planned_interventions=current_plan.planned_interventions,
-                status=current_plan.status,
-                version=current_plan.version + 1,
-                selected_therapy_style=current_plan.selected_therapy_style,
-                session_briefing=current_plan.session_briefing,
+            updated_plan_output = build_therapy_plan_output(
+                {
+                    "selected_therapy_style": current_plan.selected_therapy_style,
+                    "plan_details": updated_details,
+                    "initial_goals": current_plan.initial_goals,
+                    "current_progress": current_plan.current_progress,
+                    "planned_interventions": current_plan.planned_interventions,
+                    "status": current_plan.status,
+                }
             )
-
-            # Save updated plan
-            success = await self.db_service.save_therapy_plan(updated_plan)
-            if not success:
-                raise PlanningError("Failed to save updated therapy plan to database")
 
             # Record plan evolution
             evolution = PlanEvolution(
-                plan_id=new_plan_id,
-                version=updated_plan.version,
+                plan_id=current_plan.plan_id,
+                version=current_plan.version + 1,
                 changes=changes,
                 rationale=generate_update_rationale(session_context, memory, changes),
             )
             self.plan_evolution.append(evolution)
 
-            logger.info(f"Therapy plan updated to version {updated_plan.version}")
-            return updated_plan
+            logger.info(
+                "Therapy plan update prepared for %s (next version=%s)",
+                current_plan.plan_id,
+                current_plan.version + 1,
+            )
+            return updated_plan_output
 
         except Exception as e:
             logger.error(f"Failed to update therapy plan: {e}", exc_info=True)

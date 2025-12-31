@@ -332,7 +332,16 @@ async def test_orchestrator_process_message_new_user(orchestrator):
     """Test processing message for new user."""
     user_id = "brand_new_user"
 
-    # Process message (should create profile and start intake)
+    await orchestrator.create_user_profile(
+        {
+            "user_id": user_id,
+            "name": "John Doe",
+            "primary_language": "English",
+            "session_mode": "virtual",
+        }
+    )
+
+    # Process message (should continue intake)
     full_response = ""
     async for chunk in orchestrator.process_message(
         user_id, "John Doe", session_id=None
@@ -362,6 +371,15 @@ async def test_orchestrator_concurrent_processing(orchestrator):
     async def process_for_user(user_num):
         user_id = f"concurrent_user_{user_num}"
         full_response = ""
+
+        await orchestrator.create_user_profile(
+            {
+                "user_id": user_id,
+                "name": f"User {user_num}",
+                "primary_language": "English",
+                "session_mode": "virtual",
+            }
+        )
 
         async for chunk in orchestrator.process_message(
             user_id, f"User {user_num}", session_id=None
@@ -422,7 +440,16 @@ async def test_full_orchestration_flow(orchestrator):
     """Test complete flow from user creation through message processing."""
     user_id = "full_flow_user"
 
-    # Step 1: Process first message (creates profile, starts intake)
+    await orchestrator.create_user_profile(
+        {
+            "user_id": user_id,
+            "name": "Alice Smith",
+            "primary_language": "English",
+            "session_mode": "virtual",
+        }
+    )
+
+    # Step 1: Process first message (starts intake)
     response1 = ""
     async for chunk in orchestrator.process_message(user_id, "Alice Smith"):
         response1 += chunk

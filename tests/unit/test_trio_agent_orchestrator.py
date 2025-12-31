@@ -3,8 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
-from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
+from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    WorkflowEvent,
+    WorkflowState,
+)
 from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
 
 
@@ -53,14 +57,23 @@ async def test_handle_agent_response_transition(orchestrator, mock_dependencies)
     response = AgentResponse(
         content="Test content",
         next_action="transition",
-        next_state=WorkflowState.INTAKE_IN_PROGRESS,
+        next_state=None,
+        workflow_event=WorkflowEvent.COMPLETE_ASSESSMENT,
         metadata={},
+    )
+    mock_dependencies["workflow_engine"].get_user_state.return_value = (
+        WorkflowState.ASSESSMENT_IN_PROGRESS
+    )
+    mock_dependencies["workflow_engine"].get_next_state = MagicMock(
+        return_value=WorkflowState.ASSESSMENT_COMPLETE
     )
 
     await orchestrator.response_handler.handle("test_user", "test_session", response)
 
     mock_dependencies["workflow_engine"].transition.assert_called_once_with(
-        "test_user", WorkflowState.INTAKE_IN_PROGRESS
+        "test_user",
+        WorkflowState.ASSESSMENT_COMPLETE,
+        event=WorkflowEvent.COMPLETE_ASSESSMENT,
     )
 
 
@@ -116,6 +129,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     # Setup mocks
     mock_db_service = AsyncMock()
     mock_style_service = MagicMock()
+    mock_reflection_agent = AsyncMock()
 
     # Mock service container
     def get_service(name):
@@ -140,8 +154,24 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     )
     mock_db_service.get_user_profile.return_value = profile
     mock_db_service.get_latest_therapy_plan.return_value = None
-    mock_db_service.save_therapy_plan.return_value = True
-    mock_db_service.save_user_profile.return_value = True
+    intake_session = MagicMock()
+    orchestrator.session_lifecycle.find_intake_sessions = AsyncMock(
+        return_value=[intake_session]
+    )
+    orchestrator._get_or_create_agent = AsyncMock(return_value=mock_reflection_agent)
+    plan = TherapyPlan(
+        plan_id="plan_123",
+        user_id="test_user",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        plan_details={},
+        initial_goals=["Stabilize presenting concerns"],
+        current_progress="Baseline established",
+        planned_interventions=["Supportive listening"],
+        version=1,
+        selected_therapy_style="freud",
+    )
+    mock_reflection_agent.create_initial_plan_with_style.return_value = plan
 
     # Create therapy plan
     plan = await orchestrator.create_therapy_plan("test_user", "freud")
@@ -150,8 +180,10 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     assert plan.user_id == "test_user"
     assert plan.version == 1
     assert plan.selected_therapy_style == "freud"
-    assert mock_db_service.save_therapy_plan.called
-    assert mock_db_service.save_user_profile.called
+    assert mock_reflection_agent.create_initial_plan_with_style.called
+    mock_dependencies["workflow_engine"].transition.assert_called_once_with(
+        "test_user", WorkflowState.PLAN_COMPLETE
+    )
 
 
 @pytest.mark.trio
@@ -203,8 +235,6 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
     mock_db_service.get_user_profile.return_value = profile
 
     # Mock existing plan
-    from psychoanalyst_app.models.data_models import TherapyPlan
-
     existing_plan = TherapyPlan(
         plan_id="existing_plan_id",
         user_id="test_user",
@@ -226,3 +256,4 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
     assert plan.plan_id == "existing_plan_id"
     assert plan.version == 1
     mock_db_service.save_therapy_plan.assert_not_called()
+    mock_dependencies["workflow_engine"].transition.assert_not_called()

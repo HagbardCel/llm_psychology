@@ -26,15 +26,16 @@ from psychoanalyst_app.models.data_models import (
     PatientAnalysisVersion,
     RecurringNarrative,
     Session,
-    TherapyPlan,
     TransferenceImpressions,
 )
-from psychoanalyst_app.models.structured_output_models import Tier4Extract
+from psychoanalyst_app.models.structured_output_models import (
+    StructuredTherapyPlanOutput,
+    Tier4Extract,
+)
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
     TherapyStyleRecommendation,
-    WorkflowState,
     build_agent_response,
     continue_agent_response,
     direct_agent_response,
@@ -129,7 +130,7 @@ together. Take care!",
                         content="Wonderful! Let's begin our first therapy session. \
 I'm here to support you.",
                         next_action="start_therapy",
-                        next_state=WorkflowState.THERAPY_IN_PROGRESS,
+                        workflow_event=None,
                         metadata={"new_session_required": True},
                     )
                 else:
@@ -171,7 +172,8 @@ like to finish for today (option 1) or continue with our first therapy session n
 which therapy style you'd like to start with. Could you please specify one of the \
 recommended approaches (e.g., Psychoanalysis, CBT)?",
                         next_action="await_selection",
-                        next_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
+                        next_state=None,
+                        workflow_event=None,
                     )
             else:
                 # Recommendations not yet made, generate them
@@ -217,7 +219,8 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             return AgentResponse(
                 content=content,
                 next_action="await_selection",  # Wait for user to select
-                next_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
+                next_state=None,
+                workflow_event=None,
                 metadata={
                     "recommendations": [
                         {
@@ -236,7 +239,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             return AgentResponse(
                 content=f"I encountered an error during assessment: {str(e)}",
                 next_action="continue",
-                next_state=None,
+                workflow_event=None,
                 metadata={"error": str(e)},
             )
 
@@ -246,7 +249,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         context: ConversationContext,
     ) -> AgentResponse:
         """
-        Process style selection and create therapy plan (orchestrator).
+        Process style selection without persisting backend plan data.
 
         Args:
             selected_style: User's selected therapy style
@@ -256,128 +259,17 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         Returns:
             AgentResponse with confirmation
         """
-        try:
-            logger.debug("Processing assessment selection style=%s", selected_style)
-            # Create therapy plan with selected style (FIXED: added await)
-            # Construct a temporary session object for the plan creation
-            # (ReflectionAgent expects a Session object)
-            temp_session = Session(
-                session_id=context.session_id,
-                user_id=context.user_profile.user_id,
-                timestamp=datetime.now(),
-                transcript=context.message_history,
-                topics=[],
-            )
-
-            therapy_plan = await self.create_initial_plan_with_style(
-                temp_session, selected_style
-            )
-            logger.debug("Therapy plan created: %s", therapy_plan.plan_id)
-
-            # Phase 4: Create Tier 3 & 4 initial data
-            logger.info(
-                f"Creating initial Tier 3 & 4 data for user "
-                f"{context.user_profile.user_id}"
-            )
-
-            # Load Tier 1 user profile for context
-            patient_background = await self._load_user_profile(
-                context.user_profile.user_id
-            )
-
-            # Extract Tier 3 (initial clinical formulation)
-            tier3_analysis = await self._extract_tier3_initial_formulation(
-                temp_session, selected_style, patient_background
-            )
-
-            if tier3_analysis:
-                # Save to database
-                success = await self.db_service.save_patient_analysis_version(
-                    tier3_analysis
-                )
-                if success:
-                    logger.info(
-                        f"Saved Tier 3 v1 for user {context.user_profile.user_id}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to save Tier 3 for user "
-                        f"{context.user_profile.user_id}"
-                    )
-            else:
-                logger.warning(
-                    "Failed to extract Tier 3 initial formulation"
-                )
-
-            # Extract Tier 4 (initial treatment plan)
-            tier4_data = await self._extract_tier4_initial_plan(
-                temp_session, selected_style, patient_background, tier3_analysis
-            )
-
-            if tier4_data:
-                therapy_plan.initial_goals = tier4_data["initial_goals"]
-                therapy_plan.current_progress = tier4_data["current_progress"]
-                therapy_plan.planned_interventions = tier4_data["planned_interventions"]
-                therapy_plan.status = tier4_data["status"]
-                therapy_plan.updated_at = datetime.now()
-
-                # Persist unified therapy plan (now containing Tier 4 data)
-                plan_saved = await self.db_service.save_therapy_plan(therapy_plan)
-                if plan_saved:
-                    logger.info(
-                        "Updated TherapyPlan with Tier 4 data for user %s",
-                        context.user_profile.user_id,
-                    )
-                else:
-                    logger.warning(
-                        "Failed to persist Tier 4 data for user %s",
-                        context.user_profile.user_id,
-                    )
-            else:
-                logger.warning("Failed to extract Tier 4 initial plan")
-
-            # Format confirmation message with suggestion to finish for the day
-            content = f"""
-Excellent choice! I'll be using {selected_style.upper()} therapy approach for \
-our sessions.
-
-Your personalized therapy plan has been created. We've covered a lot of ground \
-today through our intake and assessment process.
-
-I'd suggest we finish here for today to give you time to reflect on what we've \
-discussed. However, if you'd prefer, we could start our first therapy session \
-right now.
-
-Would you like to:
-1. Finish for today and begin therapy in our next session
-2. Continue with our first therapy session now
-
-What would you prefer?
-"""
-
-            return AgentResponse(
-                content=content,
-                next_action="await_continuation_choice",
-                next_state=WorkflowState.ASSESSMENT_COMPLETE,
-                metadata={
-                    "selected_style": selected_style,
-                    "plan_id": therapy_plan.plan_id,
-                    "plan_version": therapy_plan.version,
-                    "tier3_created": tier3_analysis is not None,
-                    "tier4_created": tier4_data is not None,
-                    "is_direct_response": True,
-                    "awaiting_continuation": True,
-                },
-            )
-
-        except Exception as e:
-            logger.error("Error in process_selection: %s", e, exc_info=True)
-            return AgentResponse(
-                content=f"I encountered an error creating your therapy plan: {str(e)}",
-                next_action="continue",
-                next_state=None,
-                metadata={"error": str(e)},
-            )
+        logger.info("Received assessment style selection: %s", selected_style)
+        content = (
+            "Thanks for sharing your preference. "
+            "Therapy style selection is handled through the workflow UI. "
+            "Please choose your style there so the backend can create your plan."
+        )
+        return direct_agent_response(
+            content=content,
+            next_action="await_selection",
+            metadata={"selected_style": selected_style},
+        )
 
     def _format_recommendations(
         self, recommendations: list[TherapyStyleRecommendation]
@@ -473,7 +365,7 @@ What would you prefer?
 
     async def create_initial_plan_with_style(
         self, intake_session: Session, selected_style: str
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Create an initial therapy plan with the selected therapy style using Trio.
 
@@ -482,7 +374,7 @@ What would you prefer?
             selected_style: The user-selected therapy style
 
         Returns:
-            TherapyPlan: The initial therapy plan with selected style
+            StructuredTherapyPlanOutput: Structured plan payload (no persistence)
         """
         # Use the injected TrioReflectionAgent dependency
         reflection_agent = self.reflection_agent

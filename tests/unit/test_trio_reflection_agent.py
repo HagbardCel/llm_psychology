@@ -12,7 +12,11 @@ import pytest
 from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan, Topic, UserProfile
-from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowState
+from psychoanalyst_app.orchestration.models import (
+    ConversationContext,
+    WorkflowEvent,
+    WorkflowState,
+)
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
 
@@ -378,16 +382,12 @@ async def test_process_reflection_updates_plan_with_briefing(
 
     # Verify response
     assert response is not None
-    assert response.next_state == WorkflowState.PLAN_COMPLETE
+    assert response.next_state is None
+    assert response.workflow_event == WorkflowEvent.COMPLETE_REFLECTION
     assert "has_briefing" in response.metadata
     assert response.metadata["has_briefing"] is True
+    assert response.metadata["session_briefing"] is not None
+    assert "narrative_handoff" in response.metadata["session_briefing"]
 
-    # Verify plan was updated in database
-    updated_plan = await db_service.get_therapy_plan(sample_therapy_plan.plan_id)
-    assert updated_plan is not None
-    assert updated_plan.session_briefing is not None
-    assert isinstance(updated_plan.session_briefing, dict)
-    # Check for actual SessionBriefing fields
-    assert "narrative_handoff" in updated_plan.session_briefing
-    assert "patient_observations" in updated_plan.session_briefing
-    assert "briefing_type" in updated_plan.session_briefing
+    assert "patient_observations" in response.metadata["session_briefing"]
+    assert "briefing_type" in response.metadata["session_briefing"]

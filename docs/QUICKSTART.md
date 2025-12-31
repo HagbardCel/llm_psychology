@@ -89,13 +89,17 @@ npm run dev
 
 ### Option 2: API Integration
 
-#### Create a User Profile
+#### Register Profile (Required)
 
 ```bash
-curl -X POST http://localhost:8000/api/user/profile \
+# Register a user profile before opening a WebSocket connection.
+curl -X POST http://localhost:8000/api/user/register \
   -H "Content-Type: application/json" \
   -d '{
+    "user_id": "user_abc123",
     "name": "John Doe",
+    "primary_language": "English",
+    "session_mode": "virtual",
     "data_of_birth": "1990-01-01",
     "profession": "Engineer"
   }'
@@ -104,16 +108,27 @@ curl -X POST http://localhost:8000/api/user/profile \
 Response:
 ```json
 {
-  "user_id": "user_abc123",
-  "name": "John Doe",
-  "created_at": "2025-01-08T12:00:00"
+  "session": {
+    "session_id": "session_xyz789",
+    "user_id": "user_abc123",
+    "timestamp": "2025-01-08T12:00:00"
+  },
+  "workflow_next_action": {
+    "user_id": "user_abc123",
+    "workflow_state": "intake_in_progress",
+    "required_action": "start_intake",
+    "prompt": "Start or continue the intake session.",
+    "blocking": false
+  }
 }
 ```
 
-#### Check User Status
+Open WebSocket afterward: `ws://localhost:8000/ws?user_id=user_abc123`
+
+#### Check Workflow Status
 
 ```bash
-curl http://localhost:8000/api/user/status?user_id=user_abc123
+curl http://localhost:8000/api/user/status?user_id=user_abc123\&session_id=session_xyz789
 ```
 
 Response:
@@ -121,28 +136,24 @@ Response:
 {
   "user_id": "user_abc123",
   "workflow_state": "new",
-  "next_agent": "INTAKE"
+  "timestamp": "2025-01-08T12:01:00"
 }
 ```
 
-#### Start an Intake Session
+#### Get Next Workflow Action
 
 ```bash
-curl -X POST http://localhost:8000/api/sessions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user_abc123",
-    "type": "INTAKE"
-  }'
+curl http://localhost:8000/api/workflow/next?user_id=user_abc123\&session_id=session_xyz789
 ```
 
 Response:
 ```json
 {
-  "session_id": "session_xyz789",
-  "agent_type": "INTAKE",
+  "user_id": "user_abc123",
   "workflow_state": "intake_in_progress",
-  "created_at": "2025-01-08T12:05:00"
+  "required_action": "start_intake",
+  "prompt": "Start or continue the intake session.",
+  "blocking": false
 }
 ```
 
@@ -153,13 +164,7 @@ Response:
 const ws = new WebSocket('ws://localhost:8000/ws?user_id=user_abc123');
 
 ws.addEventListener('open', () => {
-  // Start a session first
-  ws.send(
-    JSON.stringify({
-      type: 'session_request',
-      data: { session_type: 'therapy' }
-    })
-  );
+  // Session is auto-created on connect; wait for session_started
 });
 
 ws.addEventListener('message', (event) => {
@@ -345,7 +350,7 @@ water often represents the unconscious. What comes to mind?"
 - Session timer is available via the HTTP endpoint:
 
 ```bash
-GET /api/sessions/session_xyz789/timer
+GET /api/sessions/session_xyz789/timer?user_id=user_abc123&session_id=session_xyz789
 ```
 
 ### Ending a Session
@@ -406,7 +411,7 @@ ws.addEventListener('message', (event) => {
 Monitor user progress through therapy:
 
 ```bash
-GET /api/user/status?user_id=user_abc123
+GET /api/user/status?user_id=user_abc123&session_id=session_xyz789
 ```
 
 Returns:
@@ -441,7 +446,7 @@ Returns:
 **Problem**: `InvalidStateTransitionError`
 
 **Solutions**:
-- Check current workflow state: `GET /api/user/status`
+- Check current workflow state: `GET /api/user/status?user_id=...&session_id=...`
 - Review valid transitions in `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
 - Ensure proper sequence (can't skip intake/assessment)
 

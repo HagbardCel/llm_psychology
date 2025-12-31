@@ -22,7 +22,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import DeleteIcon from '@mui/icons-material/Delete';
 import WarningIcon from '@mui/icons-material/Warning';
 import { PageContainer } from '../components/shared';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useSessionHistory } from '../hooks/useSessionHistory';
 import { useTherapyPlan } from '../hooks/useTherapyPlan';
@@ -34,9 +34,10 @@ import { UserStatus } from '../types';
  */
 export function SettingsPage() {
   const userId = useCurrentUserId();
-  const { data: user } = useUserProfile(userId || '');
-  const { data: sessions } = useSessionHistory(userId || '');
-  const { data: therapyPlan } = useTherapyPlan(userId || '');
+  const sessionId = useCurrentSessionId();
+  const { data: user } = useUserProfile(userId || '', sessionId || '');
+  const { data: sessions } = useSessionHistory(userId || '', sessionId || '');
+  const { data: therapyPlan } = useTherapyPlan(userId || '', sessionId || '');
 
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(
     (localStorage.getItem('theme') as 'light' | 'dark') || 'light'
@@ -121,6 +122,11 @@ export function SettingsPage() {
 
   return (
     <PageContainer title="Settings" subtitle="Manage your preferences" maxWidth="md">
+      {!sessionId && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          No active session found. Please reconnect to manage your data.
+        </Alert>
+      )}
       {/* Theme Settings */}
       <Card sx={{ mb: 3 }}>
         <CardContent>

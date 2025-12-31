@@ -7,16 +7,16 @@ import type { Session } from '../types';
  * @param userId - User ID to fetch sessions for
  * @returns React Query result with session array
  */
-export function useSessionHistory(userId: string) {
+export function useSessionHistory(userId: string, sessionId: string) {
   return useQuery({
-    queryKey: ['sessions', userId],
+    queryKey: ['sessions', userId, sessionId],
     queryFn: async () => {
       const response = await apiClient.get<Session[]>(
-        `/api/sessions?user_id=${userId}`
+        `/api/sessions?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
       );
       return response;
     },
-    enabled: !!userId, // Only fetch if userId is provided
+    enabled: !!userId && !!sessionId, // Only fetch if userId/sessionId are provided
     staleTime: 1000 * 60 * 2, // 2 minutes - sessions change less frequently
   });
 }
@@ -26,16 +26,16 @@ export function useSessionHistory(userId: string) {
  * @param sessionId - Session ID to fetch
  * @returns React Query result with session data
  */
-export function useSession(sessionId: string) {
+export function useSession(sessionId: string, userId: string, activeSessionId: string) {
   return useQuery({
-    queryKey: ['session', sessionId],
+    queryKey: ['session', sessionId, userId, activeSessionId],
     queryFn: async () => {
       const response = await apiClient.get<Session>(
-        `/api/sessions/${sessionId}`
+        `/api/sessions/${sessionId}?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(activeSessionId)}`
       );
       return response;
     },
-    enabled: !!sessionId, // Only fetch if sessionId is provided
+    enabled: !!sessionId && !!userId && !!activeSessionId, // Only fetch if all IDs are provided
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 }

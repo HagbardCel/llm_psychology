@@ -44,7 +44,16 @@ from psychoanalyst_app.models.data_models import (
     TherapyPlan,
     TransferenceImpressions,
 )
-from psychoanalyst_app.orchestration.models import AgentResponse, ConversationContext, WorkflowState
+from psychoanalyst_app.models.structured_output_models import (
+    StructuredTherapyPlanOutput,
+    StructuredUserProfileOutput,
+)
+from psychoanalyst_app.orchestration.agent_output_validators import build_therapy_plan_output
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    ConversationContext,
+    WorkflowEvent,
+)
 from psychoanalyst_app.prompts.reflection_prompt_builder import (
     build_session_briefing_prompt,
     build_tier2_enrichment_prompt,
@@ -53,7 +62,6 @@ from psychoanalyst_app.prompts.reflection_prompt_builder import (
 )
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
-from psychoanalyst_app.services.reflection_persistence_service import ReflectionPersistenceService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -99,7 +107,6 @@ class TrioReflectionAgent:
         self.memory_agent = memory_agent
         self.planning_agent = planning_agent
         self.config = config
-        self.persistence_service = ReflectionPersistenceService(db_service)
 
         logger.info(f"TrioReflectionAgent initialized for user {user_context.user_id}")
 
@@ -140,7 +147,7 @@ class TrioReflectionAgent:
         Process reflection on completed therapy session using Trio (orchestrator interface).
 
         This is the interface for use with the orchestration layer.
-        It updates the therapy plan and returns summary information.
+        It produces updated plan output and returns summary information.
 
         Args:
             session: Completed therapy session
@@ -154,12 +161,19 @@ class TrioReflectionAgent:
         """
         logger.info(f"Processing reflection for session {session.session_id}")
 
-        # Update therapy plan
+        # Update therapy plan (structured output only)
         current_plan = context.therapy_plan
-        updated_plan = await self.update_plan(session, current_plan)
+        plan_output = await self.update_plan(session, current_plan)
+        is_noop_update = self._is_noop_plan_update(current_plan, plan_output)
+        updated_plan = self._build_plan_snapshot(current_plan, plan_output)
 
         # Generate comprehensive reflection (includes memory and planning analysis)
-        reflection = await self.generate_comprehensive_reflection(session, updated_plan)
+        (
+            reflection,
+            tier1_profile_output,
+            tier2_enrichment,
+            tier3_update,
+        ) = await self.generate_comprehensive_reflection(session, updated_plan)
 
         # Generate session briefing for next session resumption
         # This is critical for session resumption feature
@@ -196,15 +210,26 @@ class TrioReflectionAgent:
                         updated_plan.status = tier4_update["status"]
                     updated_plan.updated_at = datetime.now()
 
-            # Save updated plan with briefing
-            await self.persistence_service.save_therapy_plan(updated_plan)
             logger.info(
-                f"Successfully generated and saved session briefing for session {session.session_id}"
+                "Successfully generated session briefing for session %s",
+                session.session_id,
             )
         else:
             logger.warning(
                 f"Session briefing generation returned None for session {session.session_id}"
             )
+
+        therapy_plan_payload = build_therapy_plan_output(
+            {
+                "selected_therapy_style": updated_plan.selected_therapy_style,
+                "plan_details": updated_plan.plan_details,
+                "initial_goals": updated_plan.initial_goals,
+                "current_progress": updated_plan.current_progress,
+                "planned_interventions": updated_plan.planned_interventions,
+                "status": updated_plan.status,
+            }
+        )
+        should_persist_plan = (not is_noop_update) or (session_briefing is not None)
 
         # Build response content
         content = self._format_reflection_summary(reflection)
@@ -212,14 +237,74 @@ class TrioReflectionAgent:
         return AgentResponse(
             content=content,
             next_action="transition",
-            next_state=WorkflowState.PLAN_COMPLETE,
+            workflow_event=WorkflowEvent.COMPLETE_REFLECTION,
             metadata={
                 "plan_id": updated_plan.plan_id,
                 "plan_version": updated_plan.version,
                 "session_id": session.session_id,
                 "reflection": reflection,
                 "has_briefing": updated_plan.session_briefing is not None,
+                "therapy_plan_output": therapy_plan_payload,
+                "session_briefing": session_briefing,
+                "plan_update_applied": should_persist_plan,
+                "user_profile": tier1_profile_output,
+                "tier2_enrichment": tier2_enrichment,
+                "tier3_update": tier3_update,
             },
+        )
+
+    def _build_plan_snapshot(
+        self,
+        current_plan: TherapyPlan | None,
+        plan_output: StructuredTherapyPlanOutput,
+    ) -> TherapyPlan:
+        """Build an in-memory plan snapshot from structured output."""
+        if current_plan:
+            is_noop_update = self._is_noop_plan_update(current_plan, plan_output)
+            plan_id = current_plan.plan_id
+            created_at = current_plan.created_at
+            version = current_plan.version if is_noop_update else current_plan.version + 1
+            session_briefing = current_plan.session_briefing
+            selected_style = (
+                plan_output.selected_therapy_style
+                or current_plan.selected_therapy_style
+            )
+        else:
+            plan_id = f"pending_{uuid.uuid4().hex[:12]}"
+            created_at = datetime.now()
+            version = 1
+            session_briefing = None
+            selected_style = plan_output.selected_therapy_style
+
+        return TherapyPlan(
+            plan_id=plan_id,
+            user_id=self.user_context.user_id,
+            created_at=created_at,
+            updated_at=datetime.now(),
+            version=version,
+            selected_therapy_style=selected_style,
+            plan_details=plan_output.plan_details,
+            initial_goals=plan_output.initial_goals,
+            current_progress=plan_output.current_progress,
+            planned_interventions=plan_output.planned_interventions,
+            status=plan_output.status,
+            session_briefing=session_briefing,
+        )
+
+    @staticmethod
+    def _is_noop_plan_update(
+        current_plan: TherapyPlan | None,
+        plan_output: StructuredTherapyPlanOutput,
+    ) -> bool:
+        if not current_plan:
+            return False
+        return (
+            plan_output.selected_therapy_style == current_plan.selected_therapy_style
+            and plan_output.plan_details == current_plan.plan_details
+            and plan_output.initial_goals == current_plan.initial_goals
+            and plan_output.current_progress == current_plan.current_progress
+            and plan_output.planned_interventions == current_plan.planned_interventions
+            and plan_output.status == current_plan.status
         )
 
     def _format_reflection_summary(self, reflection: dict[str, Any]) -> str:
@@ -264,7 +349,7 @@ class TrioReflectionAgent:
 
     async def create_initial_plan(
         self, intake_session: Session, selected_style: str | None = None
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Coordinate initial therapy plan creation using specialized agents with Trio.
 
@@ -273,7 +358,7 @@ class TrioReflectionAgent:
             selected_style: Optional therapy style preference
 
         Returns:
-            TherapyPlan: The initial therapy plan
+            StructuredTherapyPlanOutput: The structured plan payload (no persistence)
 
         Raises:
             ReflectionError: If plan creation fails
@@ -284,12 +369,15 @@ class TrioReflectionAgent:
 
         try:
             # Use planning agent to create comprehensive initial plan
-            therapy_plan = await self.planning_agent.create_initial_plan(
+            plan_output = await self.planning_agent.create_initial_plan(
                 intake_session, selected_style
             )
 
-            logger.info(f"Initial therapy plan created with ID: {therapy_plan.plan_id}")
-            return therapy_plan
+            logger.info(
+                "Initial therapy plan output created for %s",
+                self.user_context.user_id,
+            )
+            return plan_output
 
         except Exception as e:
             logger.error(
@@ -299,7 +387,7 @@ class TrioReflectionAgent:
 
     async def create_initial_plan_with_style(
         self, intake_session: Session, selected_style: str
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Create initial therapy plan with specific style using Trio (delegates to create_initial_plan).
 
@@ -308,7 +396,7 @@ class TrioReflectionAgent:
             selected_style: The selected therapy style
 
         Returns:
-            TherapyPlan: The initial therapy plan with selected style
+            StructuredTherapyPlanOutput: The structured plan payload (no persistence)
         """
         logger.info(
             f"TrioReflectionAgent: Creating initial {selected_style.upper()} therapy plan"
@@ -317,7 +405,7 @@ class TrioReflectionAgent:
 
     async def update_plan(
         self, session: Session, current_plan: TherapyPlan | None = None
-    ) -> TherapyPlan:
+    ) -> StructuredTherapyPlanOutput:
         """
         Coordinate therapy plan updates using specialized agents with Trio.
 
@@ -326,7 +414,7 @@ class TrioReflectionAgent:
             current_plan: The current therapy plan (if None, retrieves latest)
 
         Returns:
-            TherapyPlan: The updated therapy plan
+            StructuredTherapyPlanOutput: Updated plan payload (no persistence)
 
         Raises:
             ReflectionError: If plan update fails
@@ -349,10 +437,14 @@ class TrioReflectionAgent:
                     return await self.planning_agent.create_initial_plan(session)
 
             # Use planning agent to update plan
-            updated_plan = await self.planning_agent.update_plan(session, current_plan)
+            updated_plan_output = await self.planning_agent.update_plan(
+                session, current_plan
+            )
 
-            logger.info(f"Therapy plan updated to version {updated_plan.version}")
-            return updated_plan
+            logger.info(
+                "Therapy plan update prepared for %s", self.user_context.user_id
+            )
+            return updated_plan_output
 
         except Exception as e:
             logger.error(f"Failed to coordinate plan update: {e}", exc_info=True)
@@ -360,7 +452,12 @@ class TrioReflectionAgent:
 
     async def generate_comprehensive_reflection(
         self, session: Session, current_plan: TherapyPlan | None = None
-    ) -> dict[str, Any]:
+    ) -> tuple[
+        dict[str, Any],
+        StructuredUserProfileOutput | None,
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+    ]:
         """
         Generate comprehensive reflection combining memory analysis and planning insights using Trio.
 
@@ -369,7 +466,8 @@ class TrioReflectionAgent:
             current_plan: Optional current therapy plan
 
         Returns:
-            Dict containing comprehensive reflection analysis
+            Tuple containing reflection analysis, Tier 1 profile updates, Tier 2 enrichment,
+            and Tier 3 update payloads.
 
         Raises:
             ReflectionError: If reflection generation fails
@@ -393,15 +491,18 @@ class TrioReflectionAgent:
 
             # Enrich session with Tier 2 psychological data
             # This is a one-time operation - check if already enriched
-            enrichment_success = False
+            tier2_enrichment = None
             session_record = session
             if not getattr(session, "enriched", False):
                 logger.info(
                     f"Session {session.session_id} not yet enriched - "
                     f"extracting Tier 2 data..."
                 )
-                enrichment_success = await self._enrich_session(session)
-                if enrichment_success:
+                tier2_enrichment = await self._enrich_session(session)
+                if tier2_enrichment:
+                    session_record = self._apply_tier2_enrichment(
+                        session, tier2_enrichment
+                    )
                     logger.info(
                         f"Successfully enriched session {session.session_id} "
                         f"with Tier 2 data"
@@ -415,27 +516,30 @@ class TrioReflectionAgent:
                 logger.info(
                     f"Session {session.session_id} already enriched - skipping"
                 )
-
-            # Load enriched view of the session for downstream analysis
-            session_record = await self.db_service.get_session(session.session_id)
-            if session_record:
-                logger.debug("Loaded enriched session record for %s", session.session_id)
-            else:
-                session_record = session
+                session_record = await self.db_service.get_session(session.session_id)
+                if session_record:
+                    logger.debug(
+                        "Loaded enriched session record for %s",
+                        session.session_id,
+                    )
+                else:
+                    session_record = session
 
             # Tier 1: rare background updates (LLM-gated)
-            tier1_updated = False
+            tier1_profile_output = None
             current_profile = await self.db_service.get_user_profile(
                 self.user_context.user_id
             )
             if current_profile:
-                tier1_updated = await maybe_update_tier1_profile(
-                    self.llm_service, self.db_service, current_profile, session_record
+                tier1_profile_output = await maybe_update_tier1_profile(
+                    self.llm_service, current_profile, session_record
                 )
 
             # Phase 5: Check Tier 3 (clinical formulation) for updates
             tier3_updated = False
             tier3_version = None
+            tier3_update = None
+            tier3_change_summary = None
 
             # Load current Tier 3 analysis
             current_tier3 = await self.db_service.get_latest_patient_analysis(
@@ -461,31 +565,19 @@ class TrioReflectionAgent:
                     )
 
                     if updated_analysis:
-                        saved = (
-                            await self.persistence_service.save_analysis_next_version_and_supersede(
-                                analysis_id=f"analysis_{uuid.uuid4().hex[:12]}",
-                                user_id=current_tier3.user_id,
-                                analysis_data=updated_analysis,
-                                created_at=datetime.now(),
-                                created_by_session=session_record.session_id,
-                                change_summary=change_summary,
-                                supersede_analysis_id=current_tier3.analysis_id,
-                            )
+                        tier3_update = {
+                            "analysis_data": updated_analysis,
+                            "change_summary": change_summary,
+                            "supersede_analysis_id": current_tier3.analysis_id,
+                        }
+                        tier3_change_summary = change_summary
+                        tier3_updated = True
+                        tier3_version = current_tier3.version + 1
+                        logger.info(
+                            "Prepared Tier 3 update payload for user %s: %s",
+                            self.user_context.user_id,
+                            change_summary,
                         )
-
-                        if saved:
-                            logger.info(
-                                "Created Tier 3 v%s for user %s: %s",
-                                saved.version,
-                                self.user_context.user_id,
-                                change_summary,
-                            )
-                            tier3_updated = True
-                            tier3_version = saved.version
-                        else:
-                            logger.warning(
-                                "Failed to save Tier 3 update"
-                            )
                     else:
                         logger.warning(
                             "Failed to generate Tier 3 update"
@@ -532,7 +624,6 @@ class TrioReflectionAgent:
                     )
                     if tier4_updated:
                         current_plan.updated_at = datetime.now()
-                        await self.db_service.save_therapy_plan(current_plan)
 
             # Compile comprehensive reflection
             reflection = {
@@ -573,14 +664,20 @@ class TrioReflectionAgent:
                 # Tier updates (Phase 3-5)
                 "tier3_updated": tier3_updated,
                 "tier3_version": tier3_version,
+                "tier3_change_summary": tier3_change_summary,
                 "tier4_updated": tier4_updated,
-                "tier1_updated": tier1_updated,
+                "tier1_updated": bool(tier1_profile_output),
             }
 
             logger.info(
                 f"Comprehensive reflection generated for session {session.session_id}"
             )
-            return reflection
+            return (
+                reflection,
+                tier1_profile_output,
+                tier2_enrichment,
+                tier3_update,
+            )
 
         except Exception as e:
             logger.error(
@@ -606,7 +703,7 @@ class TrioReflectionAgent:
             "timestamp": session.timestamp.isoformat(),
         }
 
-    async def _enrich_session(self, session: Session) -> bool:
+    async def _enrich_session(self, session: Session) -> dict[str, Any] | None:
         """
         Enrich session with Tier 2 psychological data using LLM.
 
@@ -618,7 +715,7 @@ class TrioReflectionAgent:
             session: The session to enrich
 
         Returns:
-            bool: True if enrichment successful, False otherwise
+            Tier 2 enrichment payload, or None when enrichment fails
         """
         try:
             enrichment_prompt = build_tier2_enrichment_prompt(session)
@@ -626,29 +723,40 @@ class TrioReflectionAgent:
                 self.llm_service, enrichment_prompt
             )
             if not tier2_data:
-                return False
-
-            success = await self.persistence_service.apply_tier2_enrichment(
-                session, tier2_data
-            )
-            if success:
-                logger.info(
-                    "Successfully enriched session %s with Tier 2 data",
-                    session.session_id,
-                )
-            else:
-                logger.warning(
-                    "Failed to persist Tier 2 enrichment for session %s",
-                    session.session_id,
-                )
-            return success
+                return None
+            return tier2_data
 
         except Exception as e:
             logger.error(
                 f"Error enriching session {session.session_id}: {e}",
                 exc_info=True,
             )
-            return False
+            return None
+
+    def _apply_tier2_enrichment(
+        self, session: Session, tier2_data: dict[str, Any]
+    ) -> Session:
+        """Apply Tier 2 enrichment to a session object without persistence."""
+        updates = {
+            "psychological_summary": tier2_data.get(
+                "psychological_summary", session.psychological_summary
+            ),
+            "dominant_affects": tier2_data.get(
+                "dominant_affects", session.dominant_affects
+            ),
+            "key_themes": tier2_data.get("key_themes", session.key_themes),
+            "notable_interactions": tier2_data.get(
+                "notable_interactions", session.notable_interactions
+            ),
+            "interpretations": tier2_data.get(
+                "interpretations", session.interpretations
+            ),
+            "patient_reactions": tier2_data.get(
+                "patient_reactions", session.patient_reactions
+            ),
+            "enriched": True,
+        }
+        return session.model_copy(update=updates)
 
     async def _generate_session_briefing(
         self,

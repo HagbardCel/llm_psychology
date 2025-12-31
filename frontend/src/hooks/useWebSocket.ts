@@ -10,7 +10,8 @@ import {
   WebSocketResponse,
   WebSocketConfig,
   StreamingChunkCallback,
-  SessionStartedCallback
+  SessionStartedCallback,
+  WorkflowNextActionEvent
 } from '../types/websocket';
 
 interface UseWebSocketOptions {
@@ -21,6 +22,7 @@ interface UseWebSocketOptions {
   reconnectDelay?: number;
   onStreamingChunk?: StreamingChunkCallback;
   onSessionStarted?: SessionStartedCallback;
+  onWorkflowNextAction?: (event: WorkflowNextActionEvent) => void;
 }
 
 interface UseWebSocketReturn {
@@ -30,7 +32,6 @@ interface UseWebSocketReturn {
   sendChatMessage: (message: string) => void;
   connect: () => Promise<boolean>;
   disconnect: () => void;
-  requestSession: (sessionType?: string) => void;
   isConnected: boolean;
 }
 
@@ -42,7 +43,8 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     reconnectAttempts = 5,
     reconnectDelay = 1000,
     onStreamingChunk,
-    onSessionStarted
+    onSessionStarted,
+    onWorkflowNextAction
   } = options;
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
@@ -75,13 +77,24 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     if (onSessionStarted) {
       serviceRef.current.onSessionStarted(onSessionStarted);
     }
+    if (onWorkflowNextAction) {
+      serviceRef.current.onWorkflowNextAction(onWorkflowNextAction);
+    }
     return () => {
       if (serviceRef.current) {
         serviceRef.current.disconnect();
         serviceRef.current = null;
       }
     };
-  }, [url, userId, reconnectAttempts, reconnectDelay, onStreamingChunk, onSessionStarted]);
+  }, [
+    url,
+    userId,
+    reconnectAttempts,
+    reconnectDelay,
+    onStreamingChunk,
+    onSessionStarted,
+    onWorkflowNextAction
+  ]);
 
   // Auto-connect if enabled
   useEffect(() => {
@@ -143,12 +156,6 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     }
   }, []);
 
-  const requestSession = useCallback((sessionType: string = 'therapy'): void => {
-    if (serviceRef.current) {
-      serviceRef.current.requestSession(sessionType);
-    }
-  }, []);
-
   return {
     connectionStatus,
     lastMessage,
@@ -156,7 +163,6 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     sendChatMessage,
     connect,
     disconnect,
-    requestSession,
     isConnected: connectionStatus.isConnected
   };
 };

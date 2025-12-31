@@ -37,6 +37,10 @@ interface AppContextType {
   currentUserId: string | null;
   setCurrentUserId: (userId: string | null) => void;
 
+  // Current session ID (stored in localStorage for persistence)
+  currentSessionId: string | null;
+  setCurrentSessionId: (sessionId: string | null) => void;
+
   // DEPRECATED: Legacy compatibility layer for components not yet refactored
   // These will be removed in a future release
   state: LegacyAppState;
@@ -82,6 +86,11 @@ export function AppProvider({ children }: AppProviderProps) {
     return generated;
   });
 
+  const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(() => {
+    const existing = localStorage.getItem('current_session_id');
+    return existing || null;
+  });
+
   // Persist theme changes
   useEffect(() => {
     localStorage.setItem('theme', theme);
@@ -103,6 +112,14 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }, [currentUserId]);
 
+  useEffect(() => {
+    if (currentSessionId) {
+      localStorage.setItem('current_session_id', currentSessionId);
+    } else {
+      localStorage.removeItem('current_session_id');
+    }
+  }, [currentSessionId]);
+
   const setTheme = (newTheme: 'light' | 'dark') => {
     setThemeState(newTheme);
   };
@@ -113,6 +130,10 @@ export function AppProvider({ children }: AppProviderProps) {
 
   const setCurrentUserId = (userId: string | null) => {
     setCurrentUserIdState(userId);
+  };
+
+  const setCurrentSessionId = (sessionId: string | null) => {
+    setCurrentSessionIdState(sessionId);
   };
 
   // DEPRECATED: Legacy state for backward compatibility
@@ -144,6 +165,8 @@ export function AppProvider({ children }: AppProviderProps) {
         setSidebarOpen,
         currentUserId,
         setCurrentUserId,
+        currentSessionId,
+        setCurrentSessionId,
         state: legacyState,
         actions: legacyActions,
       }}
@@ -172,4 +195,9 @@ export function useAppContext() {
 export function useCurrentUserId(): string | null {
   const { currentUserId } = useAppContext();
   return currentUserId;
+}
+
+export function useCurrentSessionId(): string | null {
+  const { currentSessionId } = useAppContext();
+  return currentSessionId;
 }

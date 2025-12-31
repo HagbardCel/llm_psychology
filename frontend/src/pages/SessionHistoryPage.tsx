@@ -13,7 +13,7 @@ import {
   CircularProgress
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useSessionHistory } from '../hooks/useSessionHistory';
 
 /**
@@ -22,10 +22,14 @@ import { useSessionHistory } from '../hooks/useSessionHistory';
  */
 export const SessionHistoryPage: React.FC = () => {
   const userId = useCurrentUserId();
+  const sessionId = useCurrentSessionId();
   const navigate = useNavigate();
 
   // Fetch sessions from backend via React Query
-  const { data: sessions, isLoading, error } = useSessionHistory(userId || '');
+  const { data: sessions, isLoading, error } = useSessionHistory(
+    userId || '',
+    sessionId || ''
+  );
 
   const handleSessionClick = (sessionId: string) => {
     navigate(`/session/${sessionId}`);
@@ -57,6 +61,11 @@ export const SessionHistoryPage: React.FC = () => {
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Failed to load sessions. Please try refreshing the page.
+        </Alert>
+      )}
+      {!sessionId && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          No active session found. Please reconnect to view session history.
         </Alert>
       )}
 

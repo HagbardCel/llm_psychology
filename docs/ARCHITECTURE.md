@@ -238,18 +238,22 @@ Gateways connect client interfaces to the orchestration layer.
 
 **Purpose**: Handle real-time WebSocket communication
 
+**Notes**:
+- WebSocket payloads are implicitly bound to the active session; clients do not send `session_id` in WS messages.
+- Initial greetings are skipped when `workflow_next_action.required_action` is `wait`; the wait prompt acts as the status notice.
+
 **Events Handled**:
 - `chat_message`: User sends message → streaming response
-- `session_request`: Start new therapy session
-- `user_status_request`: Get current workflow state
-- `style_selection`: User selects therapy style
-- `session_extension`: Extend session time
+- `end_session`: End active session
 
 **Events Emitted**:
 - `chat_response_chunk`: Streaming LLM chunks
 - `session_started`: Session creation confirmed
-- `user_status`: Workflow state update
+- `workflow_next_action`: Workflow state update
 - `typing_start`/`typing_stop`: Typing indicators
+- `connected`: Connection established
+- `session_ended`: Session ended
+- `assessment_recommendations`: Assessment recommendations
 - `error`: Error messages
 
 **Streaming Pattern**:
@@ -340,7 +344,8 @@ class ConversationContext:
 class AgentResponse:
     content: str              # Prompt for LLM
     next_action: str          # "continue" | "transition" | "offer_extension"
-    next_state: Optional[WorkflowState]
+    next_state: Optional[WorkflowState]  # Deprecated; use workflow_event
+    workflow_event: Optional[WorkflowEvent]
     metadata: Dict[str, Any]
 ```
 
@@ -350,15 +355,17 @@ class AgentResponse:
 
 ```
 GET  /health                        - Health check
-GET  /api/user/status               - Get user workflow state
-POST /api/user/profile              - Create user profile
-GET  /api/sessions                  - List user sessions
-GET  /api/sessions/{id}             - Get session with transcript
+POST /api/user/register             - Register profile + start session
+GET  /api/user/status               - Get user workflow state (requires session_id)
+GET  /api/sessions                  - List user sessions (requires session_id)
+GET  /api/sessions/{id}             - Get session with transcript (requires session_id)
 POST /api/sessions                  - Create new session
-POST /api/sessions/{id}/extend      - Extend session time
-GET  /api/therapy/styles            - List therapy styles
-GET  /api/therapy/plan              - Get therapy plan
-POST /api/therapy/plan              - Create/update therapy plan
+POST /api/sessions/{id}/extend      - Extend session time (requires session_id)
+GET  /api/therapy/styles            - List therapy styles (requires session_id)
+GET  /api/therapy/plan              - Get therapy plan (requires session_id)
+GET  /api/workflow/next             - Get next workflow action (requires session_id)
+POST /api/workflow/complete_profile - Complete profile step
+POST /api/workflow/select_therapy_style - Select therapy style
 ```
 
 ### WebSocket Events
@@ -366,20 +373,13 @@ POST /api/therapy/plan              - Create/update therapy plan
 ```
 Client → Server:
   - chat_message          Send message, receive streaming response
-  - session_request       Start new session
-  - user_status_request   Get current state
-  - style_selection       Select therapy style
-  - session_extension     Request time extension
-  - typing_start/stop     Typing indicators
-  - ping                  Connection test
+  - end_session           End session
 
 Server → Client:
   - chat_response_chunk   Streaming message chunks
   - session_started       Session created
-  - user_status           Workflow state
+  - workflow_next_action  Workflow state
   - connected             Connection established
-  - session_started       Session created
-  - chat_response_chunk   Streaming responses
   - session_ended         Session ended
   - assessment_recommendations Style recommendations
   - typing_start/stop     Therapist typing (optional)

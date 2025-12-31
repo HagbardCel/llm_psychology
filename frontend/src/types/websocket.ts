@@ -6,7 +6,7 @@
  * WebSocket Protocol Version
  * Matches backend protocol version in trio_server.py
  */
-export const WS_PROTOCOL_VERSION = '1.2.1' as const;
+export const WS_PROTOCOL_VERSION = '1.2.3' as const;
 
 /**
  * WebSocket Message Types
@@ -14,7 +14,6 @@ export const WS_PROTOCOL_VERSION = '1.2.1' as const;
  */
 export const WS_MESSAGE_TYPES = {
   // Client → Server messages
-  SESSION_REQUEST: 'session_request',
   CHAT_MESSAGE: 'chat_message',
   END_SESSION: 'end_session',
 
@@ -24,6 +23,7 @@ export const WS_MESSAGE_TYPES = {
   CHAT_RESPONSE_CHUNK: 'chat_response_chunk',
   TYPING_START: 'typing_start',
   TYPING_STOP: 'typing_stop',
+  WORKFLOW_NEXT_ACTION: 'workflow_next_action',
   ASSESSMENT_RECOMMENDATIONS: 'assessment_recommendations',
   SESSION_ENDED: 'session_ended',
   ERROR: 'error',
@@ -109,7 +109,6 @@ export interface SessionStartedEvent {
   workflow_state: string;  // WorkflowState value
   created_at: string;      // ISO 8601 timestamp
   user_id: string;
-  has_initial_message: boolean;
 }
 
 /**
@@ -127,6 +126,17 @@ export interface SessionEndedEvent {
   workflow_state: string;
 }
 
+export interface WorkflowNextActionEvent {
+  user_id: string;
+  workflow_state: string;
+  required_action: string;
+  required_fields: string[];
+  defaults?: Record<string, string> | null;
+  prompt?: string | null;
+  blocking: boolean;
+  timestamp: string;
+}
+
 /**
  * Type-safe WebSocket message wrapper
  */
@@ -142,6 +152,7 @@ export interface WebSocketEventMap {
   connected: ConnectedEvent;
   session_started: SessionStartedEvent;
   chat_response_chunk: ChatResponseChunk;
+  workflow_next_action: WorkflowNextActionEvent;
   assessment_recommendations: AssessmentRecommendationsEvent;
   session_ended: SessionEndedEvent;
   typing_start: undefined;

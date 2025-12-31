@@ -7,10 +7,11 @@
 
 import type {
   CreateSessionRequest as GeneratedCreateSessionRequest,
-  CreateTherapyPlanRequest as GeneratedCreateTherapyPlanRequest,
   CreateUserProfileRequest as GeneratedCreateUserProfileRequest,
   HealthCheckResponse as GeneratedHealthCheckResponse,
   PatchUserProfileRequest as GeneratedPatchUserProfileRequest,
+  RequiredWorkflowAction as GeneratedRequiredWorkflowAction,
+  SelectTherapyStyleRequest as GeneratedSelectTherapyStyleRequest,
   UserProfile as GeneratedUserProfile,
   UserStatus as GeneratedUserStatus,
   Message as GeneratedMessage,
@@ -21,8 +22,8 @@ import type {
   UpdateUserProfileRequest as GeneratedUpdateUserProfileRequest,
   UserStatusResponse as GeneratedUserStatusResponse,
   StatusMessageResponse as GeneratedStatusMessageResponse,
-  WorkflowNextActionRequest as GeneratedWorkflowNextActionRequest,
-  WorkflowNextActionResponse,
+  WorkflowCompleteProfileRequest as GeneratedWorkflowCompleteProfileRequest,
+  WorkflowNextAction as GeneratedWorkflowNextAction,
 } from './generated/api';
 
 // ============================================================================
@@ -80,11 +81,10 @@ export interface TherapyPlan extends GeneratedTherapyPlan {
   sessionCount?: number;
 }
 
-/** Workflow next action (from backend) */
-export type WorkflowNextAction = WorkflowNextActionResponse;
+export type RequiredWorkflowAction = GeneratedRequiredWorkflowAction;
 
-/** Workflow next action request (from backend) */
-export type WorkflowNextActionRequest = GeneratedWorkflowNextActionRequest;
+/** Workflow next action (from backend) */
+export type WorkflowNextAction = GeneratedWorkflowNextAction;
 
 /** User status response (from backend) */
 export type UserStatusResponse = GeneratedUserStatusResponse;
@@ -95,6 +95,9 @@ export type HealthCheckResponse = GeneratedHealthCheckResponse;
 /** User profile create request (from backend) */
 export type CreateUserProfileRequest = GeneratedCreateUserProfileRequest;
 
+/** Workflow profile completion request (backend workflow endpoint) */
+export type WorkflowCompleteProfileRequest = GeneratedWorkflowCompleteProfileRequest;
+
 /** User profile update request (from backend) */
 export type UpdateUserProfileRequest = GeneratedUpdateUserProfileRequest;
 
@@ -104,11 +107,16 @@ export type PatchUserProfileRequest = GeneratedPatchUserProfileRequest;
 /** Session create request (from backend) */
 export type CreateSessionRequest = GeneratedCreateSessionRequest;
 
-/** Therapy plan create request (from backend) */
-export type CreateTherapyPlanRequest = GeneratedCreateTherapyPlanRequest;
-
 /** Status message response (from backend) */
 export type StatusMessageResponse = GeneratedStatusMessageResponse;
+
+/** Workflow therapy style selection request (backend workflow endpoint) */
+export type WorkflowSelectTherapyStyleRequest = GeneratedSelectTherapyStyleRequest;
+
+export interface UserRegisterResponse {
+  session: Session;
+  workflow_next_action: WorkflowNextAction;
+}
 
 // ============================================================================
 // CLIENT-ONLY TYPES (UI State, Not in Backend)

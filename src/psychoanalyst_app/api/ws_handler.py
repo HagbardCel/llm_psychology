@@ -7,8 +7,16 @@ import logging
 
 from quart import websocket
 
-from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
-from psychoanalyst_app.utils.ws_messages import chat_chunk_message, connected_message, session_started_message
+from psychoanalyst_app.orchestration.orchestrator_helpers import (
+    session_type_for_workflow_state,
+)
+from psychoanalyst_app.models.api_models import RequiredWorkflowAction
+from psychoanalyst_app.utils.ws_messages import (
+    chat_chunk_message,
+    connected_message,
+    error_message,
+    session_started_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +45,16 @@ def register_ws_handler(app, server) -> None:
 
         user_profile = await server.db_service.get_user_profile(user_id)
         if not user_profile:
-            user_profile = await ensure_user_profile(
-                server.db_service,
-                user_id,
-                {"name": user_id},
+            await websocket.send(
+                json.dumps(
+                    error_message(
+                        "User profile not found. Register before opening a session."
+                    )
+                )
             )
-            logger.info("Auto-created profile for new user: %s", user_id)
+            await websocket.close(1008, "profile_not_found")
+            logger.warning("WebSocket rejected unknown user: %s", user_id)
+            return
 
         await websocket.send(
             json.dumps(
@@ -54,6 +66,19 @@ def register_ws_handler(app, server) -> None:
             )
         )
 
+        workflow_state = await server.orchestrator.get_user_state(user_id)
+        session_type = session_type_for_workflow_state(workflow_state)
+        session_info = await server.orchestrator.ensure_session_for_user(
+            user_id,
+            session_type=session_type,
+            send_initial_message=False,
+        )
+        session_id = session_info.session_id
+        server.conversation_manager.register_websocket(session_id, websocket)
+        await websocket.send(json.dumps(session_started_message(session_info)))
+        await server.orchestrator.emit_workflow_next_action(user_id, session_id)
+        await server.orchestrator.ensure_assessment_job(user_id, session_id)
+
         logger.info("WebSocket connection established for user: %s", user_id)
 
         try:
@@ -62,36 +87,25 @@ def register_ws_handler(app, server) -> None:
                 message = json.loads(raw_message)
                 msg_type = message.get("type")
 
-                if msg_type == "session_request":
-                    session_payload = message.get("data") or {}
-                    requested_type = session_payload.get("session_type")
-                    if not isinstance(requested_type, str):
-                        requested_type = "therapy"
-
-                    if session_id:
-                        server.conversation_manager.unregister_websocket(session_id)
-                        logger.info("Switching session from %s", session_id)
-
-                    session_info = await server.orchestrator.start_session(
-                        user_id,
-                        session_type=requested_type,
-                        send_initial_message=True,
-                    )
-                    session_id = session_info.session_id
-                    server.conversation_manager.register_websocket(
-                        session_id, websocket
-                    )
-
-                    await websocket.send(
-                        json.dumps(session_started_message(session_info))
-                    )
-
-                elif msg_type == "chat_message":
+                if msg_type == "chat_message":
                     if not session_id:
-                        await websocket.close(
-                            1002, "First message must be session_request"
-                        )
+                        await websocket.close(1002, "No active session")
                         return
+
+                    action = await server.orchestrator.get_workflow_next_action(
+                        user_id, session_id=session_id
+                    )
+                    if action.required_action == RequiredWorkflowAction.WAIT:
+                        await server.conversation_manager.send_json_message(
+                            session_id,
+                            "error",
+                            {
+                                "message": (
+                                    "Chat is disabled while the workflow is waiting."
+                                )
+                            },
+                        )
+                        continue
 
                     await _handle_chat_message_ws(
                         websocket=websocket,

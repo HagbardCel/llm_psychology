@@ -10,7 +10,8 @@ import {
   SessionStartedEvent,
   StreamingChunkCallback,
   SessionStartedCallback,
-  WS_MESSAGE_TYPES
+  WS_MESSAGE_TYPES,
+  WorkflowNextActionEvent
 } from '../types/websocket';
 
 export class WebSocketService {
@@ -27,6 +28,7 @@ export class WebSocketService {
   private onMessage: ((message: WebSocketResponse) => void) | null = null;
   private onStreamingChunk: StreamingChunkCallback | null = null;
   private onSessionStartedEvent: SessionStartedCallback | null = null;
+  private onWorkflowNextActionEvent: ((event: WorkflowNextActionEvent) => void) | null = null;
 
   constructor(config: WebSocketConfig) {
     this.config = config;
@@ -133,13 +135,6 @@ export class WebSocketService {
   }
 
   /**
-   * Request to start a therapy session
-   */
-  requestSession(sessionType: string = 'therapy'): void {
-    this.sendMessage(WS_MESSAGE_TYPES.SESSION_REQUEST, { session_type: sessionType });
-  }
-
-  /**
    * Set connection status change callback
    */
   onConnectionStatusChange(callback: (status: ConnectionStatus) => void): void {
@@ -165,6 +160,13 @@ export class WebSocketService {
    */
   onSessionStarted(callback: SessionStartedCallback): void {
     this.onSessionStartedEvent = callback;
+  }
+
+  /**
+   * Set workflow next action event callback
+   */
+  onWorkflowNextAction(callback: (event: WorkflowNextActionEvent) => void): void {
+    this.onWorkflowNextActionEvent = callback;
   }
 
   /**
@@ -241,6 +243,14 @@ export class WebSocketService {
         console.log('Session started:', message.data);
         if (this.onSessionStartedEvent && message.data) {
           this.onSessionStartedEvent(message.data as SessionStartedEvent);
+        }
+        break;
+
+      case WS_MESSAGE_TYPES.WORKFLOW_NEXT_ACTION:
+        if (this.onWorkflowNextActionEvent && message.data) {
+          this.onWorkflowNextActionEvent(message.data as WorkflowNextActionEvent);
+        } else if (this.onMessage) {
+          this.onMessage(message as WebSocketResponse);
         }
         break;
 

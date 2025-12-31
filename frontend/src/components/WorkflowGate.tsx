@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
+import { routeForRequiredAction } from '../utils/workflow';
 
 const WORKFLOW_ROUTES = new Set([
   '/profile',
@@ -20,10 +21,12 @@ export function WorkflowGate() {
   const location = useLocation();
   const navigate = useNavigate();
   const userId = useCurrentUserId();
+  const sessionId = useCurrentSessionId();
 
-  const shouldEnforce = !!userId && WORKFLOW_ROUTES.has(location.pathname);
+  const shouldEnforce = !!userId && !!sessionId && WORKFLOW_ROUTES.has(location.pathname);
   const { data: nextAction } = useWorkflowNextAction(
     userId || '',
+    sessionId || '',
     location.pathname,
     { enabled: shouldEnforce }
   );
@@ -32,12 +35,9 @@ export function WorkflowGate() {
     if (!shouldEnforce) return;
     if (!nextAction) return;
 
-    if (
-      nextAction.action === 'navigate' &&
-      nextAction.route &&
-      nextAction.route !== location.pathname
-    ) {
-      navigate(nextAction.route, { replace: true });
+    const targetRoute = routeForRequiredAction(nextAction.required_action);
+    if (targetRoute && targetRoute !== location.pathname) {
+      navigate(targetRoute, { replace: true });
     }
   }, [shouldEnforce, nextAction, navigate, location.pathname]);
 

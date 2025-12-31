@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 from unittest.mock import Mock
 
+import httpx
 import pytest
 import trio
 from trio_websocket import open_websocket_url
@@ -105,6 +106,13 @@ def mock_llm_service_natural_flow():
         return chunks
 
     llm.generate_response_stream = mock_stream
+
+    async def mock_stream_response(prompt, *args, **kwargs):
+        chunks = await mock_stream(prompt, *args, **kwargs)
+        for chunk in chunks:
+            yield chunk
+
+    llm.stream_response = mock_stream_response
 
     def mock_generate_sync(prompt, *args, **kwargs):
         """Mock sync generation."""
@@ -509,7 +517,21 @@ async def test_natural_patient_flow(test_server, use_real_llm):
         f"Starting natural flow test for user {user_id} (Real LLM: {use_real_llm})"
     )
 
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{test_server['url']}/api/user/register",
+            json={
+                "user_id": user_id,
+                "name": "TestUser",
+                "primary_language": "English",
+                "session_mode": "virtual",
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    therapy_session_id = None
     received_messages = []
+    latest_action = {}
     completion_send, completion_recv = trio.open_memory_channel(1000)
 
     async def websocket_receiver(ws):
@@ -523,6 +545,9 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                         await completion_send.send(True)
                 elif data.get("type") == "session_started":
                     received_messages.append(data)
+                elif data.get("type") == "workflow_next_action":
+                    latest_action.clear()
+                    latest_action.update(data.get("data") or {})
                 elif data.get("type") == "error":
                     logger.error(f"Server error: {data}")
         except Exception:
@@ -540,23 +565,13 @@ async def test_natural_patient_flow(test_server, use_real_llm):
         async with trio.open_nursery() as nursery:
             nursery.start_soon(websocket_receiver, ws)
 
-            # 1. Start Session
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "session_request",
-                        "data": {"user_id": user_id, "session_type": "therapy"},
-                    }
-                )
-            )
-
             # Wait for session_started
             with trio.move_on_after(5):
                 while not received_messages:
                     await trio.sleep(0.1)
 
             assert received_messages, "Did not receive session_started event"
-            session_id = received_messages[0]["data"]["session_id"]
+            session_id = received_messages[-1]["data"]["session_id"]
             logger.info(f"Test using session_id: {session_id}")
 
             # Drain the initial greeting (sent automatically when starting a session)
@@ -629,6 +644,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 if state in [
                     WorkflowState.INTAKE_COMPLETE,
                     WorkflowState.ASSESSMENT_IN_PROGRESS,
+                    WorkflowState.ASSESSMENT_COMPLETE,
                 ]:
                     print(f"Intake completed early at message {i+1}")
                     break
@@ -646,6 +662,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                     if state in [
                         WorkflowState.INTAKE_COMPLETE,
                         WorkflowState.ASSESSMENT_IN_PROGRESS,
+                        WorkflowState.ASSESSMENT_COMPLETE,
                     ]:
                         break
                     await trio.sleep(0.5)
@@ -653,40 +670,12 @@ async def test_natural_patient_flow(test_server, use_real_llm):
             assert state in [
                 WorkflowState.INTAKE_COMPLETE,
                 WorkflowState.ASSESSMENT_IN_PROGRESS,
+                WorkflowState.ASSESSMENT_COMPLETE,
             ], f"Failed to transition from Intake. Current state: {state}"
             logger.info("Successfully transitioned to Assessment phase")
 
             # 5. Assessment Phase
-            # Send a message to get recommendations if not already received
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "chat_message",
-                        "data": {
-                            "user_id": user_id,
-                            "message": "I'm ready for recommendations.",
-                            "session_id": session_id,
-                        },
-                    }
-                )
-            )
-            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
-
-            # Select a style (this triggers plan creation with RAG)
-            await ws.send_message(
-                json.dumps(
-                    {
-                        "type": "chat_message",
-                        "data": {
-                            "user_id": user_id,
-                            "message": "I'd like to try CBT.",
-                            "session_id": session_id,
-                        },
-                    }
-                )
-            )
-            # Plan creation with RAG can take 20-30s with real LLM
-            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
+            # Assessment runs as a backend job; wait for completion before continuing.
 
             # 6. Check for Transition to Assessment Complete
             # After is_complete, state transition might take a moment
@@ -702,6 +691,71 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 state == WorkflowState.ASSESSMENT_COMPLETE
             ), f"Failed to complete Assessment. Current state: {state}"
             logger.info("Successfully completed Assessment")
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{test_server['url']}/api/workflow/select_therapy_style",
+                    json={
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "selected_therapy_style": "cbt",
+                    },
+                )
+                assert response.status_code == 200, response.text
+                response = await client.post(
+                    f"{test_server['url']}/api/sessions",
+                    json={"user_id": user_id},
+                )
+                assert response.status_code == 201, response.text
+                therapy_session_id = response.json()["session_id"]
+
+            nursery.cancel_scope.cancel()
+
+    assert therapy_session_id is not None
+
+    received_messages = []
+    completion_send, completion_recv = trio.open_memory_channel(1000)
+
+    async def websocket_receiver(ws):
+        """Receive and track WebSocket messages, including completion signals."""
+        try:
+            while True:
+                message = await ws.get_message()
+                data = json.loads(message)
+                if data.get("type") == "chat_response_chunk":
+                    if data["data"].get("is_complete"):
+                        await completion_send.send(True)
+                elif data.get("type") == "session_started":
+                    received_messages.append(data)
+                elif data.get("type") == "error":
+                    logger.error(f"Server error: {data}")
+        except Exception:
+            pass
+
+    async def wait_for_response_complete(timeout=60):
+        """Wait for the server to complete processing (is_complete signal)."""
+        with trio.fail_after(timeout):
+            await completion_recv.receive()
+
+    async with open_websocket_url(
+        f"{test_server['ws_url']}/ws?user_id={user_id}",
+        extra_headers=[("Origin", "http://localhost:5173")],
+    ) as ws:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(websocket_receiver, ws)
+
+            # Wait for session_started
+            with trio.move_on_after(5):
+                while not received_messages:
+                    await trio.sleep(0.1)
+
+            assert received_messages, "Did not receive session_started event"
+            session_id = received_messages[-1]["data"]["session_id"]
+            assert session_id == therapy_session_id
+            logger.info(f"Test using session_id: {session_id}")
+
+            # Drain the initial greeting (sent automatically when starting a session)
+            await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
             # 7. Therapy Phase
             # We need to send a message to trigger the transition from ASSESSMENT_COMPLETE to THERAPY_IN_PROGRESS

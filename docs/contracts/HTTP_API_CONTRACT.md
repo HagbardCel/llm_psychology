@@ -83,6 +83,79 @@ These shapes are what all clients should assume on the wire.
 - `status`: `"active" | "paused" | "completed"` (string)
 - `session_briefing`: `object | null`
 
+### `WorkflowNextActionDTO`
+
+- `user_id`: `string`
+- `workflow_state`: `string` (enum value matching `WorkflowState`)
+- `required_action`: `"complete_profile" | "select_therapy_style" | "start_intake" | "continue_therapy" | "wait"`
+- `required_fields`: `string[]`
+- `defaults`: `{ [k: string]: string } | null`
+- `prompt`: `string | null`
+- `blocking`: `boolean`
+- `timestamp`: `string` (ISO 8601)
+
+### `WorkflowCompleteProfileRequestDTO`
+
+- `user_id`: `string`
+- `session_id`: `string`
+- `name`: `string`
+- `alias`: `string | null`
+- `data_of_birth`: `string | null` (ISO 8601)
+- `gender`: `string | null`
+- `cultural_background`: `string | null`
+- `primary_language`: `string`
+- `profession`: `string | null`
+- `parents`: `string | null`
+- `siblings`: `string | null`
+- `family_atmosphere`: `string | null`
+- `significant_events`: `string | null`
+- `education`: `string | null`
+- `work_history`: `string | null`
+- `relationship_to_work`: `string | null`
+- `relationships`: `string | null`
+- `social_context`: `string | null`
+- `current_situation`: `string | null`
+- `preferred_school`: `string | null`
+- `session_mode`: `string`
+- `boundary_notes`: `string | null`
+- `frame_notes`: `string | null`
+
+### `CreateUserProfileRequestDTO`
+
+- `user_id`: `string`
+- `name`: `string`
+- `alias`: `string | null`
+- `data_of_birth`: `string | null` (ISO 8601)
+- `gender`: `string | null`
+- `cultural_background`: `string | null`
+- `primary_language`: `string`
+- `profession`: `string | null`
+- `parents`: `string | null`
+- `siblings`: `string | null`
+- `family_atmosphere`: `string | null`
+- `significant_events`: `string | null`
+- `education`: `string | null`
+- `work_history`: `string | null`
+- `relationship_to_work`: `string | null`
+- `relationships`: `string | null`
+- `social_context`: `string | null`
+- `current_situation`: `string | null`
+- `preferred_school`: `string | null`
+- `session_mode`: `string`
+- `boundary_notes`: `string | null`
+- `frame_notes`: `string | null`
+
+### `UserRegisterResponseDTO`
+
+- `session`: `SessionDTO`
+- `workflow_next_action`: `WorkflowNextActionDTO`
+
+### `WorkflowSelectTherapyStyleRequestDTO`
+
+- `user_id`: `string`
+- `session_id`: `string`
+- `selected_therapy_style`: `string`
+
 ### `HealthCheckResponse`
 
 - `status`: `"healthy" | "unhealthy"`
@@ -136,48 +209,52 @@ These shapes are what all clients should assume on the wire.
 
 ## Endpoints
 
+> **Deprecated routes removed**: `POST /api/user/profile` and `POST /api/therapy/plan` are retired; use the workflow step endpoints listed below instead.
+
 ### `GET /health`
 
 - **200**: `HealthCheckResponse`
 
-### `GET /api/user/profile?user_id=...`
+### `GET /api/user/profile?user_id=...&session_id=...`
 
 - **200**: `UserProfileDTO`
 - **400**: `{ "error": "User ID is required" }`
 - **404**: `{ "error": "User profile not found" }` (or equivalent)
 
-### `POST /api/user/profile`
-
-- Request: `{ "user_id": "...", "name": "...", "data_of_birth"?: "...", "profession"?: "..." }`
-- **201**: `UserProfileDTO`
-- **400**: `{ "error": "<validation message>" }`
-
 ### `PUT /api/user/profile`
 
-- Request: Full profile payload; omitted optional fields are set to `null`.
+- Request: Full profile payload; omitted optional fields are set to `null`. Requires `session_id`.
+- Status updates are rejected; workflow transitions are orchestrator-only.
 - **200**: `UserProfileDTO`
 - **400**: `{ "error": "<validation message>" }`
 - **404**: `{ "error": "User profile not found" }`
 
 ### `PATCH /api/user/profile`
 
-- Request: Partial profile payload; only provided fields are updated.
+- Request: Partial profile payload; only provided fields are updated. Requires `session_id`.
+- Status updates are rejected; workflow transitions are orchestrator-only.
 - **200**: `UserProfileDTO`
 - **400**: `{ "error": "<validation message>" }`
 - **404**: `{ "error": "User profile not found" }`
 
-### `GET /api/user/status?user_id=...`
+### `GET /api/user/status?user_id=...&session_id=...`
 
 - **200**: `UserStatusResponse`
 - **400**: `{ "error": "User ID is required" }`
 - **404**: `{ "error": "User not found: <id>" }` (or equivalent)
 
-### `GET /api/sessions?user_id=...`
+### `POST /api/user/register`
+
+- Request: `CreateUserProfileRequestDTO`
+- **201**: `UserRegisterResponseDTO`
+- **400**: `{ "error": "<validation message>" }`
+
+### `GET /api/sessions?user_id=...&session_id=...`
 
 - **200**: `SessionDTO[]`
 - **400**: `{ "error": "User ID is required" }`
 
-### `GET /api/sessions/<session_id>`
+### `GET /api/sessions/<session_id>?user_id=...&session_id=...`
 
 - **200**: `SessionDTO`
 - **404**: `{ "error": "Session not found" }`
@@ -189,23 +266,16 @@ These shapes are what all clients should assume on the wire.
 - **400**: `{ "error": "User ID is required" }`
 - **404**: `{ "error": "User profile not found" }`
 
-### `GET /api/therapy/plan?user_id=...`
+### `GET /api/therapy/plan?user_id=...&session_id=...`
 
 - **200**: `TherapyPlanDTO` or `null` (returns `null` when no plan exists for the user)
 - **400**: `{ "error": "User ID is required" }`
 
-### `POST /api/therapy/plan`
-
-- Request: `{ "user_id": "...", "therapy_style": "..." }`
-- **201**: `TherapyPlanDTO`
-- **400**: `{ "error": "user_id and therapy_style are required" }` (or equivalent)
-- **404**: `{ "error": "User profile not found" }` (or equivalent)
-
-### `GET /api/therapy/styles`
+### `GET /api/therapy/styles?user_id=...&session_id=...`
 
 - **200**: `TherapyStyleDTO[]`
 
-### `GET /api/sessions/<session_id>/timer`
+### `GET /api/sessions/<session_id>/timer?user_id=...&session_id=...`
 
 - **200**: `SessionTimerResponse`
 - **404**: `{ "error": "<not found message>" }` (or equivalent)
@@ -219,3 +289,24 @@ These shapes are what all clients should assume on the wire.
 - Request: `{ "client_version": "...", "client_type": "console" | "web" }`
 - **200**: `VersionCheckResponseDTO`
 - **400**: `{ "error": "Invalid request", "details": [...] }` (or other invalid request shapes)
+
+### `GET /api/workflow/next`
+
+- Query: `user_id`, `session_id` (required)
+- **200**: `WorkflowNextActionDTO`
+- **400**: `{ "error": "User ID is required" }`
+
+### `POST /api/workflow/complete_profile`
+
+- Request: `WorkflowCompleteProfileRequestDTO` (requires `session_id`)
+- Session must be active for the user; WebSocket presence is optional.
+- **200**: `WorkflowNextActionDTO`
+- **400**: `{ "error": "<validation message>" }`
+
+### `POST /api/workflow/select_therapy_style`
+
+- Request: `WorkflowSelectTherapyStyleRequestDTO` (requires `session_id`)
+- Session must be active for the user; WebSocket presence is optional.
+- **200**: `WorkflowNextActionDTO`
+- **400**: `{ "error": "<validation message>" }`
+- **404**: `{ "error": "User profile not found" }`

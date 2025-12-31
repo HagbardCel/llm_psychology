@@ -21,7 +21,7 @@ import {
   Person as PersonIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { UserStatus } from '../types';
 
@@ -38,9 +38,10 @@ export function Navigation({ open, onClose }: NavigationProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const userId = useCurrentUserId();
+  const sessionId = useCurrentSessionId();
 
   // Fetch user data from backend via React Query
-  const { data: user, isLoading } = useUserProfile(userId || '');
+  const { data: user, isLoading } = useUserProfile(userId || '', sessionId || '');
 
   const handleNavigation = (path: string) => {
     navigate(path);

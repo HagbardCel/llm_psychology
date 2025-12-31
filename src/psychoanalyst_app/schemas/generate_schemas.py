@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field, create_model
 from psychoanalyst_app.models.data_models import UserStatus
 from psychoanalyst_app.models.http_models import (
     CreateSessionRequestDTO,
-    CreateTherapyPlanRequestDTO,
     CreateUserProfileRequestDTO,
     HealthCheckResponseDTO,
     MessageDTO,
@@ -33,13 +32,15 @@ from psychoanalyst_app.models.http_models import (
     TherapyStyleDTO,
     TopicDTO,
     UpdateUserProfileRequestDTO,
+    UserRegisterResponseDTO,
     UserProfileDTO,
     UserStatusResponseDTO,
+    WorkflowCompleteProfileRequestDTO,
+    WorkflowSelectTherapyStyleRequestDTO,
 )
 from psychoanalyst_app.models.api_models import (
-    WorkflowDisplayAction,
-    WorkflowNextActionRequest,
-    WorkflowNextActionResponse,
+    RequiredWorkflowAction,
+    WorkflowNextActionDTO,
 )
 from psychoanalyst_app.models.version_models import (
     VersionCheckRequest,
@@ -195,13 +196,13 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
         (UpdateUserProfileRequestDTO, "UpdateUserProfileRequest"),
         (PatchUserProfileRequestDTO, "PatchUserProfileRequest"),
         (CreateSessionRequestDTO, "CreateSessionRequest"),
-        (CreateTherapyPlanRequestDTO, "CreateTherapyPlanRequest"),
+        (WorkflowCompleteProfileRequestDTO, "WorkflowCompleteProfileRequest"),
+        (WorkflowSelectTherapyStyleRequestDTO, "SelectTherapyStyleRequest"),
         (UserStatusResponseDTO, "UserStatusResponse"),
         (TherapyStyleDTO, None),
         (StatusMessageResponseDTO, "StatusMessageResponse"),
-        (WorkflowNextActionRequest, None),
-        (WorkflowDisplayAction, None),
-        (WorkflowNextActionResponse, None),
+        (UserRegisterResponseDTO, "UserRegisterResponse"),
+        (WorkflowNextActionDTO, "WorkflowNextAction"),
         (VersionInfo, None),
         (VersionCheckRequest, None),
         (VersionCheckResponse, None),
@@ -212,6 +213,7 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
         UserStatus,
         WorkflowState,
         WorkflowEvent,
+        RequiredWorkflowAction,
     ]
 
     print("Generating Pydantic model schemas...")

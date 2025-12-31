@@ -14,11 +14,12 @@ import {
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useNavigate } from 'react-router-dom';
 import { PageContainer, WorkflowStepper } from './shared';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useSessionHistory } from '../hooks/useSessionHistory';
 import { useTherapyPlan } from '../hooks/useTherapyPlan';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
+import { labelForRequiredAction, routeForRequiredAction } from '../utils/workflow';
 
 /**
  * Dashboard provides an overview of the user's therapy journey.
@@ -27,22 +28,31 @@ import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
 export const Dashboard = memo(function Dashboard() {
   const navigate = useNavigate();
   const userId = useCurrentUserId();
+  const sessionId = useCurrentSessionId();
 
   // Fetch all data from backend via React Query
-  const { data: user, isLoading: userLoading, error: userError } = useUserProfile(userId || '');
+  const { data: user, isLoading: userLoading, error: userError } = useUserProfile(
+    userId || '',
+    sessionId || ''
+  );
   const effectiveUserId = user ? userId : '';
-  const { data: sessions, isLoading: sessionsLoading } = useSessionHistory(effectiveUserId || '');
-  const { data: therapyPlan } = useTherapyPlan(effectiveUserId || '');
+  const { data: sessions, isLoading: sessionsLoading } = useSessionHistory(
+    effectiveUserId || '',
+    sessionId || ''
+  );
+  const { data: therapyPlan } = useTherapyPlan(effectiveUserId || '', sessionId || '');
   const { data: nextAction, isLoading: actionLoading } = useWorkflowNextAction(
     userId || '',
+    sessionId || '',
     '/dashboard',
-    { enabled: !!user }
+    { enabled: !!user && !!sessionId }
   );
 
   // Backend-driven navigation action
   const handleContinue = useCallback(() => {
-    if (nextAction?.route) {
-      navigate(nextAction.route);
+    const targetRoute = routeForRequiredAction(nextAction?.required_action);
+    if (targetRoute) {
+      navigate(targetRoute);
     }
   }, [nextAction, navigate]);
 
@@ -80,6 +90,16 @@ export const Dashboard = memo(function Dashboard() {
     );
   }
 
+  if (!sessionId) {
+    return (
+      <PageContainer title="Dashboard" maxWidth="lg">
+        <Alert severity="warning">
+          No active session found. Please reconnect to start a session.
+        </Alert>
+      </PageContainer>
+    );
+  }
+
   // No user state - guide new users to create a profile
   if (!user) {
     return (
@@ -103,18 +123,19 @@ export const Dashboard = memo(function Dashboard() {
 
   return (
     <PageContainer title={`Welcome back, ${user.name}`} maxWidth="lg">
+      {nextAction?.required_action === 'wait' && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          {nextAction.prompt || 'Assessment in progress. Please wait.'}
+        </Alert>
+      )}
       {/* Backend-provided instructions */}
-      {nextAction?.display && (
+      {nextAction?.prompt && nextAction?.required_action !== 'wait' && (
         <Card sx={{ mb: 3, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
           <CardContent>
             <Typography variant="h6" gutterBottom>
-              {nextAction.display.title}
+              Next Step
             </Typography>
-            {nextAction.display.description && (
-              <Typography variant="body2">
-                {nextAction.display.description}
-              </Typography>
-            )}
+            <Typography variant="body2">{nextAction.prompt}</Typography>
           </CardContent>
         </Card>
       )}
@@ -145,10 +166,9 @@ export const Dashboard = memo(function Dashboard() {
                 size="large"
                 fullWidth
                 onClick={handleContinue}
-                disabled={!nextAction?.route}
+                disabled={!routeForRequiredAction(nextAction?.required_action)}
               >
-                {/* Backend tells us what the button should say */}
-                {nextAction?.display?.primary_action?.label || 'Continue'}
+                {labelForRequiredAction(nextAction?.required_action)}
               </Button>
             </Grid>
             <Grid item xs={12} md={6}>

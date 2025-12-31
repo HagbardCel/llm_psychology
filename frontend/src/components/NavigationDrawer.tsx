@@ -17,7 +17,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import PersonIcon from '@mui/icons-material/Person';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LockIcon from '@mui/icons-material/Lock';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { UserStatus } from '../types';
 
@@ -42,7 +42,8 @@ interface NavigationItem {
  */
 export function NavigationDrawer({ open, onClose, variant }: NavigationDrawerProps) {
   const userId = useCurrentUserId();
-  const { data: user, isLoading } = useUserProfile(userId || '');
+  const sessionId = useCurrentSessionId();
+  const { data: user, isLoading } = useUserProfile(userId || '', sessionId || '');
   const location = useLocation();
 
   if (isLoading) {

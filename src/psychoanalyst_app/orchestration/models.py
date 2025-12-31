@@ -56,13 +56,16 @@ class AgentResponse:
     Attributes:
         content: The content to send to LLM or return to user
         next_action: What should happen next ("continue", "transition", "complete")
-        next_state: Next workflow state (if transitioning)
+    next_state: Deprecated direct workflow state (use workflow_event instead)
+    workflow_event: Workflow event signal for orchestrator-owned transitions
         metadata: Additional information for orchestrator
     """
 
     content: str
     next_action: str  # "continue", "transition", "complete"
     next_state: WorkflowState | None = None
+    # Deprecated: use workflow_event for orchestrator-owned transitions.
+    workflow_event: WorkflowEvent | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -71,6 +74,7 @@ def build_agent_response(
     content: str,
     next_action: str,
     next_state: WorkflowState | None = None,
+    workflow_event: WorkflowEvent | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Create a standardized AgentResponse."""
@@ -78,6 +82,7 @@ def build_agent_response(
         content=content,
         next_action=next_action,
         next_state=next_state,
+        workflow_event=workflow_event,
         metadata=metadata or {},
     )
 
@@ -87,6 +92,7 @@ def direct_agent_response(
     content: str,
     next_action: str = "continue",
     next_state: WorkflowState | None = None,
+    workflow_event: WorkflowEvent | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Create an AgentResponse that should bypass LLM streaming."""
@@ -96,6 +102,7 @@ def direct_agent_response(
         content=content,
         next_action=next_action,
         next_state=next_state,
+        workflow_event=workflow_event,
         metadata=merged,
     )
 
@@ -110,6 +117,7 @@ def continue_agent_response(
         content=content,
         next_action="continue",
         next_state=None,
+        workflow_event=None,
         metadata=metadata,
     )
 
@@ -125,6 +133,7 @@ def transition_agent_response(
         content=content,
         next_action="transition",
         next_state=next_state,
+        workflow_event=None,
         metadata=metadata,
     )
 
@@ -193,7 +202,6 @@ class SessionInfo:
         workflow_state: Current workflow state
         created_at: When session was created
         user_id: User this session belongs to
-        has_initial_message: Whether an initial message is being sent from the agent
     """
 
     session_id: str
@@ -201,7 +209,6 @@ class SessionInfo:
     workflow_state: WorkflowState
     created_at: datetime
     user_id: str
-    has_initial_message: bool = False
 
     def to_dict(self):
         """Convert dataclass to dictionary for JSON serialization."""
@@ -211,7 +218,6 @@ class SessionInfo:
             "workflow_state": self.workflow_state.value,
             "created_at": self.created_at.isoformat(),
             "user_id": self.user_id,
-            "has_initial_message": self.has_initial_message,
         }
 
 

@@ -6,8 +6,7 @@
 import { apiClient } from './apiClient';
 import {
   CreateSessionRequest,
-  CreateTherapyPlanRequest,
-  CreateUserProfileRequest,
+  WorkflowCompleteProfileRequest,
   HealthCheckResponse,
   PatchUserProfileRequest,
   Session,
@@ -15,21 +14,28 @@ import {
   TherapyPlan,
   TherapyStyleInfo,
   User,
+  UserRegisterResponse,
   UserStatusResponse,
   WorkflowNextAction,
-  WorkflowNextActionRequest
+  WorkflowSelectTherapyStyleRequest
 } from '../types';
 
 /**
  * User API
  */
 export const userApi = {
-  async getStatus(userId: string): Promise<UserStatusResponse> {
-    return apiClient.get(`/api/user/status?user_id=${encodeURIComponent(userId)}`);
+  async register(data: CreateUserProfileRequest): Promise<UserRegisterResponse> {
+    return apiClient.post('/api/user/register', data);
   },
 
-  async createProfile(data: CreateUserProfileRequest): Promise<User> {
-    return apiClient.post('/api/user/profile', data);
+  async getStatus(userId: string, sessionId: string): Promise<UserStatusResponse> {
+    return apiClient.get(
+      `/api/user/status?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
+  },
+
+  async createProfile(data: WorkflowCompleteProfileRequest): Promise<WorkflowNextAction> {
+    return apiClient.post('/api/workflow/complete_profile', data);
   },
 
   async updateProfile(data: PatchUserProfileRequest): Promise<User> {
@@ -41,20 +47,30 @@ export const userApi = {
  * Session API
  */
 export const sessionApi = {
-  async getSessions(userId: string): Promise<Session[]> {
-    return apiClient.get(`/api/sessions?user_id=${encodeURIComponent(userId)}`);
+  async getSessions(userId: string, sessionId: string): Promise<Session[]> {
+    return apiClient.get(
+      `/api/sessions?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
   },
 
-  async getSession(sessionId: string): Promise<Session> {
-    return apiClient.get(`/api/sessions/${sessionId}`);
+  async getSession(sessionId: string, userId: string, activeSessionId: string): Promise<Session> {
+    return apiClient.get(
+      `/api/sessions/${sessionId}?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(activeSessionId)}`
+    );
   },
 
   async createSession(data: CreateSessionRequest): Promise<Session> {
     return apiClient.post('/api/sessions', data);
   },
 
-  async extendSession(sessionId: string): Promise<StatusMessageResponse> {
-    return apiClient.post(`/api/sessions/${sessionId}/extend`);
+  async extendSession(
+    sessionId: string,
+    userId: string,
+    activeSessionId: string
+  ): Promise<StatusMessageResponse> {
+    return apiClient.post(
+      `/api/sessions/${sessionId}/extend?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(activeSessionId)}`
+    );
   }
 };
 
@@ -62,16 +78,20 @@ export const sessionApi = {
  * Therapy API
  */
 export const therapyApi = {
-  async getStyles(): Promise<TherapyStyleInfo[]> {
-    return apiClient.get('/api/therapy/styles');
+  async getStyles(userId: string, sessionId: string): Promise<TherapyStyleInfo[]> {
+    return apiClient.get(
+      `/api/therapy/styles?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
   },
 
-  async getPlan(userId: string): Promise<TherapyPlan | null> {
-    return apiClient.get(`/api/therapy/plan?user_id=${encodeURIComponent(userId)}`);
+  async getPlan(userId: string, sessionId: string): Promise<TherapyPlan | null> {
+    return apiClient.get(
+      `/api/therapy/plan?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
   },
 
-  async createPlan(data: CreateTherapyPlanRequest): Promise<TherapyPlan> {
-    return apiClient.post('/api/therapy/plan', data);
+  async selectStyle(data: WorkflowSelectTherapyStyleRequest): Promise<WorkflowNextAction> {
+    return apiClient.post('/api/workflow/select_therapy_style', data);
   }
 };
 
@@ -79,8 +99,10 @@ export const therapyApi = {
  * Workflow API (NEW - Phase 1)
  */
 export const workflowApi = {
-  async getNextAction(data: WorkflowNextActionRequest): Promise<WorkflowNextAction> {
-    return apiClient.post('/api/workflow/next-action', data);
+  async getNextAction(userId: string, sessionId: string): Promise<WorkflowNextAction> {
+    return apiClient.get(
+      `/api/workflow/next?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
   }
 };
 

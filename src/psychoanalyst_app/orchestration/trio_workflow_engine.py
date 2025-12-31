@@ -47,7 +47,10 @@ class TrioWorkflowEngine:
             WorkflowState.ASSESSMENT_COMPLETE,
             WorkflowState.ASSESSMENT_IN_PROGRESS,  # Allow staying in progress
         ],
-        WorkflowState.ASSESSMENT_COMPLETE: [WorkflowState.THERAPY_IN_PROGRESS],
+        WorkflowState.ASSESSMENT_COMPLETE: [
+            WorkflowState.THERAPY_IN_PROGRESS,
+            WorkflowState.PLAN_COMPLETE,
+        ],
         WorkflowState.THERAPY_IN_PROGRESS: [
             WorkflowState.REFLECTION_IN_PROGRESS,
             WorkflowState.THERAPY_IN_PROGRESS,  # Allow staying in progress

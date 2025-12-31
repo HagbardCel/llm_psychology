@@ -9,14 +9,13 @@ in docs/WEBSOCKET_PROTOCOL.md.
 from typing import Final
 
 # Protocol Version
-WS_PROTOCOL_VERSION: Final[str] = "1.2.1"
+WS_PROTOCOL_VERSION: Final[str] = "1.2.3"
 
 
 # Client → Server Message Types
 class ClientMessageTypes:
     """Message types sent from client to server."""
 
-    SESSION_REQUEST: Final[str] = "session_request"
     CHAT_MESSAGE: Final[str] = "chat_message"
     END_SESSION: Final[str] = "end_session"
 
@@ -30,6 +29,7 @@ class ServerMessageTypes:
     CHAT_RESPONSE_CHUNK: Final[str] = "chat_response_chunk"
     TYPING_START: Final[str] = "typing_start"
     TYPING_STOP: Final[str] = "typing_stop"
+    WORKFLOW_NEXT_ACTION: Final[str] = "workflow_next_action"
     SESSION_ENDED: Final[str] = "session_ended"
     ASSESSMENT_RECOMMENDATIONS: Final[str] = "assessment_recommendations"
     ERROR: Final[str] = "error"
@@ -58,7 +58,6 @@ class ErrorCodes:
 
 
 # Convenience aliases for backward compatibility and easier imports
-MSG_SESSION_REQUEST = ClientMessageTypes.SESSION_REQUEST
 MSG_CHAT_MESSAGE = ClientMessageTypes.CHAT_MESSAGE
 MSG_END_SESSION = ClientMessageTypes.END_SESSION
 

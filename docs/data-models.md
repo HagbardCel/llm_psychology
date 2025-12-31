@@ -162,11 +162,11 @@ Key DTOs:
 - `MessageDTO`, `TopicDTO`
 - `HealthCheckResponseDTO`
 - `CreateUserProfileRequestDTO`, `UpdateUserProfileRequestDTO`, `PatchUserProfileRequestDTO`
-- `CreateSessionRequestDTO`, `CreateTherapyPlanRequestDTO`
+- `CreateSessionRequestDTO`, `WorkflowCompleteProfileRequestDTO`, `WorkflowSelectTherapyStyleRequestDTO`
 
 Workflow UI guidance:
-- `WorkflowNextActionRequest` and `WorkflowNextActionResponse`
-  in `src/psychoanalyst_app/models/api_models.py`
+- `WorkflowNextActionDTO` and `RequiredWorkflowAction` in `src/psychoanalyst_app/models/api_models.py`
+- Step-completion requests for profile+style are defined in `src/psychoanalyst_app/models/http_models.py`
 
 Version negotiation:
 - `VersionInfo`, `VersionCheckRequest`, `VersionCheckResponse`

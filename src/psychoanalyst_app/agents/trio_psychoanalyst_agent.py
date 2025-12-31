@@ -16,7 +16,11 @@ import trio
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.briefing_models import BriefingStatus
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
-from psychoanalyst_app.orchestration.models import AgentResponse, ConversationContext, WorkflowState
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    ConversationContext,
+    WorkflowEvent,
+)
 from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
     build_continuation_prompt,
     build_initial_prompt,
@@ -145,7 +149,7 @@ class TrioPsychoanalystAgent:
                 return AgentResponse(
                     content="I apologize, but I don't have your therapy plan loaded. Please contact support.",
                     next_action="continue",
-                    next_state=None,
+                    workflow_event=None,
                     metadata={"error": "No therapy plan"},
                 )
 
@@ -168,27 +172,27 @@ class TrioPsychoanalystAgent:
 
             # Check if session should end
             if context.user_profile.status == UserStatus.ASSESSMENT_COMPLETE:
-                # First message in therapy - transition to IN_PROGRESS
+                # First message in therapy - request transition to IN_PROGRESS
                 next_action = "transition"
-                next_state = WorkflowState.THERAPY_IN_PROGRESS
+                workflow_event = WorkflowEvent.START_THERAPY
             elif context.user_profile.status == UserStatus.PLAN_COMPLETE:
-                # Starting new session after plan update - transition to IN_PROGRESS
+                # Starting new session after plan update - request transition to IN_PROGRESS
                 next_action = "transition"
-                next_state = WorkflowState.THERAPY_IN_PROGRESS
+                workflow_event = WorkflowEvent.START_THERAPY
             elif context.is_time_up:
                 next_action = "transition"
-                next_state = WorkflowState.REFLECTION_IN_PROGRESS
+                workflow_event = WorkflowEvent.COMPLETE_SESSION
             elif self._should_offer_extension(context):
                 next_action = "offer_extension"
-                next_state = None
+                workflow_event = None
             else:
                 next_action = "continue"
-                next_state = None
+                workflow_event = None
 
             return AgentResponse(
                 content=prompt,
                 next_action=next_action,
-                next_state=next_state,
+                workflow_event=workflow_event,
                 metadata={
                     "therapy_style": selected_style,
                     "time_remaining": context.time_remaining_minutes,
@@ -201,7 +205,7 @@ class TrioPsychoanalystAgent:
             return AgentResponse(
                 content="I apologize, but I encountered an error. Could you please repeat that?",
                 next_action="continue",
-                next_state=None,
+                workflow_event=None,
                 metadata={"error": str(e)},
             )
 

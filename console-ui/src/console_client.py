@@ -50,6 +50,9 @@ class ConsoleClient:
         self.response_complete = trio.Event()
         self.current_session_id: Optional[str] = None
         self.session_end_requested = False
+        self.pending_recommendations: list[dict[str, Any]] | None = None
+        self.latest_workflow_action: dict[str, Any] | None = None
+        self.registered = False
 
     async def _websocket_receiver(self, ws):
         """Background task to receive and handle WebSocket messages."""
@@ -91,6 +94,8 @@ class ConsoleClient:
             await self._handle_error(data)
         elif msg_type == ServerMessageTypes.ASSESSMENT_RECOMMENDATIONS:
             await self._handle_assessment_recommendations(data)
+        elif msg_type == ServerMessageTypes.WORKFLOW_NEXT_ACTION:
+            await self._handle_workflow_next_action(data)
         elif msg_type == ServerMessageTypes.SESSION_ENDED:
             await self._handle_session_ended(data)
         else:
@@ -148,28 +153,10 @@ class ConsoleClient:
         """Handle session started confirmation."""
         # Capture session_id for timer requests
         self.current_session_id = data.get("session_id")
-
-        # Check if there's an initial message coming
-        has_initial_message = data.get("has_initial_message", False)
-
-        if has_initial_message:
-            # Wait for the initial message before allowing user input
-            # (Welcome message will be shown AFTER therapist greeting completes)
-            self.waiting_for_initial_message = True
-        else:
-            # No initial message, ready to start immediately
-            print(f"\n✅ Your therapy session has begun.", flush=True)
-            print(
-                "\n💬 You can now chat with your therapist.",
-                flush=True,
-            )
-            print(
-                "   Commands: /timer (show time), /quit (finish session), /exit (close console)",
-                flush=True,
-            )
-            print("=" * 60, flush=True)
-            print()  # Add blank line for better visibility
-            self.session_ready.set()
+        self.session_end_requested = False
+        self.session_ready = trio.Event()
+        # Always wait for the initial message before allowing user input.
+        self.waiting_for_initial_message = True
 
     async def _handle_connected(self, data: Dict[str, Any]):
         """Handle connection confirmation."""
@@ -201,6 +188,7 @@ class ConsoleClient:
         if not recommendations:
             logger.info("Received assessment_recommendations without payload")
             return
+        self.pending_recommendations = recommendations
 
         print("\n" + "=" * 60, flush=True)
         print("🎯 ASSESSMENT RECOMMENDATIONS", flush=True)
@@ -217,16 +205,26 @@ class ConsoleClient:
             print("---", flush=True)
 
         print(
-            "To select a style, submit POST /api/therapy/plan "
-            "with the desired therapy_style value.",
+            "To select a style, submit POST /api/workflow/select_therapy_style "
+            "with the desired selected_therapy_style value.",
             flush=True,
         )
+
+    async def _handle_workflow_next_action(self, data: Dict[str, Any]):
+        """Store workflow next action updates for display/polling."""
+        self.latest_workflow_action = data
+        required_action = data.get("required_action")
+        prompt = data.get("prompt")
+        if required_action == "wait":
+            print(f"\n⏳ {prompt or 'Waiting for backend workflow...'}", flush=True)
 
     async def _handle_session_ended(self, data: Dict[str, Any]):
         """Handle server-side session end notification."""
         reason = data.get("reason", "Session ended")
         print(f"\n👋 {reason}. Exiting console client.", flush=True)
         self.session_end_requested = True
+        self.current_session_id = None
+        self.session_ready = trio.Event()
         if self.waiting_for_response:
             self.response_complete.set()
             self.waiting_for_response = False
@@ -256,39 +254,108 @@ class ConsoleClient:
         else:
             print(f"\033[93m{role_display}\033[0m: {text}")  # Yellow
 
-    @staticmethod
-    def _route_to_session_type(route: str) -> str | None:
-        """Map workflow routes to session types."""
-        route_map = {
-            "/intake": "intake",
-            "/assessment": "assessment",
-            "/session/new": "therapy",
-        }
-        return route_map.get(route)
-
-    async def _complete_profile(self):
-        """Prompt the user for profile details and submit them via the API."""
+    async def _complete_profile(
+        self,
+        required_fields: list[str] | None = None,
+        defaults: dict[str, Any] | None = None,
+    ):
+        """Prompt the user for required profile details and submit them via the API."""
         print("\n📝 Profile required to continue.", flush=True)
-        name = await self._get_user_input("Enter your name: ")
-        data_of_birth = await self._get_user_input(
-            "Enter your date of birth (YYYY-MM-DD) or press Enter to skip: "
-        )
-        profession = await self._get_user_input(
-            "Enter your profession (optional, press Enter to skip): "
-        )
+        required_fields = required_fields or ["name"]
+        defaults = defaults or {}
 
-        payload = {
+        def build_prompt(field_name: str) -> str:
+            label = field_name.replace("_", " ")
+            default_value = defaults.get(field_name)
+            suffix = f" [{default_value}]" if default_value else ""
+            return f"Enter {label}{suffix}: "
+
+        payload: dict[str, Any] = {
             "user_id": self.user_id,
-            "name": name or self.user_id,
-            "data_of_birth": data_of_birth or None,
-            "profession": profession or None,
+            "session_id": self.current_session_id,
         }
+
+        for field in required_fields:
+            response = await self._get_user_input(build_prompt(field))
+            value = response or defaults.get(field)
+            if field == "name" and not value:
+                value = self.user_id
+            if value:
+                payload[field] = value
 
         try:
-            await self._api_request("POST", "/user/profile", json=payload)
+            if not self.current_session_id:
+                print("⚠️  No active session. Please reconnect.", flush=True)
+                return
+            await self._api_request("POST", "/workflow/complete_profile", json=payload)
             print("✅ Profile saved. Re-checking workflow...", flush=True)
         except Exception as e:
             print(f"❌ Failed to save profile: {e}", flush=True)
+
+    async def _select_therapy_style(self):
+        """Prompt the user to select a therapy style and submit it."""
+        recommendations = self.pending_recommendations
+        options: list[dict[str, Any]] = []
+
+        if not recommendations:
+            print(
+                "⏳ Waiting for assessment recommendations before selecting a therapy style.",
+                flush=True,
+            )
+            await trio.sleep(2)
+            return
+
+        for rec in recommendations:
+            options.append(
+                {
+                    "style": rec.get("style_id"),
+                    "description": rec.get("explanation"),
+                }
+            )
+
+        if not options:
+            print("⚠️  No therapy styles available yet. Try again later.", flush=True)
+            return
+
+        print("\n🧭 Select a therapy style:", flush=True)
+        for idx, option in enumerate(options, start=1):
+            label = option.get("style") or f"option_{idx}"
+            description = option.get("description")
+            if description:
+                print(f"{idx}. {label} - {description}", flush=True)
+            else:
+                print(f"{idx}. {label}", flush=True)
+
+        selection = await self._get_user_input("Enter the number or style id: ")
+        chosen_style = None
+        if selection.isdigit():
+            idx = int(selection) - 1
+            if 0 <= idx < len(options):
+                chosen_style = options[idx].get("style")
+        else:
+            chosen_style = selection.strip().lower() if selection else None
+
+        if not chosen_style:
+            print("⚠️  Invalid selection. Please try again.", flush=True)
+            return
+
+        try:
+            if not self.current_session_id:
+                print("⚠️  No active session. Please reconnect.", flush=True)
+                return
+            await self._api_request(
+                "POST",
+                "/workflow/select_therapy_style",
+                json={
+                    "user_id": self.user_id,
+                    "session_id": self.current_session_id,
+                    "selected_therapy_style": chosen_style,
+                },
+            )
+            print("✅ Therapy style saved. Re-checking workflow...", flush=True)
+            self.pending_recommendations = None
+        except Exception as exc:
+            print(f"❌ Failed to save therapy style: {exc}", flush=True)
 
     async def _get_user_input(self, prompt: Optional[str] = None) -> str:
         """Get input from the user via console (non-blocking)."""
@@ -300,6 +367,55 @@ class ConsoleClient:
             lambda: input("\nYour response: ").strip()
         )
         return user_input
+
+    async def _register_user(self) -> bool:
+        """Register or refresh a user profile before opening a WebSocket."""
+        if self.registered and self.current_session_id:
+            return True
+
+        print("\n📝 Let’s set up your profile before starting.", flush=True)
+        name = await self._get_user_input("Enter your name (required): ")
+        if not name:
+            name = self.user_id
+        primary_language = await self._get_user_input(
+            "Primary language [English]: "
+        )
+        if not primary_language:
+            primary_language = "English"
+        session_mode = await self._get_user_input("Session mode [virtual]: ")
+        if not session_mode:
+            session_mode = "virtual"
+
+        payload = {
+            "user_id": self.user_id,
+            "name": name,
+            "primary_language": primary_language,
+            "session_mode": session_mode,
+        }
+
+        try:
+            response = await self._api_request(
+                "POST",
+                "/user/register",
+                json=payload,
+            )
+        except Exception as exc:
+            print(f"❌ Failed to register profile: {exc}", flush=True)
+            return False
+
+        if response.get("error"):
+            print(f"❌ Registration failed: {response['error']}", flush=True)
+            return False
+
+        session = response.get("session") or {}
+        self.current_session_id = session.get("session_id")
+        if not self.current_session_id:
+            print("❌ Registration did not return a session id.", flush=True)
+            return False
+        self.latest_workflow_action = response.get("workflow_next_action")
+        self.registered = True
+        print("✅ Profile registered. Connecting to WebSocket...", flush=True)
+        return True
 
     async def _send_chat_message(self, ws, message: str):
         """Send a chat message via WebSocket."""
@@ -342,29 +458,37 @@ class ConsoleClient:
 
     async def _get_user_status(self) -> Dict[str, Any]:
         """Get user status from backend API."""
+        if not self.current_session_id:
+            return {"error": "No active session"}
         try:
             return await self._api_request(
-                "GET", "/user/status", params={"user_id": self.user_id}
+                "GET",
+                "/user/status",
+                params={
+                    "user_id": self.user_id,
+                    "session_id": self.current_session_id,
+                },
             )
         except Exception as e:
             logger.error(f"Error getting user status: {e}")
             return {"error": str(e)}
 
-    async def _get_next_action(
-        self, current_route: str | None = None
-    ) -> Dict[str, Any]:
+    async def _get_next_action(self) -> Dict[str, Any]:
         """Fetch workflow next action from backend."""
-        payload: Dict[str, Any] = {"user_id": self.user_id}
-        if current_route:
-            payload["current_route"] = current_route
-
+        if not self.current_session_id:
+            return {"required_action": "error", "error": "No active session"}
         try:
             return await self._api_request(
-                "POST", "/workflow/next-action", json=payload
+                "GET",
+                "/workflow/next",
+                params={
+                    "user_id": self.user_id,
+                    "session_id": self.current_session_id,
+                },
             )
         except Exception as e:
             logger.error(f"Error getting workflow next action: {e}")
-            return {"action": "error", "error": str(e)}
+            return {"required_action": "error", "error": str(e)}
 
     async def _get_session_timer(self) -> Dict[str, Any]:
         """Get session timer information from backend API."""
@@ -373,7 +497,12 @@ class ConsoleClient:
 
         try:
             return await self._api_request(
-                "GET", f"/sessions/{self.current_session_id}/timer"
+                "GET",
+                f"/sessions/{self.current_session_id}/timer",
+                params={
+                    "user_id": self.user_id,
+                    "session_id": self.current_session_id,
+                },
             )
         except Exception as e:
             logger.error(f"Error getting session timer: {e}")
@@ -424,24 +553,17 @@ class ConsoleClient:
         print("=" * 60, flush=True)
         print()
 
-    async def _start_session(self, ws, session_type: str):
-        """Start a workflow-driven session."""
+    async def _ensure_session(self, ws) -> None:
+        """Prompt the user to reconnect when no active session is bound."""
         if not self.connected or not ws:
             print("❌ Cannot start session: not connected to server", flush=True)
             return
 
-        session_type = session_type.lower()
-        self.session_ready = trio.Event()
-        self.waiting_for_initial_message = False
-        self.current_session_id = None
-        self.is_streaming = False
-        self.current_message = ""
-        print(f"🎯 Starting {session_type} session...", flush=True)
-        msg_data = {
-            "type": ClientMessageTypes.SESSION_REQUEST,
-            "data": {"session_type": session_type},
-        }
-        await ws.send_message(json.dumps(msg_data))
+        print(
+            "⚠️  No active session. Please reconnect to start a new session.",
+            flush=True,
+        )
+        self.connected = False
 
     async def _chat_loop(self, ws) -> bool:
         """
@@ -510,104 +632,77 @@ class ConsoleClient:
 
     async def _follow_workflow(self, ws):
         """Drive the console experience based on the backend workflow."""
-        current_route: str | None = None
         wait_count = 0
 
         while True:
-            next_action = await self._get_next_action(current_route)
-            action = next_action.get("action")
-            route = next_action.get("route")
+            next_action = await self._get_next_action()
+            action = next_action.get("required_action")
 
             if action == "error":
                 print(f"❌ Workflow error: {next_action.get('error')}", flush=True)
                 break
 
             if action == "wait":
-                reason = next_action.get("reason", "Waiting for backend instructions.")
+                reason = next_action.get(
+                    "prompt", "Waiting for backend instructions."
+                )
                 wait_count += 1
-
-                session_type = self._route_to_session_type(route) if route else None
-                if session_type:
-                    logger.info(
-                        "Workflow returned wait for %s; starting %s session",
-                        route,
-                        session_type,
+                if wait_count == 1:
+                    print(f"⏳ Backend requested wait: {reason}", flush=True)
+                    print(
+                        "   Waiting for workflow to advance... (Ctrl+C to exit)",
+                        flush=True,
                     )
-                    action = "navigate"
-                else:
-                    if wait_count == 1:
-                        print(f"⏳ Backend requested wait: {reason}", flush=True)
-                        print(
-                            "   Waiting for workflow to advance... (Ctrl+C to exit)",
-                            flush=True,
-                        )
-                        if "reflection" in reason.lower() or "session" in reason.lower():
-                            print(
-                                "   If this never resolves, try `make clean-testdb` "
-                                "or change `USER_ID` to start a fresh user profile.",
-                                flush=True,
-                            )
-                    elif wait_count % 10 == 0:
-                        print(f"⏳ Still waiting: {reason}", flush=True)
+                elif wait_count % 10 == 0:
+                    print(f"⏳ Still waiting: {reason}", flush=True)
 
-                    if not self.connected:
-                        print("⚠️  Connection lost while waiting. Exiting.", flush=True)
-                        break
-
-                    await trio.sleep(2)
-                    continue
-
-            if action == "display":
-                display = next_action.get("display") or {}
-                title = display.get("title") or "Workflow update"
-                description = display.get("description")
-                print(f"ℹ️  {title}", flush=True)
-                if description:
-                    print(description, flush=True)
-                # Display is informational; keep polling unless connection drops.
                 if not self.connected:
+                    print("⚠️  Connection lost while waiting. Exiting.", flush=True)
                     break
+
                 await trio.sleep(2)
                 continue
 
-            if action != "navigate" or not route:
-                print("⚠️  Unexpected workflow response. Exiting.", flush=True)
-                break
-
-            if route == "/profile":
-                await self._complete_profile()
-                current_route = route
+            if action == "complete_profile":
+                await self._complete_profile(
+                    next_action.get("required_fields"),
+                    next_action.get("defaults"),
+                )
                 continue
 
-            if route == "/dashboard":
-                print(
-                    "✅ Workflow complete. You can start therapy sessions from the dashboard.",
-                    flush=True,
-                )
-                break
+            if action == "select_therapy_style":
+                await self._select_therapy_style()
+                continue
 
-            session_type = self._route_to_session_type(route)
-            if not session_type:
-                print(f"⚠️  Unsupported workflow route: {route}", flush=True)
-                break
+            if action in {"start_intake", "continue_therapy"}:
+                if not self.current_session_id:
+                    await self._ensure_session(ws)
+                if not self.connected:
+                    print(
+                        "⚠️  Connection lost while starting session. Exiting workflow.",
+                        flush=True,
+                    )
+                    break
 
-            await self._start_session(ws, session_type)
-            if not self.connected:
-                print("⚠️  Connection lost while starting session. Exiting workflow.", flush=True)
-                break
+                await self.session_ready.wait()
+                exit_console = await self._chat_loop(ws)
 
-            await self.session_ready.wait()
-            exit_console = await self._chat_loop(ws)
-            current_route = route
+                if exit_console:
+                    break
 
-            if exit_console:
-                break
+                continue
+
+            print("⚠️  Unexpected workflow response. Exiting.", flush=True)
+            break
 
     async def run(self):
         """Run the console client interface with structured concurrency."""
         # Create HTTP client
         async with httpx.AsyncClient() as http_client:
             self.http_client = http_client
+
+            if not await self._register_user():
+                return
 
             # Connect to WebSocket and run with structured concurrency
             ws_url = self.websocket_url.replace("http://", "ws://").replace(

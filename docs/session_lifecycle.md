@@ -11,20 +11,23 @@ The session begins when a client connects to the WebSocket endpoint (`/ws?user_i
 - **Entry Point:** WebSocket handler in `src/psychoanalyst_app/api/ws_handler.py`
   (registered by `TrioServer` in `src/psychoanalyst_app/trio_server.py`).
 - **User Check:** The system checks `trio_db_service` for an existing `UserProfile`.
-  - **New User:** If no profile exists, a guest profile is auto-created with status `PROFILE_ONLY`.
-  - **Persistence:** `UserProfile` is saved to the `user_profiles` table.
+  - **Missing Profile:** The server sends an `error` event and closes the connection.
+  - **Requirement:** Clients must call `POST /api/user/register` before connecting to WS.
 
-### 1.2. Session Start Request
+### 1.2. Session Start (Auto)
 
-The client sends a JSON message `{"type": "session_request"}`.
+On WebSocket connect, the server auto-creates or resumes the correct session
+based on the user's workflow state. Clients should reconnect if they need a
+fresh session binding.
 
-- **Action:** `TrioAgentOrchestrator.start_session(user_id)` is called.
+- **Action:** `TrioAgentOrchestrator.ensure_session_for_user(...)` is called.
 - **Session Creation:**
   - A new `Session` object is created with a unique UUID.
   - **Persistence:** The session is saved to the `sessions` table in the database.
 - **Initial Greeting:**
-  - If the user's `WorkflowState` indicates a need for proactive engagement (e.g., `NEW`, `INTAKE_IN_PROGRESS`), the orchestrator triggers an "initial greeting".
-  - This is simulated by sending an empty message to the active agent to prompt a welcome message.
+  - The orchestrator evaluates `workflow_next_action` after session start.
+  - If `required_action` is not `wait`, it triggers an "initial greeting" by sending an empty message to the active agent.
+  - If `required_action` is `wait`, the greeting is skipped and the wait prompt is used as the status notice.
 
 ## 2. Active Session Workflow
 
@@ -40,7 +43,7 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
   4.  Instantiates the correct agent (`Intake`, `Assessment`, etc.).
   5.  Delegates message processing to the agent.
   6.  Streams the agent's textual response back to the user.
-  7.  Handles state transitions returned by the agent.
+  7.  Handles state transitions based on agent `workflow_event` signals (orchestrator-owned).
 
 ### 2.2. Phase 1: Intake (`TrioIntakeAgent`)
 
@@ -48,12 +51,12 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
 
 - **Role:** Collects basic user information and understands the presenting problem.
 - **Key Activities:**
-  - **Name Collection:** If the user is `Guest`, it asks for and updates the user's name.
+  - **Profile Check:** Registration ensures required profile fields are already present.
   - **Topic Tracking:** Analyzes every message for keywords related to `INTAKE_TOPICS` (e.g., "Family", "Symptoms", "Work").
   - **Completion Check:** Monitors if sufficient topics (≥80%) have been covered or if time is up.
 - **Data Persistence:**
   - Updates `UserProfile.name`.
-  - Updates `UserProfile.status` to `INTAKE_IN_PROGRESS` or `INTAKE_COMPLETE`.
+  - Orchestrator updates `UserProfile.status` as workflow events are accepted.
 
 ### 2.3. Phase 2: Assessment (`TrioAssessmentAgent`)
 
@@ -62,12 +65,12 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
 - **Role:** Analyzes the intake session and recommends formatted therapy styles.
 - **Key Activities:**
   - **Recommendation Generation:** Uses LLM to assess the intake transcript against known therapy styles (e.g., Freud, Jung, CBT).
-  - **Presentation:** Presents top recommendations to the user.
-  - **Selection Handling:** Parses user response to identify the selected therapy style.
+  - **Presentation:** Emits `assessment_recommendations` over WebSocket.
+  - **Backend Job:** Runs asynchronously after the workflow transitions to `INTAKE_COMPLETE`; clients display a wait state.
 - **Data Persistence:**
-  - **Therapy Plan:** Upon selection, triggers `ReflectionAgent` to create an initial `TherapyPlan` (v1).
-  - **Plan Details:** Saves selected style and empty plan details to `therapy_plans` table.
-  - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` or `PLAN_COMPLETE`.
+  - **Therapy Plan:** Created only after the user completes
+    `POST /api/workflow/select_therapy_style`.
+  - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` when the job finishes.
 
 ### 2.4. Phase 3: Therapy (`TrioPsychoanalystAgent` - _implied_)
 
@@ -118,7 +121,8 @@ The session can be closed in two ways:
 ### 3.1. Explicit Closure
 
 - **Trigger:** An agent returns an `end_session` action (e.g., user says "I'm done for now").
-- **Action:** The Orchestrator stops processing.
+- **Action:** The Orchestrator transitions workflow state, runs any follow-up jobs
+  (assessment/reflection), then emits `session_ended` and expects the client to terminate.
 - **Persistence:** The final state of the session transcript is saved.
 
 ### 3.2. WebSocket Disconnection
@@ -135,4 +139,4 @@ Data is persisted in `data/psychoanalyst.db` (SQLite) via `TrioDatabaseService`.
 | :------------------ | :-------------------------------------------------- | :-------------------------------- |
 | **`sessions`**      | `session_id`, `transcript` (JSON), `topics` (JSON)  | All Agents (per message)          |
 | **`user_profiles`** | `name`, `status` (Workflow State), `profession`     | Intake Agent, Orchestrator        |
-| **`therapy_plans`** | `selected_therapy_style`, `plan_details`, `version` | Assessment Agent (via Reflection) |
+| **`therapy_plans`** | `selected_therapy_style`, `plan_details`, `version` | Planning Agent (via Reflection) |

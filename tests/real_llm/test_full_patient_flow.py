@@ -126,15 +126,6 @@ async def test_full_patient_journey_with_real_llm():
 
                 # 1. Start session and get initial prompt
                 logger.info("--- Phase 1: Verifying Initial Prompt ---")
-                await ws.send_message(
-                    json.dumps(
-                        {
-                            "type": "session_request",
-                            "data": {"user_id": user_id, "session_type": "therapy"},
-                        }
-                    )
-                )
-
                 with trio.move_on_after(60) as cancel_scope:
                     while not received_events["chat_response_chunk"]:
                         await trio.sleep(0.1)
@@ -145,7 +136,7 @@ async def test_full_patient_journey_with_real_llm():
                 assert received_events[
                     "session_started"
                 ], "session_started event was not received."
-                session_id = received_events["session_started"][0]["data"]["session_id"]
+                session_id = received_events["session_started"][-1]["data"]["session_id"]
                 initial_prompt = received_events["chat_response_chunk"][0]
 
                 logger.info(f"Received initial prompt: '{initial_prompt}'")

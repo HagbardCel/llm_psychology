@@ -1,8 +1,8 @@
 # WebSocket Protocol Specification
 
-**Version**: 1.2.1
-**Date**: 2025-12-22
-**Last Verified**: 2025-12-22
+**Version**: 1.2.3
+**Date**: 2025-12-29
+**Last Verified**: 2025-12-29
 **Status**: Active
 **Maintainer**: Backend Team
 
@@ -29,16 +29,16 @@ This document defines the WebSocket message protocol between therapy clients (co
      │  1. Connect with user_id query param       │
      ├────────────────────────────────────────────>│
      │                                             │
-     │  2. Server validates/creates user          │
+     │  2. Server validates user profile          │
      │     <connected> message                    │
      │<────────────────────────────────────────────┤
      │                                             │
-     │  3. Client requests session                │
-     │     <session_request> message              │
-     ├────────────────────────────────────────────>│
-     │                                             │
-     │  4. Server creates session                 │
+     │  3. Server creates/resumes session         │
      │     <session_started> message              │
+     │<────────────────────────────────────────────┤
+     │                                             │
+     │  4. Server emits workflow next action      │
+     │     <workflow_next_action> message         │
      │<────────────────────────────────────────────┤
      │                                             │
      │  5. Client sends chat messages             │
@@ -55,6 +55,10 @@ This document defines the WebSocket message protocol between therapy clients (co
      │                                             │
 ```
 
+If the user profile does not exist, the server sends an `error` message and closes
+the connection with code `1008` (`profile_not_found`). Clients must register first
+via `POST /api/user/register`.
+
 ---
 
 ## Message Format
@@ -70,7 +74,7 @@ All messages follow this structure:
 
 ### Message Type Naming Convention
 
-- **Client → Server**: Imperative (requests action): `session_request`, `chat_message`, `end_session`
+- **Client → Server**: Imperative (requests action): `chat_message`, `end_session`
 - **Server → Client**: Descriptive (states or events): `connected`, `session_started`, `chat_response_chunk`,
   `typing_start`, `typing_stop`, `assessment_recommendations`, `session_ended`, `error`
 
@@ -79,52 +83,11 @@ All messages follow this structure:
 ## Client → Server Messages
 Only the message types listed in this section are handled by the server. Other client message types are ignored.
 
-### `session_request`
-
-Request to start a new therapy session.
-
-**Payload**:
-```json
-{
-  "type": "session_request",
-  "data": {
-    "session_type": "therapy"  // Optional: "therapy" | "intake" | "assessment"
-  }
-}
-```
-
-**Server Response**: `session_started` message
-
-**Behavior**:
-- `session_type` (optional) tells the backend which workflow agent to start.
-  - Defaults to `"therapy"` if omitted
-  - `"intake"` → Intake agent and workflow transition to INTAKE_IN_PROGRESS
-  - `"assessment"` → Assessment agent and workflow transition to ASSESSMENT_IN_PROGRESS
-  - `"therapy"` → Therapy agent and workflow transition to THERAPY_IN_PROGRESS
-- If user already has an active session, server switches to new session
-- Previous session WebSocket registration is cleaned up
-- Session ID is tracked on server side
-
-**Example**:
-```json
-{
-  "type": "session_request",
-  "data": {
-    "session_type": "assessment"
-  }
-}
-```
-
-**Error Cases**:
-- None (always creates new session)
-
----
-
 ### `chat_message`
 
 Send user message during active session.
 
-**Prerequisites**: Must have active session (sent `session_request` first)
+**Prerequisites**: Must have active session (auto-created on connect after registration). Session binding is implicit; do not include `session_id` in client payloads.
 
 **Payload**:
 ```json
@@ -155,7 +118,7 @@ Send user message during active session.
 ```
 
 **Error Cases**:
-- **No active session**: Server closes connection with code 1002: "First message must be session_request"
+- **No active session**: Server closes connection with code 1002: "No active session"
 - **Empty message**: Silently ignored
 
 ---
@@ -164,7 +127,7 @@ Send user message during active session.
 
 Request to end the active session.
 
-**Prerequisites**: Must have active session (sent `session_request` first)
+**Prerequisites**: Must have active session
 
 **Payload**:
 ```json
@@ -220,7 +183,7 @@ Sent immediately after successful WebSocket connection.
 **Behavior**:
 - Confirms connection established
 - Provides user profile information
-- If user doesn't exist, auto-creates profile with status PROFILE_ONLY
+- If user profile is missing, server sends `error` and closes the connection
 
 **Example**:
 ```json
@@ -237,15 +200,15 @@ Sent immediately after successful WebSocket connection.
 **Client Handling**:
 - Store user information
 - Update connection status to "connected"
-- Ready to send `session_request`
+- Ready to receive `session_started` (session is created/resumed)
 
 ---
 
 ### `session_started`
 
-Sent after successful session creation.
+Sent after successful session creation or resume.
 
-**Trigger**: Client sent `session_request`
+**Trigger**: WebSocket connect (auto-session after registration)
 
 **Payload**:
 ```json
@@ -256,8 +219,7 @@ Sent after successful session creation.
     "user_id": string,              // User identifier
     "agent_type": string,           // Current agent (INTAKE, ASSESSMENT, PSYCHOANALYST, etc.)
     "workflow_state": string,       // Current workflow state
-    "created_at": string,           // ISO 8601 timestamp
-    "has_initial_message": boolean  // Whether therapist will send automatic greeting
+    "created_at": string            // ISO 8601 timestamp
   }
 }
 ```
@@ -265,7 +227,7 @@ Sent after successful session creation.
 **Behavior**:
 - Confirms session created
 - Provides session metadata
-- If `has_initial_message: true`, therapist will send initial greeting automatically
+- For chat-ready workflow steps, the backend will send an initial greeting before accepting user input
 
 **Example**:
 ```json
@@ -276,19 +238,53 @@ Sent after successful session creation.
     "user_id": "user-123",
     "agent_type": "INTAKE",
     "workflow_state": "INTAKE_IN_PROGRESS",
-    "created_at": "2025-12-02T10:30:00.000Z",
-    "has_initial_message": true
+    "created_at": "2025-12-02T10:30:00.000Z"
   }
 }
 ```
 
 **Client Handling**:
-- Store `session_id` for subsequent messages
+- Store `session_id` for subsequent HTTP requests
 - Display agent type to user (optional)
-- If `has_initial_message: true`, wait for initial `chat_response_chunk` before accepting user input
+- Wait for the initial `chat_response_chunk` before accepting user input in chat flows
 - Update UI to "session active" state
 
 ---
+
+### `workflow_next_action`
+
+Sent on WebSocket connect and whenever the backend reevaluates the required workflow step (after agent output persistence, session end, or step completion true events).
+
+**Payload**: `WorkflowNextActionDTO`
+
+```json
+{
+  "type": "workflow_next_action",
+  "data": {
+    "user_id": "user-123",
+    "workflow_state": "INTAKE_IN_PROGRESS",
+    "required_action": "wait",
+    "required_fields": [],
+    "defaults": null,
+    "prompt": "Continue your intake session.",
+    "blocking": false,
+    "timestamp": "2025-12-22T14:30:00Z"
+  }
+}
+```
+
+**Behavior**:
+- Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, continue therapy, or wait).
+- Always includes the latest workflow state and recommended fields to collect.
+- `blocking` indicates whether the UI must satisfy this action before other workflows continue.
+- Sent after `session_started` so clients can render the appropriate onboarding form.
+
+**Client Handling**:
+- Render forms based on `required_action` (`complete_profile` → show profile form, `select_therapy_style` → show style picker, `start_intake`/`continue_therapy` → show the session UI, `wait` → show progress state).
+- Use `required_fields` to dynamically drive data collection and `defaults` to prefill fields.
+- Display the `prompt` as the wait/status notice when `required_action` is `wait`.
+- Ignore duplicate events that do not change `timestamp`.
+- Do not send `chat_message` while `required_action` is `wait`.
 
 ### `chat_response_chunk`
 
@@ -511,9 +507,9 @@ Error message from server.
 ### Connection Lifecycle
 
 1. **Connection**: Client connects with `user_id` query parameter
-2. **Authentication**: Server validates/creates user profile
+2. **Authentication**: Server validates existing user profile (register first)
 3. **Confirmation**: Server sends `connected` message
-4. **Session Creation**: Client sends `session_request` when ready
+4. **Session Creation**: Server auto-creates/resumes and sends `session_started`
 5. **Active Session**: Client sends `chat_message`, receives `chat_response_chunk`
 6. **Disconnection**: Either party can close connection
 
@@ -522,7 +518,8 @@ Error message from server.
 | Code | Reason | Meaning |
 |------|--------|---------|
 | 1000 | Normal Closure | Clean disconnect |
-| 1002 | Protocol Error | Missing user_id or session_request |
+| 1002 | Protocol Error | Missing user_id or no active session |
+| 1008 | Policy Violation | Profile not found (register required) |
 | 1011 | Internal Error | Server-side error |
 
 ### Reconnection Strategy
@@ -534,7 +531,7 @@ Clients should implement exponential backoff:
 - **Max delay**: 30 seconds
 
 **Reconnection Behavior**:
-- On reconnection, client must send `session_request` again
+- On reconnection, the server rebinds an active session and emits `session_started`
 - Previous session context is maintained on server
 - Client should re-fetch session history if needed
 
@@ -572,7 +569,7 @@ Clients should implement exponential backoff:
 
 **Missing Session**:
 - Server closes connection with code 1002
-- Error message: "First message must be session_request"
+- Error message: "No active session"
 
 **LLM Generation Failure**:
 - Server may send an `error` message (primarily for background streaming flows)
@@ -624,9 +621,6 @@ npm install -g wscat
 # Connect to server
 wscat -c "ws://localhost:8000/ws?user_id=test-user"
 
-# Send session request
-> {"type":"session_request","data":{}}
-
 # Send chat message
 > {"type":"chat_message","data":{"message":"Hello"}}
 ```
@@ -647,7 +641,7 @@ console.log('[WS]', message.type, message.data);
 
 **Issue**: Client receives no response to `chat_message`
 - **Cause**: No active session
-- **Solution**: Send `session_request` first
+- **Solution**: Reconnect (auto-session will resume)
 
 **Issue**: Connection closes immediately
 - **Cause**: Missing `user_id` query parameter
@@ -663,8 +657,10 @@ console.log('[WS]', message.type, message.data);
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2.3 | 2025-01-10 | Auto-session on connect; `session_request` removed |
+| 1.2.2 | 2025-12-29 | session_started before workflow_next_action |
 | 1.2.1 | 2025-12-22 | Trimmed documentation to implemented message types and updated references |
-| 1.1.0 | 2025-12-16 | Added session_type contract for `session_request` and new `assessment_recommendations` event |
+| 1.1.0 | 2025-12-16 | Added `assessment_recommendations` event |
 | 1.0.0 | 2025-12-02 | Initial protocol specification |
 
 ---

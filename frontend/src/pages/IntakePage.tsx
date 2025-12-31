@@ -1,7 +1,7 @@
 import { Alert } from '@mui/material';
 import { PageContainer, LoadingOverlay } from '../components/shared';
 import { TherapySession } from '../components/TherapySession';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 
 /**
@@ -10,7 +10,8 @@ import { useUserProfile } from '../hooks/useUserProfile';
  */
 export function IntakePage() {
   const userId = useCurrentUserId();
-  const { isLoading, error } = useUserProfile(userId || '');
+  const sessionId = useCurrentSessionId();
+  const { isLoading, error } = useUserProfile(userId || '', sessionId || '');
 
   if (isLoading) {
     return <LoadingOverlay message="Preparing your intake session..." fullScreen />;
@@ -27,7 +28,12 @@ export function IntakePage() {
           {error instanceof Error ? error.message : 'Failed to load your profile. Reload the page to try again.'}
         </Alert>
       )}
-      <TherapySession sessionType="intake" />
+      {!sessionId && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          No active session found. Please reconnect to begin intake.
+        </Alert>
+      )}
+      <TherapySession />
     </PageContainer>
   );
 }

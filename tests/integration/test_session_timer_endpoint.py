@@ -31,7 +31,7 @@ async def server_url(test_server_websocket):
 
 
 @pytest.fixture
-async def active_session(test_server_websocket):
+async def active_session(test_server_websocket, server_url):
     """Create an active session for testing."""
     db_service = test_server_websocket["db_service"]
 
@@ -63,10 +63,17 @@ async def active_session(test_server_websocket):
     )
     await db_service.save_therapy_plan(therapy_plan)
 
-    # Create session
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{server_url}/api/sessions",
+            json={"user_id": "test_user"},
+        )
+        response.raise_for_status()
+        session_payload = response.json()
+
     from psychoanalyst_app.models.data_models import Session
     session = Session(
-        session_id="test_session_123",
+        session_id=session_payload["session_id"],
         user_id="test_user",
         timestamp=datetime.now() - timedelta(minutes=10),  # Started 10 minutes ago
         transcript=[],
@@ -82,7 +89,11 @@ async def test_get_session_timer_success(server_url, active_session):
     """Test GET /api/sessions/<session_id>/timer endpoint with valid session."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{active_session.session_id}/timer"
+            f"{server_url}/api/sessions/{active_session.session_id}/timer",
+            params={
+                "user_id": active_session.user_id,
+                "session_id": active_session.session_id,
+            },
         )
 
         assert response.status_code == 200
@@ -117,10 +128,11 @@ async def test_get_session_timer_not_found(server_url):
     """Test GET /api/sessions/<session_id>/timer with non-existent session."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/nonexistent_session/timer"
+            f"{server_url}/api/sessions/nonexistent_session/timer",
+            params={"user_id": "missing", "session_id": "missing"},
         )
 
-        assert response.status_code == 404
+        assert response.status_code == 400
         data = response.json()
         assert "error" in data
 
@@ -159,10 +171,17 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     )
     await db_service.save_therapy_plan(therapy_plan)
 
-    # Create session that started 40 minutes ago (near end of base duration)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{server_url}/api/sessions",
+            json={"user_id": "test_user_ext"},
+        )
+        response.raise_for_status()
+        session_payload = response.json()
+
     from psychoanalyst_app.models.data_models import Session
     session = Session(
-        session_id="test_session_ext",
+        session_id=session_payload["session_id"],
         user_id="test_user_ext",
         timestamp=datetime.now() - timedelta(minutes=40),
         transcript=[],
@@ -172,7 +191,11 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{session.session_id}/timer"
+            f"{server_url}/api/sessions/{session.session_id}/timer",
+            params={
+                "user_id": session.user_id,
+                "session_id": session.session_id,
+            },
         )
 
         assert response.status_code == 200
@@ -218,10 +241,17 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
     )
     await db_service.save_therapy_plan(therapy_plan)
 
-    # Create session that started 50 minutes ago (past the 45 minute limit)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{server_url}/api/sessions",
+            json={"user_id": "test_user_timeup"},
+        )
+        response.raise_for_status()
+        session_payload = response.json()
+
     from psychoanalyst_app.models.data_models import Session
     session = Session(
-        session_id="test_session_timeup",
+        session_id=session_payload["session_id"],
         user_id="test_user_timeup",
         timestamp=datetime.now() - timedelta(minutes=50),
         transcript=[],
@@ -231,7 +261,11 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{server_url}/api/sessions/{session.session_id}/timer"
+            f"{server_url}/api/sessions/{session.session_id}/timer",
+            params={
+                "user_id": session.user_id,
+                "session_id": session.session_id,
+            },
         )
 
         assert response.status_code == 200

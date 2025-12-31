@@ -10,8 +10,8 @@ import { SessionHeader } from './SessionHeader';
 import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';
 import { ConnectionStatus } from './ConnectionStatus';
-import { useAppContext, useCurrentUserId } from '../contexts/AppContext';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useAppContext, useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
+import { useWebSocketContext } from '../contexts/WebSocketContext';
 import { apiClient } from '../services/apiClient';
 import { Message, Session, AgentType, SessionStatus } from '../types';
 import type {
@@ -23,7 +23,6 @@ import { WS_MESSAGE_TYPES } from '../types/websocket';
 
 interface TherapySessionProps {
   sessionId?: string;
-  sessionType?: 'therapy' | 'intake' | 'assessment';
   onAssessmentRecommendations?: (
     payload: AssessmentRecommendationsEvent
   ) => void;
@@ -31,7 +30,6 @@ interface TherapySessionProps {
 
 export function TherapySession({
   sessionId,
-  sessionType = 'therapy',
   onAssessmentRecommendations
 }: TherapySessionProps) {
   const currentUserId = useCurrentUserId();
@@ -40,9 +38,9 @@ export function TherapySession({
   const params = useParams<{ sessionId?: string }>();
   const effectiveSessionId = sessionId ?? params.sessionId;
   const isReadOnly = !!effectiveSessionId;
-  const effectiveSessionType = sessionType;
 
   const userId = currentUserId || 'guest';
+  const activeSessionId = useCurrentSessionId();
 
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -50,9 +48,10 @@ export function TherapySession({
   const [streamingMessage, setStreamingMessage] = useState<string>('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSessionReady, setIsSessionReady] = useState(false);
+  const [waitPrompt, setWaitPrompt] = useState<string | null>(null);
 
   const streamBufferRef = useRef<string>('');
-  const sessionRequestedRef = useRef(false);
+  const hasReceivedInitialMessageRef = useRef(false);
 
   const messages = session?.transcript || [];
 
@@ -76,6 +75,11 @@ export function TherapySession({
       setIsLoading(false);
 
       if (!finalContent) return;
+
+      if (!hasReceivedInitialMessageRef.current) {
+        hasReceivedInitialMessageRef.current = true;
+        setIsSessionReady(true);
+      }
 
       setSession((prev) => {
         if (!prev) return prev;
@@ -102,7 +106,7 @@ export function TherapySession({
     if (isReadOnly) return;
 
     streamBufferRef.current = '';
-    sessionRequestedRef.current = true;
+    hasReceivedInitialMessageRef.current = false;
 
     const startedSession: Session = {
       session_id: event.session_id,
@@ -123,7 +127,7 @@ export function TherapySession({
     };
 
     setSession(startedSession);
-    setIsSessionReady(true);
+    setIsSessionReady(false);
     setIsLoading(false);
   }, [isReadOnly]);
 
@@ -132,14 +136,11 @@ export function TherapySession({
     connectionStatus,
     lastMessage,
     sendChatMessage,
-    requestSession,
-    isConnected
-  } = useWebSocket({
-    userId,
-    autoConnect: !isReadOnly,
-    onStreamingChunk: handleStreamingChunk,
-    onSessionStarted: handleSessionStarted
-  });
+    isConnected,
+    registerStreamingChunkHandler,
+    registerSessionStartedHandler,
+    registerWorkflowNextActionHandler,
+  } = useWebSocketContext();
 
   // Handle WebSocket messages
   const handleWebSocketMessage = useCallback(
@@ -176,8 +177,35 @@ export function TherapySession({
 
   useEffect(() => {
     if (isReadOnly) return;
-    sessionRequestedRef.current = false;
-  }, [isReadOnly, effectiveSessionType]);
+    const unsubscribeStreaming = registerStreamingChunkHandler(handleStreamingChunk);
+    const unsubscribeSession = registerSessionStartedHandler(handleSessionStarted);
+    const unsubscribeWorkflow = registerWorkflowNextActionHandler((event) => {
+      if (event.required_action === 'wait') {
+        setWaitPrompt(event.prompt || 'Assessment in progress. Please wait.');
+      } else {
+        setWaitPrompt(null);
+      }
+    });
+    return () => {
+      unsubscribeStreaming();
+      unsubscribeSession();
+      unsubscribeWorkflow();
+    };
+  }, [
+    handleSessionStarted,
+    handleStreamingChunk,
+    isReadOnly,
+    registerSessionStartedHandler,
+    registerStreamingChunkHandler,
+    registerWorkflowNextActionHandler
+  ]);
+
+  useEffect(() => {
+    if (isReadOnly) return;
+    if (!isConnected) {
+      setIsSessionReady(false);
+    }
+  }, [isConnected, isReadOnly]);
 
   useEffect(() => {
     if (!effectiveSessionId) return;
@@ -189,7 +217,12 @@ export function TherapySession({
         setError(null);
         setIsSessionReady(false);
 
-        const response = await apiClient.get<Session>(`/api/sessions/${effectiveSessionId}`);
+        if (!activeSessionId) {
+          throw new Error('No active session found. Please reconnect.');
+        }
+        const response = await apiClient.get<Session>(
+          `/api/sessions/${effectiveSessionId}?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(activeSessionId)}`
+        );
 
         if (cancelled) return;
 
@@ -219,34 +252,7 @@ export function TherapySession({
     return () => {
       cancelled = true;
     };
-  }, [effectiveSessionId]);
-
-  // Request session once per connection (new sessions only).
-  useEffect(() => {
-    if (isReadOnly) return;
-    if (!isConnected) return;
-    if (isSessionReady) return;
-    if (sessionRequestedRef.current) return;
-
-    sessionRequestedRef.current = true;
-    setIsLoading(true);
-    setIsSessionReady(false);
-    requestSession(effectiveSessionType);
-  }, [
-    effectiveSessionType,
-    isConnected,
-    isReadOnly,
-    isSessionReady,
-    requestSession
-  ]);
-
-  // If we disconnect, allow re-requesting a session on reconnect.
-  useEffect(() => {
-    if (isReadOnly) return;
-    if (isConnected) return;
-    sessionRequestedRef.current = false;
-    setIsSessionReady(false);
-  }, [isConnected, isReadOnly]);
+  }, [activeSessionId, effectiveSessionId, userId]);
 
   // Session initialization timeout
   useEffect(() => {
@@ -344,6 +350,11 @@ export function TherapySession({
       <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider' }}>
         <ConnectionStatus status={connectionStatus} variant="chip" />
       </Box>
+      {waitPrompt && (
+        <Box sx={{ p: 1 }}>
+          <Alert severity="info">{waitPrompt}</Alert>
+        </Box>
+      )}
 
       <Container 
         maxWidth="md" 
@@ -371,7 +382,8 @@ export function TherapySession({
             !session ||
             session.status !== SessionStatus.ACTIVE ||
             !isConnected ||
-            !isSessionReady
+            !isSessionReady ||
+            !!waitPrompt
           }
           isLoading={isLoading}
           placeholder={getInputPlaceholder(session?.agentType)}

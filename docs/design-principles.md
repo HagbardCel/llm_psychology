@@ -86,9 +86,11 @@ Canonical examples:
 ## System Overview (One Mental Model)
 
 At a high level:
-1. A client connects via WebSocket (`/ws?user_id=...`) and then sends `session_request`.
-2. The server creates a `Session` record and registers the WebSocket to that session.
-3. For each `chat_message`, the orchestrator:
+1. A client registers via `POST /api/user/register` to create a complete profile and receive a session id.
+2. The client connects via WebSocket (`/ws?user_id=...`); the server validates the profile and resumes the correct session.
+3. Clients reconnect to prompt the backend to re-emit `session_started` and `workflow_next_action`.
+4. The server registers the WebSocket to the active session.
+5. For each `chat_message`, the orchestrator:
    - loads workflow state (`TrioWorkflowEngine`)
    - loads conversation context (`TrioConversationManager`)
    - selects/creates the correct agent
@@ -189,6 +191,21 @@ Design rule:
 Workflow states are explicit and validated:
 - `WorkflowState` in `src/psychoanalyst_app/orchestration/models.py`
 - transition validation in `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
+
+### Backend-driven workflow invariants
+These principles are non-negotiable and are sourced from the implementation plans:
+- The backend orchestrator is the single source of truth for workflow state and required action.
+- Clients never advance workflow state directly; profile PATCH/PUT must not mutate `status`.
+- Profile creation is explicit via `POST /api/user/register`; WebSocket connections for unknown users are rejected.
+- All workflow step completion calls require a valid `session_id` bound to the user.
+- Active session tracking is in-memory (single active session per user) and is not durable across restarts/instances; clients must reconnect to rebind, and multi-instance deployments require sticky sessions or a shared store (not implemented).
+- Assessment runs as a backend job; clients display `required_action: "wait"` until completion.
+- Reconnects must re-emit `session_started` and `workflow_next_action`, and re-kick assessment jobs when needed.
+
+Authoritative plan references:
+- `docs/assessments/project/plans/BACKEND_DRIVEN_WORKFLOW_MIGRATION_PLAN.md`
+- `docs/assessments/project/plans/SESSION_BOUND_WORKFLOW_IMPLEMENTATION_PLAN.md`
+- `docs/assessments/project/plans/BACKEND_DRIVEN_WORKFLOW_REMEDIATION_PLAN.md`
 
 ### AgentResponse is the orchestrator contract
 Agents return an `AgentResponse` with:

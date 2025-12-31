@@ -11,8 +11,20 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.data_models import Message, Session
-from psychoanalyst_app.orchestration.models import AgentResponse, SessionInfo, WorkflowEvent, WorkflowState
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
+from psychoanalyst_app.models.structured_output_models import (
+    StructuredTherapyPlanOutput,
+    StructuredUserProfileOutput,
+)
+from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    SessionInfo,
+    WorkflowEvent,
+    WorkflowState,
+)
+from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
@@ -23,6 +35,121 @@ GetAgentFn = Callable[[str, str], Awaitable[Any]]
 RunReflectionFn = Callable[[str, str], Awaitable[None]]
 CreateSessionFn = Callable[[str], Awaitable[str]]
 EndSessionFn = Callable[[str, str, str | None], Awaitable[None]]
+EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
+
+
+class ActiveSessionRegistry:
+    """Track active sessions per user (single concurrent session)."""
+
+    def __init__(self) -> None:
+        self._active_sessions: dict[str, str] = {}
+
+    def get_active_session_id(self, user_id: str) -> str | None:
+        return self._active_sessions.get(user_id)
+
+    def set_active_session_id(self, user_id: str, session_id: str) -> None:
+        self._active_sessions[user_id] = session_id
+
+    def clear_active_session(self, user_id: str, session_id: str | None = None) -> None:
+        if session_id is None:
+            self._active_sessions.pop(user_id, None)
+            return
+        if self._active_sessions.get(user_id) == session_id:
+            self._active_sessions.pop(user_id, None)
+
+    def is_session_active(self, user_id: str, session_id: str) -> bool:
+        return self._active_sessions.get(user_id) == session_id
+
+
+def session_type_for_workflow_state(state: WorkflowState) -> str:
+    """Map workflow state to the session type to resume next."""
+    state_map = {
+        WorkflowState.NEW: "intake",
+        WorkflowState.INTAKE_IN_PROGRESS: "intake",
+        WorkflowState.INTAKE_COMPLETE: "assessment",
+        WorkflowState.ASSESSMENT_IN_PROGRESS: "assessment",
+        WorkflowState.ASSESSMENT_COMPLETE: "therapy",
+        WorkflowState.THERAPY_IN_PROGRESS: "therapy",
+        WorkflowState.REFLECTION_IN_PROGRESS: "therapy",
+        WorkflowState.PLAN_COMPLETE: "therapy",
+    }
+    return state_map.get(state, "therapy")
+
+
+async def persist_therapy_plan_from_output(
+    *,
+    trio_db_service,
+    user_id: str,
+    plan_output: StructuredTherapyPlanOutput,
+    session_briefing: dict[str, Any] | None = None,
+) -> TherapyPlan:
+    """Persist a therapy plan from structured output data."""
+    latest_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+    selected_style = plan_output.selected_therapy_style
+    if not selected_style and latest_plan:
+        selected_style = latest_plan.selected_therapy_style
+
+    plan = TherapyPlan(
+        plan_id=str(uuid.uuid4()),
+        user_id=user_id,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        version=(latest_plan.version + 1) if latest_plan else 1,
+        selected_therapy_style=selected_style,
+        plan_details=plan_output.plan_details,
+        initial_goals=plan_output.initial_goals,
+        current_progress=plan_output.current_progress,
+        planned_interventions=plan_output.planned_interventions,
+        status=plan_output.status,
+        session_briefing=session_briefing,
+    )
+
+    success = await trio_db_service.save_therapy_plan(plan)
+    if not success:
+        raise ValueError("Failed to save therapy plan to database")
+    return plan
+
+
+def _session_has_agent(session: Session, agent_name: str) -> bool:
+    needle = agent_name.upper()
+    for message in session.transcript:
+        if message.agent and message.agent.upper() == needle:
+            return True
+    return False
+
+
+async def persist_tier3_update(
+    *,
+    trio_db_service,
+    user_id: str,
+    session_id: str,
+    tier3_update: dict[str, Any],
+) -> bool:
+    """Persist a Tier 3 update payload as a new analysis version."""
+    analysis_data = tier3_update.get("analysis_data")
+    supersede_analysis_id = tier3_update.get("supersede_analysis_id")
+    change_summary = tier3_update.get("change_summary")
+    if not analysis_data or not supersede_analysis_id:
+        return False
+    try:
+        saved = await trio_db_service.save_patient_analysis_next_version_and_supersede(
+            analysis_id=f"analysis_{uuid.uuid4().hex[:12]}",
+            user_id=user_id,
+            analysis_data=analysis_data,
+            created_at=datetime.now(),
+            created_by_session=session_id,
+            change_summary=change_summary,
+            supersede_analysis_id=supersede_analysis_id,
+        )
+        if not saved:
+            logger.error("Failed to persist Tier 3 update for user %s", user_id)
+            return False
+        return True
+    except Exception:
+        logger.error(
+            "Failed to persist Tier 3 update for user %s", user_id, exc_info=True
+        )
+        return False
 
 
 class SessionLifecycleManager:
@@ -36,6 +163,8 @@ class SessionLifecycleManager:
         nursery: trio.Nursery,
         process_message: ProcessMessageFn,
         run_reflection: RunReflectionFn,
+        emit_next_action: EmitNextActionFn | None = None,
+        active_sessions: ActiveSessionRegistry | None = None,
     ) -> None:
         self.service_container = service_container
         self.workflow_engine = workflow_engine
@@ -43,6 +172,89 @@ class SessionLifecycleManager:
         self.nursery = nursery
         self._process_message = process_message
         self._run_reflection = run_reflection
+        self._emit_next_action = emit_next_action
+        self.active_sessions = active_sessions or ActiveSessionRegistry()
+
+    def get_active_session_id(self, user_id: str) -> str | None:
+        return self.active_sessions.get_active_session_id(user_id)
+
+    def is_session_active(self, user_id: str, session_id: str) -> bool:
+        return self.active_sessions.is_session_active(user_id, session_id)
+
+    async def find_intake_sessions(
+        self, user_id: str, *, limit: int = 1000
+    ) -> list[Session]:
+        """Return intake sessions for a user (should be at most one)."""
+        trio_db_service = self.service_container.get("trio_db_service")
+        sessions = await trio_db_service.get_user_sessions(user_id, limit=limit)
+        intake_sessions = [
+            session for session in sessions if _session_has_agent(session, "INTAKE")
+        ]
+        if len(intake_sessions) > 1:
+            logger.error(
+                "Expected a single intake session for user %s; found %s",
+                user_id,
+                len(intake_sessions),
+            )
+        return intake_sessions
+
+    async def get_single_intake_session(self, user_id: str) -> Session | None:
+        """Return the sole intake session for a user when present."""
+        intake_sessions = await self.find_intake_sessions(user_id)
+        if not intake_sessions:
+            return None
+        return intake_sessions[0]
+
+    async def ensure_session_id(
+        self, user_id: str, session_id: str | None = None
+    ) -> str:
+        """Return an active session ID for a user, creating one if needed."""
+        if session_id:
+            active_session_id = self.get_active_session_id(user_id)
+            if active_session_id and active_session_id != session_id:
+                raise ValueError(
+                    f"Session {session_id} is not active for user {user_id}"
+                )
+            if not active_session_id:
+                self.active_sessions.set_active_session_id(user_id, session_id)
+            return session_id
+
+        active_session_id = self.get_active_session_id(user_id)
+        if active_session_id:
+            return active_session_id
+        return await self.create_session(user_id)
+
+    async def ensure_session(
+        self,
+        user_id: str,
+        session_type: str,
+        *,
+        send_initial_message: bool = False,
+    ) -> SessionInfo:
+        """Ensure a session exists for the user, creating one if needed."""
+        active_session_id = self.get_active_session_id(user_id)
+        if active_session_id:
+            return await self._build_session_info(
+                user_id,
+                active_session_id,
+            )
+        return await self.start_session(
+            user_id,
+            session_type=session_type,
+            send_initial_message=send_initial_message,
+        )
+
+    async def get_session_info(
+        self, user_id: str, session_id: str | None = None
+    ) -> SessionInfo | None:
+        """Build session info for an active session if available."""
+        resolved_session_id = session_id or self.get_active_session_id(user_id)
+        if not resolved_session_id:
+            return None
+        return await self._build_session_info(
+            user_id,
+            resolved_session_id,
+        )
 
     async def start_session(
         self,
@@ -54,12 +266,26 @@ class SessionLifecycleManager:
         """Start a new therapy session and optionally send an initial greeting."""
         try:
             normalized_session_type = (session_type or "therapy").lower()
+            if normalized_session_type == "intake":
+                existing_intake = await self.get_single_intake_session(user_id)
+                if existing_intake:
+                    self.active_sessions.set_active_session_id(
+                        user_id, existing_intake.session_id
+                    )
+                    logger.info(
+                        "Reusing intake session %s for user %s",
+                        existing_intake.session_id,
+                        user_id,
+                    )
+                    return await self._build_session_info(
+                        user_id,
+                        existing_intake.session_id,
+                    )
             logger.info(
                 "Starting session for user %s, type: %s",
                 user_id,
                 normalized_session_type,
             )
-            has_initial_message = bool(send_initial_message)
 
             session_state_map = {
                 "intake": WorkflowState.INTAKE_IN_PROGRESS,
@@ -75,6 +301,29 @@ class SessionLifecycleManager:
             # Get current workflow state and adjust if session type demands it.
             state = await self.workflow_engine.get_user_state(user_id)
             desired_state = session_state_map.get(normalized_session_type)
+            if desired_state == WorkflowState.INTAKE_IN_PROGRESS:
+                trio_db_service = self.service_container.get("trio_db_service")
+                profile = await trio_db_service.get_user_profile(user_id)
+                if not profile or not is_profile_complete(profile):
+                    desired_state = None
+                    logger.info(
+                        "Skipping intake transition for user %s until profile is complete",
+                        user_id,
+                    )
+            if desired_state and desired_state != state:
+                if (
+                    desired_state == WorkflowState.THERAPY_IN_PROGRESS
+                    and state == WorkflowState.ASSESSMENT_COMPLETE
+                ):
+                    trio_db_service = self.service_container.get("trio_db_service")
+                    plan = await trio_db_service.get_latest_therapy_plan(user_id)
+                    if not plan or not plan.selected_therapy_style:
+                        desired_state = None
+                        logger.info(
+                            "Skipping therapy transition for user %s until therapy style is selected",
+                            user_id,
+                        )
+
             if desired_state and desired_state != state:
                 event = session_event_map.get(normalized_session_type)
                 try:
@@ -117,7 +366,6 @@ class SessionLifecycleManager:
                 agent_type=agent_type,
                 workflow_state=state,
                 created_at=datetime.now(),
-                has_initial_message=has_initial_message,
             )
 
             logger.info(
@@ -127,13 +375,17 @@ class SessionLifecycleManager:
                 user_id,
                 agent_type,
                 state,
-                has_initial_message,
+                bool(send_initial_message),
             )
             return session_info
 
         except Exception as exc:
             logger.error("Error starting session: %s", exc, exc_info=True)
             raise
+
+    def send_initial_greeting(self, user_id: str, session_id: str) -> None:
+        """Schedule the initial greeting for a session."""
+        self.nursery.start_soon(self._send_initial_greeting, user_id, session_id)
 
     async def end_session(
         self, user_id: str, session_id: str, reason: str | None = None
@@ -148,9 +400,16 @@ class SessionLifecycleManager:
                 session_id,
                 exc_info=True,
             )
+            self.active_sessions.clear_active_session(user_id, session_id)
             return
 
         final_state = state
+        follow_up = None
+        follow_up_args: tuple[Any, ...] = ()
+        emit_session_id = self.get_active_session_id(user_id) or session_id
+        if emit_session_id and not self.get_active_session_id(user_id):
+            self.active_sessions.set_active_session_id(user_id, emit_session_id)
+
         try:
             if state == WorkflowState.THERAPY_IN_PROGRESS:
                 await self.workflow_engine.transition(
@@ -171,10 +430,8 @@ class SessionLifecycleManager:
                         session_id,
                         exc_info=True,
                     )
-                if self.nursery:
-                    self.nursery.start_soon(
-                        self._run_reflection, user_id, session_id
-                    )
+                follow_up = self._run_reflection
+                follow_up_args = (user_id, session_id)
             elif state == WorkflowState.ASSESSMENT_IN_PROGRESS:
                 await self.workflow_engine.transition(
                     user_id,
@@ -182,14 +439,6 @@ class SessionLifecycleManager:
                     event=WorkflowEvent.COMPLETE_ASSESSMENT,
                 )
                 final_state = WorkflowState.ASSESSMENT_COMPLETE
-                self.conversation_manager.clear_context(session_id)
-            elif state == WorkflowState.INTAKE_IN_PROGRESS:
-                await self.workflow_engine.transition(
-                    user_id,
-                    WorkflowState.INTAKE_COMPLETE,
-                    event=WorkflowEvent.COMPLETE_INTAKE,
-                )
-                final_state = WorkflowState.INTAKE_COMPLETE
                 self.conversation_manager.clear_context(session_id)
         except Exception:
             logger.error(
@@ -200,6 +449,48 @@ class SessionLifecycleManager:
                 exc_info=True,
             )
 
+        if self._emit_next_action:
+            try:
+                await self._emit_next_action(user_id, emit_session_id)
+            except Exception:
+                logger.warning(
+                    "Could not emit workflow next action after ending session %s for user %s",
+                    session_id,
+                    user_id,
+                    exc_info=True,
+                )
+
+        if follow_up:
+            try:
+                await follow_up(*follow_up_args)
+            except Exception:
+                logger.error(
+                    "Follow-up job failed for session %s (user=%s)",
+                    session_id,
+                    user_id,
+                    exc_info=True,
+                )
+
+        try:
+            final_state = await self.workflow_engine.get_user_state(user_id)
+        except Exception:
+            logger.warning(
+                "Failed to refresh workflow state after session end (user=%s, session=%s)",
+                user_id,
+                session_id,
+                exc_info=True,
+            )
+
+        if self._emit_next_action:
+            try:
+                await self._emit_next_action(user_id, emit_session_id)
+            except Exception:
+                logger.warning(
+                    "Could not emit workflow next action after follow-up for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+
         await self.conversation_manager.send_json_message(
             session_id,
             "session_ended",
@@ -208,10 +499,38 @@ class SessionLifecycleManager:
                 "workflow_state": final_state.value,
             },
         )
+        self.active_sessions.clear_active_session(user_id, session_id)
 
     async def create_session(self, user_id: str) -> str:
         """Create a new session in the database and return the ID."""
         try:
+            state = await self.workflow_engine.get_user_state(user_id)
+            if state in (WorkflowState.NEW, WorkflowState.INTAKE_IN_PROGRESS):
+                existing_intake = await self.get_single_intake_session(user_id)
+                if existing_intake:
+                    self.active_sessions.set_active_session_id(
+                        user_id, existing_intake.session_id
+                    )
+                    logger.info(
+                        "Reusing intake session %s for user %s",
+                        existing_intake.session_id,
+                        user_id,
+                    )
+                    return existing_intake.session_id
+
+            existing_session_id = self.get_active_session_id(user_id)
+            if existing_session_id:
+                logger.info(
+                    "Ending active session %s for user %s before creating new session",
+                    existing_session_id,
+                    user_id,
+                )
+                await self.end_session(
+                    user_id,
+                    existing_session_id,
+                    reason="Replaced by new session",
+                )
+
             session_id = str(uuid.uuid4())
 
             session = Session(
@@ -234,12 +553,27 @@ class SessionLifecycleManager:
             if not success:
                 raise ValueError("Failed to save session to database")
 
+            self.active_sessions.set_active_session_id(user_id, session_id)
             logger.info("Created session %s for user %s", session_id, user_id)
             return session_id
 
         except Exception as exc:
             logger.error("Error creating session: %s", exc, exc_info=True)
             raise
+
+    async def _build_session_info(self, user_id: str, session_id: str) -> SessionInfo:
+        trio_db_service = self.service_container.get("trio_db_service")
+        session = await trio_db_service.get_session(session_id)
+        created_at = session.timestamp if session else datetime.now()
+        state = await self.workflow_engine.get_user_state(user_id)
+        agent_type = self.workflow_engine.get_current_agent(state)
+        return SessionInfo(
+            session_id=session_id,
+            user_id=user_id,
+            agent_type=agent_type,
+            workflow_state=state,
+            created_at=created_at,
+        )
 
     async def _send_initial_greeting(self, user_id: str, session_id: str) -> None:
         """
@@ -260,6 +594,7 @@ class SessionLifecycleManager:
                 )
                 return
 
+            self.conversation_manager.mark_initial_greeting_sent(session_id)
             await self.conversation_manager.send_typing_indicator(session_id, True)
             typing_started = True
 
@@ -322,6 +657,7 @@ class AgentResponseHandler:
         get_agent: GetAgentFn,
         create_session: CreateSessionFn | None = None,
         end_session: EndSessionFn | None = None,
+        emit_next_action: EmitNextActionFn | None = None,
     ) -> None:
         self.service_container = service_container
         self.workflow_engine = workflow_engine
@@ -330,6 +666,9 @@ class AgentResponseHandler:
         self._get_agent = get_agent
         self._create_session = create_session
         self._end_session = end_session
+        self._emit_next_action = emit_next_action
+        self._assessment_recommendations: dict[str, list[dict[str, Any]]] = {}
+        self._assessment_jobs: set[str] = set()
 
     def attach_session_callbacks(
         self,
@@ -345,33 +684,64 @@ class AgentResponseHandler:
         self, user_id: str, session_id: str, agent_response: AgentResponse
     ) -> None:
         """Handle the agent's response and manage state transitions."""
-        if agent_response.next_state:
-            prior_state = await self.workflow_engine.get_user_state(user_id)
-            logger.info(
-                "Transitioning user %s to state: %s",
-                user_id,
-                agent_response.next_state,
-            )
-            await self.workflow_engine.transition(user_id, agent_response.next_state)
-
-            self.conversation_manager.clear_context(session_id)
-
-            if (
-                prior_state == WorkflowState.THERAPY_IN_PROGRESS
-                and agent_response.next_state == WorkflowState.REFLECTION_IN_PROGRESS
-            ):
-                try:
-                    trio_db_service = self.service_container.get("trio_db_service")
-                    await trio_db_service.enqueue_session_enrichment_job(
-                        session_id, user_id
+        if agent_response.workflow_event:
+            workflow_event = agent_response.workflow_event
+            current_state = await self.workflow_engine.get_user_state(user_id)
+            if workflow_event == WorkflowEvent.START_INTAKE:
+                trio_db_service = self.service_container.get("trio_db_service")
+                profile = await trio_db_service.get_user_profile(user_id)
+                if not profile or not is_profile_complete(profile):
+                    logger.info(
+                        "Profile incomplete for user %s; skipping intake transition",
+                        user_id,
                     )
-                except Exception:
-                    logger.warning(
-                        "Failed to enqueue Tier 2 enrichment job for session %s",
-                        session_id,
-                        exc_info=True,
+                else:
+                    next_state = self.workflow_engine.get_next_state(
+                        current_state, workflow_event
                     )
-                self.nursery.start_soon(self.run_reflection, user_id, session_id)
+                    await self.workflow_engine.transition(
+                        user_id, next_state, event=workflow_event
+                    )
+            elif workflow_event == WorkflowEvent.COMPLETE_INTAKE:
+                if not (agent_response.metadata or {}).get("intake_complete"):
+                    logger.info(
+                        "Intake completion not confirmed for user %s; skipping transition",
+                        user_id,
+                    )
+                else:
+                    next_state = self.workflow_engine.get_next_state(
+                        current_state, workflow_event
+                    )
+                    await self.workflow_engine.transition(
+                        user_id, next_state, event=workflow_event
+                    )
+                    self.conversation_manager.clear_context(session_id)
+                    await self.ensure_assessment_job(user_id, session_id)
+            else:
+                next_state = self.workflow_engine.get_next_state(
+                    current_state, workflow_event
+                )
+                await self.workflow_engine.transition(
+                    user_id, next_state, event=workflow_event
+                )
+                self.conversation_manager.clear_context(session_id)
+
+                if (
+                    current_state == WorkflowState.THERAPY_IN_PROGRESS
+                    and next_state == WorkflowState.REFLECTION_IN_PROGRESS
+                ):
+                    try:
+                        trio_db_service = self.service_container.get("trio_db_service")
+                        await trio_db_service.enqueue_session_enrichment_job(
+                            session_id, user_id
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to enqueue Tier 2 enrichment job for session %s",
+                            session_id,
+                            exc_info=True,
+                        )
+                    self.nursery.start_soon(self.run_reflection, user_id, session_id)
 
         action = agent_response.next_action
         logger.info("Handling agent response for user %s: action=%s", user_id, action)
@@ -394,6 +764,7 @@ class AgentResponseHandler:
                 logger.debug("Selection metadata: %s", agent_response.metadata)
                 recommendations = agent_response.metadata.get("recommendations")
                 if recommendations:
+                    self._assessment_recommendations[user_id] = recommendations
                     await self._send_assessment_recommendations(
                         session_id, user_id, recommendations
                     )
@@ -422,6 +793,28 @@ class AgentResponseHandler:
             if not self._create_session:
                 logger.error("Create session callback not configured")
                 return
+            try:
+                current_state = await self.workflow_engine.get_user_state(user_id)
+                next_state = self.workflow_engine.get_next_state(
+                    current_state, WorkflowEvent.START_THERAPY
+                )
+                trio_db_service = self.service_container.get("trio_db_service")
+                plan = await trio_db_service.get_latest_therapy_plan(user_id)
+                if not plan or not plan.selected_therapy_style:
+                    logger.info(
+                        "Skipping therapy transition for user %s; plan not selected",
+                        user_id,
+                    )
+                else:
+                    await self.workflow_engine.transition(
+                        user_id, next_state, event=WorkflowEvent.START_THERAPY
+                    )
+            except Exception:
+                logger.warning(
+                    "Could not transition user %s into therapy before session start",
+                    user_id,
+                    exc_info=True,
+                )
             new_session_id = await self._create_session(user_id)
             logger.info(
                 "Created new therapy session %s for user %s",
@@ -468,11 +861,88 @@ class AgentResponseHandler:
                 session, context
             )
 
-            if agent_response.next_state:
+            metadata = agent_response.metadata or {}
+            plan_output = metadata.get("therapy_plan_output")
+            if isinstance(plan_output, dict):
+                plan_output = StructuredTherapyPlanOutput.model_validate(plan_output)
+            session_briefing = metadata.get("session_briefing")
+            plan_update_applied = metadata.get("plan_update_applied", True)
+            if isinstance(plan_output, StructuredTherapyPlanOutput) and plan_update_applied:
+                try:
+                    await persist_therapy_plan_from_output(
+                        trio_db_service=trio_db_service,
+                        user_id=user_id,
+                        plan_output=plan_output,
+                        session_briefing=session_briefing,
+                    )
+                except Exception:
+                    logger.error(
+                        "Failed to persist therapy plan after reflection for user %s",
+                        user_id,
+                        exc_info=True,
+                    )
+
+            user_profile_output = metadata.get("user_profile")
+            if isinstance(user_profile_output, dict):
+                user_profile_output = StructuredUserProfileOutput.model_validate(
+                    user_profile_output
+                )
+            if isinstance(user_profile_output, StructuredUserProfileOutput):
+                updates = user_profile_output.model_dump(
+                    exclude_none=True, exclude_unset=True
+                )
+                existing = await trio_db_service.get_user_profile(user_id)
+                merged = merge_user_profile(
+                    existing_profile=existing,
+                    user_id=user_id,
+                    updates=updates,
+                )
+                success = await trio_db_service.update_user_profile(
+                    merged,
+                    change_summary="Reflection profile update",
+                    created_by_session=session_id,
+                )
+                if not success:
+                    logger.error(
+                        "Failed to persist reflection profile update for user %s",
+                        user_id,
+                    )
+
+            tier2_enrichment = metadata.get("tier2_enrichment")
+            if isinstance(tier2_enrichment, dict):
+                try:
+                    success = await trio_db_service.update_session_tier2(
+                        session_id, tier2_enrichment
+                    )
+                    if not success:
+                        logger.error(
+                            "Failed to persist Tier 2 enrichment for session %s",
+                            session_id,
+                        )
+                except Exception:
+                    logger.error(
+                        "Failed to persist Tier 2 enrichment for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
+
+            tier3_update = metadata.get("tier3_update")
+            if isinstance(tier3_update, dict):
+                await persist_tier3_update(
+                    trio_db_service=trio_db_service,
+                    user_id=user_id,
+                    session_id=session_id,
+                    tier3_update=tier3_update,
+                )
+
+            if agent_response.workflow_event:
+                next_state = self.workflow_engine.get_next_state(
+                    state, agent_response.workflow_event
+                )
                 await self.workflow_engine.transition(
                     user_id,
-                    agent_response.next_state,
-                    event=WorkflowEvent.COMPLETE_REFLECTION,
+                    next_state,
+                    event=agent_response.workflow_event,
                 )
                 self.conversation_manager.clear_context(session_id)
 
@@ -483,6 +953,93 @@ class AgentResponseHandler:
                 session_id,
                 exc_info=True,
             )
+
+    async def _run_assessment_job(
+        self, user_id: str, intake_session_id: str, emit_session_id: str | None = None
+    ) -> None:
+        """Run backend assessment and emit recommendations + next actions."""
+        try:
+            current_state = await self.workflow_engine.get_user_state(user_id)
+            if current_state not in (
+                WorkflowState.INTAKE_COMPLETE,
+                WorkflowState.ASSESSMENT_IN_PROGRESS,
+            ):
+                logger.info(
+                    "Skipping assessment job for user %s (state=%s)",
+                    user_id,
+                    current_state,
+                )
+                return
+            target_session_id = emit_session_id or intake_session_id
+            if current_state == WorkflowState.INTAKE_COMPLETE:
+                await self.workflow_engine.transition(
+                    user_id,
+                    WorkflowState.ASSESSMENT_IN_PROGRESS,
+                    event=WorkflowEvent.START_ASSESSMENT,
+                )
+                if self._emit_next_action:
+                    await self._emit_next_action(user_id, target_session_id)
+            elif self._emit_next_action:
+                await self._emit_next_action(user_id, target_session_id)
+
+            context = await self.conversation_manager.get_context(intake_session_id)
+            assessment_agent = self.service_container.create_agent(
+                "ASSESSMENT",
+                UserContext(user_id=user_id),
+            )
+            agent_response = await assessment_agent.process_assessment(context)
+            recommendations = (agent_response.metadata or {}).get("recommendations")
+            if recommendations:
+                self._assessment_recommendations[user_id] = recommendations
+                await self.conversation_manager.send_json_message(
+                    target_session_id,
+                    "assessment_recommendations",
+                    {
+                        "session_id": target_session_id,
+                        "user_id": user_id,
+                        "recommendations": recommendations,
+                    },
+                )
+
+            await self.workflow_engine.transition(
+                user_id,
+                WorkflowState.ASSESSMENT_COMPLETE,
+                event=WorkflowEvent.COMPLETE_ASSESSMENT,
+            )
+            if self._emit_next_action:
+                await self._emit_next_action(user_id, target_session_id)
+        except Exception:
+            logger.error(
+                "Assessment job failed for user %s (session=%s)",
+                user_id,
+                intake_session_id,
+                exc_info=True,
+            )
+        finally:
+            self._assessment_jobs.discard(user_id)
+
+    async def ensure_assessment_job(self, user_id: str, session_id: str) -> None:
+        """Ensure a single assessment job is running for the user."""
+        if user_id in self._assessment_jobs:
+            return
+        self._assessment_jobs.add(user_id)
+        self.nursery.start_soon(
+            self._run_assessment_job,
+            user_id,
+            session_id,
+            session_id,
+        )
+
+    async def emit_assessment_recommendations(
+        self, session_id: str, user_id: str
+    ) -> None:
+        """Re-emit cached assessment recommendations if available."""
+        recommendations = self._assessment_recommendations.get(user_id)
+        if not recommendations:
+            return
+        await self._send_assessment_recommendations(
+            session_id, user_id, recommendations
+        )
 
     async def _send_assessment_recommendations(
         self, session_id: str, user_id: str, recommendations: list[dict[str, Any]]

@@ -10,6 +10,7 @@ jest.mock('react-router-dom', () => ({
 
 jest.mock('../../contexts/AppContext', () => ({
   useCurrentUserId: () => 'test-user-id',
+  useCurrentSessionId: () => 'test-session-id',
 }));
 
 const mockUseSessionHistory = jest.fn();

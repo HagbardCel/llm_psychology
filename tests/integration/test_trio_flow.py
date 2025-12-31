@@ -5,14 +5,23 @@ Tests the complete flow from HTTP endpoint through database using pure Trio.
 """
 
 from datetime import datetime
+import uuid
 
 import pytest
 import trio
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import Message, Session, UserProfile, UserStatus
+from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 from psychoanalyst_app.trio_server import TrioServer
+
+
+class DummyWebSocket:
+    """Minimal websocket stub for registering active sessions in tests."""
+
+    async def send(self, _payload: str) -> None:
+        return None
 
 
 @pytest.fixture
@@ -150,7 +159,7 @@ async def test_create_session_endpoint_success(trio_server, test_user):
     async with app.test_client() as client:
         # Create session request
         response = await client.post(
-            "/api/sessions", json={"user_id": test_user.user_id, "type": "therapy"}
+            "/api/sessions", json={"user_id": test_user.user_id}
         )
 
         assert response.status_code == 201
@@ -171,7 +180,7 @@ async def test_create_session_endpoint_missing_user_id(trio_server):
     app = trio_server.app
 
     async with app.test_client() as client:
-        response = await client.post("/api/sessions", json={"type": "therapy"})
+        response = await client.post("/api/sessions", json={})
 
         assert response.status_code == 400
 
@@ -188,7 +197,7 @@ async def test_create_session_endpoint_nonexistent_user(trio_server):
 
     async with app.test_client() as client:
         response = await client.post(
-            "/api/sessions", json={"user_id": "nonexistent_user_999", "type": "therapy"}
+            "/api/sessions", json={"user_id": "nonexistent_user_999"}
         )
 
         assert response.status_code == 404
@@ -208,7 +217,7 @@ async def test_create_session_and_verify_in_database(trio_server, test_user):
     async with app.test_client() as client:
         # Create session
         response = await client.post(
-            "/api/sessions", json={"user_id": test_user.user_id, "type": "therapy"}
+            "/api/sessions", json={"user_id": test_user.user_id}
         )
 
         assert response.status_code == 201
@@ -227,14 +236,69 @@ async def test_create_session_and_verify_in_database(trio_server, test_user):
 
 @pytest.mark.trio
 @pytest.mark.integration
+async def test_workflow_complete_profile_requires_session_id(trio_server, test_user):
+    """Ensure workflow profile completion requires a session_id."""
+    app = trio_server.app
+
+    async with app.test_client() as client:
+        response = await client.post(
+            "/api/workflow/complete_profile",
+            json={
+                "user_id": test_user.user_id,
+                "name": "Test User",
+            },
+        )
+
+        assert response.status_code == 400
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_workflow_complete_profile_accepts_active_session(trio_server, test_user):
+    """Ensure workflow profile completion accepts an active session."""
+    app = trio_server.app
+
+    session_info = await trio_server.orchestrator.start_session(
+        test_user.user_id,
+        session_type="intake",
+        send_initial_message=False,
+    )
+    trio_server.conversation_manager.register_websocket(
+        session_info.session_id, DummyWebSocket()
+    )
+
+    async with app.test_client() as client:
+        response = await client.post(
+            "/api/workflow/complete_profile",
+            json={
+                "user_id": test_user.user_id,
+                "session_id": session_info.session_id,
+                "name": "Test User",
+                "primary_language": "English",
+                "session_mode": "virtual",
+            },
+        )
+
+        assert response.status_code == 200
+        data = await response.get_json()
+        assert data["user_id"] == test_user.user_id
+
+
+@pytest.mark.trio
+@pytest.mark.integration
 async def test_get_sessions_returns_dtos(trio_server, test_user):
     """Ensure GET /api/sessions returns DTO-shaped payloads."""
     app = trio_server.app
 
     async with app.test_client() as client:
-        await client.post("/api/sessions", json={"user_id": test_user.user_id})
+        create_response = await client.post(
+            "/api/sessions", json={"user_id": test_user.user_id}
+        )
+        created = await create_response.get_json()
 
-        response = await client.get(f"/api/sessions?user_id={test_user.user_id}")
+        response = await client.get(
+            f"/api/sessions?user_id={test_user.user_id}&session_id={created['session_id']}"
+        )
 
         assert response.status_code == 200
 
@@ -259,7 +323,14 @@ async def test_get_therapy_plan_returns_null_when_missing(trio_server, test_user
     app = trio_server.app
 
     async with app.test_client() as client:
-        response = await client.get(f"/api/therapy/plan?user_id={test_user.user_id}")
+        create_response = await client.post(
+            "/api/sessions", json={"user_id": test_user.user_id}
+        )
+        created = await create_response.get_json()
+
+        response = await client.get(
+            f"/api/therapy/plan?user_id={test_user.user_id}&session_id={created['session_id']}"
+        )
 
         assert response.status_code == 200
         data = await response.get_json()
@@ -268,30 +339,74 @@ async def test_get_therapy_plan_returns_null_when_missing(trio_server, test_user
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_create_and_get_therapy_plan(trio_server, test_user):
-    """Therapy plan endpoints should return DTO payloads."""
+async def test_select_therapy_style_creates_plan(trio_server, test_user):
+    """Workflow selection should create a therapy plan."""
     app = trio_server.app
+    trio_db_service = trio_server.db_service
+
+    intake_session = Session(
+        session_id=str(uuid.uuid4()),
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="Intake session started.",
+                timestamp=datetime.now(),
+                agent="INTAKE",
+            )
+        ],
+        topics=[],
+    )
+    await trio_db_service.save_session(intake_session)
+
+    await trio_server.workflow_engine.transition(
+        test_user.user_id,
+        WorkflowState.INTAKE_IN_PROGRESS,
+        event=WorkflowEvent.START_INTAKE,
+    )
+    await trio_server.workflow_engine.transition(
+        test_user.user_id,
+        WorkflowState.INTAKE_COMPLETE,
+        event=WorkflowEvent.COMPLETE_INTAKE,
+    )
+    await trio_server.workflow_engine.transition(
+        test_user.user_id,
+        WorkflowState.ASSESSMENT_IN_PROGRESS,
+        event=WorkflowEvent.START_ASSESSMENT,
+    )
+    await trio_server.workflow_engine.transition(
+        test_user.user_id,
+        WorkflowState.ASSESSMENT_COMPLETE,
+        event=WorkflowEvent.COMPLETE_ASSESSMENT,
+    )
+
+    session_info = await trio_server.orchestrator.start_session(
+        test_user.user_id,
+        session_type="therapy",
+        send_initial_message=False,
+    )
+    trio_server.conversation_manager.register_websocket(
+        session_info.session_id, DummyWebSocket()
+    )
 
     async with app.test_client() as client:
         create_response = await client.post(
-            "/api/therapy/plan",
-            json={"user_id": test_user.user_id, "therapy_style": "freud"},
+            "/api/workflow/select_therapy_style",
+            json={
+                "user_id": test_user.user_id,
+                "session_id": session_info.session_id,
+                "selected_therapy_style": "freud",
+            },
         )
 
-        assert create_response.status_code == 201
-        created_plan = await create_response.get_json()
-        assert created_plan["user_id"] == test_user.user_id
-        assert created_plan["selected_therapy_style"] == "freud"
-        datetime.fromisoformat(created_plan["created_at"])
+        assert create_response.status_code == 200
+        action = await create_response.get_json()
+        assert action["required_action"] == "continue_therapy"
 
-        get_response = await client.get(
-            f"/api/therapy/plan?user_id={test_user.user_id}"
-        )
-
-        assert get_response.status_code == 200
-        plan = await get_response.get_json()
-        assert plan["plan_id"] == created_plan["plan_id"]
-        assert plan["status"] == "active"
+    plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    assert plan is not None
+    assert plan.selected_therapy_style == "freud"
 @pytest.mark.trio
 @pytest.mark.integration
 async def test_structured_concurrency_with_nursery(service_container):
@@ -337,7 +452,14 @@ async def test_get_user_status_endpoint(trio_server, test_user):
     app = trio_server.app
 
     async with app.test_client() as client:
-        response = await client.get(f"/api/user/status?user_id={test_user.user_id}")
+        create_response = await client.post(
+            "/api/sessions", json={"user_id": test_user.user_id}
+        )
+        created = await create_response.get_json()
+
+        response = await client.get(
+            f"/api/user/status?user_id={test_user.user_id}&session_id={created['session_id']}"
+        )
 
         assert response.status_code == 200
 

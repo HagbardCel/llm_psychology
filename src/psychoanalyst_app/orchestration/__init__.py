@@ -21,11 +21,6 @@ from .models import (
     WorkflowState,
 )
 
-# Import Trio orchestration components (PRODUCTION)
-from .trio_agent_orchestrator import TrioAgentOrchestrator
-from .trio_conversation_manager import TrioConversationManager
-from .trio_workflow_engine import TrioWorkflowEngine
-
 __all__ = [
     # Data Models
     "AgentResponse",
@@ -34,8 +29,4 @@ __all__ = [
     "TherapyStyleRecommendation",
     "WorkflowEvent",
     "WorkflowState",
-    # Trio Orchestration (PRODUCTION)
-    "TrioAgentOrchestrator",
-    "TrioConversationManager",
-    "TrioWorkflowEngine",
 ]

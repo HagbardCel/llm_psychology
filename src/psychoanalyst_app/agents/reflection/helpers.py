@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 import trio
 
 from psychoanalyst_app.models.data_models import Session, TherapyPlan, UserProfile
-from psychoanalyst_app.models.structured_output_models import ChangeDetectionDecision, Tier1ProfilePatch
+from psychoanalyst_app.models.structured_output_models import (
+    ChangeDetectionDecision,
+    StructuredUserProfileOutput,
+    Tier1ProfilePatch,
+)
 from psychoanalyst_app.prompts.reflection_prompts import (
     SESSION_SUMMARY_PROMPT,
     TIER1_CHANGE_DETECTION_PROMPT,
     TIER1_UPDATE_GENERATION_PROMPT,
 )
 from psychoanalyst_app.services.llm_service import LLMService
-from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
-
 logger = logging.getLogger(__name__)
 
 
@@ -102,10 +103,9 @@ def should_update_tier4(
 
 async def maybe_update_tier1_profile(
     llm_service: LLMService,
-    db_service: TrioDatabaseService,
     profile: UserProfile,
     session: Session,
-) -> bool:
+) -> StructuredUserProfileOutput | None:
     """Run Tier 1 profile change detection/update pipeline."""
     try:
         if getattr(session, "enriched", False) and getattr(
@@ -159,9 +159,9 @@ async def maybe_update_tier1_profile(
             method="json_schema",
         )
         if not isinstance(decision, ChangeDetectionDecision):
-            return False
+            return None
         if not decision.update_needed:
-            return False
+            return None
 
         change_summary = decision.change_summary or ""
         update_prompt = TIER1_UPDATE_GENERATION_PROMPT.format(
@@ -175,7 +175,7 @@ async def maybe_update_tier1_profile(
             method="json_schema",
         )
         if not isinstance(patch, Tier1ProfilePatch):
-            return False
+            return None
 
         updates: dict[str, Any] = {}
         if patch.basic_info:
@@ -232,75 +232,10 @@ async def maybe_update_tier1_profile(
                 updates["frame_notes"] = frame.frame_notes
 
         if not updates:
-            return False
+            return None
 
-        updates["updated_at"] = datetime.now()
-        updated_profile = profile.model_copy(update=updates)
-        return bool(
-            await db_service.update_user_profile(
-                updated_profile,
-                change_summary=change_summary or None,
-                created_by_session=session.session_id,
-            )
-        )
+        return StructuredUserProfileOutput.model_validate(updates)
 
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Error updating Tier 1 profile: %s", exc, exc_info=True)
-        return False
-
-        if patch.family:
-            family = patch.family
-            if family.parents is not None and family.parents.strip():
-                updates["parents"] = family.parents
-            if family.siblings is not None and family.siblings.strip():
-                updates["siblings"] = family.siblings
-            if family.family_atmosphere is not None and family.family_atmosphere.strip():
-                updates["family_atmosphere"] = family.family_atmosphere
-            if family.significant_events is not None and family.significant_events.strip():
-                updates["significant_events"] = family.significant_events
-
-        if patch.history:
-            history = patch.history
-            if history.education is not None and history.education.strip():
-                updates["education"] = history.education
-            if history.work_history is not None and history.work_history.strip():
-                updates["work_history"] = history.work_history
-            if history.relationship_to_work is not None and history.relationship_to_work.strip():
-                updates["relationship_to_work"] = history.relationship_to_work
-
-        if patch.context:
-            context_patch = patch.context
-            if context_patch.relationships is not None and context_patch.relationships.strip():
-                updates["relationships"] = context_patch.relationships
-            if context_patch.social_context is not None and context_patch.social_context.strip():
-                updates["social_context"] = context_patch.social_context
-            if context_patch.current_situation is not None and context_patch.current_situation.strip():
-                updates["current_situation"] = context_patch.current_situation
-
-        if patch.frame:
-            frame = patch.frame
-            if frame.preferred_school is not None and frame.preferred_school.strip():
-                updates["preferred_school"] = frame.preferred_school
-            if frame.session_mode is not None and frame.session_mode.strip():
-                updates["session_mode"] = frame.session_mode
-            if frame.boundary_notes is not None and frame.boundary_notes.strip():
-                updates["boundary_notes"] = frame.boundary_notes
-            if frame.frame_notes is not None and frame.frame_notes.strip():
-                updates["frame_notes"] = frame.frame_notes
-
-        if not updates:
-            return False
-
-        updates["updated_at"] = datetime.now()
-        updated_profile = profile.model_copy(update=updates)
-        return bool(
-            await db_service.update_user_profile(
-                updated_profile,
-                change_summary=change_summary or None,
-                created_by_session=session.session_id,
-            )
-        )
-
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Error updating Tier 1 profile: %s", exc, exc_info=True)
-        return False
+        return None

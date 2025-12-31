@@ -3,31 +3,19 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.models.data_models import TherapyPlan
-from psychoanalyst_app.models.structured_output_models import (
-    StructuredTherapyPlanOutput,
-    StructuredUserProfileOutput,
-)
-from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
+from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
-from psychoanalyst_app.orchestration.profile_helpers import (
-    ensure_user_profile,
-    merge_user_profile,
-)
+from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
 
 logger = logging.getLogger(__name__)
 
 
 async def ensure_session(session_lifecycle, user_id: str, session_id: str | None) -> str:
     """Ensure a session exists and return its ID."""
-    if session_id:
-        return session_id
-    return await session_lifecycle.create_session(user_id)
+    return await session_lifecycle.ensure_session_id(user_id, session_id)
 
 
 async def record_user_message(conversation_manager, session_id: str, message: str) -> None:
@@ -37,16 +25,14 @@ async def record_user_message(conversation_manager, session_id: str, message: st
 
 
 async def ensure_profile_for_new_state(service_container, user_id: str, state: WorkflowState) -> None:
-    """Create placeholder profiles for NEW users without workflow transitions."""
+    """Require a profile for NEW users before entering message processing."""
     if state != WorkflowState.NEW:
         return
 
     trio_db_service = service_container.get("trio_db_service")
     existing = await trio_db_service.get_user_profile(user_id)
-    if existing:
-        return
-
-    await ensure_user_profile(trio_db_service, user_id, {"name": "Guest"})
+    if not existing:
+        raise ValueError("User profile not found; register before starting a session")
 
 
 async def resolve_agent_and_context(
@@ -129,41 +115,5 @@ async def finalize_agent_response(
             "Ignoring unexpected user_profile payload type: %s",
             type(user_profile_output),
         )
-
-    therapy_plan_output = metadata.get("therapy_plan")
-    if isinstance(therapy_plan_output, StructuredTherapyPlanOutput):
-        latest_plan = await trio_db_service.get_latest_therapy_plan(user_id)
-        plan = TherapyPlan(
-            plan_id=str(uuid.uuid4()),
-            user_id=user_id,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            version=(latest_plan.version + 1) if latest_plan else 1,
-            selected_therapy_style=therapy_plan_output.selected_therapy_style,
-            plan_details=therapy_plan_output.plan_details,
-            initial_goals=therapy_plan_output.initial_goals,
-            current_progress=therapy_plan_output.current_progress,
-            planned_interventions=therapy_plan_output.planned_interventions,
-            status=therapy_plan_output.status,
-        )
-        success = await trio_db_service.save_therapy_plan(plan)
-        if not success:
-            raise ValueError("Failed to save therapy plan to database")
-    elif therapy_plan_output is not None:
-        logger.warning(
-            "Ignoring unexpected therapy_plan payload type: %s",
-            type(therapy_plan_output),
-        )
-
-    if agent_response.next_state == WorkflowState.INTAKE_IN_PROGRESS:
-        profile = updated_profile or await trio_db_service.get_user_profile(user_id)
-        if not profile or not is_profile_complete(profile):
-            logger.info(
-                "Profile incomplete for user %s; skipping transition to intake",
-                user_id,
-            )
-            agent_response.next_state = None
-            if agent_response.next_action == "transition":
-                agent_response.next_action = "continue"
 
     await response_handler.handle(user_id, session_id, agent_response)

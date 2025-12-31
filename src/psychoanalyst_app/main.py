@@ -126,9 +126,8 @@ class TerminalUI(BaseUI):
                 session_info.session_id, ws
             )
 
-            # If initial greeting is being sent, wait for it
-            if session_info.has_initial_message:
-                await ws.completion_event.wait()
+            # Wait for the initial greeting to complete before accepting input.
+            await ws.completion_event.wait()
 
             # Main interaction loop
             while True:

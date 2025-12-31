@@ -1,5 +1,4 @@
-import { useState, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import {
   Grid,
   Card,
@@ -9,75 +8,77 @@ import {
   Button,
   CircularProgress,
   Alert,
+  Box,
   Divider
 } from '@mui/material';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '../components/shared';
-import { TherapySession } from '../components/TherapySession';
-import { useCurrentUserId } from '../contexts/AppContext';
+import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
+import { useWebSocketContext } from '../contexts/WebSocketContext';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { TherapyStyle } from '../types';
 import { api } from '../services/api';
 import { ApiRequestError } from '../services/apiClient';
-
-type AssessmentMode = 'chat' | 'selection';
-
-interface StyleRecommendation {
-  style: string;
-  reason: string;
-  description: string;
-  score?: number;
-}
+import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
+import { labelForRequiredAction } from '../utils/workflow';
 
 /**
  * AssessmentPage handles the therapy style assessment and selection.
- * Two modes:
- * 1. Chat mode: Conversation with Assessment agent
- * 2. Selection mode: Choose therapy style from recommendations
+ * In the backend-driven flow, the assessment runs asynchronously and this
+ * page only handles style selection once required_action is set.
  */
 export function AssessmentPage() {
   const userId = useCurrentUserId();
-  const { data: user } = useUserProfile(userId || '');
+  const sessionId = useCurrentSessionId();
+  const { assessmentRecommendations } = useWebSocketContext();
+  const { data: user } = useUserProfile(userId || '', sessionId || '');
   const queryClient = useQueryClient();
-  const location = useLocation();
-  const [mode, setMode] = useState<AssessmentMode>('chat');
-  const [recommendations, setRecommendations] = useState<StyleRecommendation[]>([]);
+  const { data: nextAction, isLoading: actionLoading } = useWorkflowNextAction(
+    userId || '',
+    sessionId || '',
+    '/assessment',
+    { enabled: !!userId && !!sessionId }
+  );
+  const [stylesError, setStylesError] = useState<string | null>(null);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const recommendations =
+    assessmentRecommendations?.user_id === userId
+      ? assessmentRecommendations.recommendations || []
+      : [];
+  const hasRecommendations = recommendations.length > 0;
 
-  const handleRecommendations = useCallback(
-    (payload: {
-      recommendations?: Array<{ style_id: string; explanation: string; score?: number }>;
-    }) => {
-      const styleRecommendations =
-        payload.recommendations?.map((rec) => ({
-          style: rec.style_id,
-          reason: rec.explanation,
-          description: getStyleDescription(rec.style_id),
-          score: rec.score
-        })) || [];
-
-      setRecommendations(styleRecommendations);
-      setMode('selection');
-      setError(null);
-    },
-    []
-  );
+  const { data: styles, isLoading: stylesLoading } = useQuery({
+    queryKey: ['therapyStyles', userId, sessionId],
+    queryFn: async () => api.therapy.getStyles(userId || '', sessionId || ''),
+    enabled: nextAction?.required_action === 'select_therapy_style' && !!sessionId,
+    onError: (err) => {
+      setStylesError(err instanceof Error ? err.message : 'Failed to load styles');
+    }
+  });
 
   const handleStyleSelect = async (style: string) => {
     if (!user) return;
+    if (!sessionId) {
+      setError('Session is required to select a therapy style. Please reconnect.');
+      return;
+    }
 
     setIsCreatingPlan(true);
     setError(null);
 
     try {
-      await api.therapy.createPlan({
+      await api.therapy.selectStyle({
         user_id: user.user_id,
-        therapy_style: style.toLowerCase() as TherapyStyle
+        session_id: sessionId,
+        selected_therapy_style: style.toLowerCase()
       });
 
       await queryClient.invalidateQueries({
-        queryKey: ['workflow', 'next-action', user.user_id, location.pathname]
+        queryKey: ['workflow', 'next', user.user_id, sessionId]
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['therapyPlan', user.user_id, sessionId]
       });
     } catch (err) {
       if (err instanceof ApiRequestError) {
@@ -92,17 +93,26 @@ export function AssessmentPage() {
     }
   };
 
-  if (mode === 'chat') {
+  if (actionLoading) {
     return (
       <PageContainer
         title="Therapy Assessment"
-        subtitle="Let's explore which therapeutic approach suits you best"
+        subtitle="Checking assessment status..."
         maxWidth="lg"
       >
-        <TherapySession
-          sessionType="assessment"
-          onAssessmentRecommendations={handleRecommendations}
-        />
+        <CircularProgress />
+      </PageContainer>
+    );
+  }
+
+  if (nextAction?.required_action === 'wait') {
+    return (
+      <PageContainer
+        title="Therapy Assessment"
+        subtitle={nextAction.prompt || 'Assessment in progress. Please wait.'}
+        maxWidth="lg"
+      >
+        <CircularProgress />
       </PageContainer>
     );
   }
@@ -110,18 +120,55 @@ export function AssessmentPage() {
   return (
     <PageContainer
       title="Choose Your Therapy Style"
-      subtitle="Based on our conversation, here are our recommendations"
+      subtitle={nextAction?.prompt || 'Select a therapy style to continue'}
       maxWidth="lg"
     >
+      {!sessionId && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          No active session found. Please reconnect to continue.
+        </Alert>
+      )}
+      {!hasRecommendations && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          Waiting for assessment recommendations before selecting a therapy style.
+        </Alert>
+      )}
+      {hasRecommendations && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Assessment Recommendations
+            </Typography>
+            {(recommendations || []).map((rec, index) => (
+              <Box key={`${rec.style_id || index}`} sx={{ mb: 2 }}>
+                <Typography variant="subtitle1">
+                  {capitalizeStyle(rec.style_id || `option_${index + 1}`)}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {rec.explanation || 'No rationale provided.'}
+                </Typography>
+              </Box>
+            ))}
+          </CardContent>
+        </Card>
+      )}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
       )}
 
+      {stylesError && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {stylesError}
+        </Alert>
+      )}
+
+      {stylesLoading && <CircularProgress />}
+
       <Grid container spacing={3}>
-        {recommendations.map((rec) => (
-          <Grid item xs={12} md={4} key={rec.style}>
+        {(styles || []).map((style) => (
+          <Grid item xs={12} md={4} key={style.style}>
             <Card
               sx={{
                 height: '100%',
@@ -131,32 +178,34 @@ export function AssessmentPage() {
             >
               <CardContent sx={{ flexGrow: 1 }}>
                 <Typography variant="h5" component="h2" gutterBottom>
-                  {capitalizeStyle(rec.style)}
+                  {capitalizeStyle(style.style)}
                 </Typography>
 
                 <Typography variant="body2" color="text.secondary" paragraph>
-                  {rec.description}
+                  {style.description || getStyleDescription(style.style)}
                 </Typography>
 
                 <Divider sx={{ my: 2 }} />
 
                 <Typography variant="subtitle2" gutterBottom>
-                  Why we recommend this:
+                  {labelForRequiredAction('select_therapy_style')}
                 </Typography>
-                <Typography variant="body2">{rec.reason}</Typography>
+                <Typography variant="body2">
+                  Choose the style that feels right for you.
+                </Typography>
               </CardContent>
 
               <CardActions>
                 <Button
                   fullWidth
                   variant="contained"
-                  onClick={() => handleStyleSelect(rec.style)}
-                  disabled={isCreatingPlan}
+                  onClick={() => handleStyleSelect(style.style)}
+                  disabled={isCreatingPlan || !hasRecommendations}
                 >
                   {isCreatingPlan ? (
                     <CircularProgress size={24} />
                   ) : (
-                    `Select ${capitalizeStyle(rec.style)}`
+                    `Select ${capitalizeStyle(style.style)}`
                   )}
                 </Button>
               </CardActions>

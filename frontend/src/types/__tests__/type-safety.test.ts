@@ -241,38 +241,20 @@ describe('Type Safety Integration', () => {
   });
 
   describe('WorkflowNextAction Type', () => {
-    it('should support navigate action', () => {
+    it('should support required action payloads', () => {
       const action: WorkflowNextAction = {
-        action: 'navigate',
-        route: '/intake',
-        reason: 'User needs intake assessment',
+        user_id: 'user-1',
+        workflow_state: 'INTAKE_IN_PROGRESS',
+        required_action: 'start_intake',
+        required_fields: [],
+        defaults: null,
+        prompt: 'Continue your intake session.',
+        blocking: false,
+        timestamp: new Date().toISOString(),
       };
 
-      expect(action.action).toBe('navigate');
-      expect(action.route).toBe('/intake');
-    });
-
-    it('should support display action', () => {
-      const action: WorkflowNextAction = {
-        action: 'display',
-        display: {
-          title: 'Welcome',
-          description: 'Please complete your profile',
-        },
-      };
-
-      expect(action.action).toBe('display');
-      expect(action.display?.title).toBe('Welcome');
-    });
-
-    it('should support error action', () => {
-      const action: WorkflowNextAction = {
-        action: 'error',
-        error: 'User not found',
-      };
-
-      expect(action.action).toBe('error');
-      expect(action.error).toBe('User not found');
+      expect(action.required_action).toBe('start_intake');
+      expect(action.workflow_state).toBe('INTAKE_IN_PROGRESS');
     });
   });
 

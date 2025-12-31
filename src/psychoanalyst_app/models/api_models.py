@@ -5,79 +5,64 @@ This module defines Pydantic models for API endpoints, separate from
 internal workflow models to maintain clean separation of concerns.
 """
 
+from datetime import datetime
+from enum import Enum
+from typing import Optional, Mapping
+
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, Literal
+
+from psychoanalyst_app.orchestration.models import WorkflowState
 
 
-class WorkflowNextActionRequest(BaseModel):
+class RequiredWorkflowAction(str, Enum):
+    """Actions that clients must perform before the workflow can advance."""
+
+    COMPLETE_PROFILE = "complete_profile"
+    SELECT_THERAPY_STYLE = "select_therapy_style"
+    START_INTAKE = "start_intake"
+    CONTINUE_THERAPY = "continue_therapy"
+    WAIT = "wait"
+
+
+class WorkflowNextActionDTO(BaseModel):
     """
-    Request for determining the next action in the workflow.
+    Payload describing what the backend expects the client to do next.
 
     Attributes:
-        user_id: The user's identifier
-        current_route: Optional current frontend route for context
+        user_id: User identifier.
+        workflow_state: Current workflow state.
+        required_action: Action the client must perform.
+        required_fields: Fields the client must collect for the action.
+        defaults: Optional default values for the required fields.
+        prompt: Optional copy describing the work to do.
+        blocking: Whether this action must be completed before the client can continue other activities.
+        timestamp: When the action was generated.
     """
 
     user_id: str = Field(..., description="User identifier")
-    current_route: Optional[str] = Field(None, description="Current frontend route")
-
-
-class WorkflowDisplayAction(BaseModel):
-    """
-    Display information for a non-navigation action.
-
-    Attributes:
-        title: Title to display to user
-        description: Optional description text
-        primary_action: Optional primary action button configuration
-    """
-
-    title: str = Field(..., description="Display title")
-    description: Optional[str] = Field(None, description="Display description")
-    primary_action: Optional[dict] = Field(
-        None, description="Primary action button config"
+    workflow_state: WorkflowState = Field(
+        ..., description="Current workflow state value"
+    )
+    required_action: RequiredWorkflowAction = Field(
+        ..., description="Action the client is required to perform"
+    )
+    required_fields: list[str] = Field(
+        default_factory=list, description="Fields that must be provided before advancing"
+    )
+    defaults: Mapping[str, str] | None = Field(
+        None,
+        description="Optional defaults usable to pre-fill the required fields",
+    )
+    prompt: Optional[str] = Field(
+        None, description="Human-friendly prompt describing what should happen next"
+    )
+    blocking: bool = Field(
+        True,
+        description="Indicates whether the workflow must wait for this action before continuing",
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When this instruction was evaluated",
     )
 
-
-class WorkflowNextActionResponse(BaseModel):
-    """
-    Response indicating what the frontend should do next.
-
-    Attributes:
-        action: Type of action ('navigate', 'wait', 'display', 'error')
-        route: Optional route to navigate to (for 'navigate' action)
-        reason: Optional reason for the action
-        display: Optional display information (for 'display' action)
-        error: Optional error message (for 'error' action)
-    """
-
-    action: Literal["navigate", "wait", "display", "error"] = Field(
-        ..., description="Action type to perform"
-    )
-    route: Optional[str] = Field(None, description="Route to navigate to")
-    reason: Optional[str] = Field(None, description="Reason for this action")
-    display: Optional[WorkflowDisplayAction] = Field(
-        None, description="Display information"
-    )
-    error: Optional[str] = Field(None, description="Error message")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "action": "navigate",
-                    "route": "/intake",
-                    "reason": "User needs to complete intake assessment",
-                },
-                {"action": "wait", "reason": "Session in progress"},
-                {
-                    "action": "display",
-                    "display": {
-                        "title": "Complete Your Profile",
-                        "description": "Please fill in your profile information to continue",
-                    },
-                },
-                {"action": "error", "error": "User not found"},
-            ]
-        }
-    )
+    model_config = ConfigDict(use_enum_values=True)

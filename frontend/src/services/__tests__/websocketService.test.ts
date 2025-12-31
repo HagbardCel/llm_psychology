@@ -476,24 +476,6 @@ describe('WebSocketService', () => {
       );
     });
 
-    test('requestSession sends correct format', async () => {
-      const connectPromise = service.connect();
-
-      const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
-      mockWs.simulateOpen();
-
-      await connectPromise;
-
-      service.requestSession('therapy');
-
-      expect(mockWs.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'session_request',
-          data: { session_type: 'therapy' }
-        })
-      );
-    });
-
     test('isConnected returns correct status', async () => {
       expect(service.isConnected()).toBe(false);
 

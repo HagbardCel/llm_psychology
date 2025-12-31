@@ -29,7 +29,15 @@ from psychoanalyst_app.models.structured_output_models import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
 )
-from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowState
+from psychoanalyst_app.orchestration.models import (
+    ConversationContext,
+    WorkflowEvent,
+    WorkflowState,
+)
+from psychoanalyst_app.orchestration.orchestrator_helpers import (
+    persist_therapy_plan_from_output,
+    persist_tier3_update,
+)
 
 
 @pytest.fixture
@@ -229,14 +237,12 @@ async def test_planning_agent_create_initial_plan(
         style_service=style_service,
     )
 
-    # Create initial plan
-    therapy_plan = await planning_agent.create_initial_plan(test_session, "cbt")
+    # Create initial plan output (no persistence)
+    plan_output = await planning_agent.create_initial_plan(test_session, "cbt")
 
-    assert therapy_plan is not None
-    assert therapy_plan.plan_id is not None
-    assert therapy_plan.user_id == user_context.user_id
-    assert therapy_plan.selected_therapy_style == "cbt"
-    assert therapy_plan.version == 1
+    assert isinstance(plan_output, StructuredTherapyPlanOutput)
+    assert plan_output.selected_therapy_style == "cbt"
+    assert plan_output.initial_goals
 
 
 @pytest.mark.trio
@@ -343,7 +349,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
     assert "Dr. AI" in response.content
     assert "may I have your name" in response.content
     assert response.next_action == "continue"
-    assert response.next_state is None
+    assert response.workflow_event is None
 
 
 @pytest.mark.trio
@@ -398,7 +404,7 @@ async def test_intake_agent_guest_name_collection(service_container):
     # Verify name was updated and state transitioned
     assert response is not None
     assert response.next_action == "transition"
-    assert response.next_state == WorkflowState.INTAKE_IN_PROGRESS
+    assert response.workflow_event == WorkflowEvent.START_INTAKE
     assert context.user_profile.name == "John Smith"
     structured_profile = response.metadata.get("user_profile")
     assert structured_profile is not None
@@ -538,7 +544,7 @@ async def test_intake_agent_tier1_extraction(service_container):
 
     # Verify intake completed
     assert response.next_action == "transition"
-    assert response.next_state == WorkflowState.INTAKE_COMPLETE
+    assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
 
     structured_profile = response.metadata.get("user_profile")
     assert structured_profile is not None
@@ -707,7 +713,12 @@ async def test_reflection_agent_session_enrichment(
     )
 
     # Generate comprehensive reflection (which triggers enrichment)
-    reflection = await reflection_agent.generate_comprehensive_reflection(
+    (
+        reflection,
+        _profile_output,
+        tier2_enrichment,
+        _tier3_update,
+    ) = await reflection_agent.generate_comprehensive_reflection(
         test_session, current_plan=None
     )
 
@@ -715,27 +726,28 @@ async def test_reflection_agent_session_enrichment(
     assert reflection is not None
     assert reflection["session_id"] == test_session.session_id
 
-    # Verify session was enriched in database
-    enriched_session = await trio_db_service.get_session(test_session.session_id)
-
-    assert enriched_session is not None
-    assert enriched_session.enriched is True
-    assert enriched_session.psychological_summary == tier2_enrichment_data[
+    # Verify enrichment payload returned (persistence handled by orchestrator)
+    assert tier2_enrichment is not None
+    assert tier2_enrichment["psychological_summary"] == tier2_enrichment_data[
         "psychological_summary"
     ]
-    assert enriched_session.dominant_affects == tier2_enrichment_data[
+    assert tier2_enrichment["dominant_affects"] == tier2_enrichment_data[
         "dominant_affects"
     ]
-    assert enriched_session.key_themes == tier2_enrichment_data["key_themes"]
-    assert enriched_session.notable_interactions == tier2_enrichment_data[
+    assert tier2_enrichment["key_themes"] == tier2_enrichment_data["key_themes"]
+    assert tier2_enrichment["notable_interactions"] == tier2_enrichment_data[
         "notable_interactions"
     ]
-    assert enriched_session.interpretations == tier2_enrichment_data[
+    assert tier2_enrichment["interpretations"] == tier2_enrichment_data[
         "interpretations"
     ]
-    assert enriched_session.patient_reactions == tier2_enrichment_data[
+    assert tier2_enrichment["patient_reactions"] == tier2_enrichment_data[
         "patient_reactions"
     ]
+
+    persisted_session = await trio_db_service.get_session(test_session.session_id)
+    assert persisted_session is not None
+    assert persisted_session.enriched is False
 
 
 # ===== TrioAssessmentAgent Tests =====
@@ -880,8 +892,13 @@ async def test_full_agent_workflow(
         memory_agent,
         style_service=style_service,
     )
-    therapy_plan = await planning_agent.create_initial_plan(test_session, "cbt")
-    assert therapy_plan is not None
+    plan_output = await planning_agent.create_initial_plan(test_session, "cbt")
+    assert plan_output is not None
+    therapy_plan = await persist_therapy_plan_from_output(
+        trio_db_service=trio_db_service,
+        user_id=test_user.user_id,
+        plan_output=plan_output,
+    )
 
     # Step 3: Reflection agent coordinates
     reflection_agent = TrioReflectionAgent(
@@ -893,7 +910,12 @@ async def test_full_agent_workflow(
         planning_agent,
         config=service_container.config,
     )
-    comprehensive_reflection = await reflection_agent.generate_comprehensive_reflection(
+    (
+        comprehensive_reflection,
+        _profile_output,
+        _tier2_enrichment,
+        _tier3_update,
+    ) = await reflection_agent.generate_comprehensive_reflection(
         test_session, therapy_plan
     )
     assert comprehensive_reflection is not None
@@ -1017,9 +1039,9 @@ async def test_assessment_agent_process_selection(
     response = await assessment_agent.process_selection("cbt", context)
 
     assert response is not None
-    assert response.next_action == "await_continuation_choice"
-    assert response.next_state == WorkflowState.ASSESSMENT_COMPLETE
-    assert "plan_id" in response.metadata
+    assert response.next_action == "await_selection"
+    assert response.workflow_event is None
+    assert response.metadata.get("selected_style") == "cbt"
 
 
 @pytest.mark.trio
@@ -1222,40 +1244,22 @@ async def test_assessment_agent_creates_tier3_and_tier4(
         duration_minutes=60,
     )
 
-    # Process style selection (should create Tier 3 & 4)
+    # Process style selection (no persistence; UI handles selection)
     response = await assessment_agent.process_selection("cbt", context)
 
     # Verify response
     assert response is not None
-    assert response.next_state == WorkflowState.ASSESSMENT_COMPLETE
-    assert response.metadata.get("tier3_created") is True
-    assert response.metadata.get("tier4_created") is True
+    assert response.workflow_event is None
+    assert response.next_action == "await_selection"
+    assert response.metadata.get("selected_style") == "cbt"
 
-    # Verify Tier 3 was saved
     tier3_analysis = await trio_db_service.get_latest_patient_analysis(
         test_user.user_id
     )
-    assert tier3_analysis is not None
-    assert tier3_analysis.version == 1
-    assert tier3_analysis.user_id == test_user.user_id
-    assert (
-        tier3_analysis.analysis_data.current_focus.theme
-        == "Work-life balance and relationship strain"
-    )
-    assert "intellectualization" in (
-        tier3_analysis.analysis_data.defenses.primary_defenses
-    )
-    assert len(tier3_analysis.analysis_data.narratives) == 1
+    assert tier3_analysis is None
 
-    # Verify Tier 4 was saved
     tier4_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
-    assert tier4_plan is not None
-    assert tier4_plan.user_id == test_user.user_id
-    assert tier4_plan.status == "active"
-    assert len(tier4_plan.initial_goals) == 3
-    assert "Reduce work-related stress and anxiety" in tier4_plan.initial_goals
-    assert len(tier4_plan.planned_interventions) == 3
-    assert "Cognitive restructuring" in tier4_plan.planned_interventions[0]
+    assert tier4_plan is None
 
 
 @pytest.mark.trio
@@ -1578,7 +1582,12 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
 
     # Run reflection (should create Tier 3 v2)
     current_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
-    reflection = await reflection_agent.generate_comprehensive_reflection(
+    (
+        reflection,
+        _profile_output,
+        _tier2_enrichment,
+        _tier3_update,
+    ) = await reflection_agent.generate_comprehensive_reflection(
         therapy_session, current_plan=current_plan
     )
 
@@ -1587,6 +1596,13 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     assert reflection["tier3_updated"] is True
     assert reflection["tier3_version"] == 2
     assert reflection["tier4_updated"] is True
+    assert _tier3_update is not None
+    assert await persist_tier3_update(
+        trio_db_service=trio_db_service,
+        user_id=test_user.user_id,
+        session_id=session_id,
+        tier3_update=_tier3_update,
+    )
 
     # Verify Tier 3 v2 was created
     tier3_v2 = await trio_db_service.get_latest_patient_analysis(
@@ -1613,8 +1629,6 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
 
     latest_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
     assert latest_plan is not None
-    assert latest_plan.current_progress != ""
-    assert len(latest_plan.planned_interventions) >= 1
 
     # Verify old version was marked as superseded
     tier3_v1_updated = await trio_db_service.get_patient_analysis_version(
@@ -1854,9 +1868,12 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     )
 
     # Run reflection (should NOT create Tier 3 v2)
-    reflection = await reflection_agent.generate_comprehensive_reflection(
-        therapy_session
-    )
+    (
+        reflection,
+        _profile_output,
+        _tier2_enrichment,
+        _tier3_update,
+    ) = await reflection_agent.generate_comprehensive_reflection(therapy_session)
 
     # Verify reflection metadata shows NO Tier 3 update
     assert reflection is not None

@@ -9,9 +9,9 @@ stateDiagram-v2
     [*] --> NEW
     NEW --> INTAKE_IN_PROGRESS: TrioIntakeAgent\nprofile creation
     INTAKE_IN_PROGRESS --> INTAKE_COMPLETE: TrioIntakeAgent
-    INTAKE_COMPLETE --> ASSESSMENT_IN_PROGRESS: TrioAssessmentAgent
-    ASSESSMENT_IN_PROGRESS --> ASSESSMENT_COMPLETE: TrioAssessmentAgent\nstyle selection
-    ASSESSMENT_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent
+    INTAKE_COMPLETE --> ASSESSMENT_IN_PROGRESS: Backend assessment job
+    ASSESSMENT_IN_PROGRESS --> ASSESSMENT_COMPLETE: Backend assessment job
+    ASSESSMENT_COMPLETE --> THERAPY_IN_PROGRESS: Workflow step (select therapy style)
     THERAPY_IN_PROGRESS --> REFLECTION_IN_PROGRESS: TrioReflectionAgent
     REFLECTION_IN_PROGRESS --> PLAN_COMPLETE: TrioReflectionAgent
     PLAN_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nnext session
@@ -32,21 +32,24 @@ sequenceDiagram
     participant DB
 
     User->>UI: Launch client
-    UI->>HTTP: GET /api/user/status?user_id=...
+    UI->>HTTP: POST /api/user/register (CreateUserProfileRequestDTO)
+    HTTP->>Orchestrator: create_user_profile + start_session
+    HTTP-->>UI: UserRegisterResponseDTO (session + workflow_next_action)
+    UI->>HTTP: GET /api/user/status?user_id=...&session_id=...
     HTTP->>Orchestrator: get_user_state
     HTTP-->>UI: workflow_state payload
 
-    UI->>HTTP: POST /api/workflow/next-action (WorkflowNextActionRequest)
-    HTTP-->>UI: WorkflowNextActionResponse
+    UI->>HTTP: GET /api/workflow/next?user_id=...&session_id=... (WorkflowNextActionDTO)
+    HTTP-->>UI: WorkflowNextActionDTO
 
     UI->>WS: Connect /ws?user_id=...
     WS-->>UI: connected (user_id, status)
 
-    UI->>WS: session_request {session_type}
-    WS->>Orchestrator: start_session
+    WS->>Orchestrator: ensure_session
     Orchestrator->>Agents: instantiate agent for workflow state
     Orchestrator->>DB: save Session
     WS-->>UI: session_started (SessionInfo)
+    WS-->>UI: workflow_next_action (WorkflowNextActionDTO)
 
     UI->>WS: chat_message {message}
     WS->>Orchestrator: process_message
@@ -59,7 +62,7 @@ sequenceDiagram
     WS->>Orchestrator: end_session
     Orchestrator->>DB: finalize session + update workflow state
 
-    UI->>HTTP: GET /api/sessions/{id} (SessionDTO)
+    UI->>HTTP: GET /api/sessions/{id}?user_id=...&session_id=... (SessionDTO)
     HTTP->>DB: fetch session transcript
     HTTP-->>UI: SessionDTO
 ```
@@ -74,21 +77,21 @@ Notes:
 | --- | --- | --- | --- |
 | `GET /api/version` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
 | `POST /api/version/check` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
-| `GET /api/user/status` | Yes | Yes | Workflow state polling. Source: `src/psychoanalyst_app/api/user_routes.py`. |
-| `GET /api/user/profile` | Yes | No | Web loads profile for forms. Source: `src/psychoanalyst_app/api/user_routes.py`. |
-| `POST /api/user/profile` | Yes | Yes | Console creates minimal profile during onboarding. Source: `src/psychoanalyst_app/api/user_routes.py`. |
-| `PATCH /api/user/profile` | Yes | No | Web updates profile. Source: `src/psychoanalyst_app/api/user_routes.py`. |
-| `POST /api/workflow/next-action` | Yes | Yes | Drives workflow navigation. Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
-| `GET /api/sessions?user_id=...` | Yes | No | Web session history. Source: `src/psychoanalyst_app/api/session_routes.py`. |
-| `GET /api/sessions/{id}` | Yes | No | Web transcript views. Source: `src/psychoanalyst_app/api/session_routes.py`. |
-| `POST /api/sessions` | Yes | No | Web starts sessions from dashboard. Source: `src/psychoanalyst_app/api/session_routes.py`. |
-| `POST /api/sessions/{id}/extend` | Yes | No | Web session extension control. Source: `src/psychoanalyst_app/api/session_routes.py`. |
-| `GET /api/sessions/{id}/timer` | No | Yes | Console timer command (`/timer`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
-| `GET /api/therapy/styles` | Yes | No | Web style selection UI. Source: `src/psychoanalyst_app/api/therapy_routes.py`. |
-| `GET /api/therapy/plan?user_id=...` | Yes | No | Web therapy plan view. Source: `src/psychoanalyst_app/api/therapy_routes.py`. |
-| `POST /api/therapy/plan` | Yes | No | Web style selection / plan creation. Source: `src/psychoanalyst_app/api/therapy_routes.py`. |
+| `GET /api/user/status?user_id=...&session_id=...` | Yes | Yes | Workflow state polling (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `POST /api/user/register` | Yes | Yes | Explicit profile creation/login step; returns session + workflow action. Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `GET /api/user/profile?user_id=...&session_id=...` | Yes | No | Web loads profile for forms (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `PATCH /api/user/profile` | Yes | No | Web updates profile (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `GET /api/workflow/next?user_id=...&session_id=...` | Yes | Yes | Provides the latest `WorkflowNextActionDTO` (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
+| `POST /api/workflow/complete_profile` | Yes | Yes | Completes the profile step and returns a new action (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
+| `POST /api/workflow/select_therapy_style` | Yes | Yes | Stores the selected style and advances the workflow (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
+| `GET /api/sessions?user_id=...&session_id=...` | Yes | No | Web session history (requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
+| `GET /api/sessions/{id}?user_id=...&session_id=...` | Yes | No | Web transcript views (requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
+| `POST /api/sessions` | Yes | No | Backend derives session type from workflow state. Source: `src/psychoanalyst_app/api/session_routes.py`. |
+| `POST /api/sessions/{id}/extend` | Yes | No | Web session extension control (requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
+| `GET /api/sessions/{id}/timer` | No | Yes | Console timer command (`/timer`, requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
+| `GET /api/therapy/styles?user_id=...&session_id=...` | Yes | No | Web style selection UI (requires `session_id`). Source: `src/psychoanalyst_app/api/therapy_routes.py`. |
+| `GET /api/therapy/plan?user_id=...&session_id=...` | Yes | No | Web therapy plan view (requires `session_id`). Source: `src/psychoanalyst_app/api/therapy_routes.py`. |
 | `WS /ws?user_id=...` | Yes | Yes | WebSocket connection entry point. Source: `src/psychoanalyst_app/api/ws_handler.py`. |
-| `session_request` | Yes | Yes | Starts a session over WebSocket. Source: `src/psychoanalyst_app/api/ws_handler.py`. |
 | `chat_message` | Yes | Yes | User messages over WebSocket. Source: `src/psychoanalyst_app/api/ws_handler.py`. |
 | `end_session` | Yes | Yes | Ends session over WebSocket. Source: `src/psychoanalyst_app/api/ws_handler.py`. |
 | `connected` | Yes | Yes | Server acknowledgment event. Source: `src/psychoanalyst_app/utils/ws_messages.py`. |
@@ -98,11 +101,14 @@ Notes:
 ## Client Responsibilities
 
 - Include `user_id` on HTTP requests (query param for GETs, JSON body for POST/PUT/PATCH).
-- Handle `WorkflowNextActionResponse` to route the user to `/profile`, `/intake`, `/assessment`, or `/session/new`.
-- For WebSocket sessions, always issue `session_request` before any `chat_message`.
+- Include `session_id` on all post user_id HTTP requests after the first `session_started`.
+- Register via `POST /api/user/register` before opening a WebSocket connection.
+- Handle `WorkflowNextActionDTO` (and its `required_action`) to decide whether to show onboarding forms or start/resume sessions.
+- For WebSocket sessions, wait for `session_started` before sending `chat_message`.
+- Reconnect the WebSocket to rebind a session if the client needs a new session.
 - Stream `chat_response_chunk` messages and treat `is_complete=true` as end-of-response.
 - Use `end_session` to close a session cleanly; the server updates workflow state.
-- Console UI can call `GET /api/sessions/{id}/timer` to display session time remaining.
+- Console UI can call `GET /api/sessions/{id}/timer` with `session_id` to display session time remaining.
 
 ## Journey Stages
 
@@ -134,15 +140,15 @@ The user journey is defined by a series of `WorkflowState` transitions.
 
 - **Purpose**: Analyze the intake session to recommend suitable therapy styles and allow the user to choose their preferred approach.
 - **Workflow State**: `ASSESSMENT_IN_PROGRESS` -> `ASSESSMENT_COMPLETE`
-- **Responsible Agent**: `TrioAssessmentAgent`
+- **Responsible Agent**: Backend assessment job (no interactive assessment session).
 - **Key Activities**:
   - Analyzes intake transcript against available therapy styles.
   - Generates `TherapyStyleRecommendation`s with explanations.
-  - Presents recommendations to the user.
-  - Processes user selection.
+  - Emits recommendations via WebSocket while clients show a wait state.
+  - Users select a style via `POST /api/workflow/select_therapy_style`.
 - **Outputs**:
   - `TherapyStyleRecommendation`: Presented to user (ephemeral/metadata).
-  - `TherapyPlan`: Initial plan created with the selected style.
+  - `TherapyPlan`: Initial plan created by the planning agent using the intake transcript + selected style.
   - **Storage**: Database (`db_service.save_therapy_plan`).
 
 ### 4. Therapy Sessions
