@@ -132,6 +132,7 @@ class TrioReflectionAgent:
         session = Session(
             session_id=context.session_id,
             user_id=context.user_profile.user_id,
+            plan_id=context.therapy_plan.plan_id if context.therapy_plan else None,
             timestamp=context.session_start_time,
             transcript=context.message_history,
             topics=[],  # Topics are tracked in context but Session expects list[Topic]

@@ -13,11 +13,10 @@ from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
 
-DEFAULT_PROFILE_FIELDS = ["name", "primary_language", "session_mode"]
+DEFAULT_PROFILE_FIELDS = ["name", "primary_language"]
 DEFAULT_PROFILE_PROMPT = "Complete your profile so we can tailor the next steps."
 DEFAULT_PROFILE_DEFAULTS = {
     "primary_language": "English",
-    "session_mode": "virtual",
 }
 
 
@@ -112,8 +111,6 @@ def _profile_defaults(profile: UserProfile | None) -> dict[str, str]:
             defaults["name"] = profile.name
         if profile.primary_language:
             defaults["primary_language"] = profile.primary_language
-        if profile.session_mode:
-            defaults["session_mode"] = profile.session_mode
 
     for key, value in DEFAULT_PROFILE_DEFAULTS.items():
         defaults.setdefault(key, value)

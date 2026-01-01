@@ -52,9 +52,10 @@ def load_json(payload: str | None, *, default: T) -> T:
 
 
 SESSION_COLUMNS = (
-    "session_id, user_id, timestamp, transcript, topics, "
-    "psychological_summary, dominant_affects, key_themes, "
-    "notable_interactions, interpretations, patient_reactions, enriched"
+    "session_id, user_id, plan_id, timestamp, transcript, topics, "
+    "session_summary, session_briefing, psychological_summary, "
+    "dominant_affects, key_themes, notable_interactions, "
+    "interpretations, patient_reactions, enriched"
 )
 
 THERAPY_PLAN_COLUMNS = (
@@ -80,9 +81,12 @@ def session_from_row(
     return model_cls(
         session_id=row["session_id"],
         user_id=row["user_id"],
+        plan_id=row["plan_id"],
         timestamp=iso_to_datetime(row["timestamp"]),
         transcript=transcript,
         topics=topics,
+        session_summary=row["session_summary"],
+        session_briefing=load_json(row["session_briefing"], default=None),
         psychological_summary=row["psychological_summary"],
         dominant_affects=load_json(row["dominant_affects"], default=[]),
         key_themes=load_json(row["key_themes"], default=[]),

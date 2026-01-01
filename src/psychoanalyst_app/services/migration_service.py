@@ -1,4 +1,3 @@
-import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -97,47 +96,13 @@ class MigrationService:
         """
         return [
             (1, self._migration_001_initial_schema),
-            (2, self._migration_002_add_briefing),
-            (4, self._migration_004_add_performance_indexes),
-            (5, self._migration_005_tiered_patient_information),
-            (6, self._migration_006_unify_treatment_plans),
-            (7, self._migration_007_add_session_enrichment_jobs),
-            (8, self._migration_008_add_user_profile_history),
-            (9, self._migration_009_profile_consolidation),
         ]
 
     def _migration_001_initial_schema(self, conn: sqlite3.Connection):
-        """Initial schema creation."""
+        """Create the full current schema for clean database resets."""
         cursor = conn.cursor()
 
-        # Create sessions table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                transcript TEXT NOT NULL,
-                topics TEXT
-            )
-        """
-        )
-
-        # Create therapy_plans table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS therapy_plans (
-                plan_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                plan_details TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                selected_therapy_style TEXT
-            )
-        """
-        )
-        # Create user_profiles table
+        # Core user profiles.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_profiles (
@@ -150,6 +115,7 @@ class MigrationService:
                 primary_language TEXT NOT NULL DEFAULT 'English',
                 profession TEXT,
                 status TEXT NOT NULL,
+                plan_id TEXT,
                 parents TEXT,
                 siblings TEXT,
                 family_atmosphere TEXT,
@@ -161,7 +127,6 @@ class MigrationService:
                 social_context TEXT,
                 current_situation TEXT,
                 preferred_school TEXT,
-                session_mode TEXT NOT NULL DEFAULT 'virtual',
                 boundary_notes TEXT,
                 frame_notes TEXT,
                 created_at TEXT NOT NULL,
@@ -170,103 +135,50 @@ class MigrationService:
         """
         )
 
-    def _migration_002_add_briefing(self, conn: sqlite3.Connection):
-        """Add session_briefing column to therapy_plans."""
-        cursor = conn.cursor()
-
-        # Check if column exists first (idempotency)
-        cursor.execute("PRAGMA table_info(therapy_plans)")
-        columns = {col[1] for col in cursor.fetchall()}
-
-        if "session_briefing" not in columns:
-            cursor.execute(
-                """
-                ALTER TABLE therapy_plans
-                ADD COLUMN session_briefing TEXT
+        # Sessions (with Tier 2 enrichment fields).
+        cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                plan_id TEXT,
+                timestamp TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                topics TEXT,
+                session_summary TEXT,
+                session_briefing TEXT,
+                psychological_summary TEXT,
+                dominant_affects TEXT,
+                key_themes TEXT,
+                notable_interactions TEXT,
+                interpretations TEXT,
+                patient_reactions TEXT,
+                enriched INTEGER DEFAULT 0
             )
-
-    def _migration_004_add_performance_indexes(self, conn: sqlite3.Connection):
-        """Add performance indexes for frequently queried columns."""
-        cursor = conn.cursor()
-
-        # Index on user_profiles for status lookups
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_user_profiles_status
-            ON user_profiles(status)
         """
         )
 
-        # Index on sessions for user_id and timestamp lookups
+        # Therapy plans (full unified schema).
         cursor.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_sessions_user_timestamp
-            ON sessions(user_id, timestamp DESC)
+            CREATE TABLE IF NOT EXISTS therapy_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                plan_details TEXT NOT NULL,
+                initial_goals TEXT,
+                current_progress TEXT,
+                planned_interventions TEXT,
+                status TEXT DEFAULT 'active',
+                version INTEGER NOT NULL,
+                selected_therapy_style TEXT,
+                session_briefing TEXT
+            )
         """
         )
 
-        # Index on sessions for session_id lookups (if not already primary key indexed)
-        # Note: Primary key already creates an index, but adding explicit index for joins
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_sessions_user_id
-            ON sessions(user_id)
-        """
-        )
-
-        # Index on therapy_plans for user_id and created_at lookups
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_created
-            ON therapy_plans(user_id, created_at DESC)
-        """
-        )
-
-        # Index on therapy_plans for user_id alone (for faster user plan lookups)
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_id
-            ON therapy_plans(user_id)
-        """
-        )
-
-        logger.info("Performance indexes created successfully")
-
-    def _migration_005_tiered_patient_information(self, conn: sqlite3.Connection):
-        """Add tiered patient information system tables and columns."""
-        cursor = conn.cursor()
-        # ========================================================================
-        # TIER 2: Extend Sessions Table with Enrichment Fields
-        # ========================================================================
-        # Check which columns already exist
-        cursor.execute("PRAGMA table_info(sessions)")
-        existing_columns = {col[1] for col in cursor.fetchall()}
-
-        # Add Tier 2 columns if they don't exist
-        tier2_columns = [
-            ("psychological_summary", "TEXT"),
-            ("dominant_affects", "TEXT"),  # JSON array
-            ("key_themes", "TEXT"),  # JSON array
-            ("notable_interactions", "TEXT"),
-            ("interpretations", "TEXT"),
-            ("patient_reactions", "TEXT"),
-            ("enriched", "INTEGER DEFAULT 0"),  # SQLite doesn't have BOOLEAN
-        ]
-
-        for column_name, column_type in tier2_columns:
-            if column_name not in existing_columns:
-                cursor.execute(
-                    f"""
-                    ALTER TABLE sessions
-                    ADD COLUMN {column_name} {column_type}
-                """
-                )
-                logger.info(f"Added column {column_name} to sessions table")
-
-        # ========================================================================
-        # TIER 3: Patient Analysis with Versioning
-        # ========================================================================
+        # Tier 3 analysis with versioning.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS patient_analysis (
@@ -286,127 +198,7 @@ class MigrationService:
         """
         )
 
-        # Create indexes for Tier 3
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_analysis_user_version
-            ON patient_analysis(user_id, version DESC)
-        """
-        )
-
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_analysis_created
-            ON patient_analysis(created_at)
-        """
-        )
-
-        # ========================================================================
-        # TIER 4: Treatment Plans
-        # ========================================================================
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS treatment_plans (
-                plan_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                plan_data TEXT NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'completed')),
-                created_at TEXT NOT NULL,
-                last_updated TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
-            )
-        """
-        )
-
-        # Create indexes for Tier 4
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_treatment_plans_user
-            ON treatment_plans(user_id)
-        """
-        )
-
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_treatment_plans_status
-            ON treatment_plans(status)
-        """
-        )
-
-        logger.info("Tiered patient information system tables created successfully")
-
-    def _migration_006_unify_treatment_plans(self, conn: sqlite3.Connection):
-        """Unify therapy/treatment plan storage into a single table."""
-        cursor = conn.cursor()
-
-        # Add Tier 4 columns to therapy_plans if missing
-        cursor.execute("PRAGMA table_info(therapy_plans)")
-        columns = {col[1] for col in cursor.fetchall()}
-
-        def add_column(name: str, definition: str):
-            if name not in columns:
-                cursor.execute(f"ALTER TABLE therapy_plans ADD COLUMN {name} {definition}")
-                columns.add(name)
-
-        add_column("initial_goals", "TEXT")
-        add_column("current_progress", "TEXT")
-        add_column("planned_interventions", "TEXT")
-        add_column("status", "TEXT DEFAULT 'active'")
-
-        # Ensure defaults for existing rows
-        cursor.execute(
-            "UPDATE therapy_plans SET initial_goals = '[\"Stabilize presenting concerns\"]' WHERE initial_goals IS NULL OR initial_goals = ''"
-        )
-        cursor.execute(
-            "UPDATE therapy_plans SET planned_interventions = '[\"Supportive listening\"]' WHERE planned_interventions IS NULL OR planned_interventions = ''"
-        )
-        cursor.execute(
-            "UPDATE therapy_plans SET current_progress = 'Baseline established' WHERE current_progress IS NULL OR current_progress = ''"
-        )
-        cursor.execute(
-            "UPDATE therapy_plans SET status = 'active' WHERE status IS NULL OR status = ''"
-        )
-
-        # Migrate any data from treatment_plans table if it exists
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='treatment_plans'"
-        )
-        if cursor.fetchone():
-            cursor.execute(
-                "SELECT plan_data, user_id FROM treatment_plans"
-            )
-            rows = cursor.fetchall()
-            for plan_data, user_id in rows:
-                try:
-                    data = json.loads(plan_data)
-                except json.JSONDecodeError:
-                    continue
-
-                initial_goals = json.dumps(data.get("initial_goals", []))
-                planned_interventions = json.dumps(data.get("planned_interventions", []))
-                current_progress = data.get("current_progress", "")
-                status = data.get("status", "active")
-
-                cursor.execute(
-                    """
-                    UPDATE therapy_plans
-                    SET initial_goals = ?,
-                        current_progress = ?,
-                        planned_interventions = ?,
-                        status = ?
-                    WHERE user_id = ?
-                    """,
-                    (initial_goals, current_progress, planned_interventions, status, user_id),
-                )
-
-            cursor.execute("DROP TABLE IF EXISTS treatment_plans")
-
-        logger.info("Therapy plan columns unified with Tier 4 data")
-
-    def _migration_007_add_session_enrichment_jobs(self, conn: sqlite3.Connection):
-        """Add session enrichment job queue for async Tier 2 enrichment."""
-        cursor = conn.cursor()
-
+        # Session enrichment jobs for async Tier 2 processing.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS session_enrichment_jobs (
@@ -423,118 +215,103 @@ class MigrationService:
             """
         )
 
+        # User profile history for audit trail.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_profile_history (
+                history_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                previous_profile_data TEXT NOT NULL,
+                new_profile_data TEXT NOT NULL,
+                change_summary TEXT,
+                created_at TEXT NOT NULL,
+                created_by_session TEXT,
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by_session) REFERENCES sessions(session_id) ON DELETE SET NULL
+            )
+            """
+        )
+
+        # Indexes.
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_status
+            ON user_profiles(status)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_timestamp
+            ON sessions(user_id, timestamp DESC)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+            ON sessions(user_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sessions_plan_id
+            ON sessions(plan_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_created
+            ON therapy_plans(user_id, created_at DESC)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_id
+            ON therapy_plans(user_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_plan_id
+            ON user_profiles(plan_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_user_version
+            ON patient_analysis(user_id, version DESC)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_created
+            ON patient_analysis(created_at)
+        """
+        )
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_user_status
             ON session_enrichment_jobs(user_id, status, updated_at DESC)
-            """
+        """
         )
-
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status_updated
             ON session_enrichment_jobs(status, updated_at ASC)
-            """
+        """
         )
-
-        logger.info("Session enrichment job queue table created successfully")
-
-    def _migration_008_add_user_profile_history(self, conn: sqlite3.Connection):
-        """Add audit trail for Tier 1 user profile updates."""
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_profile_history (
-                history_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                previous_profile_data TEXT NOT NULL,
-                new_profile_data TEXT NOT NULL,
-                change_summary TEXT,
-                created_at TEXT NOT NULL,
-                created_by_session TEXT,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_session) REFERENCES sessions(session_id) ON DELETE SET NULL
-            )
-            """
-        )
-
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_user_profile_history_user_created
             ON user_profile_history(user_id, created_at DESC)
-            """
-        )
-
-        logger.info("User profile history table created successfully")
-
-    def _migration_009_profile_consolidation(self, conn: sqlite3.Connection):
-        """Consolidate user profile storage into a flattened schema."""
-        cursor = conn.cursor()
-
-        cursor.execute("PRAGMA table_info(user_profiles)")
-        existing_columns = {col[1] for col in cursor.fetchall()}
-
-        new_columns = [
-            ("alias", "TEXT"),
-            ("data_of_birth", "TEXT"),
-            ("gender", "TEXT"),
-            ("cultural_background", "TEXT"),
-            ("primary_language", "TEXT NOT NULL DEFAULT 'English'"),
-            ("parents", "TEXT"),
-            ("siblings", "TEXT"),
-            ("family_atmosphere", "TEXT"),
-            ("significant_events", "TEXT"),
-            ("education", "TEXT"),
-            ("work_history", "TEXT"),
-            ("relationship_to_work", "TEXT"),
-            ("relationships", "TEXT"),
-            ("social_context", "TEXT"),
-            ("current_situation", "TEXT"),
-            ("preferred_school", "TEXT"),
-            ("session_mode", "TEXT NOT NULL DEFAULT 'virtual'"),
-            ("boundary_notes", "TEXT"),
-            ("frame_notes", "TEXT"),
-        ]
-
-        for column_name, column_type in new_columns:
-            if column_name not in existing_columns:
-                cursor.execute(
-                    f"ALTER TABLE user_profiles ADD COLUMN {column_name} {column_type}"
-                )
-
-        if "birthdate" in existing_columns and "data_of_birth" in existing_columns:
-            cursor.execute(
-                """
-                UPDATE user_profiles
-                SET data_of_birth = COALESCE(data_of_birth, birthdate)
-                """
-            )
-
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_profile_history (
-                history_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                previous_profile_data TEXT NOT NULL,
-                new_profile_data TEXT NOT NULL,
-                change_summary TEXT,
-                created_at TEXT NOT NULL,
-                created_by_session TEXT,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_session) REFERENCES sessions(session_id) ON DELETE SET NULL
-            )
-            """
+        """
         )
 
         cursor.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_user_profile_history_user_created
-            ON user_profile_history(user_id, created_at DESC)
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_status
+            ON user_profiles(status)
             """
         )
+        cursor.execute("PRAGMA foreign_keys=ON")
 
-        cursor.execute("DROP TABLE IF EXISTS patient_profiles")
-        cursor.execute("DROP TABLE IF EXISTS patient_profile_history")
-
-        logger.info("User profile consolidation migration applied")
+        logger.info("Removed session_mode from user_profiles")

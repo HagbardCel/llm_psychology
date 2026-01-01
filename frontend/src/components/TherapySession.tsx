@@ -127,7 +127,7 @@ export function TherapySession({
     };
 
     setSession(startedSession);
-    setIsSessionReady(false);
+    setIsSessionReady(true);
     setIsLoading(false);
   }, [isReadOnly]);
 
@@ -154,6 +154,11 @@ export function TherapySession({
         return;
       }
 
+      if (message.type === WS_MESSAGE_TYPES.SESSION_STARTED && message.data) {
+        handleSessionStarted(message.data as SessionStartedEvent);
+        return;
+      }
+
       if (message.type === WS_MESSAGE_TYPES.ERROR || message.error) {
         const errorMessage =
           message.error ||
@@ -166,7 +171,7 @@ export function TherapySession({
         setIsLoading(false);
       }
     },
-    [onAssessmentRecommendations]
+    [handleSessionStarted, onAssessmentRecommendations]
   );
 
   useEffect(() => {
@@ -204,8 +209,12 @@ export function TherapySession({
     if (isReadOnly) return;
     if (!isConnected) {
       setIsSessionReady(false);
+      return;
     }
-  }, [isConnected, isReadOnly]);
+    if (session?.status === SessionStatus.ACTIVE && !waitPrompt) {
+      setIsSessionReady(true);
+    }
+  }, [isConnected, isReadOnly, session, waitPrompt]);
 
   useEffect(() => {
     if (!effectiveSessionId) return;

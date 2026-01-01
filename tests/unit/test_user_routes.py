@@ -31,7 +31,6 @@ async def test_register_user_returns_session_and_action(trio_server):
                 "user_id": "register_user",
                 "name": "Register User",
                 "primary_language": "English",
-                "session_mode": "virtual",
             },
         )
 
@@ -56,7 +55,6 @@ async def test_profile_patch_rejects_status_update(trio_server):
         profession="Tester",
         status=UserStatus.INTAKE_IN_PROGRESS,
         primary_language="English",
-        session_mode="virtual",
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )

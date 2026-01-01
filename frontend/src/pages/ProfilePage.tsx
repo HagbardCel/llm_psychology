@@ -43,7 +43,6 @@ export function ProfilePage() {
     data_of_birth: '',
     profession: '',
     primary_language: 'English',
-    session_mode: 'virtual',
   });
 
   // Initialize form with user data when loaded
@@ -54,7 +53,6 @@ export function ProfilePage() {
         data_of_birth: user.data_of_birth || '',
         profession: user.profession || '',
         primary_language: user.primary_language || 'English',
-        session_mode: user.session_mode || 'virtual',
       });
     }
   }, [user]);
@@ -69,9 +67,6 @@ export function ProfilePage() {
     }
     if (!formData.primary_language.trim()) {
       newErrors.primary_language = 'Primary language is required';
-    }
-    if (!formData.session_mode.trim()) {
-      newErrors.session_mode = 'Session mode is required';
     }
 
     if (formData.data_of_birth) {
@@ -102,7 +97,6 @@ export function ProfilePage() {
         data_of_birth: formData.data_of_birth || undefined,
         profession: formData.profession || undefined,
         primary_language: formData.primary_language.trim(),
-        session_mode: formData.session_mode.trim(),
       };
 
       if (user) {
@@ -169,16 +163,6 @@ export function ProfilePage() {
           error={errors.primary_language}
           required
           disabled={isPending}
-        />
-
-        <FormField
-          label="Session Mode"
-          value={formData.session_mode}
-          onChange={(value) => setFormData({ ...formData, session_mode: value })}
-          error={errors.session_mode}
-          required
-          disabled={isPending}
-          helperText="Example: virtual or in_person"
         />
 
         <FormField

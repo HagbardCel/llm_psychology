@@ -38,25 +38,35 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
         cursor = conn.cursor()
         transcript_json = dump_messages(session.transcript)
         topics_json = dump_topics(session.topics)
+        session_briefing_json = (
+            dump_json(session.session_briefing) if session.session_briefing else None
+        )
 
         cursor.execute(
             """
             INSERT INTO sessions
-            (session_id, user_id, timestamp, transcript, topics)
-            VALUES (?, ?, ?, ?, ?)
+            (session_id, user_id, plan_id, timestamp, transcript, topics,
+             session_summary, session_briefing)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 user_id = excluded.user_id,
+                plan_id = excluded.plan_id,
                 timestamp = excluded.timestamp,
                 transcript = excluded.transcript,
-                topics = excluded.topics
+                topics = excluded.topics,
+                session_summary = excluded.session_summary,
+                session_briefing = excluded.session_briefing
             WHERE sessions.enriched = 0
         """,
             (
                 session.session_id,
                 session.user_id,
+                session.plan_id,
                 datetime_to_iso(session.timestamp),
                 transcript_json,
                 topics_json,
+                session.session_summary,
+                session_briefing_json,
             ),
         )
 
@@ -315,6 +325,49 @@ def _sync_update_session_tier2(conn, session_id: str, tier2_data: dict) -> bool:
             tier2_data.get("notable_interactions", ""),
             tier2_data.get("interpretations", ""),
             tier2_data.get("patient_reactions", ""),
+            session_id,
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+async def update_session_reflection(
+    executor: TrioSQLiteExecutor,
+    session_id: str,
+    session_summary: str | None,
+    session_briefing: dict | None,
+) -> bool:
+    """Persist reflection summary/briefing for a session."""
+    async with executor.connection() as conn:
+        return await executor.run_sync(
+            _sync_update_session_reflection,
+            conn,
+            session_id,
+            session_summary,
+            session_briefing,
+        )
+
+
+def _sync_update_session_reflection(
+    conn,
+    session_id: str,
+    session_summary: str | None,
+    session_briefing: dict | None,
+) -> bool:
+    cursor = conn.cursor()
+    session_briefing_json = (
+        dump_json(session_briefing) if session_briefing else None
+    )
+    cursor.execute(
+        """
+        UPDATE sessions
+        SET session_summary = ?, session_briefing = ?
+        WHERE session_id = ?
+        """,
+        (
+            session_summary,
+            session_briefing_json,
             session_id,
         ),
     )

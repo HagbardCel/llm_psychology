@@ -19,10 +19,13 @@ from psychoanalyst_app.models.http_models import (
     CreateUserProfileRequestDTO,
     PatchUserProfileRequestDTO,
     UpdateUserProfileRequestDTO,
+    UserLoginRequestDTO,
+    UserProfileListResponseDTO,
     UserRegisterResponseDTO,
     UserStatusResponseDTO,
     session_to_dto,
     user_profile_to_dto,
+    user_profile_summary_to_dto,
 )
 from psychoanalyst_app.orchestration.orchestrator_helpers import (
     session_type_for_workflow_state,
@@ -95,6 +98,53 @@ def create_user_routes(server) -> Blueprint:
         )
         return jsonify(response.model_dump(mode="json")), 201
 
+    @bp.route("/profiles", methods=["GET"])
+    async def list_user_profiles():
+        """List lightweight user profile summaries."""
+        profiles = await server.db_service.list_user_profiles()
+        response = UserProfileListResponseDTO(
+            profiles=[user_profile_summary_to_dto(profile) for profile in profiles]
+        )
+        return jsonify(response.model_dump(mode="json"))
+
+    @bp.route("/login", methods=["POST"])
+    async def login_user():
+        """Log in an existing profile and return a session + next action."""
+        data = await request.get_json() or {}
+        try:
+            login_request = UserLoginRequestDTO(**data)
+        except ValidationError as error:
+            return validation_error_response(error)
+
+        profile = await server.db_service.get_user_profile(login_request.user_id)
+        if not profile:
+            return jsonify({"error": "User profile not found"}), 404
+
+        workflow_state = await server.orchestrator.get_user_state(profile.user_id)
+        session_type = session_type_for_workflow_state(workflow_state)
+        session_info = await server.orchestrator.start_session(
+            profile.user_id,
+            session_type=session_type,
+            send_initial_message=False,
+        )
+        created_session = await server.db_service.get_session(session_info.session_id)
+        if not created_session:
+            logger.error(
+                "Session %s could not be retrieved after login",
+                session_info.session_id,
+            )
+            return jsonify({"error": "Failed to load created session"}), 500
+
+        action = await server.orchestrator.get_workflow_next_action(
+            profile.user_id,
+            session_id=session_info.session_id,
+        )
+        response = UserRegisterResponseDTO(
+            session=session_to_dto(created_session),
+            workflow_next_action=action,
+        )
+        return jsonify(response.model_dump(mode="json"))
+
     @bp.route("/profile", methods=["GET"])
     async def get_user_profile():
         """Get a user profile."""
@@ -158,7 +208,6 @@ def create_user_routes(server) -> Blueprint:
                     "social_context": update_request.social_context,
                     "current_situation": update_request.current_situation,
                     "preferred_school": update_request.preferred_school,
-                    "session_mode": update_request.session_mode,
                     "boundary_notes": update_request.boundary_notes,
                     "frame_notes": update_request.frame_notes,
                     "updated_at": datetime.now(),

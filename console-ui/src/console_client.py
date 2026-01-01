@@ -7,6 +7,7 @@ import trio
 from trio_websocket import open_websocket_url, ConnectionClosed
 import json
 import logging
+import uuid
 from typing import Optional, Dict, Any
 import httpx
 
@@ -32,7 +33,7 @@ class ConsoleClient:
         self,
         backend_url: str,
         websocket_url: str,
-        user_id: str,
+        user_id: str | None,
         output: ConsoleOutput,
     ):
         self.backend_url = backend_url.rstrip("/")
@@ -62,6 +63,7 @@ class ConsoleClient:
         self.latest_workflow_action: dict[str, Any] | None = None
         self.registered = False
         self.welcome_shown = False
+        self.current_profile: dict[str, Any] | None = None
 
     def _show_welcome_message(self) -> None:
         """Display chat instructions once per session."""
@@ -431,10 +433,161 @@ class ConsoleClient:
         self.output.log_input(user_input)
         return user_input
 
-    async def _register_user(self) -> bool:
-        """Register or refresh a user profile before opening a WebSocket."""
-        if self.registered and self.current_session_id:
-            return True
+    async def _fetch_profiles(self) -> list[dict[str, Any]] | None:
+        """Fetch profile summaries for login selection."""
+        try:
+            response = await self._api_request("GET", "/user/profiles")
+        except Exception as exc:
+            logger.error("Failed to fetch profiles: %s", exc)
+            return None
+
+        profiles = response.get("profiles")
+        if isinstance(profiles, list):
+            return profiles
+        return None
+
+    async def _select_or_create_profile(self) -> bool:
+        """Prompt the user to select an existing profile or create a new one."""
+        profiles = await self._fetch_profiles()
+
+        if profiles is None:
+            self.output.user_text(
+                "⚠️  Could not load existing profiles. Creating a new profile.",
+                flush=True,
+            )
+            return await self._create_new_profile()
+
+        if not profiles:
+            self.output.user_text(
+                "ℹ️  No profiles found. Creating a new profile.",
+                flush=True,
+            )
+            return await self._create_new_profile()
+
+        self.output.user_text("\n👤 Select a profile:", flush=True)
+        for idx, profile in enumerate(profiles, start=1):
+            name = profile.get("name") or "Unknown"
+            status = profile.get("status") or "unknown"
+            language = profile.get("primary_language") or "English"
+            self.output.user_text(
+                f"{idx}. {name} ({status}, {language})", flush=True
+            )
+
+        create_option = len(profiles) + 1
+        self.output.user_text(
+            f"{create_option}. Create new profile", flush=True
+        )
+
+        while True:
+            selection = await self._get_user_input(
+                "Enter the number for your choice: "
+            )
+            if not selection.isdigit():
+                self.output.user_text(
+                    "⚠️  Please enter a number from the list.", flush=True
+                )
+                continue
+
+            choice = int(selection)
+            if 1 <= choice <= len(profiles):
+                selected_profile = profiles[choice - 1]
+                selected_user_id = selected_profile.get("user_id")
+                if not selected_user_id:
+                    self.output.user_text(
+                        "⚠️  Selected profile is missing a user id. Try again.",
+                        flush=True,
+                    )
+                    continue
+                success = await self._login_existing_profile(
+                    selected_user_id, selected_profile
+                )
+                if success:
+                    name = selected_profile.get("name") or selected_user_id
+                    status = selected_profile.get("status") or "unknown"
+                    self.output.system(
+                        f"✅ Selected profile: {name} ({status})"
+                    )
+                return success
+
+            if choice == create_option:
+                return await self._create_new_profile()
+
+            self.output.user_text(
+                "⚠️  Selection out of range. Try again.", flush=True
+            )
+
+    async def _login_existing_profile(
+        self, user_id: str, profile_summary: dict[str, Any] | None = None
+    ) -> bool:
+        """Log in an existing user profile before opening a WebSocket."""
+        self.user_id = user_id
+        payload = {"user_id": user_id}
+
+        try:
+            response = await self._api_request(
+                "POST",
+                "/user/login",
+                json=payload,
+            )
+        except Exception as exc:
+            self.output.error(f"❌ Failed to login profile: {exc}")
+            return False
+
+        if response.get("error"):
+            self.output.error(f"❌ Login failed: {response['error']}")
+            return False
+
+        session = response.get("session") or {}
+        self.current_session_id = session.get("session_id")
+        if not self.current_session_id:
+            self.output.error("❌ Login did not return a session id.")
+            return False
+
+        self.latest_workflow_action = response.get("workflow_next_action")
+        self.registered = True
+
+        await self._load_profile_details(profile_summary)
+        self.output.user_text(
+            "✅ Logged in. Connecting to WebSocket...", flush=True
+        )
+        return True
+
+    async def _load_profile_details(
+        self, profile_summary: dict[str, Any] | None = None
+    ) -> None:
+        """Load full profile details for logging and defaults."""
+        if not self.user_id or not self.current_session_id:
+            return
+
+        try:
+            response = await self._api_request(
+                "GET",
+                "/user/profile",
+                params={
+                    "user_id": self.user_id,
+                    "session_id": self.current_session_id,
+                },
+            )
+            if response.get("error"):
+                self.output.user_text(
+                    f"⚠️  Could not load profile details: {response['error']}",
+                    flush=True,
+                )
+                self.current_profile = profile_summary
+                return
+            self.current_profile = response
+        except Exception as exc:
+            self.output.user_text(
+                f"⚠️  Could not load profile details: {exc}", flush=True
+            )
+            self.current_profile = profile_summary
+
+    async def _create_new_profile(self) -> bool:
+        """Create a new user profile before opening a WebSocket."""
+        if not self.user_id:
+            self.user_id = uuid.uuid4().hex
+            logger.info("Generated new user_id: %s", self.user_id)
+            self.output.system(f"ℹ️  Generated user_id: {self.user_id}")
 
         self.output.user_text(
             "\n📝 Let’s set up your profile before starting.", flush=True
@@ -446,16 +599,11 @@ class ConsoleClient:
             "Primary language [English]: ",
             default="English",
         )
-        session_mode = await self._get_user_input(
-            "Session mode [virtual]: ",
-            default="virtual",
-        )
 
         payload = {
             "user_id": self.user_id,
             "name": name,
             "primary_language": primary_language,
-            "session_mode": session_mode,
         }
 
         try:
@@ -479,6 +627,7 @@ class ConsoleClient:
             return False
         self.latest_workflow_action = response.get("workflow_next_action")
         self.registered = True
+        self.current_profile = response
         self.output.user_text(
             "✅ Profile registered. Connecting to WebSocket...", flush=True
         )
@@ -806,7 +955,7 @@ class ConsoleClient:
         async with httpx.AsyncClient() as http_client:
             self.http_client = http_client
 
-            if not await self._register_user():
+            if not await self._select_or_create_profile():
                 return
 
             # Connect to WebSocket and run with structured concurrency

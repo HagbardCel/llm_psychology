@@ -11,6 +11,7 @@ from psychoanalyst_app.models.data_models import (
     Session,
     TherapyPlan,
     UserProfile,
+    UserProfileSummary,
     UserStatus,
 )
 from psychoanalyst_app.services.db.codecs import datetime_to_iso, iso_to_datetime
@@ -239,6 +240,10 @@ class TrioDatabaseService:
             self.executor, user_id, iso_to_datetime
         )
 
+    async def list_user_profiles(self) -> list[UserProfileSummary]:
+        """List user profile summaries ordered by most recent update."""
+        return await users_repo.list_user_profiles(self.executor, iso_to_datetime)
+
     async def clear_all_data(self) -> bool:
         """
         Clear all data from all tables in the database.
@@ -316,6 +321,20 @@ class TrioDatabaseService:
         """
         return await sessions_repo.get_recent_sessions(
             self.executor, user_id, limit, enriched_only, iso_to_datetime
+        )
+
+    async def update_session_reflection(
+        self,
+        session_id: str,
+        session_summary: str | None,
+        session_briefing: dict[str, Any] | None,
+    ) -> bool:
+        """Persist reflection summary/briefing for a session."""
+        return await sessions_repo.update_session_reflection(
+            self.executor,
+            session_id,
+            session_summary,
+            session_briefing,
         )
 
     async def update_session_tier2(self, session_id: str, tier2_data: dict) -> bool:

@@ -24,6 +24,7 @@ These shapes are what all clients should assume on the wire.
 - `primary_language`: `string`
 - `profession`: `string | null`
 - `status`: `string` (enum value)
+- `plan_id`: `string | null`
 - `parents`: `string | null`
 - `siblings`: `string | null`
 - `family_atmosphere`: `string | null`
@@ -35,11 +36,23 @@ These shapes are what all clients should assume on the wire.
 - `social_context`: `string | null`
 - `current_situation`: `string | null`
 - `preferred_school`: `string | null`
-- `session_mode`: `string`
 - `boundary_notes`: `string | null`
 - `frame_notes`: `string | null`
 - `created_at`: `string` (ISO 8601)
 - `updated_at`: `string` (ISO 8601)
+
+### `UserProfileSummaryDTO`
+
+- `user_id`: `string`
+- `name`: `string`
+- `status`: `string` (enum value)
+- `primary_language`: `string`
+- `plan_id`: `string | null`
+- `updated_at`: `string` (ISO 8601)
+
+### `UserProfileListResponseDTO`
+
+- `profiles`: `UserProfileSummaryDTO[]`
 
 ### `MessageDTO`
 
@@ -57,9 +70,12 @@ These shapes are what all clients should assume on the wire.
 
 - `session_id`: `string`
 - `user_id`: `string`
+- `plan_id`: `string | null`
 - `timestamp`: `string` (ISO 8601)
 - `transcript`: `MessageDTO[]`
 - `topics`: `TopicDTO[]`
+- `session_summary`: `string | null`
+- `session_briefing`: `object | null`
 - `psychological_summary`: `string | null`
 - `dominant_affects`: `string[]`
 - `key_themes`: `string[]`
@@ -116,7 +132,6 @@ These shapes are what all clients should assume on the wire.
 - `social_context`: `string | null`
 - `current_situation`: `string | null`
 - `preferred_school`: `string | null`
-- `session_mode`: `string`
 - `boundary_notes`: `string | null`
 - `frame_notes`: `string | null`
 
@@ -141,9 +156,12 @@ These shapes are what all clients should assume on the wire.
 - `social_context`: `string | null`
 - `current_situation`: `string | null`
 - `preferred_school`: `string | null`
-- `session_mode`: `string`
 - `boundary_notes`: `string | null`
 - `frame_notes`: `string | null`
+
+### `UserLoginRequestDTO`
+
+- `user_id`: `string`
 
 ### `UserRegisterResponseDTO`
 
@@ -243,11 +261,21 @@ These shapes are what all clients should assume on the wire.
 - **400**: `{ "error": "User ID is required" }`
 - **404**: `{ "error": "User not found: <id>" }` (or equivalent)
 
+### `GET /api/user/profiles`
+
+- **200**: `UserProfileListResponseDTO`
+
 ### `POST /api/user/register`
 
 - Request: `CreateUserProfileRequestDTO`
 - **201**: `UserRegisterResponseDTO`
 - **400**: `{ "error": "<validation message>" }`
+
+### `POST /api/user/login`
+
+- Request: `UserLoginRequestDTO`
+- **200**: `UserRegisterResponseDTO`
+- **404**: `{ "error": "User profile not found" }`
 
 ### `GET /api/sessions?user_id=...&session_id=...`
 

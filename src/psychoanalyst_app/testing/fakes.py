@@ -129,7 +129,6 @@ class DeterministicLLMService:
                 },
                 "frame": {
                     "preferred_school": None,
-                    "session_mode": "virtual",
                     "boundary_notes": None,
                     "frame_notes": None,
                 },

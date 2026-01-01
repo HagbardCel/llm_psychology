@@ -205,7 +205,6 @@ def mock_llm_service_natural_flow():
                         },
                         "frame": {
                             "preferred_school": None,
-                            "session_mode": "virtual",
                             "boundary_notes": None,
                             "frame_notes": None,
                         },
@@ -357,7 +356,6 @@ def mock_llm_service_natural_flow():
                     },
                     "frame": {
                         "preferred_school": None,
-                        "session_mode": "virtual",
                         "boundary_notes": None,
                         "frame_notes": None,
                     },
@@ -524,7 +522,6 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                 "user_id": user_id,
                 "name": "TestUser",
                 "primary_language": "English",
-                "session_mode": "virtual",
             },
         )
         assert response.status_code == 201, response.text

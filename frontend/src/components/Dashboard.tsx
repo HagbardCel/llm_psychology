@@ -93,9 +93,22 @@ export const Dashboard = memo(function Dashboard() {
   if (!sessionId) {
     return (
       <PageContainer title="Dashboard" maxWidth="lg">
-        <Alert severity="warning">
-          No active session found. Please reconnect to start a session.
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          No active session found. Create or update your profile to start a session.
         </Alert>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Start a new session
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Set up your profile to begin intake and unlock the rest of your journey.
+            </Typography>
+            <Button variant="contained" size="large" onClick={() => navigate('/profile')}>
+              Continue
+            </Button>
+          </CardContent>
+        </Card>
       </PageContainer>
     );
   }

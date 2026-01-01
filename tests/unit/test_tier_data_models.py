@@ -491,7 +491,6 @@ class TestModelIntegration:
             siblings="Test siblings",
             education="PhD",
             current_situation="Test situation",
-            session_mode="in-person",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -506,4 +505,3 @@ class TestModelIntegration:
         assert restored.parents == "Test parents"
         assert restored.education == "PhD"
         assert restored.current_situation == "Test situation"
-        assert restored.session_mode == "in-person"

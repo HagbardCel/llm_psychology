@@ -31,7 +31,6 @@ def _complete_profile(user_id: str = "user-123") -> UserProfile:
         social_context=None,
         current_situation=None,
         preferred_school=None,
-        session_mode="virtual",
         boundary_notes=None,
         frame_notes=None,
         created_at=now,

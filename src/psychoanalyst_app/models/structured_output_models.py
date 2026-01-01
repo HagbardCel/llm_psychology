@@ -68,7 +68,6 @@ class AnalyticFramePatch(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     preferred_school: str | None = None
-    session_mode: str = "virtual"
     boundary_notes: str | None = Field(default=None, max_length=500)
     frame_notes: str | None = Field(default=None, max_length=500)
 
@@ -144,7 +143,6 @@ class StructuredUserProfileOutput(BaseModel):
     social_context: str | None = Field(default=None, max_length=500)
     current_situation: str | None = Field(default=None, max_length=1000)
     preferred_school: str | None = None
-    session_mode: str | None = None
     boundary_notes: str | None = Field(default=None, max_length=500)
     frame_notes: str | None = Field(default=None, max_length=500)
 

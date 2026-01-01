@@ -99,7 +99,6 @@ curl -X POST http://localhost:8000/api/user/register \
     "user_id": "user_abc123",
     "name": "John Doe",
     "primary_language": "English",
-    "session_mode": "virtual",
     "data_of_birth": "1990-01-01",
     "profession": "Engineer"
   }'

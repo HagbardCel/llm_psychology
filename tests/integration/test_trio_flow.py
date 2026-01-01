@@ -275,7 +275,6 @@ async def test_workflow_complete_profile_accepts_active_session(trio_server, tes
                 "session_id": session_info.session_id,
                 "name": "Test User",
                 "primary_language": "English",
-                "session_mode": "virtual",
             },
         )
 

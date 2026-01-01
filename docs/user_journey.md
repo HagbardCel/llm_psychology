@@ -32,9 +32,16 @@ sequenceDiagram
     participant DB
 
     User->>UI: Launch client
-    UI->>HTTP: POST /api/user/register (CreateUserProfileRequestDTO)
-    HTTP->>Orchestrator: create_user_profile + start_session
-    HTTP-->>UI: UserRegisterResponseDTO (session + workflow_next_action)
+    UI->>HTTP: GET /api/user/profiles
+    alt Existing profile selected
+        UI->>HTTP: POST /api/user/login (UserLoginRequestDTO)
+        HTTP->>Orchestrator: start_session
+        HTTP-->>UI: UserRegisterResponseDTO (session + workflow_next_action)
+    else New profile created
+        UI->>HTTP: POST /api/user/register (CreateUserProfileRequestDTO)
+        HTTP->>Orchestrator: create_user_profile + start_session
+        HTTP-->>UI: UserRegisterResponseDTO (session + workflow_next_action)
+    end
     UI->>HTTP: GET /api/user/status?user_id=...&session_id=...
     HTTP->>Orchestrator: get_user_state
     HTTP-->>UI: workflow_state payload
@@ -78,7 +85,9 @@ Notes:
 | `GET /api/version` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
 | `POST /api/version/check` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
 | `GET /api/user/status?user_id=...&session_id=...` | Yes | Yes | Workflow state polling (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `GET /api/user/profiles` | No | Yes | Console profile picker (no session required). Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `POST /api/user/register` | Yes | Yes | Explicit profile creation/login step; returns session + workflow action. Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `POST /api/user/login` | No | Yes | Login existing profile; returns session + workflow action. Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `GET /api/user/profile?user_id=...&session_id=...` | Yes | No | Web loads profile for forms (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `PATCH /api/user/profile` | Yes | No | Web updates profile (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `GET /api/workflow/next?user_id=...&session_id=...` | Yes | Yes | Provides the latest `WorkflowNextActionDTO` (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
@@ -102,7 +111,7 @@ Notes:
 
 - Include `user_id` on HTTP requests (query param for GETs, JSON body for POST/PUT/PATCH).
 - Include `session_id` on all post user_id HTTP requests after the first `session_started`.
-- Register via `POST /api/user/register` before opening a WebSocket connection.
+ - Create or login via `POST /api/user/register` or `POST /api/user/login` before opening a WebSocket connection.
 - Handle `WorkflowNextActionDTO` (and its `required_action`) to decide whether to show onboarding forms or start/resume sessions.
 - For WebSocket sessions, wait for `session_started` before sending `chat_message`.
 - Reconnect the WebSocket to rebind a session if the client needs a new session.

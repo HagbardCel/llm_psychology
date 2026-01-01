@@ -12,7 +12,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from psychoanalyst_app.models.api_models import WorkflowNextActionDTO
-from psychoanalyst_app.models.data_models import Session, TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import (
+    Session,
+    TherapyPlan,
+    UserProfile,
+    UserProfileSummary,
+    UserStatus,
+)
 from psychoanalyst_app.orchestration.models import WorkflowState
 
 
@@ -44,6 +50,7 @@ class UserProfileDTO(BaseHTTPModel):
     primary_language: str = "English"
     profession: str | None = None
     status: UserStatus
+    plan_id: str | None = None
     parents: str | None = None
     siblings: str | None = None
     family_atmosphere: str | None = None
@@ -55,20 +62,35 @@ class UserProfileDTO(BaseHTTPModel):
     social_context: str | None = None
     current_situation: str | None = None
     preferred_school: str | None = None
-    session_mode: str = "virtual"
     boundary_notes: str | None = None
     frame_notes: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
+class UserProfileSummaryDTO(BaseHTTPModel):
+    user_id: str
+    name: str
+    status: UserStatus
+    primary_language: str = "English"
+    plan_id: str | None = None
+    updated_at: datetime
+
+
+class UserProfileListResponseDTO(BaseHTTPModel):
+    profiles: list[UserProfileSummaryDTO]
+
+
 class SessionDTO(BaseHTTPModel):
     session_id: str
     user_id: str
+    plan_id: str | None = None
     timestamp: datetime
     transcript: list[MessageDTO] = Field(default_factory=list)
     topics: list[TopicDTO] = Field(default_factory=list)
 
+    session_summary: str | None = None
+    session_briefing: dict[str, Any] | None = None
     psychological_summary: str | None = None
     dominant_affects: list[str] = Field(default_factory=list)
     key_themes: list[str] = Field(default_factory=list)
@@ -154,9 +176,12 @@ class CreateUserProfileRequestDTO(BaseModel):
     social_context: str | None = None
     current_situation: str | None = None
     preferred_school: str | None = None
-    session_mode: str = Field(..., min_length=1)
     boundary_notes: str | None = None
     frame_notes: str | None = None
+
+
+class UserLoginRequestDTO(BaseModel):
+    user_id: str = Field(..., min_length=1)
 
 
 class WorkflowCompleteProfileRequestDTO(CreateUserProfileRequestDTO):
@@ -184,7 +209,6 @@ class UpdateUserProfileRequestDTO(BaseModel):
     social_context: str | None = None
     current_situation: str | None = None
     preferred_school: str | None = None
-    session_mode: str | None = None
     boundary_notes: str | None = None
     frame_notes: str | None = None
 
@@ -212,7 +236,6 @@ class PatchUserProfileRequestDTO(BaseModel):
     social_context: str | None = None
     current_situation: str | None = None
     preferred_school: str | None = None
-    session_mode: str | None = None
     boundary_notes: str | None = None
     frame_notes: str | None = None
 
@@ -230,6 +253,13 @@ class WorkflowSelectTherapyStyleRequestDTO(BaseModel):
 def user_profile_to_dto(profile: UserProfile) -> UserProfileDTO:
     """Convert internal user profile model to wire DTO."""
     return UserProfileDTO.model_validate(profile)
+
+
+def user_profile_summary_to_dto(
+    profile: UserProfileSummary,
+) -> UserProfileSummaryDTO:
+    """Convert internal profile summary model to wire DTO."""
+    return UserProfileSummaryDTO.model_validate(profile)
 
 
 def session_to_dto(session: Session) -> SessionDTO:

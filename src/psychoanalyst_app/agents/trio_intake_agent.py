@@ -437,7 +437,6 @@ class TrioIntakeAgent:
                 "social_context": extracted.context.social_context,
                 "current_situation": extracted.context.current_situation,
                 "preferred_school": extracted.frame.preferred_school,
-                "session_mode": extracted.frame.session_mode,
                 "boundary_notes": extracted.frame.boundary_notes,
                 "frame_notes": extracted.frame.frame_notes,
             }

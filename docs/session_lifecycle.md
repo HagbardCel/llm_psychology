@@ -11,14 +11,15 @@ The session begins when a client connects to the WebSocket endpoint (`/ws?user_i
 - **Entry Point:** WebSocket handler in `src/psychoanalyst_app/api/ws_handler.py`
   (registered by `TrioServer` in `src/psychoanalyst_app/trio_server.py`).
 - **User Check:** The system checks `trio_db_service` for an existing `UserProfile`.
-  - **Missing Profile:** The server sends an `error` event and closes the connection.
-  - **Requirement:** Clients must call `POST /api/user/register` before connecting to WS.
+- **Missing Profile:** The server sends an `error` event and closes the connection.
+- **Requirement:** Clients must call `POST /api/user/register` or `POST /api/user/login` before connecting to WS.
 
 ### 1.2. Session Start (Auto)
 
 On WebSocket connect, the server auto-creates or resumes the correct session
-based on the user's workflow state. Clients should reconnect if they need a
-fresh session binding.
+based on the user's workflow state. Session creation may also be triggered
+explicitly by `POST /api/user/login` or `POST /api/user/register` before the
+WebSocket handshake. Clients should reconnect if they need a fresh session binding.
 
 - **Action:** `TrioAgentOrchestrator.ensure_session_for_user(...)` is called.
 - **Session Creation:**

@@ -131,7 +131,6 @@ class AnalyticFrame(BaseModel):
     """Therapeutic frame and preferences."""
 
     preferred_school: str | None = Field(None, description="Preferred therapeutic approach if specified")
-    session_mode: str = Field(default="virtual", description="Session modality (virtual, in-person)")
     boundary_notes: str | None = Field(None, max_length=500, description="Special boundary considerations")
     frame_notes: str | None = Field(None, max_length=500, description="Other frame-related notes")
 
@@ -844,7 +843,6 @@ Extract the following information into structured format. Use null for any infor
 
 5. ANALYTIC FRAME:
    - preferred_school: Preferred therapeutic approach if mentioned
-   - session_mode: "virtual" or "in-person"
    - boundary_notes: Special considerations
    - frame_notes: Other notes
 

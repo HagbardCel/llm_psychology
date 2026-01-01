@@ -12,7 +12,6 @@ export interface UserProfileUpdate {
   data_of_birth?: string;
   profession?: string;
   primary_language?: string;
-  session_mode?: string;
 }
 
 export interface WorkflowProfileRequest extends UserProfileUpdate {

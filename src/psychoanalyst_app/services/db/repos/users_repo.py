@@ -8,18 +8,23 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import (
+    UserProfile,
+    UserProfileSummary,
+    UserStatus,
+)
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 
 logger = logging.getLogger(__name__)
 
 PROFILE_COLUMNS = (
     "user_id, name, alias, data_of_birth, gender, cultural_background, "
-    "primary_language, profession, status, parents, siblings, family_atmosphere, "
+    "primary_language, profession, status, plan_id, parents, siblings, family_atmosphere, "
     "significant_events, education, work_history, relationship_to_work, "
     "relationships, social_context, current_situation, preferred_school, "
-    "session_mode, boundary_notes, frame_notes, created_at, updated_at"
+    "boundary_notes, frame_notes, created_at, updated_at"
 )
+PROFILE_SUMMARY_COLUMNS = "user_id, name, status, primary_language, plan_id, updated_at"
 
 
 async def save_user_profile(
@@ -217,6 +222,7 @@ def _profile_from_row(
         primary_language=row["primary_language"] or "English",
         profession=row["profession"],
         status=UserStatus(row["status"]) if row["status"] else UserStatus.PROFILE_ONLY,
+        plan_id=row["plan_id"],
         parents=row["parents"],
         siblings=row["siblings"],
         family_atmosphere=row["family_atmosphere"],
@@ -228,7 +234,6 @@ def _profile_from_row(
         social_context=row["social_context"],
         current_situation=row["current_situation"],
         preferred_school=row["preferred_school"],
-        session_mode=row["session_mode"] or "virtual",
         boundary_notes=row["boundary_notes"],
         frame_notes=row["frame_notes"],
         created_at=iso_to_datetime(row["created_at"]),
@@ -250,6 +255,7 @@ def _profile_values(
         profile.primary_language or "English",
         profile.profession,
         profile.status.value if hasattr(profile.status, "value") else profile.status,
+        profile.plan_id,
         profile.parents,
         profile.siblings,
         profile.family_atmosphere,
@@ -261,9 +267,54 @@ def _profile_values(
         profile.social_context,
         profile.current_situation,
         profile.preferred_school,
-        profile.session_mode or "virtual",
         profile.boundary_notes,
         profile.frame_notes,
         datetime_to_iso(profile.created_at),
         datetime_to_iso(profile.updated_at),
+    )
+
+
+async def list_user_profiles(
+    executor: TrioSQLiteExecutor,
+    iso_to_datetime: Callable[[str], datetime],
+) -> list[UserProfileSummary]:
+    """Fetch profile summaries ordered by most recent update."""
+    async with executor.connection(row_factory=sqlite3.Row) as conn:
+        return await executor.run_sync(
+            _sync_list_user_profiles, conn, iso_to_datetime
+        )
+
+
+def _sync_list_user_profiles(
+    conn: sqlite3.Connection,
+    iso_to_datetime: Callable[[str], datetime],
+) -> list[UserProfileSummary]:
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT {PROFILE_SUMMARY_COLUMNS}
+            FROM user_profiles
+            ORDER BY updated_at DESC
+            """
+        )
+        rows = cursor.fetchall() or []
+        conn.commit()
+        return [_profile_summary_from_row(row, iso_to_datetime) for row in rows]
+    except Exception as exc:  # pragma: no cover
+        logger.error("Error listing user profiles: %s", exc, exc_info=True)
+        return []
+
+
+def _profile_summary_from_row(
+    row: sqlite3.Row,
+    iso_to_datetime: Callable[[str], datetime],
+) -> UserProfileSummary:
+    return UserProfileSummary(
+        user_id=row["user_id"],
+        name=row["name"],
+        status=UserStatus(row["status"]) if row["status"] else UserStatus.PROFILE_ONLY,
+        primary_language=row["primary_language"] or "English",
+        plan_id=row["plan_id"],
+        updated_at=iso_to_datetime(row["updated_at"]),
     )

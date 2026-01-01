@@ -63,6 +63,7 @@ Defined in `src/psychoanalyst_app/models/data_models.py`.
 | primary_language | str | Defaults to `English`. |
 | profession | str or null | Optional. |
 | status | UserStatus | Workflow state persisted to DB. |
+| plan_id | str or null | Latest linked therapy plan. |
 | parents | str or null | Tier 1 profile. |
 | siblings | str or null | Tier 1 profile. |
 | family_atmosphere | str or null | Tier 1 profile. |
@@ -74,7 +75,6 @@ Defined in `src/psychoanalyst_app/models/data_models.py`.
 | social_context | str or null | Tier 1 profile. |
 | current_situation | str or null | Tier 1 profile. |
 | preferred_school | str or null | Preferred therapy style. |
-| session_mode | str | Defaults to `virtual`. |
 | boundary_notes | str or null | Optional. |
 | frame_notes | str or null | Optional. |
 | created_at | datetime | ISO 8601 in storage. |
@@ -86,9 +86,12 @@ Defined in `src/psychoanalyst_app/models/data_models.py`.
 | --- | --- | --- |
 | session_id | str | Primary identifier. |
 | user_id | str | Foreign key to `user_profiles`. |
+| plan_id | str or null | Links session to active therapy plan. |
 | timestamp | datetime | Session start time. |
 | transcript | list[Message] | JSON array in storage. |
 | topics | list[Topic] | JSON array in storage. |
+| session_summary | str or null | Reflection summary persisted after session. |
+| session_briefing | dict or null | Session briefing JSON for resumption. |
 | psychological_summary | str or null | Tier 2 enrichment. |
 | dominant_affects | list[str] | JSON array in storage. |
 | key_themes | list[str] | JSON array in storage. |
@@ -229,6 +232,7 @@ erDiagram
 - `sessions`
   - Stores `Session` transcripts and Tier 2 enrichment data.
   - `transcript` and `topics` are JSON blobs.
+  - `session_briefing` is stored as JSON for session resumption.
   - `dominant_affects` and `key_themes` are JSON arrays.
   - Enriched sessions are immutable (updates blocked once `enriched = 1`).
 - `therapy_plans`
@@ -241,9 +245,6 @@ erDiagram
   - `superseded_by` is a self-referential pointer to the next analysis version.
 - `session_enrichment_jobs`
   - Queue for Tier 2 enrichment workers (status, attempts, errors).
-- `treatment_plans` (legacy)
-  - Created by older migrations and dropped by migration 006; kept here
-    only for historical databases.
 
 JSON serialization helpers live in
 `src/psychoanalyst_app/services/db_serialization.py`.

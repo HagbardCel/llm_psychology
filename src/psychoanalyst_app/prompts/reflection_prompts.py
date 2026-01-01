@@ -454,7 +454,7 @@ Return JSON with this structure:
   "family": {{ "parents": null, "siblings": null, "family_atmosphere": null, "significant_events": null }},
   "history": {{ "education": null, "work_history": null, "relationship_to_work": null }},
   "context": {{ "relationships": null, "social_context": null, "current_situation": null }},
-  "frame": {{ "preferred_school": null, "session_mode": null, "boundary_notes": null, "frame_notes": null }}
+  "frame": {{ "preferred_school": null, "boundary_notes": null, "frame_notes": null }}
 }}
 
 IMPORTANT:

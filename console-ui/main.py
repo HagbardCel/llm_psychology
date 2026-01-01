@@ -9,7 +9,6 @@ import sys
 import os
 import trio
 import logging
-import uuid
 
 # Import directly from the package
 from src.console_client import ConsoleClient
@@ -77,9 +76,10 @@ async def main():
                 "Continuing anyway (use at your own risk)..."
             )
 
-        user_id = os.getenv("USER_ID") or uuid.uuid4().hex
-        logger.info("Using user_id: %s", user_id)
-        output.system(f"ℹ️  Using user_id: {user_id}")
+        user_id = os.getenv("USER_ID")
+        if user_id:
+            logger.info("Using user_id from environment: %s", user_id)
+            output.system(f"ℹ️  Using user_id from env: {user_id}")
 
         # Initialize console client
         client = ConsoleClient(

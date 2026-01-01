@@ -337,7 +337,6 @@ async def test_orchestrator_process_message_new_user(orchestrator):
             "user_id": user_id,
             "name": "John Doe",
             "primary_language": "English",
-            "session_mode": "virtual",
         }
     )
 
@@ -374,12 +373,11 @@ async def test_orchestrator_concurrent_processing(orchestrator):
 
         await orchestrator.create_user_profile(
             {
-                "user_id": user_id,
-                "name": f"User {user_num}",
-                "primary_language": "English",
-                "session_mode": "virtual",
-            }
-        )
+            "user_id": user_id,
+            "name": f"User {user_num}",
+            "primary_language": "English",
+        }
+    )
 
         async for chunk in orchestrator.process_message(
             user_id, f"User {user_num}", session_id=None
@@ -445,7 +443,6 @@ async def test_full_orchestration_flow(orchestrator):
             "user_id": user_id,
             "name": "Alice Smith",
             "primary_language": "English",
-            "session_mode": "virtual",
         }
     )
 

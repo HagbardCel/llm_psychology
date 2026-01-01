@@ -34,7 +34,7 @@ Reference: `docs/assessments/project/CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.m
 - **Workflow transitions**: the orchestrator should perform all workflow transitions; helper utilities should never advance workflow.
 - **Error surface**: `process_message` should log and re-raise only (no client error chunk).
 - **Structured agent outputs**: intake returns a structured user profile; planning returns a structured therapy plan; agents perform validation and return Pydantic instances; orchestrator performs lightweight type checks before persistence.
-- **Profile completeness gating**: orchestrator must not advance workflow until the user profile meets completeness criteria based on required fields + defaults (partial updates allowed). `primary_language` and `session_mode` count as required but should keep their defaults unless explicitly set.
+- **Profile completeness gating**: orchestrator must not advance workflow until the user profile meets completeness criteria based on required fields + defaults (partial updates allowed). `primary_language` counts as required but should keep its default unless explicitly set.
 
 ## Implementation Steps
 
@@ -54,7 +54,7 @@ Proposed changes:
 - Add validation utilities in `src/psychoanalyst_app/orchestration/agent_output_validators.py`:
   - `build_user_profile_output(payload) -> StructuredUserProfileOutput`
   - `build_therapy_plan_output(payload) -> StructuredTherapyPlanOutput`
-  - `is_profile_complete(profile: UserProfile) -> bool` (required fields + defaulted `primary_language` and `session_mode`)
+  - `is_profile_complete(profile: UserProfile) -> bool` (required fields + defaulted `primary_language`)
 - Agents call the builders to validate and return Pydantic instances (no double validation).
 - Keep validators focused on parsing, defaults, and field normalization (no transitions).
 
@@ -164,7 +164,7 @@ Tests:
 - Add unit tests verifying structured outputs:
   - intake returns `StructuredUserProfileOutput`
   - planning returns `StructuredTherapyPlanOutput`
-- Add a test that verifies the orchestrator does not advance workflow until profile completeness criteria are met (including defaulted `primary_language`/`session_mode`).
+- Add a test that verifies the orchestrator does not advance workflow until profile completeness criteria are met (including defaulted `primary_language`).
 
 ## Acceptance Criteria
 - `TrioAgentOrchestrator.process_message` is decomposed into helpers; behavior is unchanged for normal flows.

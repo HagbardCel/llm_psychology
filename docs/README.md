@@ -61,6 +61,16 @@ NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
 
 **See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation**
 
+### Database Reset
+For a clean setup, delete the SQLite DB file and restart the app. The baseline
+migration creates the full current schema in a single pass; legacy upgrades are
+not supported at the moment.
+
+### Agent Documentation
+
+Detailed agent contracts, triggers, and outputs live in
+[docs/agents/README.md](docs/agents/README.md).
+
 ### Type System (Backend ↔ Frontend)
 
 The application uses **automated type generation** to maintain type safety between Python backend and TypeScript frontend:

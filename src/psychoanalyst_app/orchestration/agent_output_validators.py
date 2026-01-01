@@ -23,7 +23,6 @@ def build_user_profile_output(payload: Any) -> StructuredUserProfileOutput:
         if isinstance(data_of_birth, str) and data_of_birth:
             normalized["data_of_birth"] = parse_date_of_birth(data_of_birth)
         normalized.setdefault("primary_language", "English")
-        normalized.setdefault("session_mode", "virtual")
         return StructuredUserProfileOutput.model_validate(normalized)
 
     return StructuredUserProfileOutput.model_validate(payload)
@@ -42,7 +41,5 @@ def is_profile_complete(profile: UserProfile) -> bool:
     if not name or name.lower() == "guest":
         return False
     if not profile.primary_language:
-        return False
-    if not profile.session_mode:
         return False
     return True

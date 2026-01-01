@@ -89,7 +89,6 @@ Be concise but preserve important clinical details. Extract only factual informa
 
 5. ANALYTIC FRAME (frame):
    - preferred_school: Preferred therapeutic approach if patient mentioned any (string or null)
-   - session_mode: "virtual" or "in-person" (default to "virtual")
    - boundary_notes: Any special boundary considerations patient mentioned (string up to 500 chars, or null)
    - frame_notes: Other therapy frame-related notes (string up to 500 chars, or null)
 
@@ -128,7 +127,6 @@ Return the data as JSON with this exact structure:
   }},
   "frame": {{
     "preferred_school": "string or null",
-    "session_mode": "virtual",
     "boundary_notes": "string or null",
     "frame_notes": "string or null"
   }}

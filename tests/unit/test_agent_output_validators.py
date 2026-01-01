@@ -13,7 +13,6 @@ def test_build_user_profile_output_defaults():
 
     assert output.name == "Alice"
     assert output.primary_language == "English"
-    assert output.session_mode == "virtual"
 
 
 def test_build_user_profile_output_parses_date():

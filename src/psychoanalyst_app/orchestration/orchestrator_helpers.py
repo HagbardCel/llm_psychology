@@ -108,6 +108,17 @@ async def persist_therapy_plan_from_output(
     success = await trio_db_service.save_therapy_plan(plan)
     if not success:
         raise ValueError("Failed to save therapy plan to database")
+
+    existing_profile = await trio_db_service.get_user_profile(user_id)
+    if existing_profile and existing_profile.plan_id != plan.plan_id:
+        updated_profile = existing_profile.model_copy(
+            update={"plan_id": plan.plan_id, "updated_at": datetime.now()}
+        )
+        await trio_db_service.update_user_profile(
+            updated_profile,
+            change_summary="Linked therapy plan",
+            created_by_session=None,
+        )
     return plan
 
 
@@ -534,9 +545,14 @@ class SessionLifecycleManager:
 
             session_id = str(uuid.uuid4())
 
+            trio_db_service = self.service_container.get("trio_db_service")
+            latest_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+            plan_id = latest_plan.plan_id if latest_plan else None
+
             session = Session(
                 session_id=session_id,
                 user_id=user_id,
+                plan_id=plan_id,
                 timestamp=datetime.now(),
                 transcript=[
                     Message(
@@ -547,8 +563,6 @@ class SessionLifecycleManager:
                 ],
                 topics=[],
             )
-
-            trio_db_service = self.service_container.get("trio_db_service")
             success = await trio_db_service.save_session(session)
 
             if not success:
@@ -864,6 +878,10 @@ class AgentResponseHandler:
             )
 
             metadata = agent_response.metadata or {}
+            reflection_payload = metadata.get("reflection")
+            session_summary = None
+            if isinstance(reflection_payload, dict):
+                session_summary = reflection_payload.get("session_summary")
             plan_output = metadata.get("therapy_plan_output")
             if isinstance(plan_output, dict):
                 plan_output = StructuredTherapyPlanOutput.model_validate(plan_output)
@@ -909,6 +927,24 @@ class AgentResponseHandler:
                         "Failed to persist reflection profile update for user %s",
                         user_id,
                     )
+
+            try:
+                success = await trio_db_service.update_session_reflection(
+                    session_id,
+                    session_summary,
+                    session_briefing,
+                )
+                if not success:
+                    logger.error(
+                        "Failed to persist reflection summary/briefing for session %s",
+                        session_id,
+                    )
+            except Exception:
+                logger.error(
+                    "Failed to persist reflection summary/briefing for session %s",
+                    session_id,
+                    exc_info=True,
+                )
 
             tier2_enrichment = metadata.get("tier2_enrichment")
             if isinstance(tier2_enrichment, dict):

@@ -143,7 +143,6 @@ async def maybe_update_tier1_profile(
             },
             "frame": {
                 "preferred_school": profile.preferred_school,
-                "session_mode": profile.session_mode,
                 "boundary_notes": profile.boundary_notes,
                 "frame_notes": profile.frame_notes,
             },
@@ -224,8 +223,6 @@ async def maybe_update_tier1_profile(
             frame = patch.frame
             if frame.preferred_school is not None and frame.preferred_school.strip():
                 updates["preferred_school"] = frame.preferred_school
-            if frame.session_mode is not None and frame.session_mode.strip():
-                updates["session_mode"] = frame.session_mode
             if frame.boundary_notes is not None and frame.boundary_notes.strip():
                 updates["boundary_notes"] = frame.boundary_notes
             if frame.frame_notes is not None and frame.frame_notes.strip():

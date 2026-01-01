@@ -258,7 +258,6 @@ def mock_llm_service_with_context():
                         },
                         "frame": {
                             "preferred_school": None,
-                            "session_mode": "virtual",
                             "boundary_notes": None,
                             "frame_notes": None,
                         },
@@ -415,7 +414,6 @@ def mock_llm_service_with_context():
                     },
                     "frame": {
                         "preferred_school": None,
-                        "session_mode": "virtual",
                         "boundary_notes": None,
                         "frame_notes": None,
                     },
@@ -639,13 +637,18 @@ async def test_complete_patient_journey_intake_to_therapy(
     user_id = f"console_test_{uuid.uuid4().hex[:8]}"
 
     async with httpx.AsyncClient() as client:
+        profiles_response = await client.get(
+            f"{test_server_websocket['url']}/api/user/profiles"
+        )
+        assert profiles_response.status_code == 200, profiles_response.text
+        assert profiles_response.json().get("profiles") == []
+
         response = await client.post(
             f"{test_server_websocket['url']}/api/user/register",
             json={
                 "user_id": user_id,
                 "name": "Fabian",
                 "primary_language": "English",
-                "session_mode": "virtual",
             },
         )
         assert response.status_code == 201, response.text
@@ -1135,7 +1138,6 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
                 "user_id": user_id,
                 "name": "Fabian",
                 "primary_language": "English",
-                "session_mode": "virtual",
             },
         )
         assert response.status_code == 201, response.text

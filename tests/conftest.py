@@ -113,7 +113,6 @@ def mock_llm_service():
                 },
                 "frame": {
                     "preferred_school": None,
-                    "session_mode": "virtual",
                     "boundary_notes": None,
                     "frame_notes": None,
                 },

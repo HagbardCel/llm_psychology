@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import TherapyPlan
+from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
 
 
 @pytest.fixture
@@ -243,25 +243,33 @@ async def test_get_latest_therapy_plan_with_briefing(
 @pytest.mark.unit
 async def test_database_migration_adds_session_briefing_column(test_db_service):
     """
-    Test that the database migration properly adds the session_briefing column.
+    Test that the database migration includes current schema columns.
 
-    This test verifies that the migration logic in _sync_initialize works correctly.
-    Note: In practice, with :memory: databases, the table is always created fresh,
-    so this test primarily validates the schema definition is correct.
+    This test verifies that the baseline schema definition is correct.
     """
     # The database is already initialized by the fixture
     # Verify we can query the column information
 
     async def check_column_exists():
-        """Check if session_briefing column exists using trio.to_thread."""
+        """Check if expected columns exist using trio.to_thread."""
 
         def _check():
             conn = test_db_service._create_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(therapy_plans)")
-                columns = {col[1] for col in cursor.fetchall()}
-                return "session_briefing" in columns
+                plan_columns = {col[1] for col in cursor.fetchall()}
+                cursor.execute("PRAGMA table_info(sessions)")
+                session_columns = {col[1] for col in cursor.fetchall()}
+                cursor.execute("PRAGMA table_info(user_profiles)")
+                profile_columns = {col[1] for col in cursor.fetchall()}
+                return (
+                    "session_briefing" in plan_columns
+                    and "plan_id" in session_columns
+                    and "session_summary" in session_columns
+                    and "session_briefing" in session_columns
+                    and "plan_id" in profile_columns
+                )
             finally:
                 conn.close()
 
@@ -270,5 +278,40 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
     has_column = await check_column_exists()
     assert (
         has_column is True
-    ), "session_briefing column should exist in therapy_plans table"
+    ), "Expected session/user profile columns should exist in the schema"
 
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_update_session_reflection_persists_summary_and_briefing(
+    test_db_service,
+):
+    """Ensure session summary and briefing persist to the session row."""
+    session = Session(
+        session_id="session_reflection_1",
+        user_id="user_reflection_1",
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="Session content",
+                timestamp=datetime.now(),
+            )
+        ],
+        topics=[],
+    )
+    assert await test_db_service.save_session(session)
+
+    briefing = {"briefing_type": "resumption", "generated_at": datetime.now().isoformat()}
+    summary = "Reflection summary text."
+    success = await test_db_service.update_session_reflection(
+        session.session_id,
+        summary,
+        briefing,
+    )
+    assert success is True
+
+    stored = await test_db_service.get_session(session.session_id)
+    assert stored is not None
+    assert stored.session_summary == summary
+    assert stored.session_briefing == briefing

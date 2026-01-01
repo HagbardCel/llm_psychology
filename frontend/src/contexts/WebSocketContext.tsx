@@ -37,6 +37,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const queryClient = useQueryClient();
   const [assessmentRecommendations, setAssessmentRecommendations] =
     useState<AssessmentRecommendationsEvent | null>(null);
+  const [lastSessionStarted, setLastSessionStarted] = useState<SessionStartedEvent | null>(
+    null
+  );
 
   const streamingHandlers = useRef<StreamingChunkCallback[]>([]);
   const sessionStartedHandlers = useRef<Array<(event: SessionStartedEvent) => void>>([]);
@@ -53,6 +56,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   const handleSessionStarted = useCallback((event: SessionStartedEvent) => {
     setCurrentSessionId(event.session_id);
+    setLastSessionStarted(event);
     sessionStartedHandlers.current.forEach((handler) => {
       handler(event);
     });
@@ -101,12 +105,15 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   const registerSessionStartedHandler = useCallback((handler: (event: SessionStartedEvent) => void) => {
     sessionStartedHandlers.current = [...sessionStartedHandlers.current, handler];
+    if (lastSessionStarted) {
+      handler(lastSessionStarted);
+    }
     return () => {
       sessionStartedHandlers.current = sessionStartedHandlers.current.filter(
         (candidate) => candidate !== handler
       );
     };
-  }, []);
+  }, [lastSessionStarted]);
 
   const registerWorkflowNextActionHandler = useCallback(
     (handler: (event: WorkflowNextActionEvent) => void) => {

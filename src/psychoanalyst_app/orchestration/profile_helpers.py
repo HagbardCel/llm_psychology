@@ -50,9 +50,6 @@ def merge_user_profile(
     primary_language = updates.get("primary_language") or (
         existing_profile.primary_language if existing_profile else "English"
     )
-    session_mode = updates.get("session_mode") or (
-        existing_profile.session_mode if existing_profile else "virtual"
-    )
 
     return UserProfile(
         user_id=user_id,
@@ -63,6 +60,7 @@ def merge_user_profile(
         gender=pick_optional("gender"),
         cultural_background=pick_optional("cultural_background"),
         primary_language=primary_language,
+        plan_id=pick_optional("plan_id"),
         parents=pick_optional("parents"),
         siblings=pick_optional("siblings"),
         family_atmosphere=pick_optional("family_atmosphere"),
@@ -74,7 +72,6 @@ def merge_user_profile(
         social_context=pick_optional("social_context"),
         current_situation=pick_optional("current_situation"),
         preferred_school=pick_optional("preferred_school"),
-        session_mode=session_mode,
         boundary_notes=pick_optional("boundary_notes"),
         frame_notes=pick_optional("frame_notes"),
         status=status,

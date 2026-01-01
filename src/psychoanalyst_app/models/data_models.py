@@ -31,6 +31,7 @@ class UserProfile(BaseModel):
     primary_language: str = "English"
     profession: str | None = None
     status: UserStatus = UserStatus.PROFILE_ONLY
+    plan_id: str | None = None
 
     parents: str | None = None
     siblings: str | None = None
@@ -45,11 +46,21 @@ class UserProfile(BaseModel):
     current_situation: str | None = None
 
     preferred_school: str | None = None
-    session_mode: str = "virtual"
     boundary_notes: str | None = None
     frame_notes: str | None = None
 
     created_at: datetime
+    updated_at: datetime
+
+
+class UserProfileSummary(BaseModel):
+    """Lightweight summary for profile listings."""
+
+    user_id: str
+    name: str
+    status: UserStatus = UserStatus.PROFILE_ONLY
+    primary_language: str = "English"
+    plan_id: str | None = None
     updated_at: datetime
 
 
@@ -75,9 +86,18 @@ class Session(BaseModel):
 
     session_id: str
     user_id: str
+    plan_id: str | None = None
     timestamp: datetime
     transcript: list[Message]
     topics: list[Topic] = Field(default_factory=list)
+    session_summary: str | None = Field(
+        None,
+        max_length=4000,
+        description="Reflection summary persisted after the session completes",
+    )
+    session_briefing: dict[str, Any] | None = Field(
+        None, description="Structured briefing generated for the next session"
+    )
 
     # Tier 2 enrichment fields (added by Reflection Agent)
     psychological_summary: str | None = Field(
@@ -202,7 +222,6 @@ class AnalyticFrame(BaseModel):
     """Therapeutic frame and preferences."""
 
     preferred_school: str | None = Field(None, description="Preferred therapeutic approach if specified")
-    session_mode: str = Field(default="virtual", description="Session modality (virtual, in-person)")
     boundary_notes: str | None = Field(None, max_length=500, description="Special boundary considerations")
     frame_notes: str | None = Field(None, max_length=500, description="Other frame-related notes")
 

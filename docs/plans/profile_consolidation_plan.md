@@ -44,7 +44,6 @@ Consolidate `user_profiles` and `patient_profiles` into a single, fully flattene
         
         # Frame
         preferred_school: str | None = None
-        session_mode: str = "virtual"
         boundary_notes: str | None = None
         frame_notes: str | None = None
         
@@ -87,7 +86,6 @@ Consolidate `user_profiles` and `patient_profiles` into a single, fully flattene
     - `social_context`: TEXT
     - `current_situation`: TEXT
     - `preferred_school`: TEXT
-    - `session_mode`: TEXT
     - `boundary_notes`: TEXT
     - `frame_notes`: TEXT
     - `created_at`: TEXT
