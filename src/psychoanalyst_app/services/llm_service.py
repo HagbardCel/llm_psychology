@@ -1,5 +1,7 @@
+import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import trio
@@ -12,6 +14,24 @@ from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.utils.trio_streaming import iter_in_thread
 
 logger = logging.getLogger(__name__)
+LLM_CALL_LOGGER_NAME = "llm_calls"
+
+
+def _get_llm_call_logger() -> logging.Logger:
+    llm_logger = logging.getLogger(LLM_CALL_LOGGER_NAME)
+    if llm_logger.handlers:
+        return llm_logger
+    if not getattr(llm_logger, "_llm_call_handler_configured", False):
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        handler = logging.FileHandler(logs_dir / "llm_calls.log", mode="a")
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        llm_logger.addHandler(handler)
+        llm_logger.setLevel(logging.INFO)
+        llm_logger.propagate = False
+        llm_logger._llm_call_handler_configured = True
+    return llm_logger
 
 
 class TrioRateLimiter:
@@ -115,6 +135,17 @@ class LLMService:
             self._rate_limiter = None
             logger.info("Rate limiting disabled")
 
+    def _log_llm_call(self, event: str, payload: dict[str, Any]) -> None:
+        llm_logger = _get_llm_call_logger()
+        record = {
+            "event": event,
+            "model": self.model_name,
+            **payload,
+        }
+        llm_logger.info(
+            json.dumps(record, ensure_ascii=True, sort_keys=True, default=str)
+        )
+
     async def _acquire_rate_limit(self) -> None:
         """Acquire rate limit token if rate limiting is enabled."""
         if self.rate_limit_enabled and self._rate_limiter is not None:
@@ -134,6 +165,14 @@ class LLMService:
             str: The LLM's response.
         """
         try:
+            self._log_llm_call(
+                "request",
+                {
+                    "call_type": "generate_response",
+                    "prompt": prompt,
+                    "context": context or [],
+                },
+            )
             if context:
                 # Convert context to LangChain message format
                 messages = []
@@ -151,12 +190,26 @@ class LLMService:
                 # Generate response
                 response = self.llm.invoke(messages)
                 logger.info(f"Generated LLM response for prompt: {prompt[:100]}...")
+                self._log_llm_call(
+                    "response",
+                    {
+                        "call_type": "generate_response",
+                        "response": response.content,
+                    },
+                )
                 return response.content
             else:
                 # Simple prompt without context
                 response = self.llm.invoke([HumanMessage(content=prompt)])
                 logger.info(
                     f"Generated LLM response for simple prompt: {prompt[:100]}..."
+                )
+                self._log_llm_call(
+                    "response",
+                    {
+                        "call_type": "generate_response",
+                        "response": response.content,
+                    },
                 )
                 return response.content
         except Exception as e:
@@ -195,6 +248,14 @@ class LLMService:
         await self._acquire_rate_limit()
 
         try:
+            self._log_llm_call(
+                "request",
+                {
+                    "call_type": "stream_response",
+                    "prompt": prompt,
+                    "context": context or [],
+                },
+            )
             messages = []
             if context:
                 for msg in context:
@@ -214,6 +275,13 @@ class LLMService:
                         yield chunk_text
 
             async for chunk in iter_in_thread(_iterator, buffer_size=3):
+                self._log_llm_call(
+                    "stream_chunk",
+                    {
+                        "call_type": "stream_response",
+                        "chunk": chunk,
+                    },
+                )
                 yield chunk
 
         except Exception as e:
@@ -241,12 +309,47 @@ class LLMService:
         # Import here to avoid hard dependency in module import order.
         from pydantic import BaseModel
 
+        schema_payload: dict[str, Any]
         if isinstance(schema, type) and issubclass(schema, BaseModel):
+            schema_payload = {"model": schema.__name__}
+            self._log_llm_call(
+                "request",
+                {
+                    "call_type": "generate_structured_output",
+                    "prompt": prompt,
+                    "schema": schema_payload,
+                },
+            )
             runnable = self.llm.with_structured_output(schema, method=method)
-            return runnable.invoke(prompt)
+            response = runnable.invoke(prompt)
+            self._log_llm_call(
+                "response",
+                {
+                    "call_type": "generate_structured_output",
+                    "response": response,
+                },
+            )
+            return response
 
+        schema_payload = {"schema": schema}
+        self._log_llm_call(
+            "request",
+            {
+                "call_type": "generate_structured_output",
+                "prompt": prompt,
+                "schema": schema_payload,
+            },
+        )
         runnable = self.llm.with_structured_output(schema, method=method)
-        return runnable.invoke(prompt)
+        response = runnable.invoke(prompt)
+        self._log_llm_call(
+            "response",
+            {
+                "call_type": "generate_structured_output",
+                "response": response,
+            },
+        )
+        return response
 
     def create_prompt_template(
         self, template: str, input_variables: list[str]
@@ -277,8 +380,23 @@ class LLMService:
             str: The LLM's response.
         """
         try:
+            self._log_llm_call(
+                "request",
+                {
+                    "call_type": "run_prompt_chain",
+                    "template": prompt_template.template,
+                    "inputs": inputs,
+                },
+            )
             chain = LLMChain(llm=self.llm, prompt=prompt_template)
             response = chain.run(**inputs)
+            self._log_llm_call(
+                "response",
+                {
+                    "call_type": "run_prompt_chain",
+                    "response": response,
+                },
+            )
             return response
         except Exception as e:
             import traceback

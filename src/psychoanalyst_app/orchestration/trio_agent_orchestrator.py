@@ -95,7 +95,7 @@ class TrioAgentOrchestrator:
             conversation_manager=self.conversation_manager,
             nursery=self.nursery,
             process_message=self.process_message,
-            run_reflection=self.response_handler.run_reflection,
+            run_reflection=self.response_handler.ensure_reflection_job,
             emit_next_action=self.emit_workflow_next_action,
         )
         self.response_handler.attach_session_callbacks(
@@ -323,6 +323,10 @@ class TrioAgentOrchestrator:
                 "workflow_next_action",
                 action.model_dump(mode="json"),
             )
+            if action.workflow_state == WorkflowState.REFLECTION_IN_PROGRESS.value:
+                await self.response_handler.ensure_reflection_job(
+                    user_id, resolved_session_id
+                )
             if action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE:
                 await self.response_handler.emit_assessment_recommendations(
                     resolved_session_id, user_id

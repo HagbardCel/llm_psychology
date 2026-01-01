@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 import httpx
 
 from .base_ui import BaseUI
+from .output import ConsoleOutput
 from .websocket_protocol import (
     ClientMessageTypes,
     ServerMessageTypes,
@@ -27,10 +28,17 @@ class ConsoleClient:
     Uses Trio for structured concurrency and automatic resource cleanup.
     """
 
-    def __init__(self, backend_url: str, websocket_url: str, user_id: str):
+    def __init__(
+        self,
+        backend_url: str,
+        websocket_url: str,
+        user_id: str,
+        output: ConsoleOutput,
+    ):
         self.backend_url = backend_url.rstrip("/")
         self.websocket_url = websocket_url
         self.user_id = user_id
+        self.output = output
 
         # HTTP session for API calls
         self.http_client: Optional[httpx.AsyncClient] = None
@@ -53,6 +61,23 @@ class ConsoleClient:
         self.pending_recommendations: list[dict[str, Any]] | None = None
         self.latest_workflow_action: dict[str, Any] | None = None
         self.registered = False
+        self.welcome_shown = False
+
+    def _show_welcome_message(self) -> None:
+        """Display chat instructions once per session."""
+        if self.welcome_shown:
+            return
+        self.welcome_shown = True
+        self.output.user_text(
+            "\n💬 You can now chat with your therapist.",
+            flush=True,
+        )
+        self.output.user_text(
+            "   Commands: /timer (show time), /quit (finish session), /exit (close console)",
+            flush=True,
+        )
+        self.output.user_text("=" * 60, flush=True)
+        self.output.user_text("", log=False)
 
     async def _websocket_receiver(self, ws):
         """Background task to receive and handle WebSocket messages."""
@@ -111,34 +136,33 @@ class ConsoleClient:
                 # Accumulate and display chunk
                 if not self.is_streaming:
                     # First chunk - start new message
-                    print("\n\033[94mTHERAPIST\033[0m: ", end="", flush=True)
+                    self.output.user_text(
+                        "\n\033[94mTHERAPIST\033[0m: ",
+                        end="",
+                        flush=True,
+                        log=False,
+                    )
                     self.is_streaming = True
                     self.current_message = ""
 
                 # Display chunk in real-time
-                print(chunk, end="", flush=True)
+                self.output.user_text(chunk, end="", flush=True, log=False)
                 self.current_message += chunk
             else:
                 # Streaming complete
                 if self.is_streaming:
-                    print()  # New line after complete message
+                    self.output.user_text("", log=False)  # New line after complete message
+                    full_message = self.current_message
                     self.is_streaming = False
                     self.current_message = ""
+                    if full_message:
+                        self.output.log_chat("therapist", full_message)
 
                 # If we were waiting for initial message, show welcome UI and signal ready
                 if self.waiting_for_initial_message:
                     self.waiting_for_initial_message = False
                     # Show welcome message AFTER therapist greeting completes
-                    print(
-                        "\n💬 You can now chat with your therapist.",
-                        flush=True,
-                    )
-                    print(
-                        "   Commands: /timer (show time), /quit (finish session), /exit (close console)",
-                        flush=True,
-                    )
-                    print("=" * 60, flush=True)
-                    print()  # Add blank line for better visibility
+                    self._show_welcome_message()
                     self.session_ready.set()
 
                 # Signal response complete for regular messages
@@ -157,6 +181,7 @@ class ConsoleClient:
         self.session_ready = trio.Event()
         # Always wait for the initial message before allowing user input.
         self.waiting_for_initial_message = True
+        self.welcome_shown = False
 
     async def _handle_connected(self, data: Dict[str, Any]):
         """Handle connection confirmation."""
@@ -164,23 +189,26 @@ class ConsoleClient:
         name = data.get("name", user_id)
         status = data.get("status", "unknown")
 
-        print(f"🔐 Connected as: {name} (user_id: {user_id})", flush=True)
+        self.output.system(f"🔐 Connected as: {name} (user_id: {user_id})")
         if status == "PROFILE_ONLY":
-            print(f"ℹ️  New user profile created", flush=True)
+            self.output.system("ℹ️  New user profile created")
 
     async def _handle_typing_start(self):
         """Handle therapist typing indicator."""
-        if not self.is_streaming:
-            print("\n💭 Therapist is typing...", end="\r")
+        if (
+            not self.is_streaming
+            and (self.waiting_for_response or self.waiting_for_initial_message)
+        ):
+            self.output.user_text("\n💭 Therapist is typing...", end="\r", flush=True)
 
     async def _handle_typing_stop(self):
         """Handle therapist stopped typing."""
         if not self.is_streaming:
-            print(" " * 30, end="\r")  # Clear typing indicator
+            self.output.user_text(" " * 30, end="\r", log=False)  # Clear typing indicator
 
     async def _handle_error(self, data: Dict[str, Any]):
         """Handle WebSocket errors."""
-        print(f"\n❌ Error: {data.get('message', data)}")
+        self.output.error(f"\n❌ Error: {data.get('message', data)}")
 
     async def _handle_assessment_recommendations(self, data: Dict[str, Any]):
         """Display assessment recommendations without interrupting the chat flow."""
@@ -190,21 +218,23 @@ class ConsoleClient:
             return
         self.pending_recommendations = recommendations
 
-        print("\n" + "=" * 60, flush=True)
-        print("🎯 ASSESSMENT RECOMMENDATIONS", flush=True)
-        print("=" * 60, flush=True)
+        self.output.user_text("\n" + "=" * 60, flush=True)
+        self.output.user_text("🎯 ASSESSMENT RECOMMENDATIONS", flush=True)
+        self.output.user_text("=" * 60, flush=True)
         for idx, rec in enumerate(recommendations, start=1):
             style = rec.get("style_id", f"option_{idx}")
             explanation = rec.get("explanation", "No explanation provided.")
             score = rec.get("score")
             if score is not None:
-                print(f"{idx}. {style} (score: {score:.2f})", flush=True)
+                self.output.user_text(
+                    f"{idx}. {style} (score: {score:.2f})", flush=True
+                )
             else:
-                print(f"{idx}. {style}", flush=True)
-            print(f"   {explanation}", flush=True)
-            print("---", flush=True)
+                self.output.user_text(f"{idx}. {style}", flush=True)
+            self.output.user_text(f"   {explanation}", flush=True)
+            self.output.user_text("---", flush=True)
 
-        print(
+        self.output.user_text(
             "To select a style, submit POST /api/workflow/select_therapy_style "
             "with the desired selected_therapy_style value.",
             flush=True,
@@ -216,12 +246,16 @@ class ConsoleClient:
         required_action = data.get("required_action")
         prompt = data.get("prompt")
         if required_action == "wait":
-            print(f"\n⏳ {prompt or 'Waiting for backend workflow...'}", flush=True)
+            self.output.user_text(
+                f"\n⏳ {prompt or 'Waiting for backend workflow...'}", flush=True
+            )
 
     async def _handle_session_ended(self, data: Dict[str, Any]):
         """Handle server-side session end notification."""
         reason = data.get("reason", "Session ended")
-        print(f"\n👋 {reason}. Exiting console client.", flush=True)
+        self.output.user_text(
+            f"\n👋 {reason}. Exiting console client.", flush=True
+        )
         self.session_end_requested = True
         self.current_session_id = None
         self.session_ready = trio.Event()
@@ -248,11 +282,18 @@ class ConsoleClient:
         """Display a message in the console."""
         role_display = role.upper()
         if role == "therapist":
-            print(f"\033[94m{role_display}\033[0m: {text}")  # Blue
+            self.output.user_text(
+                f"\033[94m{role_display}\033[0m: {text}", log=False
+            )  # Blue
         elif role == "user":
-            print(f"\033[92m{role_display}\033[0m: {text}")  # Green
+            self.output.user_text(
+                f"\033[92m{role_display}\033[0m: {text}", log=False
+            )  # Green
         else:
-            print(f"\033[93m{role_display}\033[0m: {text}")  # Yellow
+            self.output.user_text(
+                f"\033[93m{role_display}\033[0m: {text}", log=False
+            )  # Yellow
+        self.output.log_chat(role, text)
 
     async def _complete_profile(
         self,
@@ -260,7 +301,7 @@ class ConsoleClient:
         defaults: dict[str, Any] | None = None,
     ):
         """Prompt the user for required profile details and submit them via the API."""
-        print("\n📝 Profile required to continue.", flush=True)
+        self.output.user_text("\n📝 Profile required to continue.", flush=True)
         required_fields = required_fields or ["name"]
         defaults = defaults or {}
 
@@ -285,12 +326,16 @@ class ConsoleClient:
 
         try:
             if not self.current_session_id:
-                print("⚠️  No active session. Please reconnect.", flush=True)
+                self.output.user_text(
+                    "⚠️  No active session. Please reconnect.", flush=True
+                )
                 return
             await self._api_request("POST", "/workflow/complete_profile", json=payload)
-            print("✅ Profile saved. Re-checking workflow...", flush=True)
+            self.output.user_text(
+                "✅ Profile saved. Re-checking workflow...", flush=True
+            )
         except Exception as e:
-            print(f"❌ Failed to save profile: {e}", flush=True)
+            self.output.error(f"❌ Failed to save profile: {e}")
 
     async def _select_therapy_style(self):
         """Prompt the user to select a therapy style and submit it."""
@@ -298,7 +343,7 @@ class ConsoleClient:
         options: list[dict[str, Any]] = []
 
         if not recommendations:
-            print(
+            self.output.user_text(
                 "⏳ Waiting for assessment recommendations before selecting a therapy style.",
                 flush=True,
             )
@@ -314,17 +359,20 @@ class ConsoleClient:
             )
 
         if not options:
-            print("⚠️  No therapy styles available yet. Try again later.", flush=True)
+            self.output.user_text(
+                "⚠️  No therapy styles available yet. Try again later.",
+                flush=True,
+            )
             return
 
-        print("\n🧭 Select a therapy style:", flush=True)
+        self.output.user_text("\n🧭 Select a therapy style:", flush=True)
         for idx, option in enumerate(options, start=1):
             label = option.get("style") or f"option_{idx}"
             description = option.get("description")
             if description:
-                print(f"{idx}. {label} - {description}", flush=True)
+                self.output.user_text(f"{idx}. {label} - {description}", flush=True)
             else:
-                print(f"{idx}. {label}", flush=True)
+                self.output.user_text(f"{idx}. {label}", flush=True)
 
         selection = await self._get_user_input("Enter the number or style id: ")
         chosen_style = None
@@ -336,12 +384,16 @@ class ConsoleClient:
             chosen_style = selection.strip().lower() if selection else None
 
         if not chosen_style:
-            print("⚠️  Invalid selection. Please try again.", flush=True)
+            self.output.user_text(
+                "⚠️  Invalid selection. Please try again.", flush=True
+            )
             return
 
         try:
             if not self.current_session_id:
-                print("⚠️  No active session. Please reconnect.", flush=True)
+                self.output.user_text(
+                    "⚠️  No active session. Please reconnect.", flush=True
+                )
                 return
             await self._api_request(
                 "POST",
@@ -352,20 +404,31 @@ class ConsoleClient:
                     "selected_therapy_style": chosen_style,
                 },
             )
-            print("✅ Therapy style saved. Re-checking workflow...", flush=True)
+            self.output.user_text(
+                "✅ Therapy style saved. Re-checking workflow...", flush=True
+            )
             self.pending_recommendations = None
         except Exception as exc:
-            print(f"❌ Failed to save therapy style: {exc}", flush=True)
+            self.output.error(f"❌ Failed to save therapy style: {exc}")
 
-    async def _get_user_input(self, prompt: Optional[str] = None) -> str:
+    async def _get_user_input(
+        self,
+        prompt: Optional[str] = None,
+        default: Optional[str] = None,
+    ) -> str:
         """Get input from the user via console (non-blocking)."""
         if prompt:
-            print(f"{prompt}")
+            self.output.prompt(f"{prompt}")
 
         # Use trio.to_thread to avoid blocking the event loop
+        self.output.prompt("\nYour response: ", end="")
         user_input = await trio.to_thread.run_sync(
-            lambda: input("\nYour response: ").strip()
+            lambda: input().strip()
         )
+        if not user_input and default is not None:
+            self.output.log_input(f"{default} (default)")
+            return default
+        self.output.log_input(user_input)
         return user_input
 
     async def _register_user(self) -> bool:
@@ -373,18 +436,20 @@ class ConsoleClient:
         if self.registered and self.current_session_id:
             return True
 
-        print("\n📝 Let’s set up your profile before starting.", flush=True)
+        self.output.user_text(
+            "\n📝 Let’s set up your profile before starting.", flush=True
+        )
         name = await self._get_user_input("Enter your name (required): ")
         if not name:
             name = self.user_id
         primary_language = await self._get_user_input(
-            "Primary language [English]: "
+            "Primary language [English]: ",
+            default="English",
         )
-        if not primary_language:
-            primary_language = "English"
-        session_mode = await self._get_user_input("Session mode [virtual]: ")
-        if not session_mode:
-            session_mode = "virtual"
+        session_mode = await self._get_user_input(
+            "Session mode [virtual]: ",
+            default="virtual",
+        )
 
         payload = {
             "user_id": self.user_id,
@@ -400,27 +465,29 @@ class ConsoleClient:
                 json=payload,
             )
         except Exception as exc:
-            print(f"❌ Failed to register profile: {exc}", flush=True)
+            self.output.error(f"❌ Failed to register profile: {exc}")
             return False
 
         if response.get("error"):
-            print(f"❌ Registration failed: {response['error']}", flush=True)
+            self.output.error(f"❌ Registration failed: {response['error']}")
             return False
 
         session = response.get("session") or {}
         self.current_session_id = session.get("session_id")
         if not self.current_session_id:
-            print("❌ Registration did not return a session id.", flush=True)
+            self.output.error("❌ Registration did not return a session id.")
             return False
         self.latest_workflow_action = response.get("workflow_next_action")
         self.registered = True
-        print("✅ Profile registered. Connecting to WebSocket...", flush=True)
+        self.output.user_text(
+            "✅ Profile registered. Connecting to WebSocket...", flush=True
+        )
         return True
 
     async def _send_chat_message(self, ws, message: str):
         """Send a chat message via WebSocket."""
         if not self.connected or not ws:
-            print("❌ Not connected to WebSocket server")
+            self.output.error("❌ Not connected to WebSocket server")
             return
 
         try:
@@ -432,16 +499,16 @@ class ConsoleClient:
             logger.debug(f"Sent chat message: {message[:50]}...")
         except Exception as e:
             logger.error(f"Error sending message: {e}")
-            print(f"❌ Failed to send message: {e}")
+            self.output.error(f"❌ Failed to send message: {e}")
 
     async def _send_end_session(self, ws, reason: str | None = None):
         """Request the backend to end the current session."""
         if not self.connected or not ws:
-            print("❌ Not connected to WebSocket server")
+            self.output.error("❌ Not connected to WebSocket server")
             return
 
         if not self.current_session_id:
-            print("⚠️  No active session to end.", flush=True)
+            self.output.user_text("⚠️  No active session to end.", flush=True)
             return
 
         try:
@@ -454,7 +521,7 @@ class ConsoleClient:
             logger.debug("Sent end_session request for session %s", self.current_session_id)
         except Exception as e:
             logger.error(f"Error sending end_session: {e}")
-            print(f"❌ Failed to end session: {e}")
+            self.output.error(f"❌ Failed to end session: {e}")
 
     async def _get_user_status(self) -> Dict[str, Any]:
         """Get user status from backend API."""
@@ -513,7 +580,9 @@ class ConsoleClient:
         timer_data = await self._get_session_timer()
 
         if "error" in timer_data:
-            print(f"\n⚠️  Could not retrieve timer: {timer_data['error']}", flush=True)
+            self.output.user_text(
+                f"\n⚠️  Could not retrieve timer: {timer_data['error']}", flush=True
+            )
             return
 
         # Extract timing information
@@ -526,44 +595,64 @@ class ConsoleClient:
         is_time_up = timer_data.get("is_time_up", False)
 
         # Format and display
-        print("\n" + "=" * 60, flush=True)
-        print("⏱️  SESSION TIMER", flush=True)
-        print("=" * 60, flush=True)
-        print(f"Time elapsed:   {int(elapsed)} minutes", flush=True)
-        print(f"Time remaining: {int(remaining)} minutes", flush=True)
-        print(f"Total duration: {total} minutes", flush=True)
+        self.output.user_text("\n" + "=" * 60, flush=True)
+        self.output.user_text("⏱️  SESSION TIMER", flush=True)
+        self.output.user_text("=" * 60, flush=True)
+        self.output.user_text(f"Time elapsed:   {int(elapsed)} minutes", flush=True)
+        self.output.user_text(f"Time remaining: {int(remaining)} minutes", flush=True)
+        self.output.user_text(f"Total duration: {total} minutes", flush=True)
 
         if extensions_used > 0:
-            print(
+            self.output.user_text(
                 f"Extensions:     {extensions_used}/{max_extensions} used", flush=True
             )
         else:
-            print(f"Extensions:     {max_extensions} available", flush=True)
+            self.output.user_text(
+                f"Extensions:     {max_extensions} available", flush=True
+            )
 
         if is_time_up:
-            print("\n⚠️  Time is up! Session should be ending soon.", flush=True)
+            self.output.user_text(
+                "\n⚠️  Time is up! Session should be ending soon.", flush=True
+            )
         elif remaining < 5:
-            print("\n⚠️  Less than 5 minutes remaining!", flush=True)
+            self.output.user_text("\n⚠️  Less than 5 minutes remaining!", flush=True)
         elif can_extend and remaining < 10:
-            print(
-                f"\nℹ️  Running low on time. You can extend the session.",
+            self.output.user_text(
+                "\nℹ️  Running low on time. You can extend the session.",
                 flush=True,
             )
 
-        print("=" * 60, flush=True)
-        print()
+        self.output.user_text("=" * 60, flush=True)
+        self.output.user_text("", log=False)
 
     async def _ensure_session(self, ws) -> None:
         """Prompt the user to reconnect when no active session is bound."""
         if not self.connected or not ws:
-            print("❌ Cannot start session: not connected to server", flush=True)
+            self.output.error("❌ Cannot start session: not connected to server")
             return
 
-        print(
+        self.output.user_text(
             "⚠️  No active session. Please reconnect to start a new session.",
             flush=True,
         )
         self.connected = False
+
+    async def _await_session_ready(self, timeout_seconds: float = 8.0) -> None:
+        """Wait for initial greeting, but fall back to allowing input on timeout."""
+        if self.session_ready.is_set():
+            return
+        with trio.move_on_after(timeout_seconds) as cancel_scope:
+            await self.session_ready.wait()
+        if cancel_scope.cancelled_caught:
+            self.output.system(
+                "Initial greeting not received in time; allowing user input."
+            )
+            self.waiting_for_initial_message = False
+            if not self.is_streaming:
+                self.output.user_text(" " * 30, end="\r", log=False)
+            self._show_welcome_message()
+            self.session_ready.set()
 
     async def _chat_loop(self, ws) -> bool:
         """
@@ -584,17 +673,21 @@ class ConsoleClient:
                         command = user_message.lower().strip()
                         if command in ["/quit", "/end"]:
                             await self._send_end_session(ws, reason="User ended session")
-                            print("👋 Ending current session...", flush=True)
+                            self.output.user_text(
+                                "👋 Ending current session...", flush=True
+                            )
                             return True
                         elif command == "/exit":
                             await self._send_end_session(ws, reason="User exited console")
-                            print("👋 Exiting console client. Take care.", flush=True)
+                            self.output.user_text(
+                                "👋 Exiting console client. Take care.", flush=True
+                            )
                             return True
                         elif command == "/timer":
                             await self._display_timer_info()
                             continue
                         else:
-                            print(
+                            self.output.user_text(
                                 "⚠️  Unknown command. Available: /timer, /quit (finish session), /exit (close console).",
                                 flush=True,
                             )
@@ -606,7 +699,7 @@ class ConsoleClient:
                     # Legacy exit keywords without slash exit the console completely
                     if user_message.lower() in ["quit", "exit", "bye"]:
                         await self._send_end_session(ws, reason="User ended session")
-                        print("👋 Exiting console client.", flush=True)
+                        self.output.user_text("👋 Exiting console client.", flush=True)
                         return True
 
                     await self._display_message("user", user_message)
@@ -622,11 +715,11 @@ class ConsoleClient:
 
                 except KeyboardInterrupt:
                     await self._send_end_session(ws, reason="User exited console")
-                    print("\n👋 Exiting console client.", flush=True)
+                    self.output.user_text("\n👋 Exiting console client.", flush=True)
                     return True
                 except Exception as e:
                     logger.error(f"Error in chat loop: {e}")
-                    print(f"❌ Error: {e}")
+                    self.output.error(f"❌ Error: {e}")
         finally:
             self.waiting_for_response = False
 
@@ -637,27 +730,37 @@ class ConsoleClient:
         while True:
             next_action = await self._get_next_action()
             action = next_action.get("required_action")
+            prompt = next_action.get("prompt")
+            self.output.system(
+                f"Workflow action: {action} prompt={prompt!r}"
+            )
 
             if action == "error":
-                print(f"❌ Workflow error: {next_action.get('error')}", flush=True)
+                self.output.error(
+                    f"❌ Workflow error: {next_action.get('error')}"
+                )
                 break
 
             if action == "wait":
-                reason = next_action.get(
-                    "prompt", "Waiting for backend instructions."
-                )
+                reason = prompt or "Waiting for backend instructions."
                 wait_count += 1
                 if wait_count == 1:
-                    print(f"⏳ Backend requested wait: {reason}", flush=True)
-                    print(
+                    self.output.user_text(
+                        f"⏳ Backend requested wait: {reason}", flush=True
+                    )
+                    self.output.user_text(
                         "   Waiting for workflow to advance... (Ctrl+C to exit)",
                         flush=True,
                     )
                 elif wait_count % 10 == 0:
-                    print(f"⏳ Still waiting: {reason}", flush=True)
+                    self.output.user_text(
+                        f"⏳ Still waiting: {reason}", flush=True
+                    )
 
                 if not self.connected:
-                    print("⚠️  Connection lost while waiting. Exiting.", flush=True)
+                    self.output.user_text(
+                        "⚠️  Connection lost while waiting. Exiting.", flush=True
+                    )
                     break
 
                 await trio.sleep(2)
@@ -678,13 +781,13 @@ class ConsoleClient:
                 if not self.current_session_id:
                     await self._ensure_session(ws)
                 if not self.connected:
-                    print(
+                    self.output.user_text(
                         "⚠️  Connection lost while starting session. Exiting workflow.",
                         flush=True,
                     )
                     break
 
-                await self.session_ready.wait()
+                await self._await_session_ready()
                 exit_console = await self._chat_loop(ws)
 
                 if exit_console:
@@ -692,7 +795,9 @@ class ConsoleClient:
 
                 continue
 
-            print("⚠️  Unexpected workflow response. Exiting.", flush=True)
+            self.output.user_text(
+                "⚠️  Unexpected workflow response. Exiting.", flush=True
+            )
             break
 
     async def run(self):
@@ -727,7 +832,7 @@ class ConsoleClient:
                     self.ws = ws
                     self.connected = True
                     logger.info("Connected to WebSocket server")
-                    print("✅ Connected to therapy session server", flush=True)
+                    self.output.system("✅ Connected to therapy session server")
 
                     # Use nursery for structured concurrency
                     async with trio.open_nursery() as nursery:
@@ -738,29 +843,26 @@ class ConsoleClient:
                         await trio.sleep(1)
 
                         if not self.connected:
-                            print(
-                                "❌ Failed to establish connection. Exiting.",
-                                flush=True,
+                            self.output.error(
+                                "❌ Failed to establish connection. Exiting."
                             )
                             nursery.cancel_scope.cancel()
                             return
 
                         # Get user status
-                        print("📊 Checking user status...", flush=True)
+                        self.output.system("📊 Checking user status...")
                         status = await self._get_user_status()
 
                         if "error" in status:
-                            print(
-                                f"⚠️  Could not get user status: {status['error']}",
-                                flush=True,
+                            self.output.system(
+                                f"⚠️  Could not get user status: {status['error']}"
                             )
-                            print("Proceeding with basic session...", flush=True)
+                            self.output.system("Proceeding with basic session...")
                         else:
                             workflow_state = status.get("workflow_state")
                             if workflow_state:
-                                print(
-                                    f"📍 Current workflow state: {workflow_state}",
-                                    flush=True,
+                                self.output.system(
+                                    f"📍 Current workflow state: {workflow_state}"
                                 )
 
                         try:
@@ -770,8 +872,8 @@ class ConsoleClient:
                             nursery.cancel_scope.cancel()
 
             except ConnectionClosed:
-                print("❌ WebSocket connection closed unexpectedly", flush=True)
+                self.output.error("❌ WebSocket connection closed unexpectedly")
                 logger.error("WebSocket connection closed")
             except Exception as e:
                 logger.error(f"Failed to connect to WebSocket: {e}")
-                print(f"❌ Failed to connect to WebSocket server: {e}", flush=True)
+                self.output.error(f"❌ Failed to connect to WebSocket server: {e}")

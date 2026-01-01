@@ -85,10 +85,16 @@ def resolve_next_action(
 
     if workflow_state in (
         WorkflowState.THERAPY_IN_PROGRESS,
-        WorkflowState.REFLECTION_IN_PROGRESS,
         WorkflowState.PLAN_COMPLETE,
     ):
         return _continue_therapy_action(user_id, workflow_state)
+
+    if workflow_state == WorkflowState.REFLECTION_IN_PROGRESS:
+        return _wait_action(
+            user_id,
+            workflow_state,
+            prompt="Reflection in progress. We'll notify you when it's ready.",
+        )
 
     # Default fallback when state is NEW but profile already exists
     return _start_session_action(

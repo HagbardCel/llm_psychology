@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
@@ -669,6 +670,7 @@ class AgentResponseHandler:
         self._emit_next_action = emit_next_action
         self._assessment_recommendations: dict[str, list[dict[str, Any]]] = {}
         self._assessment_jobs: set[str] = set()
+        self._reflection_jobs: set[str] = set()
 
     def attach_session_callbacks(
         self,
@@ -741,7 +743,7 @@ class AgentResponseHandler:
                             session_id,
                             exc_info=True,
                         )
-                    self.nursery.start_soon(self.run_reflection, user_id, session_id)
+                    await self.ensure_reflection_job(user_id, session_id)
 
         action = agent_response.next_action
         logger.info("Handling agent response for user %s: action=%s", user_id, action)
@@ -947,12 +949,86 @@ class AgentResponseHandler:
                 self.conversation_manager.clear_context(session_id)
 
             logger.info("Auto reflection complete for session %s", session_id)
-        except Exception:
+        except Exception as exc:
             logger.error(
                 "Auto reflection failed for session %s",
                 session_id,
                 exc_info=True,
             )
+            await self._surface_reflection_failure(user_id, session_id, exc)
+
+    async def _surface_reflection_failure(
+        self, user_id: str, session_id: str, exc: Exception
+    ) -> None:
+        """Send a user-visible error and advance workflow after reflection failure."""
+        error_text = str(exc)
+        error_code = _extract_error_code(error_text)
+        if isinstance(exc, trio.TooSlowError):
+            detail = "error code: timeout"
+        elif error_code:
+            detail = f"error code: {error_code}"
+        else:
+            detail = f"error type: {type(exc).__name__}"
+        await self.conversation_manager.send_json_message(
+            session_id,
+            "error",
+            {
+                "message": (
+                    f"Reflection failed due to a backend error ({detail}). "
+                    "You can continue your session while we investigate."
+                )
+            },
+        )
+        try:
+            await self.workflow_engine.transition(
+                user_id,
+                WorkflowState.PLAN_COMPLETE,
+                event=WorkflowEvent.COMPLETE_REFLECTION,
+            )
+            self.conversation_manager.clear_context(session_id)
+            logger.info(
+                "Advanced workflow to PLAN_COMPLETE after reflection failure "
+                "for session %s",
+                session_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to advance workflow after reflection failure "
+                "(session=%s, user=%s)",
+                session_id,
+                user_id,
+                exc_info=True,
+            )
+
+    async def _run_reflection_job(
+        self, user_id: str, session_id: str, emit_session_id: str | None = None
+    ) -> None:
+        """Run a reflection job and emit next action when done."""
+        timeout_seconds = self.service_container.config.REFLECTION_TIMEOUT_SECONDS
+        try:
+            with trio.fail_after(timeout_seconds):
+                await self.run_reflection(user_id, session_id)
+            if self._emit_next_action:
+                await self._emit_next_action(user_id, emit_session_id or session_id)
+        except trio.TooSlowError as exc:
+            logger.error(
+                "Reflection job timed out after %s seconds for session %s",
+                timeout_seconds,
+                session_id,
+                exc_info=True,
+            )
+            await self._surface_reflection_failure(user_id, session_id, exc)
+            if self._emit_next_action:
+                await self._emit_next_action(user_id, emit_session_id or session_id)
+        except Exception:
+            logger.error(
+                "Reflection job failed for session %s (user=%s)",
+                session_id,
+                user_id,
+                exc_info=True,
+            )
+        finally:
+            self._reflection_jobs.discard(session_id)
 
     async def _run_assessment_job(
         self, user_id: str, intake_session_id: str, emit_session_id: str | None = None
@@ -1030,6 +1106,18 @@ class AgentResponseHandler:
             session_id,
         )
 
+    async def ensure_reflection_job(self, user_id: str, session_id: str) -> None:
+        """Ensure a single reflection job is running for the session."""
+        if session_id in self._reflection_jobs:
+            return
+        self._reflection_jobs.add(session_id)
+        self.nursery.start_soon(
+            self._run_reflection_job,
+            user_id,
+            session_id,
+            session_id,
+        )
+
     async def emit_assessment_recommendations(
         self, session_id: str, user_id: str
     ) -> None:
@@ -1052,3 +1140,13 @@ class AgentResponseHandler:
         await self.conversation_manager.send_json_message(
             session_id, "assessment_recommendations", payload
         )
+def _extract_error_code(message: str) -> str | None:
+    """Extract an HTTP-like status code from an error message."""
+    for pattern in (
+        r"(?:HTTP|status)\D{0,10}(4\d{2}|5\d{2})",
+        r"\b(4\d{2}|5\d{2})\b",
+    ):
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None

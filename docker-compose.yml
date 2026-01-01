@@ -22,6 +22,7 @@ x-api-base: &api-base
     - ./src:/app/src:delegated
     - ./tests:/app/tests:delegated
     - ./data:/app/data
+    - ./logs:/app/logs
     - ./deployment_validation.py:/app/deployment_validation.py:delegated
     # Volume for pip cache to speed up rebuilds
     - pip-cache:/root/.cache/pip
@@ -51,7 +52,9 @@ x-console-base: &console-base
     dockerfile: Dockerfile
   volumes:
     - ./console-ui/src:/app/src:delegated
+    - ./console-ui/main.py:/app/main.py:delegated
     - ./data:/app/data
+    - ./logs:/app/logs
   environment:
     - PYTHONUNBUFFERED=1
   networks:
@@ -193,6 +196,7 @@ services:
       - WEBSOCKET_URL=http://api:8000
       - USER_ID=console_user
       - AUTH_TOKEN=console_token
+      - CONSOLE_LOG_PATH=/app/logs/console-ui.log
     env_file:
       - ${ENV_FILE:-.env}
     depends_on:
@@ -291,6 +295,7 @@ services:
       - WEBSOCKET_URL=http://api-usertest:8000
       - USER_ID=console_user_test
       - AUTH_TOKEN=console_token_test
+      - CONSOLE_LOG_PATH=/app/logs/console-ui-usertest.log
     env_file:
       - .env.usertest
     depends_on:

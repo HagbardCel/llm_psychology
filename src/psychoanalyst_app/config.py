@@ -180,6 +180,14 @@ class Settings(BaseSettings):
     MAX_OBSERVATIONS_LENGTH: int = Field(default=1000, le=2000)
     MAX_PLAN_NOTES_LENGTH: int = Field(default=1000, le=2000)
 
+    # Reflection Job Configuration
+    REFLECTION_TIMEOUT_SECONDS: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Max time allowed for reflection before timing out.",
+    )
+
 
 def setup_logging(
     settings: Settings, log_level: str | None = None, console_log_level: str | None = None
@@ -223,6 +231,16 @@ def setup_logging(
     # Add our handlers
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+
+    # Configure a dedicated LLM call logger that always writes to host logs folder.
+    llm_logger = logging.getLogger("llm_calls")
+    llm_logger.handlers.clear()
+    llm_handler = logging.FileHandler(logs_dir / "llm_calls.log", mode="a")
+    llm_handler.setLevel(logging.INFO)
+    llm_handler.setFormatter(file_formatter)
+    llm_logger.addHandler(llm_handler)
+    llm_logger.setLevel(logging.INFO)
+    llm_logger.propagate = False
 
     # Set specific loggers to appropriate levels
     logging.getLogger("urllib3").setLevel(logging.WARNING)

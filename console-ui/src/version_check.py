@@ -5,8 +5,10 @@ Verifies compatibility with backend API version before starting the client.
 """
 
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 import httpx
+
+from .output import ConsoleOutput
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,32 @@ async def check_backend_version(
         raise VersionCheckError(error_msg)
 
 
-def print_version_banner(client_version: str, api_version: str):
+def _emit_banner(
+    lines: list[str],
+    output: Optional[ConsoleOutput],
+    *,
+    log_only: bool = False,
+    is_error: bool = False,
+) -> None:
+    banner = "\n".join(lines)
+    if output:
+        if log_only:
+            output.system(banner)
+        elif is_error:
+            output.error(banner)
+        else:
+            output.user_text(banner)
+        return
+    print(banner)
+
+
+def print_version_banner(
+    client_version: str,
+    api_version: str,
+    *,
+    output: Optional[ConsoleOutput] = None,
+    log_only: bool = False,
+):
     """
     Print a version information banner.
 
@@ -108,49 +135,78 @@ def print_version_banner(client_version: str, api_version: str):
         client_version: Console client version
         api_version: Backend API version
     """
-    print()
-    print("═" * 60)
-    print("  🔍 VERSION INFORMATION")
-    print("═" * 60)
-    print(f"  Console Client: v{client_version}")
-    print(f"  Backend API:    v{api_version}")
-    print("═" * 60)
-    print()
+    _emit_banner(
+        [
+            "",
+            "═" * 60,
+            "  🔍 VERSION INFORMATION",
+            "═" * 60,
+            f"  Console Client: v{client_version}",
+            f"  Backend API:    v{api_version}",
+            "═" * 60,
+            "",
+        ],
+        output,
+        log_only=log_only,
+    )
 
 
-def print_version_error(message: str):
+def print_version_error(
+    message: str,
+    *,
+    output: Optional[ConsoleOutput] = None,
+    log_only: bool = False,
+):
     """
     Print a version compatibility error message.
 
     Args:
         message: Error message to display
     """
-    print()
-    print("═" * 60)
-    print("  ⚠️  VERSION COMPATIBILITY ERROR")
-    print("═" * 60)
-    print(f"  {message}")
-    print()
-    print("  Please update your console client to continue.")
-    print("  Visit: https://github.com/your-repo/releases")
-    print("═" * 60)
-    print()
+    _emit_banner(
+        [
+            "",
+            "═" * 60,
+            "  ⚠️  VERSION COMPATIBILITY ERROR",
+            "═" * 60,
+            f"  {message}",
+            "",
+            "  Please update your console client to continue.",
+            "  Visit: https://github.com/your-repo/releases",
+            "═" * 60,
+            "",
+        ],
+        output,
+        log_only=log_only,
+        is_error=True,
+    )
 
 
-def print_version_warning(message: str):
+def print_version_warning(
+    message: str,
+    *,
+    output: Optional[ConsoleOutput] = None,
+    log_only: bool = False,
+):
     """
     Print a version compatibility warning message.
 
     Args:
         message: Warning message to display
     """
-    print()
-    print("─" * 60)
-    print("  ℹ️  VERSION UPDATE AVAILABLE")
-    print("─" * 60)
-    print(f"  {message}")
-    print()
-    print("  Consider updating for the latest features.")
-    print("  Visit: https://github.com/your-repo/releases")
-    print("─" * 60)
-    print()
+    _emit_banner(
+        [
+            "",
+            "─" * 60,
+            "  ℹ️  VERSION UPDATE AVAILABLE",
+            "─" * 60,
+            f"  {message}",
+            "",
+            "  Consider updating for the latest features.",
+            "  Visit: https://github.com/your-repo/releases",
+            "─" * 60,
+            "",
+        ],
+        output,
+        log_only=log_only,
+    )

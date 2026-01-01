@@ -7,6 +7,8 @@
 .PHONY: generate-schemas validate-schemas
 
 export PYTHONPATH := src
+CONSOLE_UI_LOG ?= logs/console-ui.log
+CONSOLE_UI_LOG_TEST ?= logs/console-ui-usertest.log
 
 # Default target
 help:
@@ -460,25 +462,18 @@ ui-standalone-test:
 
 # Console UI Service (WebSocket client)
 ui-console:
-	@echo "💻 Starting Console UI Service..."
-	@echo "- API Server: http://localhost:8000"
-	@echo "- Console Client: WebSocket-based terminal"
-	@echo ""
-	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
-	@echo ""
-	docker compose up --build --remove-orphans -d api && docker compose run --rm -it console-ui
+	@mkdir -p logs
+	@printf "\n[%s] make ui-console\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG)
+	@docker compose up --build --remove-orphans -d api >> $(CONSOLE_UI_LOG) 2>&1
+	@docker compose run --rm -it console-ui 2>> $(CONSOLE_UI_LOG)
 
 # Console UI Service (usertest mode)
 ui-console-test:
 	$(MAKE) check-usertest-key
-	@echo "💻 Starting Console UI Service (Usertest Mode)..."
-	@echo "- Using test database: data/psychoanalyst_usertest.db"
-	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
-	@echo ""
-	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
-	@echo ""
-	docker compose --profile usertest-console up --build --remove-orphans -d api-usertest && docker compose --profile usertest-console run --rm -it console-ui-usertest
+	@mkdir -p logs
+	@printf "\n[%s] make ui-console-test\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG_TEST)
+	@docker compose --profile usertest-console up --build --remove-orphans -d api-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
+	@docker compose --profile usertest-console run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
 # Web UI (browser interface)
 ui-web:
@@ -502,31 +497,18 @@ ui-web-test:
 
 # All UI modes simultaneously
 ui-all:
-	@echo "🎯 Starting All UI Modes..."
-	@echo "- API Server: http://localhost:8000"
-	@echo "- Console Client: Terminal"
-	@echo "- Frontend: http://localhost:5173"
-	@echo ""
-	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
-	@echo "💡 Tip: To view API logs, run 'make docker-logs-api' in another terminal"
-	@echo ""
-	docker compose up --build --remove-orphans -d api frontend && docker compose run --rm -it console-ui
+	@mkdir -p logs
+	@printf "\n[%s] make ui-all\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG)
+	@docker compose up --build --remove-orphans -d api frontend >> $(CONSOLE_UI_LOG) 2>&1
+	@docker compose run --rm -it console-ui 2>> $(CONSOLE_UI_LOG)
 
 # All UI modes (usertest mode)
 ui-all-test:
 	$(MAKE) check-usertest-key
-	@echo "🎯 Starting All UI Modes (Usertest Mode)..."
-	@echo "- Using test database: data/psychoanalyst_usertest.db"
-	@echo "- Session duration: 10 minutes"
-	@echo "- API Server: http://localhost:8000"
-	@echo "- Console Client: Terminal"
-	@echo "- Frontend: http://localhost:5173"
-	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
-	@echo ""
-	@echo "⚠️  Note: Console UI requires interactive terminal. Web UI will run in background."
-	@echo "💡 Tip: To view API logs, run 'docker compose logs -f api-usertest' in another terminal"
-	@echo ""
-	docker compose --profile usertest-all up --build --remove-orphans -d api-usertest frontend-usertest && docker compose --profile usertest-all run --rm -it console-ui-usertest
+	@mkdir -p logs
+	@printf "\n[%s] make ui-all-test\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG_TEST)
+	@docker compose --profile usertest-all up --build --remove-orphans -d api-usertest frontend-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
+	@docker compose --profile usertest-all run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
 # ============================================
 # DevContainer Commands
