@@ -244,7 +244,7 @@ describe('Type Safety Integration', () => {
     it('should support required action payloads', () => {
       const action: WorkflowNextAction = {
         user_id: 'user-1',
-        workflow_state: 'INTAKE_IN_PROGRESS',
+        workflow_state: 'intake_in_progress',
         required_action: 'start_intake',
         required_fields: [],
         defaults: null,
@@ -254,7 +254,7 @@ describe('Type Safety Integration', () => {
       };
 
       expect(action.required_action).toBe('start_intake');
-      expect(action.workflow_state).toBe('INTAKE_IN_PROGRESS');
+      expect(action.workflow_state).toBe('intake_in_progress');
     });
   });
 
@@ -344,8 +344,8 @@ describe('Type Safety Integration', () => {
         enriched: false,
       };
 
-      expect(session.transcript[0].id).toBe('msg-nested');
-      expect(session.topics[0].name).toBe('nested-topic');
+      expect(session.transcript?.[0].id).toBe('msg-nested');
+      expect(session.topics?.[0].name).toBe('nested-topic');
     });
 
     it('should handle Date types correctly', () => {

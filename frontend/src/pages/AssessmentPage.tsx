@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Grid,
   Card,
@@ -48,14 +48,29 @@ export function AssessmentPage() {
       : [];
   const hasRecommendations = recommendations.length > 0;
 
-  const { data: styles, isLoading: stylesLoading } = useQuery({
+  const {
+    data: styles,
+    isLoading: stylesLoading,
+    error: stylesQueryError,
+  } = useQuery({
     queryKey: ['therapyStyles', userId, sessionId],
     queryFn: async () => api.therapy.getStyles(userId || '', sessionId || ''),
     enabled: nextAction?.required_action === 'select_therapy_style' && !!sessionId,
-    onError: (err) => {
-      setStylesError(err instanceof Error ? err.message : 'Failed to load styles');
-    }
   });
+
+  useEffect(() => {
+    if (stylesQueryError) {
+      setStylesError(
+        stylesQueryError instanceof Error
+          ? stylesQueryError.message
+          : 'Failed to load styles'
+      );
+      return;
+    }
+    if (!stylesLoading) {
+      setStylesError(null);
+    }
+  }, [stylesLoading, stylesQueryError]);
 
   const handleStyleSelect = async (style: string) => {
     if (!user) return;
@@ -168,7 +183,7 @@ export function AssessmentPage() {
 
       <Grid container spacing={3}>
         {(styles || []).map((style) => (
-          <Grid item xs={12} md={4} key={style.style}>
+          <Grid size={{ xs: 12, md: 4 }} key={style.style}>
             <Card
               sx={{
                 height: '100%',

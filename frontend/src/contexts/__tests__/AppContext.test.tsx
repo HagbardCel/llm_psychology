@@ -11,17 +11,17 @@ describe('AppContext', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    const originalGetItem = Storage.prototype.getItem;
-    jest.spyOn(Storage.prototype, 'getItem').mockImplementation(function (key: string) {
+    const originalGetItem = Storage.prototype.getItem.bind(localStorage);
+    jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
       if (key === 'theme') return null;
       if (key === 'sidebarOpen') return null;
       if (key === 'current_user_id') return null;
-      return originalGetItem.call(this, key);
+      return originalGetItem(key);
     });
 
-    const originalSetItem = Storage.prototype.setItem;
-    jest.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key: string, value: string) {
-      return originalSetItem.call(this, key, value);
+    const originalSetItem = Storage.prototype.setItem.bind(localStorage);
+    jest.spyOn(Storage.prototype, 'setItem').mockImplementation((key: string, value: string) => {
+      return originalSetItem(key, value);
     });
   });
 

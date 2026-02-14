@@ -5,6 +5,7 @@
 
 import { apiClient } from './apiClient';
 import {
+  CreateUserProfileRequest,
   CreateSessionRequest,
   WorkflowCompleteProfileRequest,
   HealthCheckResponse,

@@ -173,7 +173,7 @@ export const Dashboard = memo(function Dashboard() {
             Quick Actions
           </Typography>
           <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Button
                 variant="contained"
                 size="large"
@@ -184,7 +184,7 @@ export const Dashboard = memo(function Dashboard() {
                 {labelForRequiredAction(nextAction?.required_action)}
               </Button>
             </Grid>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Button
                 variant="outlined"
                 size="large"
@@ -200,7 +200,7 @@ export const Dashboard = memo(function Dashboard() {
 
       {/* Stats */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <Card>
             <CardContent>
               <Typography color="text.secondary" gutterBottom>
@@ -212,7 +212,7 @@ export const Dashboard = memo(function Dashboard() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <Card>
             <CardContent>
               <Typography color="text.secondary" gutterBottom>
@@ -224,7 +224,7 @@ export const Dashboard = memo(function Dashboard() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid size={{ xs: 12, sm: 4 }}>
           <Card>
             <CardContent>
               <Typography color="text.secondary" gutterBottom>
@@ -254,7 +254,7 @@ export const Dashboard = memo(function Dashboard() {
                 >
                   <ListItemText
                     primary={`Session on ${session.timestamp ? new Date(session.timestamp).toLocaleDateString() : 'Unknown date'}`}
-                    secondary={`${session.transcript.length} messages${session.topics ? ` • ${session.topics.length} topics` : ''}`}
+                    secondary={`${session.transcript?.length ?? 0} messages${session.topics ? ` • ${session.topics.length} topics` : ''}`}
                   />
                   <ChevronRightIcon />
                 </ListItem>

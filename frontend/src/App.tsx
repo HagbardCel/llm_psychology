@@ -68,7 +68,7 @@ function App() {
       <VersionCheck />
       <AppProvider>
         <WebSocketProvider>
-          <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Router>
             <Suspense fallback={<LoadingFallback />}>
               <Routes>
                 <Route

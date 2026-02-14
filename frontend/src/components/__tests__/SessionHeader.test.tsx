@@ -141,7 +141,7 @@ describe('SessionHeader', () => {
       const session = createMockSession();
       render(<SessionHeader session={session} onMenuClick={mockOnMenuClick} />);
 
-      const expectedTime = format(new Date(session.startTime), 'HH:mm');
+      const expectedTime = format(new Date(session.startTime!), 'HH:mm');
       expect(screen.getByText(`Started ${expectedTime}`)).toBeInTheDocument();
     });
 
@@ -406,7 +406,7 @@ describe('SessionHeader', () => {
       render(<SessionHeader session={session} onMenuClick={mockOnMenuClick} />);
 
       // Verify formatted time is displayed
-      const expectedTime = format(new Date(session.startTime), 'HH:mm');
+      const expectedTime = format(new Date(session.startTime!), 'HH:mm');
       expect(screen.getByText(`Started ${expectedTime}`)).toBeInTheDocument();
     });
 

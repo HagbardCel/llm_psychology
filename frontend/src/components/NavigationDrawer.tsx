@@ -11,6 +11,7 @@ import {
   Chip,
   CircularProgress
 } from '@mui/material';
+import type { ReactElement } from 'react';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import ChatIcon from '@mui/icons-material/Chat';
 import HistoryIcon from '@mui/icons-material/History';
@@ -30,7 +31,7 @@ export interface NavigationDrawerProps {
 interface NavigationItem {
   label: string;
   path: string;
-  icon: JSX.Element;
+  icon: ReactElement;
   locked?: boolean;
 }
 

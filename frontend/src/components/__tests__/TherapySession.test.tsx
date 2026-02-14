@@ -15,7 +15,6 @@ let mockConnectionStatus = { isConnected: true, isConnecting: false };
 let mockLastMessage: any = null;
 let streamingHandler: ((chunk: string, isComplete: boolean, fullResponse?: string) => void) | null = null;
 let sessionStartedHandler: ((event: SessionStartedEvent) => void) | null = null;
-let workflowNextActionHandler: ((event: any) => void) | null = null;
 
 jest.mock('../../contexts/WebSocketContext', () => ({
   useWebSocketContext: jest.fn(() => {
@@ -97,7 +96,6 @@ describe('TherapySession', () => {
     mockLastMessage = null;
     streamingHandler = null;
     sessionStartedHandler = null;
-    workflowNextActionHandler = null;
     mockRegisterStreamingChunkHandler.mockImplementation((handler) => {
       streamingHandler = handler;
       return () => {
@@ -110,12 +108,7 @@ describe('TherapySession', () => {
         sessionStartedHandler = null;
       };
     });
-    mockRegisterWorkflowNextActionHandler.mockImplementation((handler) => {
-      workflowNextActionHandler = handler;
-      return () => {
-        workflowNextActionHandler = null;
-      };
-    });
+    mockRegisterWorkflowNextActionHandler.mockImplementation(() => () => {});
     localStorage.setItem('current_user_id', 'test-user-id');
   });
 

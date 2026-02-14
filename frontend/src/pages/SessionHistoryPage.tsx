@@ -85,7 +85,7 @@ export const SessionHistoryPage: React.FC = () => {
                   <ListItemButton onClick={() => handleSessionClick(session.session_id)}>
                     <ListItemText
                       primary={`Session ${session.timestamp ? new Date(session.timestamp).toLocaleString() : 'Unknown date'}`}
-                      secondary={`${session.transcript.length} messages • ${session.topics?.length || 0} topics`}
+                      secondary={`${session.transcript?.length ?? 0} messages • ${session.topics?.length || 0} topics`}
                     />
                   </ListItemButton>
                 </ListItem>

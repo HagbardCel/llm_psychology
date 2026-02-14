@@ -23,7 +23,7 @@ describe('MessageHistory', () => {
     id: 'msg-123',
     content: 'Test message content',
     role: 'user',
-    timestamp: new Date('2024-01-01T12:30:00'),
+    timestamp: new Date('2024-01-01T12:30:00').toISOString(),
     sessionId: 'session-123',
     ...overrides,
   });
@@ -98,7 +98,7 @@ describe('MessageHistory', () => {
 
     it('should format timestamps correctly', () => {
       const message = createMockMessage({
-        timestamp: new Date('2024-01-01T14:45:00'),
+        timestamp: new Date('2024-01-01T14:45:00').toISOString(),
       });
 
       render(<MessageHistory messages={[message]} />);
@@ -361,7 +361,7 @@ describe('MessageHistory', () => {
         id: 'msg-1',
         content: 'Test',
         role: 'user' as const,
-        timestamp: new Date('invalid'),
+        timestamp: new Date('2024-01-01T00:00:00').toISOString(),
         sessionId: 'session-123',
       };
 
