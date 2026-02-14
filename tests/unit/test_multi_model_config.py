@@ -106,3 +106,13 @@ def test_default_llm_service_unchanged(monkeypatch):
     # Agent-specific service should use INTAKE_MODEL
     intake_service = container.get("llm_service_intake")
     assert intake_service.model_name == "intake-model"
+
+
+def test_llm_call_logging_defaults():
+    """Test local-safe LLM call logging defaults."""
+    settings = Settings(_env_file=None)
+
+    assert settings.LLM_CALL_LOGGING_ENABLED is False
+    assert settings.LLM_CALL_LOGGING_REDACT is True
+    assert settings.LLM_CALL_LOGGING_MAX_FIELD_CHARS == 256
+    assert settings.LLM_CALL_LOGGING_INCLUDE_CHUNKS is False

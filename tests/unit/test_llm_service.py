@@ -266,3 +266,24 @@ def test_llm_call_logging_skips_stream_chunks_by_default(
     )
     service._log_llm_call("stream_chunk", {"chunk": "hello"})
     assert fake_llm_call_logger.messages == []
+
+
+def test_llm_call_logging_truncates_non_redacted_fields(
+    fake_chat_model,
+    fake_llm_call_logger,
+):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+        llm_call_logging_enabled=True,
+        llm_call_logging_redact=False,
+        llm_call_logging_max_field_chars=64,
+    )
+    long_prompt = "a" * 90
+    service._log_llm_call("request", {"prompt": long_prompt})
+
+    assert len(fake_llm_call_logger.messages) == 1
+    record = json.loads(fake_llm_call_logger.messages[0])
+    assert record["prompt"].startswith("a" * 64)
+    assert "<truncated" in record["prompt"]

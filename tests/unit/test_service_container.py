@@ -102,6 +102,30 @@ class TestServiceContainer:
         assert executor.connect_timeout_seconds == 12.0
         assert executor.pool_acquire_timeout_seconds == 12.0
 
+    def test_llm_service_uses_logging_settings(self):
+        """Test LLM service wiring honors payload logging settings."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "test-api-key",
+                "MODEL_NAME": "test-model",
+                "LLM_CALL_LOGGING_ENABLED": True,
+                "LLM_CALL_LOGGING_REDACT": False,
+                "LLM_CALL_LOGGING_MAX_FIELD_CHARS": 777,
+                "LLM_CALL_LOGGING_INCLUDE_CHUNKS": True,
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.llm_call_logging_enabled is True
+        assert llm_service.llm_call_logging_redact is False
+        assert llm_service.llm_call_logging_max_field_chars == 777
+        assert llm_service.llm_call_logging_include_chunks is True
+
     def test_container_clear(self, container):
         """Test clearing container."""
         # Add a service
