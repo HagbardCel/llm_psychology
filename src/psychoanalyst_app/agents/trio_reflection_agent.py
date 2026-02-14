@@ -13,19 +13,28 @@ from datetime import datetime
 from typing import Any
 
 import trio
-from pydantic import ValidationError
 
-from psychoanalyst_app.agents.reflection.extractors import (
-    extract_session_briefing,
-    extract_tier2_enrichment,
-    extract_tier3_change_decision,
-    extract_updated_tier3_analysis,
-)
 from psychoanalyst_app.agents.reflection.helpers import (
-    generate_session_summary as helper_generate_session_summary,
     maybe_update_tier1_profile,
-    should_update_tier4,
-    update_tier4_fields,
+)
+from psychoanalyst_app.agents.reflection.session_summary_pipeline import (
+    generate_session_briefing,
+    generate_session_summary_payload,
+)
+from psychoanalyst_app.agents.reflection.tier2_pipeline import (
+    apply_tier2_enrichment,
+    enrich_session_tier2,
+    ensure_recent_sessions_enriched,
+    load_or_enrich_session_record,
+)
+from psychoanalyst_app.agents.reflection.tier3_pipeline import (
+    evaluate_tier3_update_necessity,
+    generate_updated_tier3_analysis,
+    prepare_tier3_update_payload,
+)
+from psychoanalyst_app.agents.reflection.tier4_pipeline import (
+    apply_tier4_updates,
+    generate_combined_recommendations,
 )
 from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
 from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
@@ -48,17 +57,13 @@ from psychoanalyst_app.models.structured_output_models import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
 )
-from psychoanalyst_app.orchestration.agent_output_validators import build_therapy_plan_output
+from psychoanalyst_app.orchestration.agent_output_validators import (
+    build_therapy_plan_output,
+)
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
     WorkflowEvent,
-)
-from psychoanalyst_app.prompts.reflection_prompt_builder import (
-    build_session_briefing_prompt,
-    build_tier2_enrichment_prompt,
-    build_tier3_detection_prompt,
-    build_tier3_update_prompt,
 )
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
@@ -191,7 +196,11 @@ class TrioReflectionAgent:
             updated_plan.session_briefing = session_briefing
 
             # Optional: Apply Tier 4 updates from the same structured LLM output
-            tier4_update = session_briefing.get("tier4_update") if isinstance(session_briefing, dict) else None
+            tier4_update = (
+                session_briefing.get("tier4_update")
+                if isinstance(session_briefing, dict)
+                else None
+            )
             if isinstance(tier4_update, dict) and updated_plan:
                 should_update = bool(tier4_update.get("should_update", False))
                 if should_update:
@@ -264,7 +273,9 @@ class TrioReflectionAgent:
             is_noop_update = self._is_noop_plan_update(current_plan, plan_output)
             plan_id = current_plan.plan_id
             created_at = current_plan.created_at
-            version = current_plan.version if is_noop_update else current_plan.version + 1
+            version = (
+                current_plan.version if is_noop_update else current_plan.version + 1
+            )
             session_briefing = current_plan.session_briefing
             selected_style = (
                 plan_output.selected_therapy_style
@@ -490,41 +501,11 @@ class TrioReflectionAgent:
                 [topic.name for topic in session.topics]
             )
 
-            # Enrich session with Tier 2 psychological data
-            # This is a one-time operation - check if already enriched
-            tier2_enrichment = None
-            session_record = session
-            if not getattr(session, "enriched", False):
-                logger.info(
-                    f"Session {session.session_id} not yet enriched - "
-                    f"extracting Tier 2 data..."
-                )
-                tier2_enrichment = await self._enrich_session(session)
-                if tier2_enrichment:
-                    session_record = self._apply_tier2_enrichment(
-                        session, tier2_enrichment
-                    )
-                    logger.info(
-                        f"Successfully enriched session {session.session_id} "
-                        f"with Tier 2 data"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to enrich session {session.session_id} - "
-                        f"continuing without enrichment"
-                    )
-            else:
-                logger.info(
-                    f"Session {session.session_id} already enriched - skipping"
-                )
-                session_record = await self.db_service.get_session(session.session_id)
-                if session_record:
-                    logger.debug(
-                        "Loaded enriched session record for %s",
-                        session.session_id,
-                    )
-                else:
-                    session_record = session
+            session_record, tier2_enrichment = await load_or_enrich_session_record(
+                self.db_service,
+                self.llm_service,
+                session,
+            )
 
             # Tier 1: rare background updates (LLM-gated)
             tier1_profile_output = None
@@ -536,61 +517,17 @@ class TrioReflectionAgent:
                     self.llm_service, current_profile, session_record
                 )
 
-            # Phase 5: Check Tier 3 (clinical formulation) for updates
-            tier3_updated = False
-            tier3_version = None
-            tier3_update = None
-            tier3_change_summary = None
-
-            # Load current Tier 3 analysis
-            current_tier3 = await self.db_service.get_latest_patient_analysis(
-                self.user_context.user_id
+            (
+                tier3_updated,
+                tier3_version,
+                tier3_update,
+                tier3_change_summary,
+            ) = await prepare_tier3_update_payload(
+                self.db_service,
+                self.llm_service,
+                self.user_context.user_id,
+                session_record,
             )
-
-            if current_tier3:
-                # Evaluate if update is needed
-                update_needed, change_summary = (
-                    await self._evaluate_tier3_update_necessity(
-                        current_tier3, session_record
-                    )
-                )
-
-                if update_needed and change_summary:
-                    logger.info(
-                        f"Tier 3 update needed: {change_summary}"
-                    )
-
-                    # Generate updated formulation
-                    updated_analysis = await self._generate_updated_tier3_analysis(
-                        current_tier3, session_record, change_summary
-                    )
-
-                    if updated_analysis:
-                        tier3_update = {
-                            "analysis_data": updated_analysis,
-                            "change_summary": change_summary,
-                            "supersede_analysis_id": current_tier3.analysis_id,
-                        }
-                        tier3_change_summary = change_summary
-                        tier3_updated = True
-                        tier3_version = current_tier3.version + 1
-                        logger.info(
-                            "Prepared Tier 3 update payload for user %s: %s",
-                            self.user_context.user_id,
-                            change_summary,
-                        )
-                    else:
-                        logger.warning(
-                            "Failed to generate Tier 3 update"
-                        )
-                else:
-                    logger.info(
-                        "Tier 3 update not needed - formulation remains stable"
-                    )
-            else:
-                logger.info(
-                    "No Tier 3 analysis exists yet (created during assessment)"
-                )
 
             # Assess plan effectiveness if plan exists (FIXED: added await)
             plan_assessment = None
@@ -604,27 +541,22 @@ class TrioReflectionAgent:
                     await self.planning_agent.recommend_plan_adjustments(current_plan)
                 )
             tier4_updated = False
-            # Generate traditional session summary
-            session_summary = await helper_generate_session_summary(
+            session_summary_payload = await generate_session_summary_payload(
                 self.llm_service, session_record
             )
-
+            session_summary = session_summary_payload["summary"]
             if current_plan:
-                session_count = await self.db_service.get_session_count(
-                    self.user_context.user_id
+                tier4_updated = await apply_tier4_updates(
+                    self.db_service,
+                    self.planning_agent,
+                    self.user_context.user_id,
+                    current_plan,
+                    session_context,
+                    plan_assessment,
+                    plan_recommendations,
+                    session_summary,
+                    tier3_updated,
                 )
-                if should_update_tier4(
-                    session_count, tier3_updated, plan_recommendations
-                ):
-                    tier4_updated = update_tier4_fields(
-                        current_plan,
-                        session_context,
-                        plan_assessment,
-                        plan_recommendations,
-                        session_summary,
-                    )
-                    if tier4_updated:
-                        current_plan.updated_at = datetime.now()
 
             # Compile comprehensive reflection
             reflection = {
@@ -696,13 +628,7 @@ class TrioReflectionAgent:
         Returns:
             Dict containing session summary
         """
-        summary = await helper_generate_session_summary(self.llm_service, session)
-
-        return {
-            "session_id": session.session_id,
-            "summary": summary,
-            "timestamp": session.timestamp.isoformat(),
-        }
+        return await generate_session_summary_payload(self.llm_service, session)
 
     async def _enrich_session(self, session: Session) -> dict[str, Any] | None:
         """
@@ -718,46 +644,13 @@ class TrioReflectionAgent:
         Returns:
             Tier 2 enrichment payload, or None when enrichment fails
         """
-        try:
-            enrichment_prompt = build_tier2_enrichment_prompt(session)
-            tier2_data = await extract_tier2_enrichment(
-                self.llm_service, enrichment_prompt
-            )
-            if not tier2_data:
-                return None
-            return tier2_data
-
-        except Exception as e:
-            logger.error(
-                f"Error enriching session {session.session_id}: {e}",
-                exc_info=True,
-            )
-            return None
+        return await enrich_session_tier2(self.llm_service, session)
 
     def _apply_tier2_enrichment(
         self, session: Session, tier2_data: dict[str, Any]
     ) -> Session:
         """Apply Tier 2 enrichment to a session object without persistence."""
-        updates = {
-            "psychological_summary": tier2_data.get(
-                "psychological_summary", session.psychological_summary
-            ),
-            "dominant_affects": tier2_data.get(
-                "dominant_affects", session.dominant_affects
-            ),
-            "key_themes": tier2_data.get("key_themes", session.key_themes),
-            "notable_interactions": tier2_data.get(
-                "notable_interactions", session.notable_interactions
-            ),
-            "interpretations": tier2_data.get(
-                "interpretations", session.interpretations
-            ),
-            "patient_reactions": tier2_data.get(
-                "patient_reactions", session.patient_reactions
-            ),
-            "enriched": True,
-        }
-        return session.model_copy(update=updates)
+        return apply_tier2_enrichment(session, tier2_data)
 
     async def _generate_session_briefing(
         self,
@@ -787,39 +680,15 @@ class TrioReflectionAgent:
         Raises:
             Exception: Propagates LLM and validation errors (fail-fast)
         """
-        logger.info(f"Generating session briefing for session {session.session_id}")
-
-        # Get session transcript as string
-        session_transcript = "\n".join(
-            [f"{msg.role}: {msg.content}" for msg in session.transcript]
+        return await generate_session_briefing(
+            self.llm_service,
+            self.config,
+            session_context,
+            therapeutic_memory,
+            plan_assessment,
+            session,
+            therapy_plan,
         )
-
-        analysis_prompt = build_session_briefing_prompt(
-            session_context=session_context,
-            therapeutic_memory=therapeutic_memory,
-            plan_assessment=plan_assessment,
-            session=session,
-            therapy_plan=therapy_plan,
-            config=self.config,
-        )
-
-        # Generate structured briefing using Gemini structured outputs.
-        try:
-            briefing = await extract_session_briefing(
-                self.llm_service,
-                analysis_prompt,
-                session_count=therapeutic_memory.get("total_sessions", 0),
-                session_id=session.session_id,
-            )
-            logger.info(
-                "Successfully generated session briefing for session %s",
-                session.session_id,
-            )
-            return briefing
-
-        except ValidationError as e:
-            logger.error(f"Session briefing failed validation: {e}")
-            raise
 
     async def get_therapeutic_insights(self) -> dict[str, Any]:
         """
@@ -898,38 +767,13 @@ class TrioReflectionAgent:
         This is a fallback mechanism used when other agents need enriched session
         context but some recent sessions haven't been enriched yet.
         """
-        scan_limit = scan_limit or max(limit * 3, 10)
-
-        # First try: return already-enriched sessions
-        enriched = await self.db_service.get_recent_sessions(
-            user_id, limit=limit, enriched_only=True
+        return await ensure_recent_sessions_enriched(
+            self.db_service,
+            self.llm_service,
+            user_id,
+            limit=limit,
+            scan_limit=scan_limit,
         )
-        if len(enriched) >= limit:
-            return enriched
-
-        # Attempt to enrich recent sessions until we have enough
-        recent_any = await self.db_service.get_recent_sessions(
-            user_id, limit=scan_limit, enriched_only=False
-        )
-        for session in recent_any:
-            if getattr(session, "enriched", False):
-                continue
-            try:
-                await self._enrich_session(session)
-            except Exception:
-                logger.warning(
-                    "On-demand Tier 2 enrichment failed for session %s",
-                    session.session_id,
-                    exc_info=True,
-                )
-
-            enriched = await self.db_service.get_recent_sessions(
-                user_id, limit=limit, enriched_only=True
-            )
-            if len(enriched) >= limit:
-                break
-
-        return enriched
 
     async def _generate_combined_recommendations(
         self, memory, patterns: dict[str, Any], current_plan: TherapyPlan | None
@@ -945,52 +789,12 @@ class TrioReflectionAgent:
         Returns:
             List of combined recommendations
         """
-        recommendations = []
-
-        # Memory-based recommendations
-        if memory.relationship_quality in ["established", "strong"]:
-            recommendations.append(
-                {
-                    "type": "relationship",
-                    "description": "Strong therapeutic relationship established - consider deeper therapeutic work",
-                    "source": "memory_analysis",
-                    "priority": "medium",
-                }
-            )
-
-        # Pattern-based recommendations
-        emotional_trend = patterns.get("emotional_patterns", {}).get(
-            "recent_trend", "stable"
+        return await generate_combined_recommendations(
+            self.planning_agent,
+            memory,
+            patterns,
+            current_plan,
         )
-        if emotional_trend == "improving":
-            recommendations.append(
-                {
-                    "type": "progress",
-                    "description": "Positive emotional trend - maintain current approach and build on progress",
-                    "source": "pattern_analysis",
-                    "priority": "high",
-                }
-            )
-        elif emotional_trend == "declining":
-            recommendations.append(
-                {
-                    "type": "intervention",
-                    "description": "Declining emotional trend - consider plan adjustment or additional support",
-                    "source": "pattern_analysis",
-                    "priority": "high",
-                }
-            )
-
-        # Planning-based recommendations (FIXED: added await)
-        if current_plan:
-            plan_recommendations = await self.planning_agent.recommend_plan_adjustments(
-                current_plan
-            )
-            for rec in plan_recommendations[:3]:  # Top 3 recommendations
-                rec["source"] = "planning_analysis"
-                recommendations.append(rec)
-
-        return recommendations
 
     async def health_check(self) -> bool:
         """
@@ -1041,34 +845,11 @@ class TrioReflectionAgent:
         Returns:
             Tuple of (update_needed: bool, change_summary: str | None)
         """
-        try:
-            detection_prompt = build_tier3_detection_prompt(
-                current_analysis, session
-            )
-            logger.info(
-                "Evaluating Tier 3 update necessity for session %s",
-                session.session_id,
-            )
-
-            decision = await extract_tier3_change_decision(
-                self.llm_service, detection_prompt
-            )
-            if not decision:
-                return (False, None)
-
-            logger.info(
-                "Tier 3 update decision: update_needed=%s, summary=%s",
-                decision.update_needed,
-                decision.change_summary,
-            )
-            return (decision.update_needed, decision.change_summary)
-
-        except Exception as e:
-            logger.error(
-                f"Error evaluating Tier 3 update necessity: {e}",
-                exc_info=True,
-            )
-            return (False, None)
+        return await evaluate_tier3_update_necessity(
+            self.llm_service,
+            current_analysis,
+            session,
+        )
 
     async def _generate_updated_tier3_analysis(
         self,
@@ -1090,35 +871,12 @@ class TrioReflectionAgent:
         Returns:
             Updated PatientAnalysis, or None if failed
         """
-        try:
-            update_prompt = build_tier3_update_prompt(
-                current_analysis, session, change_summary
-            )
-
-            logger.info(
-                "Generating updated Tier 3 analysis for session %s",
-                session.session_id,
-            )
-
-            updated_analysis = await extract_updated_tier3_analysis(
-                self.llm_service, update_prompt
-            )
-            if not updated_analysis:
-                return None
-
-            logger.info(
-                "Successfully generated updated Tier 3 analysis for user %s",
-                current_analysis.user_id,
-            )
-
-            return updated_analysis
-
-        except Exception as e:
-            logger.error(
-                f"Error generating updated Tier 3 analysis: {e}",
-                exc_info=True,
-            )
-            return None
+        return await generate_updated_tier3_analysis(
+            self.llm_service,
+            current_analysis,
+            session,
+            change_summary,
+        )
 
     def __str__(self) -> str:
         """String representation of reflection agent."""
