@@ -279,7 +279,12 @@ class ServiceContainer:
 
     def _create_db_executor(self) -> TrioSQLiteExecutor:
         """Create the shared TrioSQLiteExecutor instance."""
-        return TrioSQLiteExecutor(self.config.DATABASE_PATH)
+        return TrioSQLiteExecutor(
+            self.config.DATABASE_PATH,
+            pool_size=self.config.DATABASE_POOL_SIZE,
+            connect_timeout_seconds=float(self.config.DATABASE_POOL_TIMEOUT),
+            pool_acquire_timeout_seconds=float(self.config.DATABASE_POOL_TIMEOUT),
+        )
 
     def _get_or_create_llm_service_for_model(
         self, model_name: str, config_key: str = "DEFAULT"
@@ -310,14 +315,24 @@ class ServiceContainer:
                 rate_limit_enabled=self.config.LLM_RATE_LIMIT_ENABLED,
                 requests_per_minute=self.config.LLM_REQUESTS_PER_MINUTE,
                 burst_capacity=self.config.LLM_BURST_CAPACITY,
+                llm_call_logging_enabled=self.config.LLM_CALL_LOGGING_ENABLED,
+                llm_call_logging_redact=self.config.LLM_CALL_LOGGING_REDACT,
+                llm_call_logging_max_field_chars=(
+                    self.config.LLM_CALL_LOGGING_MAX_FIELD_CHARS
+                ),
+                llm_call_logging_include_chunks=(
+                    self.config.LLM_CALL_LOGGING_INCLUDE_CHUNKS
+                ),
             )
 
             # Cache it
             self._llm_service_cache[model_name] = llm_service
 
             logger.info(
-                f"Created new LLMService for model {model_name} (source: {config_key}), "
-                f"rate limiting: {self.config.LLM_RATE_LIMIT_ENABLED}"
+                "Created new LLMService for model %s (source: %s), rate limiting: %s",
+                model_name,
+                config_key,
+                self.config.LLM_RATE_LIMIT_ENABLED,
             )
             return llm_service
         except Exception as e:
@@ -576,7 +591,9 @@ class ServiceContainer:
             raise
 
     def _build_psychoanalyst_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+        from psychoanalyst_app.agents.trio_psychoanalyst_agent import (
+            TrioPsychoanalystAgent,
+        )
 
         logger.debug(f"Creating TrioPsychoanalystAgent for user {user_context.user_id}")
 

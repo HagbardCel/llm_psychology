@@ -9,6 +9,7 @@ import pytest
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 
 
 class TestServiceContainer:
@@ -81,6 +82,25 @@ class TestServiceContainer:
 
         # None should be instantiated yet
         assert not any(services.values())
+
+    def test_db_executor_uses_settings_configuration(self, tmp_path):
+        """Test DB executor wiring honors pool size/timeout settings."""
+        db_path = str(tmp_path / "container_db_executor.db")
+        settings = Settings().model_copy(
+            update={
+                "DATABASE_PATH": db_path,
+                "DATABASE_POOL_SIZE": 7,
+                "DATABASE_POOL_TIMEOUT": 12,
+            }
+        )
+        container = ServiceContainer(settings)
+
+        executor = container.get("db_executor")
+
+        assert isinstance(executor, TrioSQLiteExecutor)
+        assert executor.pool_size == 7
+        assert executor.connect_timeout_seconds == 12.0
+        assert executor.pool_acquire_timeout_seconds == 12.0
 
     def test_container_clear(self, container):
         """Test clearing container."""

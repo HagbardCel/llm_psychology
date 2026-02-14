@@ -14,9 +14,18 @@ logger = logging.getLogger(__name__)
 class TrioSQLiteExecutor:
     """Manages a Trio-compatible SQLite connection pool."""
 
-    def __init__(self, db_path: str, *, pool_size: int = 5):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        pool_size: int = 5,
+        connect_timeout_seconds: float = 30.0,
+        pool_acquire_timeout_seconds: float = 30.0,
+    ):
         self.db_path = db_path
         self.pool_size = pool_size
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.pool_acquire_timeout_seconds = pool_acquire_timeout_seconds
         self._is_uri = db_path.startswith("file:")
         self._pool_send, self._pool_recv = trio.open_memory_channel(pool_size)
         self._connections: list[sqlite3.Connection] = []
@@ -26,10 +35,17 @@ class TrioSQLiteExecutor:
         """Create a new sqlite3 connection."""
         if self._is_uri:
             conn = sqlite3.connect(
-                self.db_path, timeout=30.0, uri=True, check_same_thread=False
+                self.db_path,
+                timeout=self.connect_timeout_seconds,
+                uri=True,
+                check_same_thread=False,
             )
         else:
-            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+            conn = sqlite3.connect(
+                self.db_path,
+                timeout=self.connect_timeout_seconds,
+                check_same_thread=False,
+            )
 
         conn.execute("PRAGMA foreign_keys = ON")
         if row_factory:
@@ -57,12 +73,22 @@ class TrioSQLiteExecutor:
     @asynccontextmanager
     async def connection(self, row_factory=None):
         """Async context manager that yields a pooled connection."""
-        conn = await self._pool_recv.receive()
+        with trio.move_on_after(self.pool_acquire_timeout_seconds) as cancel_scope:
+            conn = await self._pool_recv.receive()
+
+        if cancel_scope.cancelled_caught:
+            raise TimeoutError(
+                f"Timed out acquiring DB connection after "
+                f"{self.pool_acquire_timeout_seconds:.2f}s"
+            )
+
+        original_row_factory = conn.row_factory
         try:
-            if row_factory:
+            if row_factory is not None:
                 conn.row_factory = row_factory
             yield conn
         finally:
+            conn.row_factory = original_row_factory
             await self._pool_send.send(conn)
 
     async def run_sync(self, func, *args):

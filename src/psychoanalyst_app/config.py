@@ -62,6 +62,24 @@ class Settings(BaseSettings):
     LLM_BURST_CAPACITY: int = Field(
         default=2, description="Burst capacity for LLM requests"
     )
+    LLM_CALL_LOGGING_ENABLED: bool = Field(
+        default=False,
+        description="Enable detailed LLM call payload logging to logs/llm_calls.log",
+    )
+    LLM_CALL_LOGGING_REDACT: bool = Field(
+        default=True,
+        description="Redact prompt/response payloads in detailed LLM call logs",
+    )
+    LLM_CALL_LOGGING_MAX_FIELD_CHARS: int = Field(
+        default=256,
+        ge=64,
+        le=8000,
+        description="Max characters retained per logged payload field",
+    )
+    LLM_CALL_LOGGING_INCLUDE_CHUNKS: bool = Field(
+        default=False,
+        description="Include stream chunk payloads in detailed LLM logs",
+    )
 
     def model_post_init(self, __context) -> None:
         """Apply compatibility shims after settings load."""
@@ -148,10 +166,6 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=20)
     DATABASE_POOL_TIMEOUT: int = Field(default=30)
 
-    # Performance Configuration
-    MAX_CONCURRENT_SESSIONS: int = Field(default=10)
-    SESSION_TIMEOUT_MINUTES: int = Field(default=60)
-
     # Session Resumption Configuration
     BRIEFING_VALIDITY_DAYS: int = Field(
         default=30,
@@ -190,7 +204,9 @@ class Settings(BaseSettings):
 
 
 def setup_logging(
-    settings: Settings, log_level: str | None = None, console_log_level: str | None = None
+    settings: Settings,
+    log_level: str | None = None,
+    console_log_level: str | None = None,
 ) -> None:
     """
     Configure application-wide logging with separate console and file logging.
@@ -232,14 +248,18 @@ def setup_logging(
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
 
-    # Configure a dedicated LLM call logger that always writes to host logs folder.
+    # Configure dedicated LLM call logger only when explicitly enabled.
     llm_logger = logging.getLogger("llm_calls")
     llm_logger.handlers.clear()
-    llm_handler = logging.FileHandler(logs_dir / "llm_calls.log", mode="a")
-    llm_handler.setLevel(logging.INFO)
-    llm_handler.setFormatter(file_formatter)
-    llm_logger.addHandler(llm_handler)
-    llm_logger.setLevel(logging.INFO)
+    if settings.LLM_CALL_LOGGING_ENABLED:
+        llm_handler = logging.FileHandler(logs_dir / "llm_calls.log", mode="a")
+        llm_handler.setLevel(logging.INFO)
+        llm_handler.setFormatter(file_formatter)
+        llm_logger.addHandler(llm_handler)
+        llm_logger.setLevel(logging.INFO)
+    else:
+        llm_logger.addHandler(logging.NullHandler())
+        llm_logger.setLevel(logging.CRITICAL)
     llm_logger.propagate = False
 
     # Set specific loggers to appropriate levels
