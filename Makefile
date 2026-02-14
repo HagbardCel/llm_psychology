@@ -41,25 +41,11 @@ help:
 	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models (Docker)"
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
 	@echo ""
-	@echo "Local (Opt-In) Development:"
-	@echo "  local-format      - Format code with black (local)"
-	@echo "  local-lint        - Lint code with ruff (local)"
-	@echo "  local-test        - Run backend tests (local)"
-	@echo "  local-test-all    - Run backend + frontend + E2E (local)"
-	@echo "  local-test-dev    - Quick tests in devContainer (local)"
-	@echo "  local-test-unit   - Run unit tests only (local)"
-	@echo "  local-test-integration - Run integration tests only (local)"
-	@echo "  local-test-frontend - Run frontend Jest unit tests (local)"
-	@echo "  local-test-e2e    - Run deterministic Playwright E2E (local)"
-	@echo "  local-test-real-llm - Run real-LLM tests only (local)"
-	@echo "  local-run         - Run terminal UI via python -m psychoanalyst_app"
-	@echo "  local-run-server  - Run HTTP/WebSocket server entry point"
-	@echo "  local-run-e2e     - Run deterministic e2e server entry point"
-	@echo "  local-generate-schemas - Generate JSON schemas from Pydantic models (local)"
-	@echo "  local-validate-schemas - Validate generated JSON schemas (local)"
+	@echo "Deprecated Local Wrappers (Docker equivalents only):"
+	@echo "  local-*           - Deprecated wrappers; print warning then run Docker target"
 	@echo ""
 	@echo "UI Mode Selection:"
-	@echo "  ui-standalone     - Run standalone terminal UI (local, no Docker)"
+	@echo "  ui-standalone     - Run standalone terminal UI (Docker)"
 	@echo "  ui-standalone-test - Run standalone terminal in usertest mode"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
@@ -154,42 +140,46 @@ test-dev:
 	@echo ""
 	docker compose --profile test run --rm test pytest -m "not real_llm" -x --tb=short -q
 
-# Local equivalents (opt-in)
+# Deprecated local wrappers (delegate to Docker targets)
 local-format:
-	black .
+	@echo "⚠️  local-format is deprecated; using Docker target 'make format'"
+	$(MAKE) format
 
 local-lint:
-	ruff check .
+	@echo "⚠️  local-lint is deprecated; using Docker target 'make lint'"
+	$(MAKE) lint
 
 local-test:
-	pytest -m "not real_llm"
+	@echo "⚠️  local-test is deprecated; using Docker target 'make test'"
+	$(MAKE) test
 
 local-test-unit:
-	pytest -m unit
+	@echo "⚠️  local-test-unit is deprecated; using Docker target 'make test-unit'"
+	$(MAKE) test-unit
 
 local-test-integration:
-	pytest -m integration
+	@echo "⚠️  local-test-integration is deprecated; using Docker target 'make test-integration'"
+	$(MAKE) test-integration
 
 local-test-all:
-	pytest -m "not real_llm"
-	$(MAKE) local-test-frontend
-	$(MAKE) local-test-e2e
+	@echo "⚠️  local-test-all is deprecated; using Docker target 'make test-all'"
+	$(MAKE) test-all
 
 local-test-frontend:
-	npm --prefix frontend test
+	@echo "⚠️  local-test-frontend is deprecated; using Docker target 'make test-frontend'"
+	$(MAKE) test-frontend
 
 local-test-e2e:
-	npm --prefix frontend run test:e2e
+	@echo "⚠️  local-test-e2e is deprecated; using Docker target 'make test-e2e'"
+	$(MAKE) test-e2e
 
 local-test-real-llm:
-	$(MAKE) check-usertest-key
-	@set -a && . ./.env.usertest && set +a && pytest -m real_llm --no-mocks
+	@echo "⚠️  local-test-real-llm is deprecated; using Docker target 'make test-real-llm'"
+	$(MAKE) test-real-llm
 
 local-test-dev:
-	@echo "🚀 Running quick tests in devContainer..."
-	@echo "Perfect for: Active development, TDD, debugging"
-	@echo ""
-	pytest -m "not real_llm" -x --tb=short -q
+	@echo "⚠️  local-test-dev is deprecated; using Docker target 'make test-dev'"
+	$(MAKE) test-dev
 
 # Full isolated Docker tests (pre-commit validation)
 test-validate:
@@ -279,13 +269,16 @@ run-e2e:
 	docker compose run --rm api python -m psychoanalyst_app.e2e_server
 
 local-run:
-	python -m psychoanalyst_app
+	@echo "⚠️  local-run is deprecated; using Docker target 'make run'"
+	$(MAKE) run
 
 local-run-server:
-	python -m psychoanalyst_app.server
+	@echo "⚠️  local-run-server is deprecated; using Docker target 'make run-server'"
+	$(MAKE) run-server
 
 local-run-e2e:
-	python -m psychoanalyst_app.e2e_server
+	@echo "⚠️  local-run-e2e is deprecated; using Docker target 'make run-e2e'"
+	$(MAKE) run-e2e
 
 # Generate JSON Schemas from Pydantic models (Docker)
 generate-schemas:
@@ -300,11 +293,12 @@ validate-schemas:
 		env PYTHONPATH=/app/src python scripts/validate_schemas.py
 
 local-generate-schemas:
-	@echo "🔧 Generating JSON schemas from Pydantic models (local)..."
-	python scripts/generate_schemas.py
+	@echo "⚠️  local-generate-schemas is deprecated; using Docker target 'make generate-schemas'"
+	$(MAKE) generate-schemas
 
 local-validate-schemas:
-	python scripts/validate_schemas.py
+	@echo "⚠️  local-validate-schemas is deprecated; using Docker target 'make validate-schemas'"
+	$(MAKE) validate-schemas
 
 # ============================================
 # Docker Development Commands
@@ -443,12 +437,12 @@ docker-prod-detach:
 # UI Mode Selection Commands
 # ============================================
 
-# Standalone Terminal UI (local, no Docker)
+# Standalone Terminal UI (Docker)
 ui-standalone:
 	@echo "🖥️  Starting Standalone Terminal UI..."
-	@echo "Running locally with direct Python execution"
+	@echo "Running in Docker container"
 	@echo ""
-	python -m psychoanalyst_app
+	docker compose run --rm api python -m psychoanalyst_app
 
 # Standalone Terminal UI (usertest mode)
 ui-standalone-test:
@@ -458,7 +452,7 @@ ui-standalone-test:
 	@echo "- Session duration: 10 minutes"
 	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
 	@echo ""
-	@set -a && . ./.env.usertest && set +a && python -m psychoanalyst_app
+	ENV_FILE=.env.usertest docker compose run --rm api python -m psychoanalyst_app
 
 # Console UI Service (WebSocket client)
 ui-console:

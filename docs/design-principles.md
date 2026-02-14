@@ -105,9 +105,8 @@ Start here in code: `src/psychoanalyst_app/trio_server.py` → HTTP blueprints i
 - `make run` → standalone terminal UI (Docker)
 - `make run-server` → HTTP + WebSocket server (Docker)
 - `make run-e2e` → deterministic server for Playwright (Docker)
-- Local equivalents: `make local-run`, `make local-run-server`, `make local-run-e2e`
 
-Packages are intentionally installed *inside* the Docker images (`docker compose build api` / `make dev-install`). Local development shells use the source tree directly—set `PYTHONPATH=src` (Make targets do this automatically) rather than installing the package globally on your workstation. The `test` profile already exports `PYTHONPATH=/app/src` so `pytest` can import `psychoanalyst_app` from the mounted sources even though the package itself isn’t globally installed.
+Packages are intentionally installed *inside* the Docker images (`docker compose build api` / `make dev-install`). The `test` profile exports `PYTHONPATH=/app/src` so `pytest` imports `psychoanalyst_app` from mounted sources in containers.
 
 ---
 

@@ -133,6 +133,17 @@ REFLECTION_MODEL=gemini-2.5-flash
 
 See [.env.example](.env.example) for complete configuration options.
 
+### LLM Call Logging (Optional, Disabled by Default)
+
+Detailed LLM payload logging is opt-in and intended for short debugging sessions:
+
+- `LLM_CALL_LOGGING_ENABLED=false` (default)
+- `LLM_CALL_LOGGING_REDACT=true` (default; masks prompt/response payloads)
+- `LLM_CALL_LOGGING_MAX_FIELD_CHARS=256`
+- `LLM_CALL_LOGGING_INCLUDE_CHUNKS=false` (default; avoid very noisy chunk logs)
+
+When enabled, logs are written to `logs/llm_calls.log`.
+
 ## 🐳 Docker-Only Workflow (Recommended)
 
 This repository supports Docker-first execution for development and testing.
@@ -147,35 +158,29 @@ docker compose run --rm api python scripts/validate_schemas.py
 docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
 ```
 
-Local Python/Node commands (for example, `python -m psychoanalyst_app`) are optional
-and intended for devcontainer or non-Docker setups.
+This repository is Docker-first. Run backend/frontend/test commands through
+`make`/`docker compose`, not host Python or Node.
 
 ## 🎨 Choosing Your Interface
 
 This application supports **three interface modes**, each optimized for different use cases:
 
 ### 🖥️ **1. Standalone Terminal UI**
-**Best for**: Quick local use, development, single-user sessions
+**Best for**: Quick sessions, development, single-user flows
 
 **Characteristics**:
-- Direct Python execution (no Docker needed)
-- Single process, runs entirely locally
-- Fastest startup time
+- Single-process terminal experience via Docker
+- Fast startup
 - Access via direct terminal I/O
 
 **How to run**:
 ```bash
 # Normal mode (45 min sessions, production database)
-make local-run
-# OR
-make ui-standalone
+make run
 
 # Usertest mode (10 min sessions, test database)
 make ui-standalone-test
 ```
-
-**Note**: This mode requires a local Python environment. In Docker-only setups,
-use `make ui-console` or `make ui-web` instead.
 
 ---
 
@@ -268,7 +273,7 @@ The launcher will guide you through:
 | What You Want | Command | Notes |
 |---------------|---------|-------|
 | Quick Docker session | `make run` | Runs terminal UI in Docker |
-| Quick local session (opt-in) | `make local-run` | Requires local Python env |
+| Quick terminal session | `make run` | Runs terminal UI in Docker |
 | Test WebSocket | `make ui-console` | Terminal with networking |
 | Use web interface | `make ui-web` | Browser-based |
 | Try everything | `make ui-all` | All UIs at once |
@@ -289,9 +294,6 @@ make run
 ```bash
 # Using Docker Compose directly
 docker compose run --rm api python -m psychoanalyst_app
-
-# Local (opt-in)
-make local-run
 ```
 
 ### Development Setup
@@ -373,8 +375,8 @@ make test           # Run all tests (Docker)
 make test-unit      # Unit tests only (Docker)
 make test-integration  # Integration tests only (Docker)
 ```
-Local equivalents are available via `make local-format`, `make local-lint`, and
-`make local-test*`.
+Deprecated `local-*` targets now delegate to Docker commands and should be
+treated as transition wrappers only.
 
 ### Dependency Management
 ```bash
@@ -387,46 +389,9 @@ pip-compile requirements-dev.in  # Update dev deps
 
 The project provides multiple testing workflows for different purposes.
 
-### Testing Philosophy: Hybrid Approach
+### Testing Philosophy: Docker-First
 
-This project uses a **Docker-first testing strategy** with optional local/devcontainer
-shortcuts for faster iteration:
-
-1. **Docker Testing (default)** - Consistent, containerized execution
-2. **Local/DevContainer Testing (opt-in)** - Faster feedback when you have a local env
-
-### Local/DevContainer Testing (Opt-In)
-
-**For daily development work with a local Python environment:**
-
-```bash
-# Quick tests locally (RECOMMENDED for fast iteration)
-make local-test-dev
-
-# Run all tests locally
-make local-test
-
-# Run specific test types locally
-make local-test-unit          # Unit tests only
-make local-test-integration   # Integration tests only
-
-# Run specific test file locally
-pytest tests/unit/test_db_service.py -v
-
-# Run with coverage locally
-pytest --cov=src --cov-report=html
-
-# Debug tests (use VSCode Test Explorer)
-# - Tests auto-discover on save
-# - Set breakpoints and debug interactively
-# - See test results in sidebar
-```
-
-**Why devContainer for development?**
-- ⚡ **Instant feedback**: No Docker build time
-- 🐛 **Easy debugging**: VSCode debugger integration
-- 🔄 **TDD-friendly**: Run tests every few minutes
-- 📊 **Test Explorer**: Visual test runner in VSCode
+Use containerized test commands for consistency with CI and team workflows.
 
 ### Docker Isolated Testing (Pre-Commit & CI/CD)
 
@@ -473,13 +438,7 @@ git commit --no-verify
 
 When you want to manually test the application with test settings (shorter sessions, separate database):
 
-**Option 1: Local execution with test environment**
-```bash
-# Set up .env.usertest first (copy from .env.example and add your API key)
-APP_ENV=testing make local-run
-```
-
-**Option 2: Docker user-test mode (RECOMMENDED)**
+**Docker user-test mode (RECOMMENDED):**
 ```bash
 # Start app in user-test mode
 make docker-usertest
@@ -513,12 +472,11 @@ make clean
 
 | Scenario | Command | Why |
 |----------|---------|-----|
-| **Active development (TDD, debugging)** | `make local-test-dev` | Instant feedback in devContainer/local |
-| **Run all tests locally** | `make local-test` | Full test suite without Docker |
+| **Active development (TDD, debugging)** | `make test-dev` | Fast Docker-based feedback |
 | **Run all tests (Docker)** | `make test` | Default Docker test runner |
 | **Pre-commit validation** | `make test-validate` | Isolated Docker environment |
 | **Manually test with shorter sessions** | `make docker-usertest` | Real app with test settings |
-| **Quick manual test without Docker** | `make local-run` | Lightweight, fast startup |
+| **Quick terminal session** | `make run` | Lightweight Docker startup |
 | **Install automated testing on commits** | `make install-hooks` | Set up pre-commit hooks |
 | **Clean test data** | `make clean-testdb` | Remove test databases |
 
@@ -531,7 +489,7 @@ make clean
 │                                                          │
 │  1. Write code in VSCode devContainer                   │
 │     ↓                                                    │
-│  2. Run tests locally (make local-test-dev)             │
+│  2. Run quick tests (make test-dev)                     │
 │     ↓                                                    │
 │  3. Debug failures with VSCode debugger                 │
 │     ↓                                                    │
@@ -584,7 +542,7 @@ tests/
 
 Both interfaces share the same SQLite database, enabling seamless switching:
 
-1. **Start session in CLI**: `make run` (Docker) or `make local-run`
+1. **Start session in CLI**: `make run`
 2. **Switch to web**: Access http://localhost:5173 (same user profile)
 3. **Resume conversations**: All session history maintained
 4. **Switch back to CLI**: Full continuity preserved
@@ -680,7 +638,7 @@ make docker-usertest
 
 ## 📈 Next Steps
 
-1. **First Run**: Start with CLI interface: `make run` (Docker) or `make local-run`
+1. **First Run**: Start with CLI interface: `make run`
 2. **Web Experience**: Launch web interface: `./todos/start-web-development.sh`
 3. **Explore Styles**: Try different therapeutic approaches during assessment
 4. **Integration Testing**: Switch between interfaces during active sessions
@@ -712,7 +670,7 @@ Comprehensive documentation is available in the `docs/` directory:
 
 - **Health Checks**: http://localhost:8000/health
 - **Clean Reset**: `make -f todos/Makefile.web web-clean`
-- **Terminal Fallback**: `make local-run` (local) or `make run` (Docker)
+- **Terminal Fallback**: `make run`
 - **Logs**: `make -f todos/Makefile.web web-logs`
 
 ---
