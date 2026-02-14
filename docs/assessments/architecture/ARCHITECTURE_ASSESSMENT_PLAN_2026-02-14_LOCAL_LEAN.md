@@ -246,6 +246,38 @@ Recommendation:
 2. Add freshness metadata and ownership on high-traffic docs.
 3. Keep architecture docs concise and link deep dives instead of duplicating guidance.
 
+### F-008 (P3) Hotspot Modules Still Concentrate Too Much Orchestration Responsibility
+Evidence:
+- Largest runtime modules remain high-risk for change review and regression:
+  - `src/psychoanalyst_app/orchestration/orchestrator_helpers.py` (reduced to 23 lines facade)
+  - `src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py` (538 lines)
+  - `src/psychoanalyst_app/orchestration/helpers/response_handler.py` (552 lines)
+  - `src/psychoanalyst_app/agents/trio_reflection_agent.py` (reduced to 887 lines)
+  - `src/psychoanalyst_app/agents/reflection/tier2_pipeline.py` (137 lines)
+  - `src/psychoanalyst_app/agents/reflection/tier3_pipeline.py` (139 lines)
+  - `src/psychoanalyst_app/agents/reflection/tier4_pipeline.py` (104 lines)
+  - `src/psychoanalyst_app/agents/reflection/session_summary_pipeline.py` (71 lines)
+  - `src/psychoanalyst_app/container/service_container.py` (reduced to 487 lines)
+  - `src/psychoanalyst_app/container/factories/agents.py` (135 lines)
+  - `src/psychoanalyst_app/container/factories/infrastructure.py` (83 lines)
+  - `src/psychoanalyst_app/container/factories/llm.py` (86 lines)
+- `orchestrator_helpers.py` responsibilities have been decomposed into package modules:
+  - active session registry and session mapping
+  - session lifecycle orchestration
+  - agent response handling and transition/error logic
+  - persistence helpers
+- There is no enforced architecture budget/check in CI for hotspot module growth.
+
+Impact:
+- High cognitive load for core workflow changes.
+- Higher probability of behavioral regressions from coupled edits.
+- Slower onboarding and harder code ownership boundaries.
+
+Recommendation:
+1. Decompose orchestration and reflection hotspots into focused submodules with explicit ownership boundaries.
+2. Keep public facades stable while migrating internals in incremental PR-safe steps.
+3. Add architecture budget guardrails (size thresholds and import-boundary checks) in CI.
+
 ## Prioritized Improvement Backlog
 
 ### P0 (Immediate)
@@ -301,6 +333,79 @@ P2 implementation status (2026-02-14):
   - Added `scripts/validate_docs_metadata.py` and wired `make validate-docs`.
   - Added CI workflow `.github/workflows/docs-governance.yml` for metadata/index validation.
 
+### P3 (Next)
+1. Hotspot decomposition and architecture budget guardrails (F-008).
+
+P3 implementation plan (proposed 2026-02-14):
+- Step 1: Split orchestrator helpers into a package with stable facade exports.
+  - Create `src/psychoanalyst_app/orchestration/helpers/` with:
+    - `active_sessions.py` (`ActiveSessionRegistry`)
+    - `session_lifecycle.py` (`SessionLifecycleManager`)
+    - `response_handler.py` (`AgentResponseHandler`, `_extract_error_code`)
+    - `persistence.py` (`persist_therapy_plan_from_output`, `persist_tier3_update`)
+    - `__init__.py` re-exporting existing public symbols used by orchestrator call sites.
+  - Keep existing import sites working during migration by retaining compatibility exports.
+- Step 2: Decompose reflection agent internals without changing external behavior.
+  - Create `src/psychoanalyst_app/agents/reflection/` coordinator modules:
+    - `tier2_pipeline.py`
+    - `tier3_pipeline.py`
+    - `tier4_pipeline.py`
+    - `session_summary_pipeline.py`
+  - Keep `TrioReflectionAgent` as orchestration coordinator only; move extraction/decision/persistence branches into pipeline helpers.
+- Step 3: Decompose service container factories by domain.
+  - Create `src/psychoanalyst_app/container/factories/`:
+    - `infrastructure.py` (db, rag, style, cache)
+    - `llm.py` (llm construction and per-agent model wiring)
+    - `agents.py` (agent factories and overrides)
+  - Keep `ServiceContainer` API unchanged; delegate implementation to factory modules.
+- Step 4: Add guardrails for continued lean architecture.
+  - Add `scripts/check_architecture_budgets.py` with configurable thresholds:
+    - `orchestrator_helpers` successor modules: max 450 lines per module.
+    - `trio_reflection_agent.py`: max 650 lines.
+    - `service_container.py`: max 500 lines.
+  - Add import-boundary assertions for gateway/orchestration/agents/services layering.
+  - Wire new target `make validate-architecture` and CI workflow/job invocation.
+- Step 5: Strengthen regression coverage for extracted boundaries.
+  - Add focused unit tests for extracted lifecycle and response-handler modules.
+  - Add reflection pipeline tests that compare pre/post behavior on representative contexts.
+  - Re-run existing orchestration and integration tests unchanged.
+
+P3 execution status (2026-02-14):
+- Completed Step 1 (orchestrator helper package split) with compatibility facade:
+  - Added `src/psychoanalyst_app/orchestration/helpers/active_sessions.py`.
+  - Added `src/psychoanalyst_app/orchestration/helpers/persistence.py`.
+  - Added `src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py`.
+  - Added `src/psychoanalyst_app/orchestration/helpers/response_handler.py`.
+  - Added `src/psychoanalyst_app/orchestration/helpers/__init__.py`.
+  - Reduced `src/psychoanalyst_app/orchestration/orchestrator_helpers.py` to a compatibility re-export facade.
+- Completed Step 2 (reflection internal pipeline decomposition):
+  - Added `src/psychoanalyst_app/agents/reflection/tier2_pipeline.py`.
+  - Added `src/psychoanalyst_app/agents/reflection/tier3_pipeline.py`.
+  - Added `src/psychoanalyst_app/agents/reflection/tier4_pipeline.py`.
+  - Added `src/psychoanalyst_app/agents/reflection/session_summary_pipeline.py`.
+  - Updated `TrioReflectionAgent` internal methods to delegate to pipeline modules while preserving external method signatures and behavior.
+- Completed Step 3 (service container factory decomposition):
+  - Added `src/psychoanalyst_app/container/factories/infrastructure.py`.
+  - Added `src/psychoanalyst_app/container/factories/llm.py`.
+  - Added `src/psychoanalyst_app/container/factories/agents.py`.
+  - Added `src/psychoanalyst_app/container/factories/__init__.py`.
+  - Updated `ServiceContainer` internals to delegate to factory modules while preserving the public container API.
+- Completed Step 4 (architecture budget and boundary guardrails):
+  - Added `scripts/check_architecture_budgets.py` with line-budget checks and layer-boundary assertions.
+  - Added `make validate-architecture` target.
+  - Added CI workflow `.github/workflows/architecture-governance.yml`.
+- Completed Step 5 (targeted regression coverage for extracted boundaries):
+  - Added `tests/unit/test_orchestration_helper_modules.py` covering active-session registry, session lifecycle filtering, response-handler idempotent job scheduling, and error-code extraction behavior.
+  - Added `tests/unit/test_reflection_pipelines.py` covering Tier 2/Tier 3/Tier 4 and session-summary pipeline helpers.
+  - Re-ran unit and focused integration suites to confirm extraction parity.
+
+P3 acceptance criteria:
+1. No public API contract changes for HTTP/WS behavior.
+2. Core hotspot files reduced below target thresholds.
+3. New architecture budget check is green in CI and available via Make target.
+4. Targeted unit/integration suites pass in Docker.
+5. Assessment document updated with completed P3 status and validation evidence.
+
 ## Deliverables
 1. This document updated with final findings and a prioritized improvement backlog.
 2. A companion implementation plan in `docs/plans/` for approved P0/P1 items.
@@ -316,6 +421,7 @@ P2 implementation status (2026-02-14):
 | F-005 | API/state duplication | `src/psychoanalyst_app/api/user_routes.py:191`, `frontend/src/services/versionService.ts:38` | Drift risk across backend/frontend | P1 | Centralize merge and API client usage |
 | F-006 | Workflow policy drift | `Makefile:44`, `docs/README.md:521` | Onboarding and support friction | P1 | Unify Docker/local policy and docs |
 | F-007 | Docs sprawl | `docs/README.md`, `docs/design-principles.md`, `docs/ARCHITECTURE.md` | Discoverability and consistency risk | P2 | Curate active docs and archive boundaries |
+| F-008 | Hotspot concentration | `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`, `src/psychoanalyst_app/agents/trio_reflection_agent.py`, `src/psychoanalyst_app/container/service_container.py` | High change risk and maintainability drag in core flows | P3 | Decompose modules + enforce architecture budgets in CI |
 
 ## Validation Log
 - Static inventory and hotspot scan:
@@ -335,10 +441,20 @@ P2 implementation status (2026-02-14):
   - `docker compose run --rm -v /home/fabian/Projects/llm_psychology/psychoanalyst_app:/app api uv run pytest tests/unit/test_db_executor.py tests/unit/test_service_container.py tests/unit/test_profile_helpers.py tests/unit/test_user_routes.py tests/unit/test_trio_assessment_agent.py tests/unit/test_process_messages.py -q`
   - `docker compose run --rm -v /home/fabian/Projects/llm_psychology/psychoanalyst_app:/app frontend sh -lc 'cd frontend && npm run test -- src/services/__tests__/versionService.test.ts src/contexts/__tests__/AppContext.test.tsx --runInBand'`
   - `make test-dev` -> `272 passed, 1 skipped, 1 deselected`
-  - `docker compose run --rm -v /home/fabian/Projects/llm_psychology/psychoanalyst_app:/app frontend sh -lc 'cd frontend && npm run type-check'` -> fails on pre-existing `MUI Grid size` typing errors in `frontend/src/components/Dashboard.tsx` and `frontend/src/pages/AssessmentPage.tsx` (unrelated to this change-set).
+  - `docker compose run --rm frontend npm run type-check` -> pass.
   - `make validate-docs` -> pass (`Documentation metadata validation passed. Validated active docs: 11`).
+  - `rg --files src frontend/src console-ui/src tests | xargs wc -l | sort -nr | head -n 25` -> confirms remaining hotspot concentration in orchestration/reflection/container modules.
+  - `rg -n "TODO|FIXME|XXX|HACK" src frontend/src console-ui/src tests -g '!**/coverage/**' -g '!**/node_modules/**'` -> no current markers.
+  - `docker compose run --rm api pytest tests/unit/test_trio_agent_orchestrator.py tests/unit/test_process_messages.py tests/unit/test_user_routes.py` -> pass (`11 passed`).
+  - `docker compose run --rm api pytest tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_process_messages.py tests/unit/test_user_routes.py` -> pass (`14 passed`).
+  - `docker compose run --rm api pytest tests/unit/test_service_container.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_process_messages.py tests/unit/test_user_routes.py` -> pass (`36 passed`).
+  - `docker compose run --rm api pytest tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py` -> pass (`14 passed`).
+  - `docker compose run --rm api pytest tests/unit/test_service_container.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_process_messages.py tests/unit/test_user_routes.py tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py` -> pass (`50 passed`).
+  - `docker compose run --rm api pytest tests/integration/test_trio_agents.py -k "full_agent_workflow or assessment_agent_creates_tier3_and_tier4 or reflection_agent_tier3_versioning or reflection_agent_tier3_no_update_when_stable"` -> pass (`4 passed`).
+  - `make validate-architecture` -> pass (`Architecture checks passed. Validated budgets: 4`).
 
 ## Decision Log
 - 2026-02-14: Created local-lean architecture assessment plan and pre-scan candidate improvement list.
 - 2026-02-14: Completed in-depth local-lean architecture assessment and prioritized findings F-001..F-007.
 - 2026-02-14: Adopted active-doc governance with YAML front matter metadata and automated validation.
+- 2026-02-14: Added P3 plan and new finding F-008 focused on hotspot decomposition and architecture guardrails.
