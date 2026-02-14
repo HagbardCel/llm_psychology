@@ -9,13 +9,23 @@ Pure Trio implementation using structured concurrency.
 
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Any
 
 import trio
 
+from psychoanalyst_app.agents.assessment.recommendation_payloads import (
+    build_recommendation_metadata,
+    build_structured_recommendations,
+    format_recommendations,
+)
+from psychoanalyst_app.agents.assessment.scoring import resolve_recommendation_score
+from psychoanalyst_app.agents.assessment.selection_handling import (
+    build_continuation_choice_response,
+    build_selection_pending_response,
+)
+from psychoanalyst_app.agents.assessment.topic_extraction import extract_key_topics
 from psychoanalyst_app.agents.parsing import parse_continuation_choice, parse_style_selection
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.data_models import (
@@ -38,7 +48,6 @@ from psychoanalyst_app.orchestration.models import (
     TherapyStyleRecommendation,
     build_agent_response,
     continue_agent_response,
-    direct_agent_response,
 )
 from psychoanalyst_app.prompts.assessment_prompts import (
     TIER3_INITIAL_FORMULATION_PROMPT,
@@ -117,29 +126,7 @@ class TrioAssessmentAgent:
             if awaiting_continuation:
                 # Parse continuation choice
                 choice = parse_continuation_choice(message)
-                if choice == "finish":
-                    return direct_agent_response(
-                        content="That sounds like a good plan. Take your time to \
-reflect on what we've discussed today. I look forward to our first therapy session \
-together. Take care!",
-                        next_action="end_session",
-                        metadata={"session_ended": True},
-                    )
-                elif choice == "continue":
-                    return direct_agent_response(
-                        content="Wonderful! Let's begin our first therapy session. \
-I'm here to support you.",
-                        next_action="start_therapy",
-                        workflow_event=None,
-                        metadata={"new_session_required": True},
-                    )
-                else:
-                    return direct_agent_response(
-                        content="I'm not sure which option you'd prefer. Would you \
-like to finish for today (option 1) or continue with our first therapy session now \
-(option 2)?",
-                        next_action="await_continuation_choice",
-                    )
+                return build_continuation_choice_response(choice)
 
             # Check if recommendations have been made recently
             recommendation_signature = (
@@ -203,16 +190,9 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             )
 
             # Convert to structured format
-            structured_recs = []
-            for rank, rec in enumerate(recommendations[:3]):  # Top 3
-                structured_recs.append(
-                    TherapyStyleRecommendation(
-                        style_name=rec["style_id"],
-                        score=self._resolve_recommendation_score(rec, rank),
-                        explanation=rec["assessment"],
-                        key_topics=self._extract_key_topics(rec),
-                    )
-                )
+            structured_recs = build_structured_recommendations(
+                recommendations, limit=3
+            )
 
             # Format response content
             content = self._format_recommendations(structured_recs)
@@ -223,14 +203,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
                 next_state=None,
                 workflow_event=None,
                 metadata={
-                    "recommendations": [
-                        {
-                            "style_id": rec.style_name,
-                            "explanation": rec.explanation,
-                            "score": rec.score,
-                        }
-                        for rec in structured_recs
-                    ],
+                    "recommendations": build_recommendation_metadata(structured_recs),
                     "awaiting_selection": True,
                     "is_direct_response": True,
                 },
@@ -246,40 +219,11 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
 
     def _resolve_recommendation_score(self, recommendation: dict[str, Any], rank: int) -> float:
         """Resolve recommendation score with deterministic rank fallback."""
-        raw_score = recommendation.get("score")
-        if isinstance(raw_score, (int, float)):
-            return max(0.0, min(1.0, float(raw_score)))
-        return max(0.1, 0.9 - (rank * 0.1))
+        return resolve_recommendation_score(recommendation, rank)
 
     def _extract_key_topics(self, recommendation: dict[str, Any]) -> list[str]:
         """Extract key topics from recommendation payload with safe fallbacks."""
-        for key in ("key_topics", "topics"):
-            value = recommendation.get(key)
-            if isinstance(value, list):
-                topics = [str(item).strip() for item in value if str(item).strip()]
-                if topics:
-                    return topics[:5]
-
-        assessment = recommendation.get("assessment")
-        if not isinstance(assessment, str):
-            return []
-
-        extracted: list[str] = []
-        for line in assessment.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            topic = re.sub(r"^[-*0-9.)\s]+", "", stripped).strip()
-            if not topic:
-                continue
-            if topic.endswith("."):
-                topic = topic[:-1].strip()
-            if not topic:
-                continue
-            extracted.append(topic)
-            if len(extracted) == 3:
-                break
-        return extracted
+        return extract_key_topics(recommendation)
 
     async def process_selection(
         self,
@@ -298,16 +242,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             AgentResponse with confirmation
         """
         logger.info("Received assessment style selection: %s", selected_style)
-        content = (
-            "Thanks for sharing your preference. "
-            "Therapy style selection is handled through the workflow UI. "
-            "Please choose your style there so the backend can create your plan."
-        )
-        return direct_agent_response(
-            content=content,
-            next_action="await_selection",
-            metadata={"selected_style": selected_style},
-        )
+        return build_selection_pending_response(selected_style)
 
     def _format_recommendations(
         self, recommendations: list[TherapyStyleRecommendation]
@@ -321,18 +256,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         Returns:
             Formatted string
         """
-        parts = [
-            "Based on our intake session, I'd like to recommend the "
-            "following therapy approaches:\n"
-        ]
-
-        for i, rec in enumerate(recommendations, 1):
-            parts.append(f"\n{i}. {rec.style_name.upper()} Therapy")
-            parts.append(f"   {rec.explanation}\n")
-
-        parts.append("\nWhich approach resonates most with you?")
-
-        return "\n".join(parts)
+        return format_recommendations(recommendations)
 
     async def _generate_recommendations(
         self, message_history: list

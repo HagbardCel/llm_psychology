@@ -5,7 +5,6 @@ This module manages conversation context, streams LLM responses using Trio,
 and integrates RAG retrieval for enhanced responses.
 """
 
-import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -16,15 +15,18 @@ import trio
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.data_models import Message, TherapyPlan
 from psychoanalyst_app.orchestration.models import ConversationContext
+from psychoanalyst_app.orchestration.runtime.session_bootstrap import (
+    load_conversation_context,
+)
+from psychoanalyst_app.orchestration.runtime.stream_dispatch import (
+    run_background_streamer,
+    send_json_message,
+    send_stream_chunk,
+    send_typing_indicator,
+)
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
-from psychoanalyst_app.utils.ws_messages import (
-    chat_chunk_message,
-    error_message,
-    typing_message,
-    ws_message,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -122,18 +124,12 @@ class TrioConversationManager:
             chunk: Text chunk to send
             is_complete: Whether this is the final chunk
         """
-        ws = self.websockets.get(session_id)
-        if ws:
-            try:
-                await ws.send(json.dumps(chat_chunk_message(chunk, is_complete=is_complete)))
-            except Exception as e:
-                logger.error(f"Error sending chunk to session {session_id}: {e}")
-        else:
-            logger.warning(
-                f"No WebSocket registered for session {session_id} "
-                f"when trying to send chunk. "
-                f"Registered sessions: {list(self.websockets.keys())}"
-            )
+        await send_stream_chunk(
+            websockets=self.websockets,
+            session_id=session_id,
+            chunk=chunk,
+            is_complete=is_complete,
+        )
 
     async def send_typing_indicator(self, session_id: str, is_typing: bool):
         """
@@ -143,21 +139,11 @@ class TrioConversationManager:
             session_id: Session identifier
             is_typing: Whether typing started (True) or stopped (False)
         """
-        ws = self.websockets.get(session_id)
-        if ws:
-            try:
-                await ws.send(json.dumps(typing_message(is_typing)))
-            except Exception as e:
-                logger.error(
-                    f"Error sending typing indicator to session {session_id}: {e}"
-                )
-        else:
-            logger.debug(
-                "Skipping typing indicator for session %s (no websocket registered). "
-                "Registered sessions: %s",
-                session_id,
-                list(self.websockets.keys()),
-            )
+        await send_typing_indicator(
+            websockets=self.websockets,
+            session_id=session_id,
+            is_typing=is_typing,
+        )
 
     async def send_json_message(
         self, session_id: str, message_type: str, data: dict[str, Any]
@@ -170,22 +156,12 @@ class TrioConversationManager:
             message_type: Type string for the payload
             data: JSON-serializable payload
         """
-        ws = self.websockets.get(session_id)
-        if not ws:
-            logger.warning(
-                "No WebSocket registered for session %s when sending %s (active sessions: %s)",
-                session_id,
-                message_type,
-                list(self.websockets.keys()),
-            )
-            return
-
-        try:
-            await ws.send(json.dumps(ws_message(message_type, data)))
-        except Exception:
-            logger.error(
-                "Failed to send %s message for session %s", message_type, session_id, exc_info=True
-            )
+        await send_json_message(
+            websockets=self.websockets,
+            session_id=session_id,
+            message_type=message_type,
+            data=data,
+        )
 
     def stream_response_in_background(
         self, prompt: str, session_id: str, use_rag: bool = True
@@ -202,41 +178,16 @@ class TrioConversationManager:
 
     async def _background_streamer(self, prompt: str, session_id: str, use_rag: bool):
         """The actual background task that streams the response."""
-        ws = self.websockets.get(session_id)
-        if not ws:
-            logger.error(
-                f"No websocket registered for session {session_id}. "
-                f"Cannot stream background response."
-            )
-            return
-
-        context = await self.get_context(session_id)
-        is_streaming = False
-        try:
+        async def _stream(context: ConversationContext):
             async for chunk in self.stream_response(prompt, context, use_rag):
-                if not is_streaming:
-                    is_streaming = True
-                    await ws.send(json.dumps(typing_message(True)))
+                yield chunk
 
-                await ws.send(json.dumps(chat_chunk_message(chunk, is_complete=False)))
-
-            await ws.send(json.dumps(chat_chunk_message("", is_complete=True)))
-
-        except Exception as e:
-            logger.error(
-                f"Error in background streamer for session {session_id}: {e}",
-                exc_info=True,
-            )
-            await ws.send(
-                json.dumps(
-                    error_message(
-                        "An error occurred while generating the initial response. Please try again."
-                    )
-                )
-            )
-        finally:
-            if is_streaming:
-                await ws.send(json.dumps(typing_message(False)))
+        await run_background_streamer(
+            session_id=session_id,
+            websockets=self.websockets,
+            get_context=self.get_context,
+            stream_response=_stream,
+        )
 
     async def stream_response(
         self,
@@ -525,32 +476,10 @@ Based on the above context and your therapeutic approach, respond to:
 
         # Load from database
         try:
-            session = await self.db_service.get_session(session_id)
-            if not session:
-                raise ValueError(f"Session not found: {session_id}")
-
-            user_profile = await self.db_service.get_user_profile(session.user_id)
-            if not user_profile:
-                raise ValueError(f"User profile not found: {session.user_id}")
-
-            # Get current therapy plan if exists
-            therapy_plan = None
-            try:
-                therapy_plan = await self.db_service.get_latest_therapy_plan(
-                    session.user_id
-                )
-            except Exception as e:
-                logger.warning(f"No therapy plan found for user {session.user_id}: {e}")
-
-            # Build context
-            context = ConversationContext(
+            context = await load_conversation_context(
+                db_service=self.db_service,
+                config=self.config,
                 session_id=session_id,
-                user_profile=user_profile,
-                therapy_plan=therapy_plan,
-                message_history=session.transcript,
-                topics_covered=[topic.name for topic in session.topics],
-                session_start_time=session.timestamp,
-                duration_minutes=self.config.SESSION_DURATION_MINUTES,
             )
 
             # Cache it

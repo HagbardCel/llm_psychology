@@ -13,16 +13,26 @@ from typing import Any
 
 import trio
 
+from psychoanalyst_app.agents.psychoanalyst.prompt_context import (
+    build_continuation_prompt_with_context,
+    build_plan_context,
+    default_style_instructions,
+    load_patient_context,
+)
+from psychoanalyst_app.agents.psychoanalyst.response_mode import (
+    resolve_response_mode,
+)
+from psychoanalyst_app.agents.psychoanalyst.time_policy import should_offer_extension
+from psychoanalyst_app.agents.psychoanalyst.topic_detection import is_in_deep_topic
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.briefing_models import BriefingStatus
-from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
     WorkflowEvent,
 )
 from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
-    build_continuation_prompt,
     build_initial_prompt,
     build_resumption_prompt,
 )
@@ -171,23 +181,10 @@ class TrioPsychoanalystAgent:
                 )
 
             # Check if session should end
-            if context.user_profile.status == UserStatus.ASSESSMENT_COMPLETE:
-                # First message in therapy - request transition to IN_PROGRESS
-                next_action = "transition"
-                workflow_event = WorkflowEvent.START_THERAPY
-            elif context.user_profile.status == UserStatus.PLAN_COMPLETE:
-                # Starting new session after plan update - request transition to IN_PROGRESS
-                next_action = "transition"
-                workflow_event = WorkflowEvent.START_THERAPY
-            elif context.is_time_up:
-                next_action = "transition"
-                workflow_event = WorkflowEvent.COMPLETE_SESSION
-            elif self._should_offer_extension(context):
-                next_action = "offer_extension"
-                workflow_event = None
-            else:
-                next_action = "continue"
-                workflow_event = None
+            next_action, workflow_event = resolve_response_mode(
+                context,
+                should_offer_extension=self._should_offer_extension(context),
+            )
 
             return AgentResponse(
                 content=prompt,
@@ -260,9 +257,9 @@ class TrioPsychoanalystAgent:
         if patient_context:
             plan_context = f"{patient_context}\n\n{plan_context}"
 
-        style_instructions = "Conduct a general psychoanalytic session."
-        if selected_style and self.style_service.get_style_pack(selected_style):
-            style_instructions = self.style_service.get_psychoanalyst_prompt(selected_style)
+        style_instructions = default_style_instructions(
+            selected_style, self.style_service
+        )
 
         return build_initial_prompt(
             user_name=user_name,
@@ -289,49 +286,14 @@ class TrioPsychoanalystAgent:
         Returns:
             Continuation prompt for LLM
         """
-        # Get RAG context from recent conversation
-        recent_messages = context.message_history[-3:]
-        recent_context = " ".join([msg.content for msg in recent_messages] + [message])
-
-        # Retrieve relevant knowledge (run in thread)
-        if selected_style:
-            knowledge_source = self.style_service.get_knowledge_source(selected_style)
-            context_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                recent_context,
-                1,  # n_results
-                knowledge_source,  # filter_source
-            )
-        else:
-            context_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                recent_context,
-                1,  # n_results
-            )
-
-        # Build plan context
-        plan_context = await self._build_plan_context(therapy_plan)
-        patient_context = await self._load_patient_context(
-            context.user_profile.user_id,
-            exclude_session_ids={context.session_id},
-        )
-        if patient_context:
-            plan_context = f"{patient_context}\n\n{plan_context}"
-
-        # Get style instructions
-        style_instructions = "Conduct a general psychoanalytic session."
-        if selected_style and self.style_service.get_style_pack(selected_style):
-            style_instructions = self.style_service.get_psychoanalyst_prompt(selected_style)
-
-        knowledge_text = (
-            context_knowledge[0]["content"] if context_knowledge else "None"
-        )
-
-        return build_continuation_prompt(
-            plan_context=plan_context,
-            additional_knowledge=knowledge_text,
-            time_prompt="",
-            style_instructions=style_instructions,
+        return await build_continuation_prompt_with_context(
+            message=message,
+            context=context,
+            therapy_plan=therapy_plan,
+            selected_style=selected_style,
+            rag_service=self.rag_service,
+            style_service=self.style_service,
+            db_service=self.db_service,
         )
 
     def _should_offer_extension(self, context: ConversationContext) -> bool:
@@ -344,13 +306,9 @@ class TrioPsychoanalystAgent:
         Returns:
             True if extension should be offered
         """
-        # Offer extension only for short sessions that are still extendable.
-        # Deep-topic detection is intentionally conservative for now.
-        return (
-            context.time_remaining_minutes <= 5
-            and context.can_extend
-            and context.time_remaining_minutes > 0
-            and not self._is_in_deep_topic(context)
+        return should_offer_extension(
+            context,
+            in_deep_topic=self._is_in_deep_topic(context),
         )
 
     def _is_in_deep_topic(self, context: ConversationContext) -> bool:
@@ -359,8 +317,7 @@ class TrioPsychoanalystAgent:
         Current behavior is an explicit fallback: return False until
         topic-depth heuristics are introduced.
         """
-        _ = context
-        return False
+        return is_in_deep_topic(context)
 
     async def _build_plan_context(self, therapy_plan: TherapyPlan) -> str:
         """
@@ -372,39 +329,11 @@ class TrioPsychoanalystAgent:
         Returns:
             Formatted plan context
         """
-        selected_style = therapy_plan.selected_therapy_style
-        plan_focus = therapy_plan.plan_details.get("focus", "")
-
-        # Get relevant knowledge (run in thread)
-        if selected_style:
-            knowledge_source = self.style_service.get_knowledge_source(selected_style)
-            relevant_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                plan_focus,
-                2,  # n_results
-                knowledge_source,  # filter_source
-            )
-        else:
-            relevant_knowledge = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                plan_focus,
-                2,  # n_results
-            )
-
-        # Build context
-        context = f"""
-        Therapy Plan (Version {therapy_plan.version}):
-        Focus: {therapy_plan.plan_details.get("focus", "General exploration")}
-        Goals: {therapy_plan.plan_details.get("goals", "Explore thoughts and feelings")}
-        Techniques: {therapy_plan.plan_details.get("techniques", "Active listening and reflection")}
-
-        Relevant Psychological Knowledge:
-        """
-
-        for i, knowledge in enumerate(relevant_knowledge, 1):
-            context += f"{i}. From {knowledge['source']}: {knowledge['content']}\n"
-
-        return context
+        return await build_plan_context(
+            therapy_plan,
+            self.rag_service,
+            self.style_service,
+        )
 
     async def _load_patient_context(
         self, user_id: str, *, exclude_session_ids: set[str] | None = None
@@ -421,190 +350,11 @@ class TrioPsychoanalystAgent:
         Returns:
             Formatted patient context string or None if no data available
         """
-        exclude_session_ids = exclude_session_ids or set()
-        try:
-            # Load all 4 tiers concurrently
-            async with trio.open_nursery() as nursery:
-                tier1_result = {"data": None}
-                tier2_result = {"data": None}
-                tier3_result = {"data": None}
-                tier4_result = {"data": None}
-
-                async def load_tier1():
-                    tier1_result["data"] = (
-                        await self.db_service.get_user_profile(user_id)
-                    )
-
-                async def load_tier2():
-                    # Read-only: do not trigger LLM calls during context loading.
-                    limit = 5
-                    enriched = await self.db_service.get_recent_sessions(
-                        user_id, limit=limit, enriched_only=True
-                    )
-                    tier2_result["data"] = enriched
-
-                    # Opportunistically enqueue missing enrichments for future sessions.
-                    if len(enriched) < limit:
-                        recent_any = await self.db_service.get_recent_sessions(
-                            user_id, limit=max(limit * 3, 10), enriched_only=False
-                        )
-                        for session in recent_any:
-                            if session.session_id in exclude_session_ids:
-                                continue
-                            if getattr(session, "enriched", False):
-                                continue
-                            await self.db_service.enqueue_session_enrichment_job(
-                                session.session_id, user_id
-                            )
-
-                async def load_tier3():
-                    tier3_result["data"] = (
-                        await self.db_service.get_latest_patient_analysis(user_id)
-                    )
-
-                async def load_tier4():
-                    tier4_result["data"] = (
-                        await self.db_service.get_latest_therapy_plan(user_id)
-                    )
-
-                nursery.start_soon(load_tier1)
-                nursery.start_soon(load_tier2)
-                nursery.start_soon(load_tier3)
-                nursery.start_soon(load_tier4)
-
-            # Extract results
-            user_profile = tier1_result["data"]
-            recent_sessions = tier2_result["data"]
-            current_analysis = tier3_result["data"]
-            treatment_plan = tier4_result["data"]
-
-            # If no data at all, return None
-            has_data = any(
-                [user_profile, recent_sessions, current_analysis, treatment_plan]
-            )
-            if not has_data:
-                logger.info(f"No patient context data for user {user_id}")
-                return None
-
-            # Build formatted context
-            context_parts = []
-
-            # Tier 1: Patient Background
-            if user_profile:
-                context_parts.append("=== PATIENT BACKGROUND ===")
-                context_parts.append(
-                    f"Patient: {user_profile.alias or user_profile.name}"
-                )
-
-                if user_profile.cultural_background:
-                    context_parts.append(
-                        f"Cultural Background: "
-                        f"{user_profile.cultural_background}"
-                    )
-
-                if user_profile.family_atmosphere:
-                    context_parts.append(
-                        f"Family: {user_profile.family_atmosphere}"
-                    )
-
-                if user_profile.relationship_to_work:
-                    context_parts.append(
-                        f"Work: {user_profile.relationship_to_work}"
-                    )
-
-                if user_profile.current_situation:
-                    context_parts.append(
-                        f"Current Situation: "
-                        f"{user_profile.current_situation}"
-                    )
-
-                context_parts.append("")  # Blank line
-
-            # Tier 3: Clinical Formulation (most important for therapist)
-            if current_analysis:
-                analysis = current_analysis.analysis_data
-                context_parts.append("=== CLINICAL FORMULATION ===")
-                context_parts.append(f"(Version {current_analysis.version})")
-                context_parts.append(
-                    f"Current Focus: {analysis.current_focus.theme}"
-                )
-                context_parts.append(f"  {analysis.current_focus.salience}")
-
-                if analysis.transference.other_patterns:
-                    context_parts.append(
-                        f"Transference: {analysis.transference.other_patterns}"
-                    )
-
-                if analysis.narratives:
-                    context_parts.append("Recurring Narratives:")
-                    for narrative in analysis.narratives[:3]:  # Max 3
-                        context_parts.append(f"  - {narrative.title}: {narrative.description}")
-
-                if analysis.defenses.primary_defenses:
-                    context_parts.append(
-                        f"Primary Defenses: "
-                        f"{', '.join(analysis.defenses.primary_defenses[:3])}"
-                    )
-
-                if analysis.orientation.pacing:
-                    context_parts.append(
-                        f"Therapeutic Pacing: {analysis.orientation.pacing}"
-                    )
-
-                if analysis.orientation.risk_areas:
-                    context_parts.append(
-                        f"Risk Areas: "
-                        f"{', '.join(analysis.orientation.risk_areas[:3])}"
-                    )
-
-                context_parts.append("")  # Blank line
-
-            # Tier 4: Treatment Goals
-            if treatment_plan:
-                context_parts.append("=== TREATMENT GOALS ===")
-                for i, goal in enumerate(treatment_plan.initial_goals[:3], 1):
-                    context_parts.append(f"{i}. {goal}")
-
-                if treatment_plan.current_progress:
-                    # Truncate to first 200 chars for conciseness
-                    progress = treatment_plan.current_progress[:200]
-                    if len(treatment_plan.current_progress) > 200:
-                        progress += "..."
-                    context_parts.append(f"Progress: {progress}")
-
-                context_parts.append("")  # Blank line
-
-            # Tier 2: Recent Session Highlights (brief summaries only)
-            if recent_sessions and len(recent_sessions) > 0:
-                context_parts.append(
-                    f"=== RECENT SESSIONS (Last {len(recent_sessions)}) ==="
-                )
-                for session in recent_sessions:
-                    if session.enriched and session.psychological_summary:
-                        # Take first sentence or 100 chars
-                        summary = session.psychological_summary.split(".")[0]
-                        if len(summary) > 100:
-                            summary = summary[:100] + "..."
-                        date = session.timestamp.strftime("%Y-%m-%d")
-                        context_parts.append(f"[{date}] {summary}")
-
-                        # Add key themes if available
-                        if session.key_themes:
-                            themes = ", ".join(session.key_themes[:3])
-                            context_parts.append(f"  Themes: {themes}")
-                    else:
-                        # Session not enriched yet - just note it exists
-                        date = session.timestamp.strftime("%Y-%m-%d")
-                        context_parts.append(f"[{date}] Session recorded")
-
-            return "\n".join(context_parts)
-
-        except Exception as e:
-            logger.error(
-                f"Error loading patient context for user {user_id}: {e}",
-                exc_info=True,
-            )
-            return None
+        return await load_patient_context(
+            self.db_service,
+            user_id,
+            exclude_session_ids=exclude_session_ids,
+        )
 
 
     async def get_closing_response(self, therapy_plan: TherapyPlan) -> str:
@@ -621,9 +371,9 @@ class TrioPsychoanalystAgent:
         plan_context = await self._build_plan_context(therapy_plan)
 
         # Get style instructions
-        style_instructions = "Conduct a general psychoanalytic session."
-        if selected_style and self.style_service.get_style_pack(selected_style):
-            style_instructions = self.style_service.get_psychoanalyst_prompt(selected_style)
+        style_instructions = default_style_instructions(
+            selected_style, self.style_service
+        )
 
         closing_prompt = CLOSING_SESSION_PROMPT.format(
             plan_context=plan_context, style_instructions=style_instructions

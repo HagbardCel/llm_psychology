@@ -14,9 +14,7 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.api_models import (
-    RequiredWorkflowAction,
     WorkflowNextActionDTO,
 )
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
@@ -40,9 +38,15 @@ from psychoanalyst_app.orchestration.process_messages import (
     stream_agent_response,
 )
 from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
+from psychoanalyst_app.orchestration.runtime.agent_resolution import (
+    get_or_create_cached_agent,
+)
+from psychoanalyst_app.orchestration.runtime.workflow_transitions import (
+    emit_workflow_next_action as emit_workflow_next_action_runtime,
+    get_workflow_next_action as get_workflow_next_action_runtime,
+)
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
-from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 
 # Agent imports moved to factory methods to avoid circular dependency
 
@@ -287,19 +291,12 @@ class TrioAgentOrchestrator:
         Returns:
             WorkflowNextActionDTO describing the required action
         """
-        trio_db_service = self.service_container.get("trio_db_service")
-        profile = await trio_db_service.get_user_profile(user_id)
-        plan = await trio_db_service.get_latest_therapy_plan(user_id)
-        workflow_state = await self.workflow_engine.get_user_state(user_id)
-        if session is None and session_id:
-            session = await self.session_lifecycle.get_session_info(
-                user_id, session_id
-            )
-        return resolve_next_action(
+        return await get_workflow_next_action_runtime(
+            service_container=self.service_container,
+            workflow_engine=self.workflow_engine,
+            session_lifecycle=self.session_lifecycle,
             user_id=user_id,
-            profile=profile,
-            plan=plan,
-            workflow_state=workflow_state,
+            session_id=session_id,
             session=session,
         )
 
@@ -309,43 +306,15 @@ class TrioAgentOrchestrator:
         """
         Send the workflow next action event to the WebSocket session if available.
         """
-        resolved_session_id = (
-            session_id or self.session_lifecycle.get_active_session_id(user_id)
+        await emit_workflow_next_action_runtime(
+            user_id=user_id,
+            session_id=session_id,
+            session_lifecycle=self.session_lifecycle,
+            conversation_manager=self.conversation_manager,
+            response_handler=self.response_handler,
+            send_initial_greeting=self.send_initial_greeting,
+            get_workflow_next_action=self.get_workflow_next_action,
         )
-        if not resolved_session_id:
-            return
-        try:
-            action = await self.get_workflow_next_action(
-                user_id, session_id=resolved_session_id
-            )
-            await self.conversation_manager.send_json_message(
-                resolved_session_id,
-                "workflow_next_action",
-                action.model_dump(mode="json"),
-            )
-            if action.workflow_state == WorkflowState.REFLECTION_IN_PROGRESS.value:
-                await self.response_handler.ensure_reflection_job(
-                    user_id, resolved_session_id
-                )
-            if action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE:
-                await self.response_handler.emit_assessment_recommendations(
-                    resolved_session_id, user_id
-                )
-            if action.required_action in (
-                RequiredWorkflowAction.START_INTAKE,
-                RequiredWorkflowAction.CONTINUE_THERAPY,
-            ):
-                if not self.conversation_manager.has_initial_greeting_sent(
-                    resolved_session_id
-                ):
-                    self.send_initial_greeting(user_id, resolved_session_id)
-        except Exception:
-            logger.warning(
-                "Failed to emit workflow next action (user=%s, session=%s)",
-                user_id,
-                resolved_session_id,
-                exc_info=True,
-            )
 
     async def emit_assessment_recommendations(
         self, user_id: str, session_id: str
@@ -520,26 +489,16 @@ class TrioAgentOrchestrator:
         Raises:
             ValueError: If agent_type is unknown
         """
-        cache_key = f"{agent_type}_{user_id}"
-
-        if cache_key in self.agents:
-            logger.debug(f"Retrieved cached agent: {cache_key}")
-            return self.agents[cache_key]
-
-        # Create agent instance based on type via the container
-        logger.info(f"Creating agent: {agent_type} for user {user_id}")
-        user_context = UserContext(user_id=user_id)
         try:
-            agent = self.service_container.create_agent(agent_type, user_context)
-        except ValueError as exc:
+            return await get_or_create_cached_agent(
+                cache=self.agents,
+                service_container=self.service_container,
+                agent_type=agent_type,
+                user_id=user_id,
+            )
+        except ValueError:
             logger.error(f"Unknown agent type requested: {agent_type}")
             raise
-
-        # Cache the agent instance
-        self.agents[cache_key] = agent
-        logger.info(f"Cached agent: {cache_key}")
-
-        return agent
 
     async def end_session(
         self, user_id: str, session_id: str, reason: str | None = None

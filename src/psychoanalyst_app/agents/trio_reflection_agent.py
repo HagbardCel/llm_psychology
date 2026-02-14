@@ -8,14 +8,21 @@ Pure Trio implementation using structured concurrency.
 """
 
 import logging
-import uuid
 from datetime import datetime
 from typing import Any
 
 import trio
 
-from psychoanalyst_app.agents.reflection.helpers import (
-    maybe_update_tier1_profile,
+from psychoanalyst_app.agents.reflection.insights_pipeline import (
+    gather_therapeutic_insights,
+    generate_comprehensive_reflection_data,
+)
+from psychoanalyst_app.agents.reflection.message_formatting import (
+    format_reflection_summary,
+)
+from psychoanalyst_app.agents.reflection.plan_snapshot import (
+    build_plan_snapshot,
+    is_noop_plan_update,
 )
 from psychoanalyst_app.agents.reflection.session_summary_pipeline import (
     generate_session_briefing,
@@ -25,15 +32,12 @@ from psychoanalyst_app.agents.reflection.tier2_pipeline import (
     apply_tier2_enrichment,
     enrich_session_tier2,
     ensure_recent_sessions_enriched,
-    load_or_enrich_session_record,
 )
 from psychoanalyst_app.agents.reflection.tier3_pipeline import (
     evaluate_tier3_update_necessity,
     generate_updated_tier3_analysis,
-    prepare_tier3_update_payload,
 )
 from psychoanalyst_app.agents.reflection.tier4_pipeline import (
-    apply_tier4_updates,
     generate_combined_recommendations,
 )
 from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
@@ -42,16 +46,11 @@ from psychoanalyst_app.config import Settings
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.exceptions import ReflectionError
 from psychoanalyst_app.models.data_models import (
-    AnalyticOrientation,
-    CurrentFocus,
-    DefensiveOrganization,
     DetailedSession,
     PatientAnalysis,
     PatientAnalysisVersion,
-    RecurringNarrative,
     Session,
     TherapyPlan,
-    TransferenceImpressions,
 )
 from psychoanalyst_app.models.structured_output_models import (
     StructuredTherapyPlanOutput,
@@ -269,38 +268,10 @@ class TrioReflectionAgent:
         plan_output: StructuredTherapyPlanOutput,
     ) -> TherapyPlan:
         """Build an in-memory plan snapshot from structured output."""
-        if current_plan:
-            is_noop_update = self._is_noop_plan_update(current_plan, plan_output)
-            plan_id = current_plan.plan_id
-            created_at = current_plan.created_at
-            version = (
-                current_plan.version if is_noop_update else current_plan.version + 1
-            )
-            session_briefing = current_plan.session_briefing
-            selected_style = (
-                plan_output.selected_therapy_style
-                or current_plan.selected_therapy_style
-            )
-        else:
-            plan_id = f"pending_{uuid.uuid4().hex[:12]}"
-            created_at = datetime.now()
-            version = 1
-            session_briefing = None
-            selected_style = plan_output.selected_therapy_style
-
-        return TherapyPlan(
-            plan_id=plan_id,
+        return build_plan_snapshot(
+            current_plan,
+            plan_output,
             user_id=self.user_context.user_id,
-            created_at=created_at,
-            updated_at=datetime.now(),
-            version=version,
-            selected_therapy_style=selected_style,
-            plan_details=plan_output.plan_details,
-            initial_goals=plan_output.initial_goals,
-            current_progress=plan_output.current_progress,
-            planned_interventions=plan_output.planned_interventions,
-            status=plan_output.status,
-            session_briefing=session_briefing,
         )
 
     @staticmethod
@@ -308,16 +279,7 @@ class TrioReflectionAgent:
         current_plan: TherapyPlan | None,
         plan_output: StructuredTherapyPlanOutput,
     ) -> bool:
-        if not current_plan:
-            return False
-        return (
-            plan_output.selected_therapy_style == current_plan.selected_therapy_style
-            and plan_output.plan_details == current_plan.plan_details
-            and plan_output.initial_goals == current_plan.initial_goals
-            and plan_output.current_progress == current_plan.current_progress
-            and plan_output.planned_interventions == current_plan.planned_interventions
-            and plan_output.status == current_plan.status
-        )
+        return is_noop_plan_update(current_plan, plan_output)
 
     def _format_reflection_summary(self, reflection: dict[str, Any]) -> str:
         """
@@ -329,33 +291,7 @@ class TrioReflectionAgent:
         Returns:
             Formatted summary string
         """
-        summary_parts = []
-
-        # Session context
-        if "session_context" in reflection:
-            ctx = reflection["session_context"]
-            summary_parts.append("## Session Reflection\n")
-            summary_parts.append(f"Key themes: {', '.join(ctx.get('key_themes', []))}")
-            summary_parts.append(
-                f"Emotional state: {ctx.get('emotional_state', 'N/A')}"
-            )
-
-        # Memory insights
-        if "therapeutic_memory" in reflection:
-            mem = reflection["therapeutic_memory"]
-            summary_parts.append("\n## Progress Overview")
-            summary_parts.append(f"Total sessions: {mem.get('total_sessions', 0)}")
-            summary_parts.append(
-                f"Relationship quality: {mem.get('relationship_quality', 'developing')}"
-            )
-
-        # Plan recommendations
-        if "plan_recommendations" in reflection and reflection["plan_recommendations"]:
-            summary_parts.append("\n## Recommendations")
-            for rec in reflection["plan_recommendations"][:3]:
-                summary_parts.append(f"- {rec.get('description', '')}")
-
-        return "\n".join(summary_parts)
+        return format_reflection_summary(reflection)
 
     # ===== LEGACY INTERFACE (for backward compatibility) =====
 
@@ -489,127 +425,14 @@ class TrioReflectionAgent:
         )
 
         try:
-            # Analyze session context using memory agent (FIXED: added await)
-            session_context = await self.memory_agent.analyze_session_context(session)
-
-            # Get therapeutic memory and patterns (FIXED: added await)
-            memory = await self.memory_agent.get_therapeutic_memory()
-            patterns = await self.memory_agent.identify_patterns()
-
-            # Get continuity context (FIXED: added await)
-            continuity_context = await self.memory_agent.get_continuity_context(
-                [topic.name for topic in session.topics]
-            )
-
-            session_record, tier2_enrichment = await load_or_enrich_session_record(
-                self.db_service,
-                self.llm_service,
-                session,
-            )
-
-            # Tier 1: rare background updates (LLM-gated)
-            tier1_profile_output = None
-            current_profile = await self.db_service.get_user_profile(
-                self.user_context.user_id
-            )
-            if current_profile:
-                tier1_profile_output = await maybe_update_tier1_profile(
-                    self.llm_service, current_profile, session_record
-                )
-
-            (
-                tier3_updated,
-                tier3_version,
-                tier3_update,
-                tier3_change_summary,
-            ) = await prepare_tier3_update_payload(
-                self.db_service,
-                self.llm_service,
-                self.user_context.user_id,
-                session_record,
-            )
-
-            # Assess plan effectiveness if plan exists (FIXED: added await)
-            plan_assessment = None
-            plan_recommendations = []
-
-            if current_plan:
-                plan_assessment = await self.planning_agent.assess_plan_effectiveness(
-                    current_plan
-                )
-                plan_recommendations = (
-                    await self.planning_agent.recommend_plan_adjustments(current_plan)
-                )
-            tier4_updated = False
-            session_summary_payload = await generate_session_summary_payload(
-                self.llm_service, session_record
-            )
-            session_summary = session_summary_payload["summary"]
-            if current_plan:
-                tier4_updated = await apply_tier4_updates(
-                    self.db_service,
-                    self.planning_agent,
-                    self.user_context.user_id,
-                    current_plan,
-                    session_context,
-                    plan_assessment,
-                    plan_recommendations,
-                    session_summary,
-                    tier3_updated,
-                )
-
-            # Compile comprehensive reflection
-            reflection = {
-                "session_id": session.session_id,
-                "timestamp": session.timestamp.isoformat(),
-                "user_id": self.user_context.user_id,
-                # Memory analysis
-                "session_context": {
-                    "key_themes": session_context.key_themes,
-                    "emotional_state": session_context.emotional_state,
-                    "insights": session_context.insights,
-                    "progress_indicators": session_context.progress_indicators,
-                },
-                "therapeutic_memory": {
-                    "total_sessions": len(memory.session_contexts),
-                    "relationship_quality": memory.relationship_quality,
-                    "dominant_themes": list(memory.recurring_themes.keys())[:5],
-                    "emotional_progression": (
-                        memory.emotional_patterns[-5:]
-                        if memory.emotional_patterns
-                        else []
-                    ),
-                },
-                "patterns": patterns,
-                "continuity_context": continuity_context,
-                # Planning analysis
-                "plan_assessment": plan_assessment,
-                "plan_recommendations": plan_recommendations,
-                # Traditional summary
-                "session_summary": session_summary,
-                # Metadata
-                "reflection_generated_at": datetime.now().isoformat(),
-                "agents_used": [
-                    "TrioMemoryAgent",
-                    "TrioPlanningAgent",
-                    "TrioReflectionAgent",
-                ],
-                # Tier updates (Phase 3-5)
-                "tier3_updated": tier3_updated,
-                "tier3_version": tier3_version,
-                "tier3_change_summary": tier3_change_summary,
-                "tier4_updated": tier4_updated,
-                "tier1_updated": bool(tier1_profile_output),
-            }
-
-            logger.info(
-                f"Comprehensive reflection generated for session {session.session_id}"
-            )
-            return (
-                reflection,
-                tier1_profile_output,
-                tier2_enrichment,
-                tier3_update,
+            return await generate_comprehensive_reflection_data(
+                db_service=self.db_service,
+                llm_service=self.llm_service,
+                memory_agent=self.memory_agent,
+                planning_agent=self.planning_agent,
+                user_id=self.user_context.user_id,
+                session=session,
+                current_plan=current_plan,
             )
 
         except Exception as e:
@@ -697,66 +520,12 @@ class TrioReflectionAgent:
         Returns:
             Dict containing therapeutic insights
         """
-        logger.info(
-            f"TrioReflectionAgent: Gathering therapeutic insights for user {self.user_context.user_id}"
+        return await gather_therapeutic_insights(
+            db_service=self.db_service,
+            memory_agent=self.memory_agent,
+            planning_agent=self.planning_agent,
+            user_id=self.user_context.user_id,
         )
-
-        try:
-            # Get memory insights (FIXED: added await)
-            memory = await self.memory_agent.get_therapeutic_memory()
-            patterns = await self.memory_agent.identify_patterns()
-            recent_context = await self.memory_agent.get_recent_context(num_sessions=5)
-
-            # Get planning insights
-            current_plan = await self.db_service.get_latest_therapy_plan(
-                self.user_context.user_id
-            )
-            plan_evolution = self.planning_agent.get_plan_evolution_summary()
-
-            plan_assessment = None
-            if current_plan:
-                # FIXED: added await
-                plan_assessment = await self.planning_agent.assess_plan_effectiveness(
-                    current_plan
-                )
-
-            # FIXED: added await to _generate_combined_recommendations
-            recommendations = await self._generate_combined_recommendations(
-                memory, patterns, current_plan
-            )
-
-            return {
-                "user_id": self.user_context.user_id,
-                "insights_generated_at": datetime.now().isoformat(),
-                # Memory insights
-                "memory_insights": {
-                    "total_sessions": len(memory.session_contexts),
-                    "relationship_quality": memory.relationship_quality,
-                    "recurring_themes": dict(memory.recurring_themes),
-                    "emotional_patterns": memory.emotional_patterns,
-                    "recent_progress": recent_context.get("insights", []),
-                    "patterns": patterns,
-                },
-                # Planning insights
-                "planning_insights": {
-                    "current_plan_id": current_plan.plan_id if current_plan else None,
-                    "current_plan_version": (
-                        current_plan.version if current_plan else None
-                    ),
-                    "plan_effectiveness": plan_assessment,
-                    "plan_evolution": plan_evolution,
-                },
-                # Combined recommendations
-                "recommendations": recommendations,
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to gather therapeutic insights: {e}", exc_info=True)
-            return {
-                "user_id": self.user_context.user_id,
-                "error": str(e),
-                "insights_generated_at": datetime.now().isoformat(),
-            }
 
     async def ensure_recent_sessions_enriched(
         self, user_id: str, *, limit: int = 5, scan_limit: int | None = None
