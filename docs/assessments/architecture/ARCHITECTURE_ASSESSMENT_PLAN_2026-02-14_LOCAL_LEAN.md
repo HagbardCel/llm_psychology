@@ -278,6 +278,27 @@ Recommendation:
 2. Keep public facades stable while migrating internals in incremental PR-safe steps.
 3. Add architecture budget guardrails (size thresholds and import-boundary checks) in CI.
 
+### F-009 (P4) Second-Pass Agent/Runtime Decomposition and Method Guardrails Were Still Missing
+Evidence:
+- Post-P3 hotspot concentration remained high in core runtime files:
+  - `src/psychoanalyst_app/agents/trio_reflection_agent.py` (887 lines pre-P4)
+  - `src/psychoanalyst_app/agents/trio_assessment_agent.py` (650 lines pre-P4)
+  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` (639 lines pre-P4)
+  - `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py` (552 lines pre-P4)
+  - `src/psychoanalyst_app/orchestration/trio_conversation_manager.py` (584 lines pre-P4)
+- Architecture guardrails only enforced file line budgets for 4 files and had no method-level checks:
+  - `scripts/check_architecture_budgets.py` (pre-P4)
+- Prompt/context assembly, recommendation shaping, and runtime dispatch logic were still bundled inside high-change classes.
+
+Impact:
+- Core review surface remained larger than needed for a laptop-first, maintainable codebase.
+- Hot methods could grow without CI feedback, increasing regression risk.
+
+Recommendation:
+1. Extract second-pass helper modules for reflection, assessment, psychoanalyst, and orchestration runtime responsibilities.
+2. Keep agent/orchestrator class interfaces stable and delegate internals to focused helpers.
+3. Extend architecture governance with method-length budgets in addition to file budgets.
+
 ## Prioritized Improvement Backlog
 
 ### P0 (Immediate)
@@ -406,6 +427,91 @@ P3 acceptance criteria:
 4. Targeted unit/integration suites pass in Docker.
 5. Assessment document updated with completed P3 status and validation evidence.
 
+### P4 (Next)
+1. Second-pass hotspot decomposition and method-level architecture guardrails (F-009).
+
+P4 implementation plan (proposed 2026-02-14):
+- Step 1: Split remaining reflection helpers into focused modules.
+  - Add `src/psychoanalyst_app/agents/reflection/plan_snapshot.py`.
+  - Add `src/psychoanalyst_app/agents/reflection/message_formatting.py`.
+  - Add `src/psychoanalyst_app/agents/reflection/insights_pipeline.py`.
+  - Delegate `TrioReflectionAgent` snapshot/summary/insights internals to helpers.
+- Step 2: Split assessment scoring/topic/selection and recommendation shaping.
+  - Add `src/psychoanalyst_app/agents/assessment/scoring.py`.
+  - Add `src/psychoanalyst_app/agents/assessment/topic_extraction.py`.
+  - Add `src/psychoanalyst_app/agents/assessment/recommendation_payloads.py`.
+  - Add `src/psychoanalyst_app/agents/assessment/selection_handling.py`.
+  - Delegate `TrioAssessmentAgent` recommendation and selection internals.
+- Step 3: Split psychoanalyst timing/topic/prompt/runtime-mode helpers.
+  - Add `src/psychoanalyst_app/agents/psychoanalyst/topic_detection.py`.
+  - Add `src/psychoanalyst_app/agents/psychoanalyst/time_policy.py`.
+  - Add `src/psychoanalyst_app/agents/psychoanalyst/prompt_context.py`.
+  - Add `src/psychoanalyst_app/agents/psychoanalyst/response_mode.py`.
+  - Delegate `TrioPsychoanalystAgent` prompt/context and response-mode internals.
+- Step 4: Split orchestration runtime helper responsibilities.
+  - Add `src/psychoanalyst_app/orchestration/runtime/agent_resolution.py`.
+  - Add `src/psychoanalyst_app/orchestration/runtime/stream_dispatch.py`.
+  - Add `src/psychoanalyst_app/orchestration/runtime/workflow_transitions.py`.
+  - Add `src/psychoanalyst_app/orchestration/runtime/session_bootstrap.py`.
+  - Delegate `TrioAgentOrchestrator` and `TrioConversationManager` internals.
+- Step 5: Tighten architecture governance.
+  - Extend `scripts/check_architecture_budgets.py` with additional file budgets.
+  - Add method-length budget checks for hotspot modules.
+- Step 6: Add focused regression coverage for new helper modules and re-run targeted unit suites.
+
+P4 execution status (2026-02-14):
+- Completed Step 1 (reflection second-pass decomposition):
+  - Added `src/psychoanalyst_app/agents/reflection/plan_snapshot.py`.
+  - Added `src/psychoanalyst_app/agents/reflection/message_formatting.py`.
+  - Added `src/psychoanalyst_app/agents/reflection/insights_pipeline.py`.
+  - Updated `src/psychoanalyst_app/agents/trio_reflection_agent.py` to delegate plan snapshot, summary formatting, and insights/comprehensive reflection pipelines.
+- Completed Step 2 (assessment decomposition):
+  - Added `src/psychoanalyst_app/agents/assessment/scoring.py`.
+  - Added `src/psychoanalyst_app/agents/assessment/topic_extraction.py`.
+  - Added `src/psychoanalyst_app/agents/assessment/recommendation_payloads.py`.
+  - Added `src/psychoanalyst_app/agents/assessment/selection_handling.py`.
+  - Added `src/psychoanalyst_app/agents/assessment/__init__.py`.
+  - Updated `src/psychoanalyst_app/agents/trio_assessment_agent.py` to delegate continuation/selection and recommendation payload shaping.
+- Completed Step 3 (psychoanalyst decomposition):
+  - Added `src/psychoanalyst_app/agents/psychoanalyst/topic_detection.py`.
+  - Added `src/psychoanalyst_app/agents/psychoanalyst/time_policy.py`.
+  - Added `src/psychoanalyst_app/agents/psychoanalyst/prompt_context.py`.
+  - Added `src/psychoanalyst_app/agents/psychoanalyst/response_mode.py`.
+  - Added `src/psychoanalyst_app/agents/psychoanalyst/__init__.py`.
+  - Updated `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` to delegate prompt-context assembly and response-mode decisions.
+- Completed Step 4 (orchestration runtime decomposition):
+  - Added `src/psychoanalyst_app/orchestration/runtime/agent_resolution.py`.
+  - Added `src/psychoanalyst_app/orchestration/runtime/stream_dispatch.py`.
+  - Added `src/psychoanalyst_app/orchestration/runtime/workflow_transitions.py`.
+  - Added `src/psychoanalyst_app/orchestration/runtime/session_bootstrap.py`.
+  - Added `src/psychoanalyst_app/orchestration/runtime/__init__.py`.
+  - Updated `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py` and `src/psychoanalyst_app/orchestration/trio_conversation_manager.py` to delegate runtime-specific internals.
+- Completed Step 5 (architecture governance hardening):
+  - Updated `scripts/check_architecture_budgets.py`:
+    - Expanded file budgets from 4 to 10 hotspot targets.
+    - Added method-length budget checks for 7 hotspot modules.
+- Completed Step 6 (regression coverage + validation):
+  - Added `tests/unit/test_assessment_scoring_helpers.py`.
+  - Added `tests/unit/test_assessment_selection_handling.py`.
+  - Added `tests/unit/test_psychoanalyst_time_policy.py`.
+  - Added `tests/unit/test_psychoanalyst_topic_detection.py`.
+  - Added `tests/unit/test_orchestration_runtime_helpers.py`.
+  - Added `tests/unit/test_reflection_plan_snapshot.py`.
+  - Re-ran impacted unit suites and architecture validation in Docker.
+- Post-P4 hotspot line counts:
+  - `src/psychoanalyst_app/agents/trio_reflection_agent.py` -> 656 lines.
+  - `src/psychoanalyst_app/agents/trio_assessment_agent.py` -> 574 lines.
+  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` -> 389 lines.
+  - `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py` -> 511 lines.
+  - `src/psychoanalyst_app/orchestration/trio_conversation_manager.py` -> 513 lines.
+
+P4 acceptance criteria:
+1. Public HTTP/WS contracts remain unchanged.
+2. Core hotspot modules are reduced and delegated to focused helpers.
+3. Architecture validation enforces both file-size and method-size budgets.
+4. Focused unit suites pass in Docker.
+5. Assessment document updated with P4 status and evidence.
+
 ## Deliverables
 1. This document updated with final findings and a prioritized improvement backlog.
 2. A companion implementation plan in `docs/plans/` for approved P0/P1 items.
@@ -422,6 +528,7 @@ P3 acceptance criteria:
 | F-006 | Workflow policy drift | `Makefile:44`, `docs/README.md:521` | Onboarding and support friction | P1 | Unify Docker/local policy and docs |
 | F-007 | Docs sprawl | `docs/README.md`, `docs/design-principles.md`, `docs/ARCHITECTURE.md` | Discoverability and consistency risk | P2 | Curate active docs and archive boundaries |
 | F-008 | Hotspot concentration | `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`, `src/psychoanalyst_app/agents/trio_reflection_agent.py`, `src/psychoanalyst_app/container/service_container.py` | High change risk and maintainability drag in core flows | P3 | Decompose modules + enforce architecture budgets in CI |
+| F-009 | Second-pass hotspot decomposition | `src/psychoanalyst_app/agents/trio_assessment_agent.py`, `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`, `src/psychoanalyst_app/orchestration/trio_conversation_manager.py`, `scripts/check_architecture_budgets.py` | Residual hotspot concentration and missing method-level growth guardrails | P4 | Extract focused helpers and enforce method/file budgets |
 
 ## Validation Log
 - Static inventory and hotspot scan:
@@ -452,9 +559,13 @@ P3 acceptance criteria:
   - `docker compose run --rm api pytest tests/unit/test_service_container.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_process_messages.py tests/unit/test_user_routes.py tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py` -> pass (`50 passed`).
   - `docker compose run --rm api pytest tests/integration/test_trio_agents.py -k "full_agent_workflow or assessment_agent_creates_tier3_and_tier4 or reflection_agent_tier3_versioning or reflection_agent_tier3_no_update_when_stable"` -> pass (`4 passed`).
   - `make validate-architecture` -> pass (`Architecture checks passed. Validated budgets: 4`).
+  - `docker compose run --rm api python -m compileall src/psychoanalyst_app tests/unit/test_assessment_scoring_helpers.py tests/unit/test_assessment_selection_handling.py tests/unit/test_psychoanalyst_time_policy.py tests/unit/test_psychoanalyst_topic_detection.py tests/unit/test_orchestration_runtime_helpers.py tests/unit/test_reflection_plan_snapshot.py` -> pass.
+  - `docker compose run --rm api pytest tests/unit/test_trio_assessment_agent.py tests/unit/test_trio_psychoanalyst_agent.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py tests/unit/test_assessment_scoring_helpers.py tests/unit/test_assessment_selection_handling.py tests/unit/test_psychoanalyst_time_policy.py tests/unit/test_psychoanalyst_topic_detection.py tests/unit/test_orchestration_runtime_helpers.py tests/unit/test_reflection_plan_snapshot.py -q` -> pass (`58 passed`).
+  - `make validate-architecture` -> pass (`Architecture checks passed. Validated budgets: 10; method budgets: 7`).
 
 ## Decision Log
 - 2026-02-14: Created local-lean architecture assessment plan and pre-scan candidate improvement list.
 - 2026-02-14: Completed in-depth local-lean architecture assessment and prioritized findings F-001..F-007.
 - 2026-02-14: Adopted active-doc governance with YAML front matter metadata and automated validation.
 - 2026-02-14: Added P3 plan and new finding F-008 focused on hotspot decomposition and architecture guardrails.
+- 2026-02-14: Completed P4 second-pass decomposition and added method-level architecture guardrails (F-009).
