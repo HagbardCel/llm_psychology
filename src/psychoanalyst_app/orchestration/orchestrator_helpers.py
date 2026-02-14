@@ -25,7 +25,9 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
+from psychoanalyst_app.orchestration.profile_persistence import (
+    persist_structured_user_profile_output,
+)
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
@@ -903,30 +905,14 @@ class AgentResponseHandler:
                     )
 
             user_profile_output = metadata.get("user_profile")
-            if isinstance(user_profile_output, dict):
-                user_profile_output = StructuredUserProfileOutput.model_validate(
-                    user_profile_output
-                )
-            if isinstance(user_profile_output, StructuredUserProfileOutput):
-                updates = user_profile_output.model_dump(
-                    exclude_none=True, exclude_unset=True
-                )
-                existing = await trio_db_service.get_user_profile(user_id)
-                merged = merge_user_profile(
-                    existing_profile=existing,
+            if isinstance(user_profile_output, (dict, StructuredUserProfileOutput)):
+                await persist_structured_user_profile_output(
+                    trio_db_service=trio_db_service,
                     user_id=user_id,
-                    updates=updates,
-                )
-                success = await trio_db_service.update_user_profile(
-                    merged,
+                    session_id=session_id,
+                    user_profile_output=user_profile_output,
                     change_summary="Reflection profile update",
-                    created_by_session=session_id,
                 )
-                if not success:
-                    logger.error(
-                        "Failed to persist reflection profile update for user %s",
-                        user_id,
-                    )
 
             try:
                 success = await trio_db_service.update_session_reflection(

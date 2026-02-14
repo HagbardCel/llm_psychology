@@ -8,7 +8,9 @@ from typing import Any
 
 from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
-from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
+from psychoanalyst_app.orchestration.profile_persistence import (
+    persist_structured_user_profile_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,26 +92,17 @@ async def finalize_agent_response(
     metadata = agent_response.metadata or {}
     trio_db_service = service_container.get("trio_db_service")
 
-    updated_profile = None
     user_profile_output = metadata.get("user_profile")
     if isinstance(user_profile_output, StructuredUserProfileOutput):
-        updates = user_profile_output.model_dump(
-            exclude_none=True, exclude_unset=True
-        )
-        existing = await trio_db_service.get_user_profile(user_id)
-        merged = merge_user_profile(
-            existing_profile=existing,
+        saved = await persist_structured_user_profile_output(
+            trio_db_service=trio_db_service,
             user_id=user_id,
-            updates=updates,
-        )
-        success = await trio_db_service.update_user_profile(
-            merged,
+            session_id=session_id,
+            user_profile_output=user_profile_output,
             change_summary="Agent profile update",
-            created_by_session=session_id,
         )
-        if not success:
+        if not saved:
             raise ValueError("Failed to save user profile to database")
-        updated_profile = merged
     elif user_profile_output is not None:
         logger.warning(
             "Ignoring unexpected user_profile payload type: %s",

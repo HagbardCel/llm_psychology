@@ -30,6 +30,7 @@ from psychoanalyst_app.models.http_models import (
 from psychoanalyst_app.orchestration.orchestrator_helpers import (
     session_type_for_workflow_state,
 )
+from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
 
 
 def create_user_routes(server) -> Blueprint:
@@ -188,30 +189,14 @@ def create_user_routes(server) -> Blueprint:
             if not existing:
                 return jsonify({"error": "User profile not found"}), 404
 
-            new_profile = existing.model_copy(
-                update={
-                    "name": update_request.name,
-                    "alias": update_request.alias,
-                    "data_of_birth": update_request.data_of_birth,
-                    "gender": update_request.gender,
-                    "cultural_background": update_request.cultural_background,
-                    "primary_language": update_request.primary_language,
-                    "profession": update_request.profession,
-                    "parents": update_request.parents,
-                    "siblings": update_request.siblings,
-                    "family_atmosphere": update_request.family_atmosphere,
-                    "significant_events": update_request.significant_events,
-                    "education": update_request.education,
-                    "work_history": update_request.work_history,
-                    "relationship_to_work": update_request.relationship_to_work,
-                    "relationships": update_request.relationships,
-                    "social_context": update_request.social_context,
-                    "current_situation": update_request.current_situation,
-                    "preferred_school": update_request.preferred_school,
-                    "boundary_notes": update_request.boundary_notes,
-                    "frame_notes": update_request.frame_notes,
-                    "updated_at": datetime.now(),
-                }
+            updates = update_request.model_dump()
+            updates.pop("user_id", None)
+            updates.pop("session_id", None)
+
+            new_profile = merge_user_profile(
+                existing_profile=existing,
+                user_id=update_request.user_id,
+                updates=updates,
             )
 
             saved = await server.db_service.update_user_profile(new_profile)
@@ -250,9 +235,12 @@ def create_user_routes(server) -> Blueprint:
             updates = patch_request.model_dump(exclude_unset=True)
             updates.pop("user_id", None)
             updates.pop("session_id", None)
-            updates["updated_at"] = datetime.now()
 
-            new_profile = existing.model_copy(update=updates)
+            new_profile = merge_user_profile(
+                existing_profile=existing,
+                user_id=patch_request.user_id,
+                updates=updates,
+            )
 
             saved = await server.db_service.update_user_profile(new_profile)
             if not saved:

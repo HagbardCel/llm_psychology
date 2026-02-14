@@ -32,24 +32,34 @@ def merge_user_profile(
     status = existing_profile.status if existing_profile else UserStatus.PROFILE_ONLY
 
     def pick_optional(field: str, default: Any = None) -> Any:
-        value = updates.get(field)
-        if value is None:
-            return getattr(existing_profile, field) if existing_profile else default
-        return value
+        if field in updates:
+            return updates[field]
+        return getattr(existing_profile, field) if existing_profile else default
 
-    data_of_birth = parse_date_of_birth(updates.get("data_of_birth"))
-    if data_of_birth is None and existing_profile:
-        data_of_birth = existing_profile.data_of_birth
+    if "data_of_birth" in updates:
+        raw_data_of_birth = updates.get("data_of_birth")
+        data_of_birth = parse_date_of_birth(raw_data_of_birth)
+        if (
+            raw_data_of_birth not in (None, "")
+            and data_of_birth is None
+            and existing_profile
+        ):
+            data_of_birth = existing_profile.data_of_birth
+    else:
+        data_of_birth = existing_profile.data_of_birth if existing_profile else None
 
-    name = updates.get("name") or (
-        existing_profile.name if existing_profile else user_id
-    )
-    profession = updates.get("profession") or (
-        existing_profile.profession if existing_profile else None
-    )
-    primary_language = updates.get("primary_language") or (
-        existing_profile.primary_language if existing_profile else "English"
-    )
+    name_value = updates.get("name") if "name" in updates else None
+    if isinstance(name_value, str) and name_value.strip():
+        name = name_value
+    else:
+        name = existing_profile.name if existing_profile else user_id
+
+    profession = pick_optional("profession")
+    primary_language = pick_optional("primary_language", "English")
+    if not primary_language:
+        primary_language = (
+            existing_profile.primary_language if existing_profile else "English"
+        )
 
     return UserProfile(
         user_id=user_id,
