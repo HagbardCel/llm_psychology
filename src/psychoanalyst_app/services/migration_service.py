@@ -96,6 +96,7 @@ class MigrationService:
         """
         return [
             (1, self._migration_001_initial_schema),
+            (2, self._migration_002_add_llm_cache),
         ]
 
     def _migration_001_initial_schema(self, conn: sqlite3.Connection):
@@ -190,9 +191,12 @@ class MigrationService:
                 created_by_session TEXT,
                 change_summary TEXT,
                 superseded_by TEXT,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_session) REFERENCES sessions(session_id) ON DELETE SET NULL,
-                FOREIGN KEY (superseded_by) REFERENCES patient_analysis(analysis_id) ON DELETE SET NULL,
+                FOREIGN KEY (user_id)
+                    REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by_session)
+                    REFERENCES sessions(session_id) ON DELETE SET NULL,
+                FOREIGN KEY (superseded_by)
+                    REFERENCES patient_analysis(analysis_id) ON DELETE SET NULL,
                 UNIQUE(user_id, version)
             )
         """
@@ -204,13 +208,17 @@ class MigrationService:
             CREATE TABLE IF NOT EXISTS session_enrichment_jobs (
                 session_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('queued', 'processing', 'complete', 'failed')),
+                status TEXT NOT NULL CHECK(
+                    status IN ('queued', 'processing', 'complete', 'failed')
+                ),
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+                FOREIGN KEY (session_id)
+                    REFERENCES sessions(session_id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id)
+                    REFERENCES user_profiles(user_id) ON DELETE CASCADE
             )
             """
         )
@@ -226,8 +234,10 @@ class MigrationService:
                 change_summary TEXT,
                 created_at TEXT NOT NULL,
                 created_by_session TEXT,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_session) REFERENCES sessions(session_id) ON DELETE SET NULL
+                FOREIGN KEY (user_id)
+                    REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by_session)
+                    REFERENCES sessions(session_id) ON DELETE SET NULL
             )
             """
         )
@@ -315,3 +325,30 @@ class MigrationService:
         cursor.execute("PRAGMA foreign_keys=ON")
 
         logger.info("Removed session_mode from user_profiles")
+
+    def _migration_002_add_llm_cache(self, conn: sqlite3.Connection):
+        """Add LLM response cache table and maintenance indexes."""
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                cache_key TEXT PRIMARY KEY,
+                call_type TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                context_json TEXT NOT NULL,
+                schema_hash TEXT,
+                response_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                user_id TEXT,
+                session_block_id TEXT,
+                source TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_llm_cache_created_at
+            ON llm_cache(created_at DESC)
+            """
+        )

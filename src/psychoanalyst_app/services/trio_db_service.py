@@ -1,7 +1,6 @@
 """Trio database service built on top of a shared SQLite executor."""
 
 import logging
-import sqlite3
 from datetime import datetime
 from typing import Any
 
@@ -12,17 +11,17 @@ from psychoanalyst_app.models.data_models import (
     TherapyPlan,
     UserProfile,
     UserProfileSummary,
-    UserStatus,
 )
 from psychoanalyst_app.services.db.codecs import datetime_to_iso, iso_to_datetime
+from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.repos import (
     enrichment_jobs_repo,
+    llm_cache_repo,
     patient_analysis_repo,
     sessions_repo,
     therapy_plans_repo,
     users_repo,
 )
-from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.migration_service import MigrationService
 
 logger = logging.getLogger(__name__)
@@ -302,6 +301,59 @@ class TrioDatabaseService:
             return False
 
     # ========================================================================
+    # LLM Cache Methods
+    # ========================================================================
+
+    async def get_llm_cache_entry(self, cache_key: str) -> dict[str, Any] | None:
+        """Fetch a cached LLM response by key."""
+        return await llm_cache_repo.get_llm_cache_entry(self.executor, cache_key)
+
+    async def upsert_llm_cache_entry(
+        self,
+        *,
+        cache_key: str,
+        call_type: str,
+        model_name: str,
+        prompt: str,
+        context_json: str,
+        schema_hash: str | None,
+        response_json: str,
+        created_at: str,
+        user_id: str | None,
+        session_block_id: str | None,
+        source: str | None,
+    ) -> None:
+        """Insert or update a cached LLM response."""
+        await llm_cache_repo.upsert_llm_cache_entry(
+            self.executor,
+            cache_key=cache_key,
+            call_type=call_type,
+            model_name=model_name,
+            prompt=prompt,
+            context_json=context_json,
+            schema_hash=schema_hash,
+            response_json=response_json,
+            created_at=created_at,
+            user_id=user_id,
+            session_block_id=session_block_id,
+            source=source,
+        )
+
+    async def delete_llm_cache_entry(self, cache_key: str) -> int:
+        """Delete a cached LLM response by key."""
+        return await llm_cache_repo.delete_llm_cache_entry(self.executor, cache_key)
+
+    async def prune_llm_cache_before(self, cutoff_iso: str) -> int:
+        """Delete cache entries older than the cutoff timestamp."""
+        return await llm_cache_repo.prune_llm_cache_before(self.executor, cutoff_iso)
+
+    async def prune_llm_cache_to_max_rows(self, max_rows: int) -> int:
+        """Ensure cache contains at most max_rows entries."""
+        return await llm_cache_repo.prune_llm_cache_to_max_rows(
+            self.executor, max_rows
+        )
+
+    # ========================================================================
     # TIER 2: Session Enrichment Methods
     # ========================================================================
 
@@ -356,7 +408,9 @@ class TrioDatabaseService:
     # SESSION ENRICHMENT JOB QUEUE (Tier 2 async enrichment)
     # ========================================================================
 
-    async def enqueue_session_enrichment_job(self, session_id: str, user_id: str) -> bool:
+    async def enqueue_session_enrichment_job(
+        self, session_id: str, user_id: str
+    ) -> bool:
         """Enqueue (or re-enqueue) a session for Tier 2 enrichment."""
         return await enrichment_jobs_repo.enqueue_job(
             self.executor, session_id, user_id
@@ -379,7 +433,9 @@ class TrioDatabaseService:
             self.executor, session_id
         )
 
-    async def mark_session_enrichment_job_failed(self, session_id: str, error: str) -> bool:
+    async def mark_session_enrichment_job_failed(
+        self, session_id: str, error: str
+    ) -> bool:
         return await enrichment_jobs_repo.mark_job_failed(
             self.executor, session_id, error
         )
