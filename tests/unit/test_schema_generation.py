@@ -171,9 +171,18 @@ class TestSchemaGeneration:
         """Test that committed schema files match generation output."""
         generate_all_schemas(tmp_path)
 
+        custom_schema_files = {"ws_protocol.json"}
         committed_dir = Path(__file__).parent.parent.parent / "schemas"
-        committed_files = sorted(p.name for p in committed_dir.glob("*.json"))
-        generated_files = sorted(p.name for p in tmp_path.glob("*.json"))
+        committed_files = sorted(
+            p.name
+            for p in committed_dir.glob("*.json")
+            if p.name not in custom_schema_files
+        )
+        generated_files = sorted(
+            p.name
+            for p in tmp_path.glob("*.json")
+            if p.name not in custom_schema_files
+        )
 
         assert (
             committed_files == generated_files
@@ -195,6 +204,49 @@ class TestSchemaGeneration:
             assert (
                 committed == generated
             ), f"Committed schema out of date: {filename}"
+
+    def test_session_schema_uses_session_id(self, tmp_path):
+        """Session schema should use canonical session_id naming."""
+        generate_all_schemas(tmp_path)
+
+        session_schema = tmp_path / "Session.json"
+        assert session_schema.exists(), "Session.json should be generated"
+
+        with open(session_schema) as f:
+            schema = json.load(f)
+
+        assert "session_id" in schema.get("properties", {})
+        assert "session_block_id" not in json.dumps(schema)
+
+    def test_no_legacy_session_block_terms_in_generated_schemas(self, tmp_path):
+        """Legacy SessionBlock naming should not appear in generated schemas."""
+        generate_all_schemas(tmp_path)
+
+        for schema_file in tmp_path.glob("*.json"):
+            if schema_file.name == "index.json":
+                continue
+            content = schema_file.read_text()
+            assert "session_block_id" not in content
+            assert "SessionBlock" not in content
+
+    def test_ws_protocol_schema_preserved_during_generation(self, tmp_path):
+        """Schema generation should not delete ws_protocol.json."""
+        ws_protocol_path = tmp_path / "ws_protocol.json"
+        ws_protocol_content = {
+            "version": "1.2.3",
+            "message_types": {
+                "client_to_server": ["chat_message"],
+                "server_to_client": ["connected"],
+            },
+        }
+        ws_protocol_path.write_text(json.dumps(ws_protocol_content))
+
+        generate_all_schemas(tmp_path)
+
+        assert ws_protocol_path.exists(), "ws_protocol.json should be preserved"
+        with open(ws_protocol_path) as f:
+            preserved = json.load(f)
+        assert preserved == ws_protocol_content
 
 
 @pytest.mark.integration

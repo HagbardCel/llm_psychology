@@ -18,6 +18,7 @@ from psychoanalyst_app.models.data_models import UserProfile, UserStatus, Messag
 from psychoanalyst_app.orchestration.models import WorkflowState, WorkflowEvent
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
+CUSTOM_SCHEMA_FILES = {"ws_protocol.json"}
 
 
 class ValidationError(Exception):
@@ -109,6 +110,39 @@ def validate_object_required_fields(schema_file: Path, schema: dict) -> None:
             )
 
 
+def validate_ws_protocol_spec(schema_file: Path, schema: dict) -> None:
+    """Validate the websocket protocol specification schema."""
+    version = schema.get("version")
+    message_types = schema.get("message_types")
+    if not isinstance(version, str) or not version.strip():
+        raise ValidationError(f"{schema_file.name} missing non-empty 'version'")
+    if not isinstance(message_types, dict):
+        raise ValidationError(f"{schema_file.name} missing object 'message_types'")
+
+    for direction in ("client_to_server", "server_to_client"):
+        values = message_types.get(direction)
+        if not isinstance(values, list) or not values:
+            raise ValidationError(
+                f"{schema_file.name} missing non-empty message_types.{direction}"
+            )
+        if not all(isinstance(item, str) and item for item in values):
+            raise ValidationError(
+                f"{schema_file.name} has invalid non-string message type in "
+                f"message_types.{direction}"
+            )
+
+    for key in ("connection_states", "error_codes"):
+        values = schema.get(key)
+        if values is None:
+            continue
+        if not isinstance(values, list) or not values:
+            raise ValidationError(f"{schema_file.name} has invalid {key} list")
+        if not all(isinstance(item, str) and item for item in values):
+            raise ValidationError(
+                f"{schema_file.name} has invalid non-string value in {key}"
+            )
+
+
 def validate_index_file() -> None:
     """Validate the index.json file."""
     index_file = SCHEMAS_DIR / "index.json"
@@ -137,7 +171,9 @@ def validate_index_file() -> None:
 
     # Check for schema files not in index
     schema_files = [
-        f.stem for f in SCHEMAS_DIR.glob("*.json") if f.name != "index.json"
+        f.stem
+        for f in SCHEMAS_DIR.glob("*.json")
+        if f.name != "index.json" and f.name not in CUSTOM_SCHEMA_FILES
     ]
 
     missing_from_index = set(schema_files) - set(models)
@@ -182,6 +218,12 @@ def validate_all_schemas() -> Tuple[int, List[str]]:
             # Load schema
             with open(schema_file) as f:
                 schema = json.load(f)
+
+            if schema_file.name in CUSTOM_SCHEMA_FILES:
+                validate_ws_protocol_spec(schema_file, schema)
+                print(f"✓ {schema_file.name} validated")
+                success_count += 1
+                continue
 
             # Run validations
             validate_json_syntax(schema_file)

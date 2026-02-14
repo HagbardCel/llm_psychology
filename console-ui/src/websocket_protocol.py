@@ -1,9 +1,7 @@
 """
 WebSocket Protocol Constants for Console Client.
 
-This module defines the WebSocket protocol constants to ensure consistency
-with the backend implementation. All constants match the protocol specification
-in docs/WEBSOCKET_PROTOCOL.md.
+AUTO-GENERATED from schemas/ws_protocol.json. Do not edit by hand.
 """
 
 from typing import Final
@@ -12,7 +10,7 @@ from typing import Final
 WS_PROTOCOL_VERSION: Final[str] = "1.2.3"
 
 
-# Client → Server Message Types
+# Client -> Server Message Types
 class ClientMessageTypes:
     """Message types sent from client to server."""
 
@@ -20,18 +18,18 @@ class ClientMessageTypes:
     END_SESSION: Final[str] = "end_session"
 
 
-# Server → Client Message Types
+# Server -> Client Message Types
 class ServerMessageTypes:
     """Message types sent from server to client."""
 
     CONNECTED: Final[str] = "connected"
     SESSION_STARTED: Final[str] = "session_started"
+    WORKFLOW_NEXT_ACTION: Final[str] = "workflow_next_action"
     CHAT_RESPONSE_CHUNK: Final[str] = "chat_response_chunk"
     TYPING_START: Final[str] = "typing_start"
     TYPING_STOP: Final[str] = "typing_stop"
-    WORKFLOW_NEXT_ACTION: Final[str] = "workflow_next_action"
-    SESSION_ENDED: Final[str] = "session_ended"
     ASSESSMENT_RECOMMENDATIONS: Final[str] = "assessment_recommendations"
+    SESSION_ENDED: Final[str] = "session_ended"
     ERROR: Final[str] = "error"
 
 
@@ -55,17 +53,3 @@ class ErrorCodes:
     SESSION_NOT_FOUND: Final[str] = "session_not_found"
     INTERNAL_ERROR: Final[str] = "internal_error"
     RATE_LIMIT_EXCEEDED: Final[str] = "rate_limit_exceeded"
-
-
-# Convenience aliases for backward compatibility and easier imports
-MSG_CHAT_MESSAGE = ClientMessageTypes.CHAT_MESSAGE
-MSG_END_SESSION = ClientMessageTypes.END_SESSION
-
-MSG_CONNECTED = ServerMessageTypes.CONNECTED
-MSG_SESSION_STARTED = ServerMessageTypes.SESSION_STARTED
-MSG_CHAT_RESPONSE_CHUNK = ServerMessageTypes.CHAT_RESPONSE_CHUNK
-MSG_TYPING_START = ServerMessageTypes.TYPING_START
-MSG_TYPING_STOP = ServerMessageTypes.TYPING_STOP
-MSG_SESSION_ENDED = ServerMessageTypes.SESSION_ENDED
-MSG_ASSESSMENT_RECOMMENDATIONS = ServerMessageTypes.ASSESSMENT_RECOMMENDATIONS
-MSG_ERROR = ServerMessageTypes.ERROR

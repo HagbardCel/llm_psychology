@@ -2,62 +2,45 @@
  * WebSocket types for real-time communication
  */
 
+import {
+  WS_CONNECTION_STATES as GENERATED_WS_CONNECTION_STATES,
+  WS_ERROR_CODES as GENERATED_WS_ERROR_CODES,
+  WS_MESSAGE_TYPES as GENERATED_WS_MESSAGE_TYPES,
+  WS_PROTOCOL_VERSION as GENERATED_WS_PROTOCOL_VERSION,
+  type WSConnectionState as GeneratedWSConnectionState,
+  type WSMessageType as GeneratedWSMessageType,
+  type WSErrorCode as GeneratedWSErrorCode,
+} from './ws_protocol.generated';
+
 /**
  * WebSocket Protocol Version
- * Matches backend protocol version in trio_server.py
+ * Auto-generated from schemas/ws_protocol.json.
  */
-export const WS_PROTOCOL_VERSION = '1.2.3' as const;
+export const WS_PROTOCOL_VERSION = GENERATED_WS_PROTOCOL_VERSION;
 
 /**
  * WebSocket Message Types
- * These constants ensure type safety and consistency with backend protocol
+ * Auto-generated from schemas/ws_protocol.json.
  */
-export const WS_MESSAGE_TYPES = {
-  // Client → Server messages
-  CHAT_MESSAGE: 'chat_message',
-  END_SESSION: 'end_session',
-
-  // Server → Client messages
-  CONNECTED: 'connected',
-  SESSION_STARTED: 'session_started',
-  CHAT_RESPONSE_CHUNK: 'chat_response_chunk',
-  TYPING_START: 'typing_start',
-  TYPING_STOP: 'typing_stop',
-  WORKFLOW_NEXT_ACTION: 'workflow_next_action',
-  ASSESSMENT_RECOMMENDATIONS: 'assessment_recommendations',
-  SESSION_ENDED: 'session_ended',
-  ERROR: 'error',
-} as const;
+export const WS_MESSAGE_TYPES = GENERATED_WS_MESSAGE_TYPES;
 
 /**
  * WebSocket Connection States
  */
-export const WS_CONNECTION_STATES = {
-  CONNECTING: 'connecting',
-  CONNECTED: 'connected',
-  DISCONNECTED: 'disconnected',
-  RECONNECTING: 'reconnecting',
-  ERROR: 'error',
-} as const;
+export const WS_CONNECTION_STATES = GENERATED_WS_CONNECTION_STATES;
 
 /**
  * WebSocket Error Codes
- * Matches backend error handling in trio_server.py
+ * Auto-generated from schemas/ws_protocol.json.
  */
-export const WS_ERROR_CODES = {
-  INVALID_MESSAGE_FORMAT: 'invalid_message_format',
-  MISSING_REQUIRED_FIELD: 'missing_required_field',
-  SESSION_NOT_FOUND: 'session_not_found',
-  INTERNAL_ERROR: 'internal_error',
-  RATE_LIMIT_EXCEEDED: 'rate_limit_exceeded',
-} as const;
+export const WS_ERROR_CODES = GENERATED_WS_ERROR_CODES;
 
 /**
  * Type helpers for const assertions
  */
-export type WSMessageType = typeof WS_MESSAGE_TYPES[keyof typeof WS_MESSAGE_TYPES];
-export type WSConnectionState = typeof WS_CONNECTION_STATES[keyof typeof WS_CONNECTION_STATES];
-export type WSErrorCode = typeof WS_ERROR_CODES[keyof typeof WS_ERROR_CODES];
+export type WSMessageType = GeneratedWSMessageType;
+export type WSConnectionState = GeneratedWSConnectionState;
+export type WSErrorCode = GeneratedWSErrorCode;
 
 export interface WebSocketMessage {
   type: string;

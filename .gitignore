@@ -158,5 +158,6 @@ data/psychoanalyst.db-wal
 # Generated schemas (auto-generated from backend models)
 schemas/*.json
 !schemas/.gitkeep
+!schemas/ws_protocol.json
 data/vector_db_usertest/data.pkl
 data/vector_db_usertest/faiss_index.bin

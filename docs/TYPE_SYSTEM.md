@@ -1,10 +1,15 @@
 # Type System Documentation
 
-**Last Verified:** 2025-12-22
+**Last Verified:** 2026-02-14
 
 ## Overview
 
 The psychoanalyst application uses an **automated type generation system** that maintains type safety between the Python backend and TypeScript frontend. Backend Pydantic models are the single source of truth, with TypeScript types auto-generated via JSON Schema.
+
+Canonical contract naming:
+- Session model: `Session`
+- Session identifier field: `session_id`
+- Legacy `SessionBlock` / `session_block_id` names are deprecated and must not appear in generated API artifacts.
 
 **Docker-first note:** `make generate-schemas` and `make validate-schemas` run inside Docker by default. Local equivalents are available as `make local-generate-schemas` and `make local-validate-schemas` if you have a local Python environment.
 

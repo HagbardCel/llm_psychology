@@ -17,3 +17,23 @@ export const WS_MESSAGE_TYPES = {
 } as const;
 
 export type WSMessageType = typeof WS_MESSAGE_TYPES[keyof typeof WS_MESSAGE_TYPES];
+
+export const WS_CONNECTION_STATES = {
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  RECONNECTING: 'reconnecting',
+  ERROR: 'error',
+} as const;
+
+export type WSConnectionState = typeof WS_CONNECTION_STATES[keyof typeof WS_CONNECTION_STATES];
+
+export const WS_ERROR_CODES = {
+  INVALID_MESSAGE_FORMAT: 'invalid_message_format',
+  MISSING_REQUIRED_FIELD: 'missing_required_field',
+  SESSION_NOT_FOUND: 'session_not_found',
+  INTERNAL_ERROR: 'internal_error',
+  RATE_LIMIT_EXCEEDED: 'rate_limit_exceeded',
+} as const;
+
+export type WSErrorCode = typeof WS_ERROR_CODES[keyof typeof WS_ERROR_CODES];

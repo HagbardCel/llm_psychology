@@ -51,6 +51,7 @@ from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = REPO_ROOT / "schemas"
+PRESERVED_SCHEMA_FILES = {"ws_protocol.json"}
 
 
 def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
@@ -179,6 +180,8 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
 
     # Remove previous schema files to avoid stale models
     for existing in output_dir.glob("*.json"):
+        if existing.name in PRESERVED_SCHEMA_FILES:
+            continue
         existing.unlink()
 
     print(f"Generating schemas in {output_dir.absolute()}...\n")

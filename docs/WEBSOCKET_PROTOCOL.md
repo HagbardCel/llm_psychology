@@ -2,11 +2,20 @@
 
 **Version**: 1.2.3
 **Date**: 2025-12-29
-**Last Verified**: 2025-12-29
+**Last Verified**: 2026-02-14
 **Status**: Active
 **Maintainer**: Backend Team
 
 ---
+
+## Source of Truth
+
+- Machine-readable protocol inventory: `schemas/ws_protocol.json`
+- Generated constants:
+  - `src/psychoanalyst_app/utils/ws_protocol.py`
+  - `console-ui/src/websocket_protocol.py`
+  - `frontend/src/types/ws_protocol.generated.ts`
+- Regeneration command (Docker): `docker compose run --rm -v "$PWD:/app" api python scripts/generate_ws_protocol.py`
 
 ## Overview
 

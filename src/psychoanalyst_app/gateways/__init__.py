@@ -5,6 +5,6 @@ This module provides gateway classes that connect client interfaces
 to the orchestration layer.
 """
 
-from .websocket_gateway import WebSocketGateway
-
-__all__ = ["WebSocketGateway"]
+# This package is retained for backward compatibility only.
+# Active gateway handlers now live under psychoanalyst_app.api.
+__all__: list[str] = []

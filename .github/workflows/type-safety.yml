@@ -7,6 +7,8 @@ on:
       - 'src/psychoanalyst_app/models/**'
       - 'src/psychoanalyst_app/orchestration/models.py'
       - 'scripts/generate_schemas.py'
+      - 'scripts/generate_ws_protocol.py'
+      - 'schemas/ws_protocol.json'
       - 'frontend/src/**/*.ts'
       - 'frontend/src/**/*.tsx'
       - 'frontend/package.json'
@@ -39,6 +41,25 @@ jobs:
 
       - name: Validate schemas
         run: make validate-schemas
+
+      - name: Enforce canonical session contract naming
+        run: |
+          if [ ! -f schemas/Session.json ]; then
+            echo "❌ Session.json is missing"
+            exit 1
+          fi
+          if [ -f schemas/SessionBlock.json ]; then
+            echo "❌ Legacy SessionBlock.json should not exist"
+            exit 1
+          fi
+          if grep -R -nE '"session_block_id"|SessionBlock' schemas/*.json; then
+            echo "❌ Legacy session_block naming detected in generated schemas"
+            exit 1
+          fi
+          if ! grep -q '"session_id"' schemas/Session.json; then
+            echo "❌ Session schema missing session_id"
+            exit 1
+          fi
 
       - name: Upload schemas as artifact
         uses: actions/upload-artifact@v3
@@ -87,11 +108,21 @@ jobs:
           fi
           echo "✓ Generated types file exists"
 
+      - name: Enforce generated API naming
+        run: |
+          if grep -nE 'session_block_id|SessionBlock' frontend/src/types/generated/api.ts; then
+            echo "❌ Legacy session_block naming detected in generated frontend API types"
+            exit 1
+          fi
+          if ! grep -q 'session_id' frontend/src/types/generated/api.ts; then
+            echo "❌ generated/api.ts missing session_id"
+            exit 1
+          fi
+
       - name: Type check
         run: |
           cd frontend
-          npm run type-check || true
-          echo "⚠️  Type check completed (may have errors in existing code)"
+          npm run type-check
 
       - name: Build frontend
         run: |
@@ -145,9 +176,32 @@ jobs:
           fi
           echo "✓ Schema count validated"
 
+  ws-protocol-consistency:
+    name: WS Protocol Consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Regenerate WS protocol constants
+        run: python scripts/generate_ws_protocol.py
+
+      - name: Ensure generated WS protocol files are up to date
+        run: |
+          git diff --exit-code \
+            src/psychoanalyst_app/utils/ws_protocol.py \
+            console-ui/src/websocket_protocol.py \
+            frontend/src/types/ws_protocol.generated.ts
+
   summary:
     name: Type Safety Summary
-    needs: [backend-schemas, frontend-types, type-consistency-check]
+    needs: [backend-schemas, frontend-types, type-consistency-check, ws-protocol-consistency]
     runs-on: ubuntu-latest
     if: always()
 
@@ -160,6 +214,7 @@ jobs:
           echo "Backend Schemas: ${{ needs.backend-schemas.result }}"
           echo "Frontend Types: ${{ needs.frontend-types.result }}"
           echo "Type Consistency: ${{ needs.type-consistency-check.result }}"
+          echo "WS Protocol: ${{ needs.ws-protocol-consistency.result }}"
           echo ""
 
           if [ "${{ needs.backend-schemas.result }}" != "success" ]; then
@@ -174,6 +229,11 @@ jobs:
 
           if [ "${{ needs.type-consistency-check.result }}" != "success" ]; then
             echo "❌ Type consistency check failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.ws-protocol-consistency.result }}" != "success" ]; then
+            echo "❌ WS protocol consistency check failed"
             exit 1
           fi
 

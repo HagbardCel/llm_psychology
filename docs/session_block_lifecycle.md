@@ -1,5 +1,10 @@
 # Session Block Lifecycle Documentation
 
+> [!WARNING]
+> Deprecated on 2026-02-14. This document uses legacy `SessionBlock` / `session_block_id`
+> terminology and is kept only for historical context. The canonical lifecycle is
+> `docs/session_lifecycle.md` with `Session` and `session_id`.
+
 This document describes the chronological flow of a clinical session block within the application, detailing agent activation, data checks, and database persistence.
 
 ## 1. Session Block Initialization
