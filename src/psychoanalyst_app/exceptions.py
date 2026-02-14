@@ -31,6 +31,12 @@ class LLMServiceError(PsychoanalystError):
     pass
 
 
+class LLMQuotaExhaustedError(LLMServiceError):
+    """Raised when all configured LLM API keys are quota exhausted."""
+
+    pass
+
+
 class RAGServiceError(PsychoanalystError):
     """Raised when RAG service operations fail."""
 

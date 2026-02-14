@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 import trio
 import trio.testing
@@ -49,6 +51,14 @@ class _FakeChatModel:
         return runnable
 
 
+class _FakeLogger:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def info(self, message: str) -> None:
+        self.messages.append(message)
+
+
 @pytest.fixture
 def fake_chat_model(monkeypatch) -> _FakeChatModel:
     import psychoanalyst_app.services.llm_service as llm_module
@@ -62,10 +72,23 @@ def fake_chat_model(monkeypatch) -> _FakeChatModel:
     return fake
 
 
+@pytest.fixture
+def fake_llm_call_logger(monkeypatch) -> _FakeLogger:
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    fake = _FakeLogger()
+    monkeypatch.setattr(llm_module, "_get_llm_call_logger", lambda: fake)
+    return fake
+
+
 def test_generate_response_without_context_uses_human_message(fake_chat_model):
     from langchain_core.messages import HumanMessage
 
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     fake_chat_model.response_content = "ok"
 
     result = service.generate_response("Hello")
@@ -81,7 +104,11 @@ def test_generate_response_without_context_uses_human_message(fake_chat_model):
 def test_generate_response_with_context_maps_roles(fake_chat_model):
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     fake_chat_model.response_content = "ok"
 
     context = [
@@ -106,7 +133,11 @@ def test_generate_response_with_context_maps_roles(fake_chat_model):
 
 
 def test_generate_response_wraps_exceptions(fake_chat_model):
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     fake_chat_model.raise_on_invoke = RuntimeError("boom")
 
     with pytest.raises(LLMServiceError) as exc_info:
@@ -120,7 +151,11 @@ def test_generate_response_wraps_exceptions(fake_chat_model):
 
 @pytest.mark.trio
 async def test_stream_response_yields_non_empty_chunks(fake_chat_model):
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     fake_chat_model.stream_chunk_contents = ["a", "", "b"]
 
     chunks: list[str] = []
@@ -133,7 +168,11 @@ async def test_stream_response_yields_non_empty_chunks(fake_chat_model):
 
 @pytest.mark.trio
 async def test_generate_response_stream_collects_chunks(fake_chat_model):
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     fake_chat_model.stream_chunk_contents = ["x", "y"]
 
     chunks = await service.generate_response_stream("Hello", context=None)
@@ -149,7 +188,11 @@ def test_generate_structured_output_uses_with_structured_output(fake_chat_model)
     expected = _Schema(ok=True)
     fake_chat_model.structured_result = expected
 
-    service = LLMService(api_key="test", model_name="test-model", rate_limit_enabled=False)
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
     result = service.generate_structured_output("prompt", _Schema)
 
     assert result == expected
@@ -171,3 +214,55 @@ def test_trio_rate_limiter_honors_capacity_and_rate():
 
     # Without auto-jumping, MockClock time does not advance and sleeps can hang.
     trio.run(_main, clock=trio.testing.MockClock(autojump_threshold=0.0))
+
+
+def test_llm_call_logging_disabled_by_default(
+    fake_chat_model,
+    fake_llm_call_logger,
+):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
+    service._log_llm_call("request", {"prompt": "secret"})
+    assert fake_llm_call_logger.messages == []
+
+
+def test_llm_call_logging_redacts_payload_fields(
+    fake_chat_model,
+    fake_llm_call_logger,
+):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+        llm_call_logging_enabled=True,
+    )
+    service._log_llm_call(
+        "request",
+        {
+            "prompt": "sensitive prompt text",
+            "context": [{"role": "user", "content": "private context"}],
+        },
+    )
+
+    assert len(fake_llm_call_logger.messages) == 1
+    record = json.loads(fake_llm_call_logger.messages[0])
+    assert record["prompt"].startswith("<redacted len=")
+    assert record["context"][0]["role"] == "user"
+    assert record["context"][0]["content"].startswith("<redacted len=")
+
+
+def test_llm_call_logging_skips_stream_chunks_by_default(
+    fake_chat_model,
+    fake_llm_call_logger,
+):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+        llm_call_logging_enabled=True,
+    )
+    service._log_llm_call("stream_chunk", {"chunk": "hello"})
+    assert fake_llm_call_logger.messages == []
