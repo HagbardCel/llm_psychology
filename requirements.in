@@ -8,8 +8,6 @@ langchain-community
 faiss-cpu>=1.7.4
 sentence-transformers[onnx]>=3.2.0
 huggingface-hub
-torchvision
-torchaudio
 
 # Utilities
 python-dotenv
@@ -17,10 +15,6 @@ pydantic
 pydantic-settings
 typing-extensions==4.15.0
 
-# Authentication
-PyJWT>=2.8.0
-passlib[bcrypt]>=1.7.4
-bcrypt==3.1.7  # Pin to 3.1.7 - last version confirmed compatible with passlib 1.7.4
 python-multipart>=0.0.6
 
 # Trio-based Server & WebSocket (structured concurrency)

@@ -143,6 +143,7 @@ data/psychoanalyst.db
 src/data/vector_db/
 src/data/psychoanalyst.db
 src/data/psychoanalyst_test.db
+src/psychoanalyst_app/data/vector_db/
 
 # Log files
 logs/
