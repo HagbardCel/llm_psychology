@@ -76,6 +76,7 @@ Evaluation of test coverage, quality, and testing infrastructure.
 **Documents:**
 - [REAL_LLM_TEST_DEBUG_ASSESSMENT.md](testing/REAL_LLM_TEST_DEBUG_ASSESSMENT.md) - LLM integration test analysis
 - [TEST_FIXES_SUMMARY.md](testing/TEST_FIXES_SUMMARY.md) - Testing infrastructure improvements
+- [INTENDED_VS_ACTUAL_ALIGNMENT_ASSESSMENT_2026-02-02.md](testing/INTENDED_VS_ACTUAL_ALIGNMENT_ASSESSMENT_2026-02-02.md) - Workflow alignment gaps (intake completion, style selection) and test/design recommendations
 
 **Key Findings:**
 - Test coverage gaps
