@@ -1,6 +1,16 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Runtime architecture boundaries and component responsibilities
+---
+
 # Architecture Documentation
 
-**Last Verified:** 2025-12-22
+**Last Verified:** 2026-02-14
+
+Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 
 ## Overview
 

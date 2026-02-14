@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: User-facing workflow progression and endpoint/event sequence
+---
+
 # User Journey Overview
 
 This document provides a detailed overview of the journey a new user takes through the AI Therapy system. It outlines the stages, responsible agents, outputs, and available therapy styles.

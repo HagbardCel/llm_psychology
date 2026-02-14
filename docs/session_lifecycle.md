@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Session lifecycle ownership, transitions, and persistence checkpoints
+---
+
 # Session Lifecycle Documentation
 
 This document describes the chronological flow of a user session within the application, detailing agent activation, data checks, and database persistence.

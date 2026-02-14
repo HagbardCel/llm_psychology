@@ -1,6 +1,16 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Project-level architecture and implementation invariants
+---
+
 # Design Principles (How This Codebase Wants You To Build)
 
 This document captures the *project-level design decisions* that shape how code is organized, how data flows, and how new features should be implemented. It is intended as an onboarding “mental model” so contributors (human and AI agents) can write code consistent with the existing architecture without reading the entire repository.
+
+Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 
 If you need deeper detail on a specific area, this document links to the canonical deep-dives:
 - Architecture: `docs/ARCHITECTURE.md`

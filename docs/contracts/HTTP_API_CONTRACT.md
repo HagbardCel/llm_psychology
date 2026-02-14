@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: HTTP wire contract and DTO shape guarantees
+---
+
 # HTTP API Contract (Phase 1)
 
 This document is the authoritative HTTP contract for Phase 1 (“Contract Stabilization”).

@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Agent responsibilities, workflow routing, and orchestration integration contract
+---
+
 # Agent Documentation
 
 This section documents each agent's contract, triggers, and responsibilities.

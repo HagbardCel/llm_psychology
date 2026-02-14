@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: WebSocket message envelope, event semantics, and versioned protocol references
+---
+
 # WebSocket Protocol Specification
 
 **Version**: 1.2.3

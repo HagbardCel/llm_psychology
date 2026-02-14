@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Assessment catalog and navigation for architecture, testing, UX, and project reviews
+---
+
 # Implementation Assessments & Gap Analysis
 
 This directory contains assessments of the current implementation, identified gaps, and areas requiring improvement. These documents provide critical analysis of the codebase to guide development priorities.

@@ -1,3 +1,11 @@
+---
+owner: engineering
+status: active
+last_reviewed: 2026-02-14
+review_cycle_days: 90
+source_of_truth_for: Domain model inventory and mapping between persistence, orchestration, and wire DTOs
+---
+
 # Data Models
 
 This document summarizes the canonical data models and how they are used.
