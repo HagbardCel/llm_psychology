@@ -315,7 +315,7 @@ P0 implementation status (2026-02-14):
   - Added opt-in LLM payload logging (`LLM_CALL_LOGGING_ENABLED=false` by default).
   - Added redaction/truncation controls and chunk logging toggle.
   - Wired settings through container/service construction.
-  - Added unit tests covering disabled logging default and redaction behavior.
+  - Added unit tests covering disabled logging default, redaction, truncation, settings defaults, and container wiring.
 
 ### P1 (Next)
 1. Wire/remove drifted config knobs; fix executor `row_factory` handling (F-003).
@@ -515,6 +515,7 @@ P4 acceptance criteria:
 ## Deliverables
 1. This document updated with final findings and a prioritized improvement backlog.
 2. A companion implementation plan in `docs/plans/` for approved P0/P1 items.
+   - `docs/plans/ARCHITECTURE_LOCAL_LEAN_P0_P1_IMPLEMENTATION_PLAN_2026-02-14.md`
 3. Validation log (tests/commands run and outcomes).
 
 ## Findings Log

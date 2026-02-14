@@ -415,7 +415,8 @@ Logging is configured centrally:
 
 Design rule:
 - Log operational events at INFO (session start, transitions, job completion).
-- Keep verbose payload logging at DEBUG to avoid leaking transcripts in normal operation.
+- Keep verbose LLM payload logging opt-in (`LLM_CALL_LOGGING_ENABLED=false` by default).
+- When enabled, keep redaction on by default (`LLM_CALL_LOGGING_REDACT=true`).
 
 ---
 
