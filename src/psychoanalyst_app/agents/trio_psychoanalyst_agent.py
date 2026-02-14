@@ -344,15 +344,23 @@ class TrioPsychoanalystAgent:
         Returns:
             True if extension should be offered
         """
-        # Offer extension if:
-        # - Time remaining is low (5 minutes or less)
-        # - Can still extend
-        # - Not in the middle of a deep topic (TODO: implement topic detection)
+        # Offer extension only for short sessions that are still extendable.
+        # Deep-topic detection is intentionally conservative for now.
         return (
             context.time_remaining_minutes <= 5
             and context.can_extend
             and context.time_remaining_minutes > 0
+            and not self._is_in_deep_topic(context)
         )
+
+    def _is_in_deep_topic(self, context: ConversationContext) -> bool:
+        """Return whether the current exchange appears to be in a deep topic.
+
+        Current behavior is an explicit fallback: return False until
+        topic-depth heuristics are introduced.
+        """
+        _ = context
+        return False
 
     async def _build_plan_context(self, therapy_plan: TherapyPlan) -> str:
         """
