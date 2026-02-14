@@ -22,6 +22,7 @@ Evaluations of system architecture, design patterns, and structural decisions.
 - [ARCHITECTURE_ASSESSMENT.md](architecture/ARCHITECTURE_ASSESSMENT.md) - Overall architecture evaluation
 - [ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md](architecture/ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md) - Implementation quality review
 - [ARCHITECTURE_IMPLEMENTATION_REPORT.md](architecture/ARCHITECTURE_IMPLEMENTATION_REPORT.md) - Detailed implementation findings
+- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md) - In-depth, laptop-first architecture assessment plan and findings log template
 
 **Key Findings:**
 - Trio migration completeness
