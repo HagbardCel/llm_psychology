@@ -1,25 +1,4 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import type { User, Session, TherapyPlan } from '../types';
-
-/**
- * DEPRECATED: Legacy state interface for backward compatibility
- * New components should use React Query hooks instead
- */
-interface LegacyAppState {
-  user: User | null;
-  currentSession: Session | null;
-  sessions: Session[];
-  therapyPlan: TherapyPlan | null;
-}
-
-/**
- * DEPRECATED: Legacy actions interface for backward compatibility
- * New components should use React Query mutations instead
- */
-interface LegacyAppActions {
-  updateSession: (session: Session) => void;
-  setCurrentSession: (session: Session | null) => void;
-}
 
 /**
  * UI-only state for the application
@@ -41,10 +20,6 @@ interface AppContextType {
   currentSessionId: string | null;
   setCurrentSessionId: (sessionId: string | null) => void;
 
-  // DEPRECATED: Legacy compatibility layer for components not yet refactored
-  // These will be removed in a future release
-  state: LegacyAppState;
-  actions: LegacyAppActions;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -136,26 +111,6 @@ export function AppProvider({ children }: AppProviderProps) {
     setCurrentSessionIdState(sessionId);
   };
 
-  // DEPRECATED: Legacy state for backward compatibility
-  const legacyState: LegacyAppState = {
-    user: null, // Components should use useUserProfile hook instead
-    currentSession: null, // Components should manage session state locally
-    sessions: [], // Components should use useSessionHistory hook instead
-    therapyPlan: null, // Components should use useTherapyPlan hook instead
-  };
-
-  // DEPRECATED: Legacy actions for backward compatibility
-  const legacyActions: LegacyAppActions = {
-    updateSession: (_session: Session) => {
-      console.warn('DEPRECATED: updateSession called. Components should use React Query mutations.');
-      // No-op: This is a compatibility shim only
-    },
-    setCurrentSession: (_session: Session | null) => {
-      console.warn('DEPRECATED: setCurrentSession called. Components should manage local state.');
-      // No-op: This is a compatibility shim only
-    },
-  };
-
   return (
     <AppContext.Provider
       value={{
@@ -167,8 +122,6 @@ export function AppProvider({ children }: AppProviderProps) {
         setCurrentUserId,
         currentSessionId,
         setCurrentSessionId,
-        state: legacyState,
-        actions: legacyActions,
       }}
     >
       {children}

@@ -4,6 +4,8 @@
  * Verifies compatibility with backend API version before starting the app.
  */
 
+import { ApiClient, ApiRequestError, apiClient } from './apiClient';
+
 // Frontend client version (should match backend API version format)
 export const CLIENT_VERSION = '1.0.0';
 export const CLIENT_TYPE = 'web';
@@ -29,24 +31,22 @@ export interface VersionCheckResult {
   upgrade_recommended: boolean;
 }
 
+function getClient(baseUrl: string): ApiClient {
+  return baseUrl ? new ApiClient({ baseUrl }) : apiClient;
+}
+
 /**
  * Get version information from backend
  */
 export async function getBackendVersion(baseUrl: string = ''): Promise<VersionInfo> {
-  const url = baseUrl ? `${baseUrl}/api/version` : '/api/version';
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to get version info: ${response.status} ${response.statusText}`);
+  try {
+    return await getClient(baseUrl).get<VersionInfo>('/api/version');
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      throw new Error(`Failed to get version info: ${error.status} ${error.statusText}`);
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 /**
@@ -55,24 +55,17 @@ export async function getBackendVersion(baseUrl: string = ''): Promise<VersionIn
 export async function checkVersionCompatibility(
   baseUrl: string = ''
 ): Promise<VersionCheckResult> {
-  const url = baseUrl ? `${baseUrl}/api/version/check` : '/api/version/check';
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  try {
+    return await getClient(baseUrl).post<VersionCheckResult>('/api/version/check', {
       client_version: CLIENT_VERSION,
       client_type: CLIENT_TYPE,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to check version: ${response.status} ${response.statusText}`);
+    });
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      throw new Error(`Failed to check version: ${error.status} ${error.statusText}`);
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 /**

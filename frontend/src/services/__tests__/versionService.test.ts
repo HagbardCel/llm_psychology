@@ -12,6 +12,10 @@ import {
   performVersionCheck,
 } from '../versionService';
 
+const mockJsonHeaders = {
+  get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+};
+
 describe('versionService', () => {
   describe('constants', () => {
     it('should have valid CLIENT_VERSION', () => {
@@ -87,21 +91,26 @@ describe('versionService', () => {
 
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => mockResponse,
       });
 
       const result = await getBackendVersion();
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/version', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/api/version',
+        expect.objectContaining({
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
       expect(result).toEqual(mockResponse);
     });
 
     it('should use custom base URL when provided', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => ({ api_version: '1.0.0', min_client_version: '1.0.0', server_time: '' }),
       });
 
@@ -109,7 +118,9 @@ describe('versionService', () => {
 
       expect(global.fetch).toHaveBeenCalledWith(
         'http://example.com/api/version',
-        expect.any(Object)
+        expect.objectContaining({
+          method: 'GET',
+        })
       );
     });
 
@@ -118,6 +129,9 @@ describe('versionService', () => {
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
+        headers: mockJsonHeaders,
+        json: async () => ({ error: 'boom' }),
+        text: async () => '{"error":"boom"}',
       });
 
       await expect(getBackendVersion()).rejects.toThrow('Failed to get version info: 500');
@@ -145,19 +159,23 @@ describe('versionService', () => {
 
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => mockResponse,
       });
 
       const result = await checkVersionCompatibility();
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/version/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_version: CLIENT_VERSION,
-          client_type: CLIENT_TYPE,
-        }),
-      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/api/version/check',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_version: CLIENT_VERSION,
+            client_type: CLIENT_TYPE,
+          }),
+        })
+      );
       expect(result).toEqual(mockResponse);
     });
 
@@ -173,6 +191,7 @@ describe('versionService', () => {
 
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => mockResponse,
       });
 
@@ -187,6 +206,9 @@ describe('versionService', () => {
         ok: false,
         status: 400,
         statusText: 'Bad Request',
+        headers: mockJsonHeaders,
+        json: async () => ({ error: 'bad request' }),
+        text: async () => '{"error":"bad request"}',
       });
 
       await expect(checkVersionCompatibility()).rejects.toThrow('Failed to check version: 400');
@@ -206,6 +228,7 @@ describe('versionService', () => {
     it('should return error severity for incompatible version', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => ({
           compatible: false,
           api_version: '2.0.0',
@@ -226,6 +249,7 @@ describe('versionService', () => {
     it('should return warning severity for outdated version', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => ({
           compatible: true,
           api_version: '1.2.0',
@@ -246,6 +270,7 @@ describe('versionService', () => {
     it('should return info severity for compatible version', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        headers: mockJsonHeaders,
         json: async () => ({
           compatible: true,
           api_version: '1.0.0',
