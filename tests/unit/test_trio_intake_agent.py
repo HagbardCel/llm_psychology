@@ -24,7 +24,7 @@ def _make_context(
     message_history: list[Message] | None = None,
 ) -> ConversationContext:
     return ConversationContext(
-        session_block_id="session-123",
+        session_id="session-123",
         user_profile=user_profile,
         therapy_plan=None,
         message_history=message_history

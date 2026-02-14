@@ -27,6 +27,7 @@ from psychoanalyst_app.orchestration.models import (
     direct_agent_response,
 )
 from psychoanalyst_app.prompts.intake_prompts import (
+    CLOSING_PROMPT,
     CONTINUE_CONVERSATION_PROMPT,
     GUEST_WELCOME_PROMPT,
     INITIAL_GREETING_PROMPT,
@@ -170,6 +171,10 @@ class TrioIntakeAgent:
 
                 # Determine next action and state
                 if is_complete:
+                    # When intake is complete, do not ask further questions.
+                    # Provide a closing summary and explain the next phase.
+                    prompt = CLOSING_PROMPT
+
                     # Extract and save Tier 1 patient profile data
                     logger.info("Intake complete - extracting Tier 1 data...")
                     tier1_updates = await self._extract_tier1_data(
