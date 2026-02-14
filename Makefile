@@ -4,7 +4,7 @@
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: generate-schemas validate-schemas validate-docs
+.PHONY: generate-schemas validate-schemas validate-docs validate-architecture
 
 export PYTHONPATH := src
 CONSOLE_UI_LOG ?= logs/console-ui.log
@@ -41,6 +41,7 @@ help:
 	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models (Docker)"
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
+	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo ""
 	@echo "Deprecated Local Wrappers (Docker equivalents only):"
 	@echo "  local-*           - Deprecated wrappers; print warning then run Docker target"
@@ -297,6 +298,11 @@ validate-schemas:
 validate-docs:
 	docker compose run --rm -v "$(PWD)/docs:/app/docs" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/validate_docs_metadata.py
+
+# Validate architecture budgets and layering boundaries (Docker)
+validate-architecture:
+	docker compose run --rm -v "$(PWD)/src:/app/src" -v "$(PWD)/scripts:/app/scripts" api \
+		env PYTHONPATH=/app/src python scripts/check_architecture_budgets.py
 
 local-generate-schemas:
 	@echo "⚠️  local-generate-schemas is deprecated; using Docker target 'make generate-schemas'"
