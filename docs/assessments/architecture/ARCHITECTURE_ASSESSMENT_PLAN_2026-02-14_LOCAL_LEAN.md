@@ -293,6 +293,14 @@ P1 implementation status (2026-02-14):
 ### P2 (Later)
 1. Documentation consolidation and active-doc governance (F-007).
 
+P2 implementation status (2026-02-14):
+- Completed F-007:
+  - Added `docs/DOCS_GOVERNANCE.md` with active/supporting/archive policy and required metadata contract.
+  - Consolidated `docs/README.md` into a canonical navigation index with explicit active-doc boundaries.
+  - Added ownership/freshness/source metadata front matter to all active docs.
+  - Added `scripts/validate_docs_metadata.py` and wired `make validate-docs`.
+  - Added CI workflow `.github/workflows/docs-governance.yml` for metadata/index validation.
+
 ## Deliverables
 1. This document updated with final findings and a prioritized improvement backlog.
 2. A companion implementation plan in `docs/plans/` for approved P0/P1 items.
@@ -328,7 +336,9 @@ P1 implementation status (2026-02-14):
   - `docker compose run --rm -v /home/fabian/Projects/llm_psychology/psychoanalyst_app:/app frontend sh -lc 'cd frontend && npm run test -- src/services/__tests__/versionService.test.ts src/contexts/__tests__/AppContext.test.tsx --runInBand'`
   - `make test-dev` -> `272 passed, 1 skipped, 1 deselected`
   - `docker compose run --rm -v /home/fabian/Projects/llm_psychology/psychoanalyst_app:/app frontend sh -lc 'cd frontend && npm run type-check'` -> fails on pre-existing `MUI Grid size` typing errors in `frontend/src/components/Dashboard.tsx` and `frontend/src/pages/AssessmentPage.tsx` (unrelated to this change-set).
+  - `make validate-docs` -> pass (`Documentation metadata validation passed. Validated active docs: 11`).
 
 ## Decision Log
 - 2026-02-14: Created local-lean architecture assessment plan and pre-scan candidate improvement list.
 - 2026-02-14: Completed in-depth local-lean architecture assessment and prioritized findings F-001..F-007.
+- 2026-02-14: Adopted active-doc governance with YAML front matter metadata and automated validation.
