@@ -237,8 +237,7 @@ class ConsoleClient:
             self.output.user_text("---", flush=True)
 
         self.output.user_text(
-            "To select a style, submit POST /api/workflow/select_therapy_style "
-            "with the desired selected_therapy_style value.",
+            "🧭 You'll be prompted to select a therapy style next.",
             flush=True,
         )
 
@@ -814,6 +813,11 @@ class ConsoleClient:
             while True:
                 if self.session_end_requested:
                     return True
+                next_action = await self._get_next_action()
+                required_action = next_action.get("required_action")
+                if required_action not in {"start_intake", "continue_therapy"}:
+                    # Workflow advanced to a non-chat step (e.g., wait/style selection).
+                    return False
                 try:
                     user_message = await self._get_user_input()
 
