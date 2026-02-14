@@ -13,6 +13,24 @@ from threading import RLock
 from typing import Any, TypeVar
 
 from psychoanalyst_app.config import Settings
+from psychoanalyst_app.container.factories import (
+    build_assessment_agent,
+    build_intake_agent,
+    build_memory_agent,
+    build_planning_agent,
+    build_psychoanalyst_agent,
+    build_reflection_agent,
+    create_agent,
+    create_agent_llm_service,
+    create_db_executor,
+    create_default_llm_service,
+    create_migration_service,
+    create_rag_service,
+    create_style_service,
+    create_trio_db_service,
+    get_llm_service_for_agent,
+    get_or_create_llm_service_for_model,
+)
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.exceptions import ConfigurationError
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
@@ -236,208 +254,42 @@ class ServiceContainer:
     # Service Factory Methods
 
     def _create_migration_service(self) -> MigrationService:
-        """
-        Create migration service.
-
-        Returns:
-            Configured MigrationService instance
-        """
-        logger.debug("Creating MigrationService")
-
-        try:
-            migration_service = MigrationService(db_path=self.config.DATABASE_PATH)
-            logger.info(f"Created MigrationService for {self.config.DATABASE_PATH}")
-            return migration_service
-        except Exception as e:
-            logger.error(f"Failed to create MigrationService: {e}")
-            raise
+        """Create migration service."""
+        return create_migration_service(self)
 
     def _create_trio_db_service(self) -> TrioDatabaseService:
-        """
-        Create a pure Trio database service using synchronous SQLite.
-
-        Returns:
-            Configured TrioDatabaseService instance
-        """
-        logger.debug("Creating pure TrioDatabaseService")
-
-        try:
-            migration_service = self.get("migration_service")
-            executor = self.get("db_executor")
-            trio_db_service = TrioDatabaseService(
-                db_path=self.config.DATABASE_PATH,
-                migration_service=migration_service,
-                executor=executor,
-            )
-            logger.info(
-                f"Created pure TrioDatabaseService for {self.config.DATABASE_PATH}"
-            )
-            return trio_db_service
-        except Exception as e:
-            logger.error(f"Failed to create TrioDatabaseService: {e}")
-            raise
+        """Create a pure Trio database service using synchronous SQLite."""
+        return create_trio_db_service(self)
 
     def _create_db_executor(self) -> TrioSQLiteExecutor:
         """Create the shared TrioSQLiteExecutor instance."""
-        return TrioSQLiteExecutor(
-            self.config.DATABASE_PATH,
-            pool_size=self.config.DATABASE_POOL_SIZE,
-            connect_timeout_seconds=float(self.config.DATABASE_POOL_TIMEOUT),
-            pool_acquire_timeout_seconds=float(self.config.DATABASE_POOL_TIMEOUT),
-        )
+        return create_db_executor(self)
 
     def _get_or_create_llm_service_for_model(
         self, model_name: str, config_key: str = "DEFAULT"
     ) -> LLMService:
-        """
-        Get existing LLMService for a model or create a new one.
-
-        Args:
-            model_name: Name of the LLM model
-            config_key: Configuration key alias for logging (e.g., "INTAKE_MODEL")
-
-        Returns:
-            LLMService instance (shared per model)
-        """
-        # Check cache first
-        if model_name in self._llm_service_cache:
-            logger.debug(f"Reusing existing LLMService for model {model_name}")
-            return self._llm_service_cache[model_name]
-
-        # Create new instance
-        if not self.config.GOOGLE_API_KEY:
-            raise ConfigurationError("GOOGLE_API_KEY must be configured")
-
-        try:
-            llm_service = LLMService(
-                api_key=self.config.GOOGLE_API_KEY,
-                model_name=model_name,
-                rate_limit_enabled=self.config.LLM_RATE_LIMIT_ENABLED,
-                requests_per_minute=self.config.LLM_REQUESTS_PER_MINUTE,
-                burst_capacity=self.config.LLM_BURST_CAPACITY,
-                llm_call_logging_enabled=self.config.LLM_CALL_LOGGING_ENABLED,
-                llm_call_logging_redact=self.config.LLM_CALL_LOGGING_REDACT,
-                llm_call_logging_max_field_chars=(
-                    self.config.LLM_CALL_LOGGING_MAX_FIELD_CHARS
-                ),
-                llm_call_logging_include_chunks=(
-                    self.config.LLM_CALL_LOGGING_INCLUDE_CHUNKS
-                ),
-            )
-
-            # Cache it
-            self._llm_service_cache[model_name] = llm_service
-
-            logger.info(
-                "Created new LLMService for model %s (source: %s), rate limiting: %s",
-                model_name,
-                config_key,
-                self.config.LLM_RATE_LIMIT_ENABLED,
-            )
-            return llm_service
-        except Exception as e:
-            logger.error(f"Failed to create LLMService for {model_name}: {e}")
-            raise
+        """Get existing LLMService for a model or create a new one."""
+        return get_or_create_llm_service_for_model(self, model_name, config_key)
 
     def _create_llm_service(self) -> LLMService:
-        """
-        Create LLM service.
-
-        Returns:
-            Configured LLMService instance
-        """
-        logger.debug("Creating LLMService")
-        if not self.config.MODEL_NAME:
-            raise ConfigurationError("MODEL_NAME must be configured")
-        return self._get_or_create_llm_service_for_model(
-            self.config.MODEL_NAME, "DEFAULT_MODEL"
-        )
+        """Create LLM service."""
+        return create_default_llm_service(self)
 
     def _create_agent_llm_service(self, agent_type: str) -> LLMService:
-        """
-        Create agent-specific LLM service with role and environment-aware defaults.
-
-        Args:
-            agent_type: Agent identifier (e.g., "INTAKE")
-
-        Returns:
-            Configured LLMService instance
-        """
-        if not self.config.GOOGLE_API_KEY:
-            raise ConfigurationError("GOOGLE_API_KEY must be configured")
-
-        # Use new environment-aware model selection logic
-        model_name = self.config.get_model_for_agent(agent_type)
-
-        logger.debug(
-            f"Creating agent LLM service for {agent_type} with model {model_name}"
-        )
-        return self._get_or_create_llm_service_for_model(model_name, agent_type)
+        """Create agent-specific LLM service."""
+        return create_agent_llm_service(self, agent_type)
 
     def _get_llm_service_for_agent(self, agent_type: str) -> LLMService:
-        """
-        Resolve the configured LLM service for a given agent.
-
-        Args:
-            agent_type: Agent identifier (e.g., "INTAKE")
-
-        Returns:
-            LLMService configured for that agent
-        """
-        service_key = self.AGENT_LLM_SERVICE_MAP.get(agent_type.upper(), "llm_service")
-        return self.get(service_key)
+        """Resolve the configured LLM service for a given agent."""
+        return get_llm_service_for_agent(self, agent_type)
 
     def _create_rag_service(self) -> RAGService:
-        """
-        Create RAG service.
-
-        Returns:
-            Configured RAGService instance
-        """
-        logger.debug("Creating RAGService")
-
-        try:
-            use_onnx = getattr(self.config, "USE_ONNX_EMBEDDINGS", True)
-            model_name = getattr(
-                self.config, "EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2"
-            )
-
-            rag_service = RAGService(
-                domain_knowledge_path=self.config.DOMAIN_KNOWLEDGE_PATH,
-                vector_db_path=self.config.VECTOR_DB_PATH,
-                styles_dir=getattr(self.config, "STYLES_DIR", None),
-                use_onnx=use_onnx,
-                model_name=model_name,
-            )
-            logger.info(
-                f"Created FAISS-based RAGService with ONNX={use_onnx}, "
-                f"model={model_name}"
-            )
-            return rag_service
-        except Exception as e:
-            logger.error(f"Failed to create RAGService: {e}")
-            raise
+        """Create RAG service."""
+        return create_rag_service(self)
 
     def _create_style_service(self) -> StyleService:
-        """
-        Create style service.
-
-        Returns:
-            Configured StyleService instance
-        """
-        logger.debug("Creating StyleService")
-
-        try:
-            style_dir = getattr(self.config, "STYLES_DIR", None) or None
-            style_service = StyleService(styles_dir=style_dir)
-            logger.info(
-                "Created StyleService with %s styles directory",
-                style_dir or "package",
-            )
-            return style_service
-        except Exception as e:
-            logger.error(f"Failed to create StyleService: {e}")
-            raise
+        """Create style service."""
+        return create_style_service(self)
 
     def __str__(self) -> str:
         """String representation of the container."""
@@ -466,19 +318,7 @@ class ServiceContainer:
         Returns:
             Configured agent instance
         """
-        normalized = agent_type.upper()
-        builders = {
-            "INTAKE": self._build_intake_agent,
-            "ASSESSMENT": self._build_assessment_agent,
-            "PSYCHOANALYST": self._build_psychoanalyst_agent,
-            "REFLECTION": self._build_reflection_agent,
-            "MEMORY": self._build_memory_agent,
-            "PLANNING": self._build_planning_agent,
-        }
-        builder = builders.get(normalized)
-        if not builder:
-            raise ValueError(f"Unknown agent type: {agent_type}")
-        return builder(user_context)
+        return create_agent(self, agent_type, user_context)
 
     def create_intake_agent(self, user_context: UserContext):
         """
@@ -553,129 +393,22 @@ class ServiceContainer:
         return self.create_agent("PLANNING", user_context)
 
     def _build_intake_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_intake_agent import TrioIntakeAgent
-
-        logger.debug(f"Creating TrioIntakeAgent for user {user_context.user_id}")
-
-        try:
-            agent = TrioIntakeAgent(
-                llm_service=self._get_llm_service_for_agent("INTAKE"),
-                user_context=user_context,
-                config=self.config,
-            )
-            logger.info(f"Created TrioIntakeAgent for user {user_context.user_id}")
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create IntakeAgent: {e}")
-            raise
+        return build_intake_agent(self, user_context)
 
     def _build_assessment_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
-
-        logger.debug(f"Creating TrioAssessmentAgent for user {user_context.user_id}")
-
-        try:
-            reflection_agent = self.create_reflection_agent(user_context)
-            agent = TrioAssessmentAgent(
-                llm_service=self._get_llm_service_for_agent("ASSESSMENT"),
-                db_service=self.get("trio_db_service"),
-                rag_service=self.get("rag_service"),
-                user_context=user_context,
-                reflection_agent=reflection_agent,
-                style_service=self.get("style_service"),
-            )
-            logger.info(f"Created TrioAssessmentAgent for user {user_context.user_id}")
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create AssessmentAgent: {e}")
-            raise
+        return build_assessment_agent(self, user_context)
 
     def _build_psychoanalyst_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_psychoanalyst_agent import (
-            TrioPsychoanalystAgent,
-        )
-
-        logger.debug(f"Creating TrioPsychoanalystAgent for user {user_context.user_id}")
-
-        try:
-            reflection_agent = self.create_reflection_agent(user_context)
-            agent = TrioPsychoanalystAgent(
-                llm_service=self._get_llm_service_for_agent("PSYCHOANALYST"),
-                db_service=self.get("trio_db_service"),
-                rag_service=self.get("rag_service"),
-                reflection_agent=reflection_agent,
-                style_service=self.get("style_service"),
-                config=self.config,
-            )
-            logger.info(
-                f"Created TrioPsychoanalystAgent for user {user_context.user_id}"
-            )
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create PsychoanalystAgent: {e}")
-            raise
+        return build_psychoanalyst_agent(self, user_context)
 
     def _build_reflection_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
-
-        logger.debug(f"Creating TrioReflectionAgent for user {user_context.user_id}")
-
-        try:
-            memory_agent = self.create_memory_agent(user_context)
-            planning_agent = self.create_planning_agent(user_context)
-            agent = TrioReflectionAgent(
-                llm_service=self._get_llm_service_for_agent("REFLECTION"),
-                db_service=self.get("trio_db_service"),
-                rag_service=self.get("rag_service"),
-                user_context=user_context,
-                memory_agent=memory_agent,
-                planning_agent=planning_agent,
-                config=self.config,
-            )
-            logger.info(f"Created TrioReflectionAgent for user {user_context.user_id}")
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create ReflectionAgent: {e}")
-            raise
+        return build_reflection_agent(self, user_context)
 
     def _build_memory_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
-
-        logger.debug(f"Creating TrioMemoryAgent for user {user_context.user_id}")
-
-        try:
-            agent = TrioMemoryAgent(
-                llm_service=self._get_llm_service_for_agent("MEMORY"),
-                db_service=self.get("trio_db_service"),
-                rag_service=self.get("rag_service"),
-                user_context=user_context,
-            )
-            logger.info(f"Created TrioMemoryAgent for user {user_context.user_id}")
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create MemoryAgent: {e}")
-            raise
+        return build_memory_agent(self, user_context)
 
     def _build_planning_agent(self, user_context: UserContext):
-        from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
-
-        logger.debug(f"Creating TrioPlanningAgent for user {user_context.user_id}")
-
-        try:
-            memory_agent = self.create_memory_agent(user_context)
-            agent = TrioPlanningAgent(
-                llm_service=self._get_llm_service_for_agent("PLANNING"),
-                db_service=self.get("trio_db_service"),
-                rag_service=self.get("rag_service"),
-                user_context=user_context,
-                memory_agent=memory_agent,
-                style_service=self.get("style_service"),
-            )
-            logger.info(f"Created TrioPlanningAgent for user {user_context.user_id}")
-            return agent
-        except Exception as e:
-            logger.error(f"Failed to create PlanningAgent: {e}")
-            raise
+        return build_planning_agent(self, user_context)
 
     # Container Lifecycle Methods
 
