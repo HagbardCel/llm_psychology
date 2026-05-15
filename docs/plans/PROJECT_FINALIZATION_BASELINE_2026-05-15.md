@@ -16,21 +16,23 @@ Use this file as the starting point for new remediation work. Historical plans m
 
 ## Current State
 
-- The branch is clean after the recent architecture, assessment, tooling, and orchestration commits.
+- The branch has a reproducible frontend validation path after the first finalization implementation wave.
 - Architecture simplification has progressed: active architecture docs are leaner, orchestration hotspots were split, structured assessment outputs were introduced, and WebSocket message constants now use generated protocol values in key paths.
-- Documentation, schema, architecture, and targeted backend checks passed during the assessment cycle.
-- The frontend type-check still fails in existing MUI Grid usage and remains the clearest known validation blocker before calling the project final.
+- Documentation, schema, architecture, frontend type-check/build, and frontend Jest checks pass through Docker.
+- The clearest remaining validation gap is a full backend suite plus deterministic E2E run after the next behavior-focused changes.
 
 ## Findings
 
-### P0 - Frontend Type-Check Failure
+### P0 - Frontend Validation Reproducibility - Resolved 2026-05-15
 
-`docker compose run --rm frontend npm run type-check` fails because installed MUI types reject `Grid size={{ ... }}` usage in:
+The original MUI Grid type-check failure was caused by stale frontend dependencies, not by invalid source code. The lockfile resolves MUI 7.3.6 where `Grid size={{ ... }}` is valid, but Docker images and the dev `node_modules` volume could still expose older MUI 5 modules.
 
-- `frontend/src/components/Dashboard.tsx`
-- `frontend/src/pages/AssessmentPage.tsx`
+The fix established lockfile-backed frontend Docker validation:
 
-This blocks a clean full validation run. Fix this before treating the UI as release-ready.
+- `frontend/Dockerfile.dev` now installs with `npm ci`.
+- `frontend/.dockerignore` prevents host `node_modules` from overwriting image dependencies.
+- `make validate-frontend` runs type-check and Vite build in an isolated Docker container.
+- `make frontend-sync-deps` refreshes the dev frontend dependency volume.
 
 ### P1 - Dependency Footprint and Docker Build Cost
 
@@ -57,30 +59,34 @@ Treat archived plans as input only. Reassess each item against the current imple
 
 ### P2 - Validation Breadth
 
-Targeted backend and documentation checks passed, but the full project is not yet proven by a single clean validation run because frontend type-check currently fails.
+Targeted backend and documentation checks passed, and frontend type-check/build plus Jest now pass. The full project is still not proven by one complete validation run because full backend tests and deterministic E2E were not rerun in this wave.
 
 The finalization path should establish one repeatable Docker-only validation command set that covers docs, schemas, backend tests, frontend type-check/build, and the most important user workflow tests.
 
 ## Recommended Next Sequence
 
-1. Fix the frontend MUI Grid type errors and rerun frontend type-check.
-2. Re-run the full Docker-only validation set and record exact results.
-3. Slim optional ML/dependency paths so default local setup remains practical.
-4. Reassess session ending, profile selection, and assessment failure handling against current code before making product fixes.
-5. Update active docs and contracts in the same commits as behavior changes.
+1. Run the full backend suite and deterministic E2E path through Docker.
+2. Slim optional ML/dependency paths so default local setup remains practical.
+3. Reassess session ending, profile selection, and assessment failure handling against current code before making product fixes.
+4. Update active docs and contracts in the same commits as behavior changes.
+5. Track frontend dependency audit output separately from this baseline if it becomes a release requirement.
 
 ## Validation Snapshot
 
-Known passing checks from the assessment cycle:
+Known passing checks after the first finalization implementation wave:
 
 - `make validate-architecture`
 - `make validate-docs`
 - `make validate-schemas`
+- `make validate-frontend`
+- `make test-frontend`
+- `make frontend-sync-deps`
 - targeted backend unit tests for Trio intake, schema generation, logging config, Trio assessment, and workflow next-action behavior
 
-Known failing check:
+Known validation gaps:
 
-- `docker compose run --rm frontend npm run type-check`
+- full backend suite not rerun in this wave
+- deterministic E2E not rerun in this wave
 
 ## Clean-Slate Archive
 
@@ -92,4 +98,3 @@ Archived source folders:
 Archive destination:
 
 - `docs/legacy/plans/clean-slate-2026-05-15/`
-
