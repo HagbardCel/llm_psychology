@@ -260,6 +260,6 @@ JSON serialization helpers live in
 ## Schema and Type Generation
 
 Pydantic models are the source of truth for schema generation:
-- JSON schemas: `python scripts/generate_schemas.py` -> `schemas/`
+- JSON schemas: `make generate-schemas` -> `schemas/`
 - Frontend types: `frontend/scripts/generate-types.js`
 - See `docs/TYPE_SYSTEM.md` for the full pipeline

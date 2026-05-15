@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-02-22
 review_cycle_days: 90
 source_of_truth_for: Project-level architecture and implementation invariants
 ---
@@ -280,7 +280,7 @@ Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app
 - `psychoanalyst_prompt.txt`, `reflection_prompt.txt`, `assessment_prompt.txt` (style-specific instructions)
 
 Loader/service:
-- `src/psychoanalyst_app/services/style_service.py` loads those prompts via `importlib.resources` so `pip install -e .` works from any working directory (override with `settings.STYLES_DIR` for local experimentation).
+- `src/psychoanalyst_app/services/style_service.py` loads those prompts via `importlib.resources` for packaged/container runtime resolution (override with `settings.STYLES_DIR` when you explicitly need alternate style assets).
 
 ### RAG uses FAISS (not a hosted vector DB)
 `src/psychoanalyst_app/services/rag_service.py` is a lean FAISS-backed retriever:
@@ -415,6 +415,7 @@ Logging is configured centrally:
 
 Design rule:
 - Log operational events at INFO (session start, transitions, job completion).
+- Keep app file logging opt-in (`APP_FILE_LOGGING_ENABLED=false` by default).
 - Keep verbose LLM payload logging opt-in (`LLM_CALL_LOGGING_ENABLED=false` by default).
 - When enabled, keep redaction on by default (`LLM_CALL_LOGGING_REDACT=true`).
 
@@ -428,8 +429,8 @@ Design rule:
 - Type checking: mypy is configured in `pyproject.toml` (strictness is part of the design intent; keep new code typed).
 
 ### Frontend (TypeScript)
-- Type-check: `cd frontend && npm run type-check`
-- Lint: `cd frontend && npm run lint`
+- Type-check: `docker compose run --rm frontend npm run type-check`
+- Lint: `docker compose run --rm frontend npm run lint`
 
 Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` sets `requires-python = ">=3.11"` and formats/linters use `py311`). Use 3.11 features freely; no need to keep compatibility with older versions.
 
@@ -443,7 +444,7 @@ Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` set
 3. If you introduced a brand-new blueprint, register it inside `TrioServer._setup_http_routes()`; existing domain files are already wired up.
 4. Return DTOs (not persistence models) and ensure datetimes serialize as ISO 8601 strings.
 5. Update schema generation if the model is API-facing: `scripts/generate_schemas.py`.
-6. Regenerate TS types: `cd frontend && npm run generate:types`.
+6. Regenerate TS types: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types`.
 
 ### Add a new WS message type
 1. Update the spec: `docs/WEBSOCKET_PROTOCOL.md`.
@@ -457,8 +458,7 @@ Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` set
 1. Prefer adding/updating DTOs (wire models) rather than internal persistence models.
 2. Add the DTO to the `pydantic_models` list in `scripts/generate_schemas.py`.
 3. Run `make generate-schemas` and then:
-   - Docker-only: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts`
-   - Local: `cd frontend && npm run generate:types`
+   - `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts`
 4. Commit the updated JSON schemas under `schemas/` and the generated TS file under `frontend/src/types/generated/api.ts`.
 
 ### Add a new agent (or change workflow routing)
@@ -563,158 +563,10 @@ class ServiceContainer:
 ---
 
 ## Coding Standards
+Detailed coding examples and anti-pattern references moved to:
+- `docs/reference/CODING_STANDARDS_AND_ANTI_PATTERNS.md`
 
-### Python Standards
-
-#### Naming Conventions
-```python
-# Classes: PascalCase
-class TrioIntakeAgent: ...
-
-# Functions: snake_case
-async def process_message(msg: str): ...
-
-# Constants: UPPER_SNAKE_CASE
-MAX_SESSION_DURATION = 45 * 60
-
-# Private: _leading_underscore
-def _internal_helper(): ...
-```
-
-#### Docstrings
-Use Google-style docstrings:
-```python
-async def process_message(user_id: str, message: str) -> AgentResponse:
-    """Process a user message through the appropriate agent.
-
-    Args:
-        user_id: Unique identifier for the user
-        message: User's input message
-
-    Returns:
-        AgentResponse containing reply and state transition
-
-    Raises:
-        WorkflowError: If user is in invalid state for messaging
-    """
-```
-
-#### Type Hints
-Always use type hints (checked by mypy strict mode):
-```python
-# ✅ GOOD
-def calculate_score(responses: list[str]) -> float:
-    ...
-
-# ❌ BAD
-def calculate_score(responses):
-    ...
-```
-
-#### Error Handling
-Be specific with exceptions:
-```python
-# ✅ GOOD
-try:
-    profile = await db.get_user_profile(user_id)
-except UserNotFoundError:
-    profile = await db.create_user_profile(user_id)
-```
-
-### TypeScript Standards
-
-#### Naming Conventions
-```typescript
-# Interfaces: PascalCase
-interface UserProfile { }
-
-# Functions: camelCase
-function processMessage(msg: string): void { }
-
-# Constants: UPPER_SNAKE_CASE
-const MAX_RETRIES = 3;
-
-# React components: PascalCase
-function TherapySession() { }
-```
-
-#### React Patterns
-Use functional components and hooks. Avoid class components.
-
-### Testing Standards
-
-#### Arrange-Act-Assert Pattern
-```python
-async def test_intake_agent_extracts_name():
-    # Arrange
-    agent = TrioIntakeAgent(llm_service=MockLLMService())
-    message = "Hi, I'm Alice"
-
-    # Act
-    response = await agent.process(message)
-
-    # Assert
-    assert response.user_data["name"] == "Alice"
-```
-
-#### Mocking Strategy
-- Mock external services (LLM API, vector DB)
-- Use real database for integration tests (with fixtures)
-- Don't mock what you own (internal components)
-
----
-
-## Anti-Patterns to Avoid
-
-### 1. God Objects
-**Problem:** One class does too much
-**Solution:** Split responsibilities
-
-```python
-# ❌ BAD: God object
-class TherapySystem:
-    def handle_websocket(self, ws): ...
-    def manage_database(self): ...
-    def call_llm(self, prompt): ...
-    def update_ui(self): ...
-
-# ✅ GOOD: Single responsibility
-class WebSocketGateway: ...
-class TrioDatabaseService: ...
-class LLMService: ...
-class UIRenderer: ...
-```
-
-### 2. Leaky Abstractions
-**Problem:** Implementation details leak through interfaces
-**Solution:** Hide complexity behind clean APIs
-
-```python
-# ❌ BAD: SQL details leak
-agent.execute_query("SELECT * FROM users WHERE id = ?", user_id)
-
-# ✅ GOOD: Clean abstraction
-agent.get_user_profile(user_id)
-```
-
-### 3. Premature Optimization
-**Problem:** Optimizing before measuring
-**Solution:** Profile first, then optimize. Keep code simple initially.
-
-### 4. Callback Hell
-**Problem:** Nested callbacks
-**Solution:** Use Trio structured concurrency (async/await)
-
-```python
-# ❌ BAD: Callback pyramid
-def process_message(msg, callback):
-    get_user(msg.user_id, lambda user:
-        get_session(user.session_id, lambda session:
-            callback(session)))
-
-# ✅ GOOD: Sequential async code
-async def process_message(msg):
-    user = await get_user(msg.user_id)
-    session = await get_session(user.session_id)
-    return session
-```
+Keep this active doc focused on architecture and runtime invariants. For code style:
+- Follow typed Python + TypeScript conventions used in existing modules.
+- Keep tests deterministic with clear arrange/act/assert structure.
+- Avoid god objects, leaky abstractions, and callback-style async flows.

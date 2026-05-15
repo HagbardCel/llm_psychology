@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-02-22
 review_cycle_days: 90
 source_of_truth_for: Assessment catalog and navigation for architecture, testing, UX, and project reviews
 ---
@@ -32,6 +32,7 @@ Evaluations of system architecture, design patterns, and structural decisions.
 - [ARCHITECTURE_IMPLEMENTATION_REPORT.md](architecture/ARCHITECTURE_IMPLEMENTATION_REPORT.md) - Detailed implementation findings
 - [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md) - In-depth, laptop-first architecture assessment plan and findings log template
 - [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_FINANCIAL_LOCAL_LEAN.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_FINANCIAL_LOCAL_LEAN.md) - In-depth architecture assessment plan focused on lean, maintainable, laptop-first financial-analysis workflows
+- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md) - Current in-depth, laptop-first architecture assessment for local AI virtual psychologist sessions
 
 **Key Findings:**
 - Trio migration completeness

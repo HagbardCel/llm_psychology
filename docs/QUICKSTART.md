@@ -28,10 +28,10 @@ GOOGLE_API_KEY=your_api_key_here
 DATABASE_PATH=data/psychoanalyst.db
 ```
 
-If you need to reset the local databases during early development, run:
+If you need to reset local databases during development, run:
 
 ```bash
-python scripts/purge_databases.py
+make clean-testdb
 ```
 
 ### 3. Build Dev Containers (Installs Dependencies Inside Docker)
@@ -42,11 +42,7 @@ Run:
 make dev-install
 ```
 
-This builds the API/console/frontend Docker images and installs all Python dependencies *inside* those containers (packages are not installed globally on your host). If you want to run backend modules directly on your machine, add the repo’s `src/` folder to `PYTHONPATH` so Python can find the package without installing it:
-
-```bash
-export PYTHONPATH=src
-```
+This builds the API/console/frontend Docker images and installs all Python dependencies *inside* those containers (packages are not installed globally on your host). The project workflow is Docker-only; avoid running Python/Node directly on the host for regular development.
 
 ### 4. Start the Server
 
@@ -56,9 +52,6 @@ make run-server
 
 # Or use Docker Compose directly
 docker compose up api
-
-# Local (opt-in)
-make local-run-server
 ```
 
 The server listens on `http://localhost:8000`.
@@ -73,13 +66,6 @@ make ui-web
 ```
 
 2. Open `http://localhost:5173` in your browser
-
-**Local (opt-in):**
-```bash
-cd frontend
-npm install
-npm run dev
-```
 
 3. Features:
    - Real-time streaming responses

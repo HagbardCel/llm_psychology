@@ -19,7 +19,7 @@ Canonical contract naming:
 - Session identifier field: `session_id`
 - Legacy `SessionBlock` / `session_block_id` names are deprecated and must not appear in generated API artifacts.
 
-**Docker-first note:** `make generate-schemas` and `make validate-schemas` run inside Docker by default. Local equivalents are available as `make local-generate-schemas` and `make local-validate-schemas` if you have a local Python environment.
+**Docker-only note:** run all commands in this guide via Docker targets/containers. Do not run Python or Node directly on the host.
 
 ## Architecture
 
@@ -107,10 +107,10 @@ export interface UserProfile {
 
 Type generation happens automatically:
 
-- **During development**: `npm run dev` (pre-hook)
-- **During build**: `npm run build` (pre-hook)
+- **During development**: `make ui-web` (frontend container)
+- **During build**: `docker compose run --rm frontend npm run build`
 - **In CI/CD**: GitHub Actions workflow
-- **On demand**: `npm run generate:types` (local) or `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts` (Docker-only)
+- **On demand**: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts`
 
 ### 3. Frontend Extensions (UI-only data)
 
@@ -196,7 +196,7 @@ class UserProfile(BaseModel):
 make generate-schemas
 ```
 
-3. **Frontend gets updated automatically** on next `npm run dev` or `npm run build`
+3. **Frontend gets updated automatically** on next Docker-based `make ui-web` or `docker compose run --rm frontend npm run build`
 
 4. **TypeScript will show errors** where the new field is missing - fix them!
 
@@ -239,8 +239,7 @@ When backend types change:
 1. **Run type generation**:
 
 ```bash
-cd frontend
-npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types
 ```
 
 2. **TypeScript will show errors** where types don't match
@@ -313,23 +312,23 @@ make generate-schemas
 make validate-schemas
 
 # Run schema generation tests
-pytest tests/unit/test_schema_generation.py -v
+docker compose run --rm api pytest tests/unit/test_schema_generation.py -v
 ```
 
 ### Frontend
 
 ```bash
 # Generate TypeScript types from schemas
-npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types
 
 # Run type generation only (no schema generation)
-npm run generate:ts
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
 
 # Type check without building
-npm run type-check
+docker compose run --rm frontend npm run type-check
 
 # Run type-safety tests
-npm test src/types/__tests__
+docker compose run --rm frontend npm test src/types/__tests__
 ```
 
 ### Full Pipeline
@@ -337,10 +336,10 @@ npm test src/types/__tests__
 ```bash
 # Complete type generation pipeline
 make generate-schemas
-cd frontend && npm run generate:ts
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
 
 # Or let the build do it automatically
-cd frontend && npm run build
+docker compose run --rm frontend npm run build
 ```
 
 ## Testing
@@ -399,8 +398,7 @@ it('accepts backend JSON without conversion', () => {
 
 **Solution**:
 ```bash
-cd frontend
-npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types
 ```
 
 ### Type Mismatch Errors
@@ -408,7 +406,7 @@ npm run generate:types
 **Problem**: TypeScript errors after backend model changes
 
 **Solution**:
-1. Regenerate types: `npm run generate:types`
+1. Regenerate types: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types`
 2. Check what changed: `git diff src/types/generated/api.ts`
 3. Update your code to match new types
 
@@ -420,10 +418,10 @@ npm run generate:types
 
 ### Build Fails with Type Errors
 
-**Problem**: `npm run build` fails with type errors
+**Problem**: `docker compose run --rm frontend npm run build` fails with type errors
 
 **Solution**:
-1. Run `npm run type-check` to see all errors
+1. Run `docker compose run --rm frontend npm run type-check` to see all errors
 2. Fix type mismatches
 3. Ensure generated types are up to date
 4. Check that backend schemas are valid
@@ -435,9 +433,7 @@ npm run generate:types
 **Solution**:
 ```bash
 # Force regeneration
-cd frontend
-rm src/types/generated/api.ts
-npm run generate:types
+docker compose run --rm -v "$PWD:/app" frontend sh -lc "rm -f src/types/generated/api.ts && npm run generate:types"
 ```
 
 ## Best Practices
@@ -464,7 +460,7 @@ npm run generate:types
 
 1. **Backend change**: Modify Pydantic model
 2. **Generate schemas**: `make generate-schemas`
-3. **Frontend build**: `npm run dev` (auto-generates types)
+3. **Frontend build**: `make ui-web` (auto-generates types in Docker)
 4. **Fix type errors**: Update frontend code as needed
 5. **Test**: Run tests to verify
 6. **Commit**: Commit source files (not generated)
