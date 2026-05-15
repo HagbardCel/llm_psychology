@@ -1,6 +1,4 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
-.PHONY: local-format local-lint local-test local-test-unit local-test-integration local-test-all local-test-frontend local-test-e2e local-test-real-llm local-test-dev
-.PHONY: local-run local-run-server local-run-e2e local-generate-schemas local-validate-schemas
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
@@ -15,7 +13,7 @@ help:
 	@echo "Available targets:"
 	@echo ""
 	@echo "Default (Docker) Development:"
-	@echo "  install-uv        - Install UV package manager"
+	@echo "  install-uv        - Deprecated local installer target (no-op)"
 	@echo "  install           - Build API container (installs backend deps inside Docker)"
 	@echo "  dev-install       - Build dev containers (api + console-ui + frontend)"
 	@echo "  format            - Format code with black (Docker)"
@@ -29,7 +27,7 @@ help:
 	@echo "  test-frontend     - Run frontend Jest unit tests"
 	@echo "  test-e2e          - Run deterministic Playwright E2E"
 	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
-	@echo "  test-devcontainer - Run devcontainer setup tests"
+	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
 	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
 	@echo "  clean             - Clean up generated files and caches"
 	@echo "  clean-testdb      - Clean test databases only"
@@ -42,9 +40,6 @@ help:
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
-	@echo ""
-	@echo "Deprecated Local Wrappers (Docker equivalents only):"
-	@echo "  local-*           - Deprecated wrappers; print warning then run Docker target"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-standalone     - Run standalone terminal UI (Docker)"
@@ -80,7 +75,8 @@ help:
 
 # Install UV package manager
 install-uv:
-	pip install uv
+	@echo "⚠️  install-uv is deprecated in Docker-only workflow."
+	@echo "    Use 'make requirements' to compile lockfiles in Docker."
 
 # Install production dependencies inside Docker
 install:
@@ -131,9 +127,9 @@ test-real-llm:
 	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
 	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 
-# Run devcontainer setup tests (local only)
+# Run devcontainer setup tests (Docker)
 test-devcontainer:
-	python scripts/devcontainer_test.py
+	docker compose run --rm api python scripts/devcontainer_test.py
 
 # Quick tests in devContainer (Docker)
 test-dev:
@@ -141,47 +137,6 @@ test-dev:
 	@echo "Perfect for: Active development, TDD, debugging"
 	@echo ""
 	docker compose --profile test run --rm test pytest -m "not real_llm" -x --tb=short -q
-
-# Deprecated local wrappers (delegate to Docker targets)
-local-format:
-	@echo "⚠️  local-format is deprecated; using Docker target 'make format'"
-	$(MAKE) format
-
-local-lint:
-	@echo "⚠️  local-lint is deprecated; using Docker target 'make lint'"
-	$(MAKE) lint
-
-local-test:
-	@echo "⚠️  local-test is deprecated; using Docker target 'make test'"
-	$(MAKE) test
-
-local-test-unit:
-	@echo "⚠️  local-test-unit is deprecated; using Docker target 'make test-unit'"
-	$(MAKE) test-unit
-
-local-test-integration:
-	@echo "⚠️  local-test-integration is deprecated; using Docker target 'make test-integration'"
-	$(MAKE) test-integration
-
-local-test-all:
-	@echo "⚠️  local-test-all is deprecated; using Docker target 'make test-all'"
-	$(MAKE) test-all
-
-local-test-frontend:
-	@echo "⚠️  local-test-frontend is deprecated; using Docker target 'make test-frontend'"
-	$(MAKE) test-frontend
-
-local-test-e2e:
-	@echo "⚠️  local-test-e2e is deprecated; using Docker target 'make test-e2e'"
-	$(MAKE) test-e2e
-
-local-test-real-llm:
-	@echo "⚠️  local-test-real-llm is deprecated; using Docker target 'make test-real-llm'"
-	$(MAKE) test-real-llm
-
-local-test-dev:
-	@echo "⚠️  local-test-dev is deprecated; using Docker target 'make test-dev'"
-	$(MAKE) test-dev
 
 # Full isolated Docker tests (pre-commit validation)
 test-validate:
@@ -253,8 +208,8 @@ reset-usertest:
 
 # Generate locked requirements from .in files with UV
 requirements:
-	uv pip compile requirements.in -o requirements.txt
-	uv pip compile requirements-dev.in -o requirements-dev.txt
+	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements.in -o requirements.txt
+	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-dev.in -o requirements-dev.txt
 
 # Sync environment with locked requirements using UV
 sync: dev-install
@@ -269,18 +224,6 @@ run-server:
 
 run-e2e:
 	docker compose run --rm api python -m psychoanalyst_app.e2e_server
-
-local-run:
-	@echo "⚠️  local-run is deprecated; using Docker target 'make run'"
-	$(MAKE) run
-
-local-run-server:
-	@echo "⚠️  local-run-server is deprecated; using Docker target 'make run-server'"
-	$(MAKE) run-server
-
-local-run-e2e:
-	@echo "⚠️  local-run-e2e is deprecated; using Docker target 'make run-e2e'"
-	$(MAKE) run-e2e
 
 # Generate JSON Schemas from Pydantic models (Docker)
 generate-schemas:
@@ -303,14 +246,6 @@ validate-docs:
 validate-architecture:
 	docker compose run --rm -v "$(PWD)/src:/app/src" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/check_architecture_budgets.py
-
-local-generate-schemas:
-	@echo "⚠️  local-generate-schemas is deprecated; using Docker target 'make generate-schemas'"
-	$(MAKE) generate-schemas
-
-local-validate-schemas:
-	@echo "⚠️  local-validate-schemas is deprecated; using Docker target 'make validate-schemas'"
-	$(MAKE) validate-schemas
 
 # ============================================
 # Docker Development Commands

@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     # Logging Configuration
     LOG_LEVEL: str = Field(default="INFO")
     CONSOLE_LOG_LEVEL: str = Field(default="CRITICAL")
+    APP_FILE_LOGGING_ENABLED: bool = Field(
+        default=False,
+        description="Enable app log file output (disabled by default for local use).",
+    )
+    APP_FILE_LOG_PATH: str = Field(
+        default="logs/app.log",
+        description="Path for app log file when APP_FILE_LOGGING_ENABLED=true.",
+    )
     LOG_FORMAT: str = Field(
         default="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
@@ -209,10 +217,10 @@ def setup_logging(
     console_log_level: str | None = None,
 ) -> None:
     """
-    Configure application-wide logging with separate console and file logging.
+    Configure application-wide logging with console output and optional file logs.
 
     Args:
-        log_level: Optional log level override for file logging
+        log_level: Optional log level override
         console_log_level: Log level for console output (uses config default: CRITICAL)
     """
     if log_level is None:
@@ -220,19 +228,11 @@ def setup_logging(
     if console_log_level is None:
         console_log_level = settings.CONSOLE_LOG_LEVEL
 
-    # Create logs directory if it doesn't exist
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-
     # Create formatters
     file_formatter = logging.Formatter(settings.LOG_FORMAT)
     console_formatter = logging.Formatter("%(levelname)s: %(message)s")
 
     # Create handlers
-    file_handler = logging.FileHandler(logs_dir / "app.log", mode="a")
-    file_handler.setLevel(getattr(logging, log_level.upper()))
-    file_handler.setFormatter(file_formatter)
-
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(getattr(logging, console_log_level.upper()))
     console_handler.setFormatter(console_formatter)
@@ -244,15 +244,23 @@ def setup_logging(
     # Remove any existing handlers to avoid duplicates
     root_logger.handlers.clear()
 
-    # Add our handlers
-    root_logger.addHandler(file_handler)
+    if settings.APP_FILE_LOGGING_ENABLED:
+        app_log_path = Path(settings.APP_FILE_LOG_PATH)
+        app_log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(app_log_path, mode="a")
+        file_handler.setLevel(getattr(logging, log_level.upper()))
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+
     root_logger.addHandler(console_handler)
 
     # Configure dedicated LLM call logger only when explicitly enabled.
     llm_logger = logging.getLogger("llm_calls")
     llm_logger.handlers.clear()
     if settings.LLM_CALL_LOGGING_ENABLED:
-        llm_handler = logging.FileHandler(logs_dir / "llm_calls.log", mode="a")
+        llm_log_path = Path("logs/llm_calls.log")
+        llm_log_path.parent.mkdir(parents=True, exist_ok=True)
+        llm_handler = logging.FileHandler(llm_log_path, mode="a")
         llm_handler.setLevel(logging.INFO)
         llm_handler.setFormatter(file_formatter)
         llm_logger.addHandler(llm_handler)
