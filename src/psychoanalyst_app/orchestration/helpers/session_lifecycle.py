@@ -6,24 +6,27 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
-from typing import Any
 
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.models.data_models import Message, Session
-from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
-    WorkflowEvent,
     WorkflowState,
 )
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
     TrioConversationManager,
 )
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
+from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 from .active_sessions import ActiveSessionRegistry
+from .initial_greeting import send_initial_greeting
+from .session_transition_policy import (
+    advance_workflow_on_session_end,
+    maybe_transition_for_session_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,64 +178,15 @@ class SessionLifecycleManager:
                 normalized_session_type,
             )
 
-            session_state_map = {
-                "intake": WorkflowState.INTAKE_IN_PROGRESS,
-                "assessment": WorkflowState.ASSESSMENT_IN_PROGRESS,
-                "therapy": WorkflowState.THERAPY_IN_PROGRESS,
-            }
-            session_event_map = {
-                "intake": WorkflowEvent.START_INTAKE,
-                "assessment": WorkflowEvent.START_ASSESSMENT,
-                "therapy": WorkflowEvent.START_THERAPY,
-            }
-
             # Get current workflow state and adjust if session type demands it.
             state = await self.workflow_engine.get_user_state(user_id)
-            desired_state = session_state_map.get(normalized_session_type)
-            if desired_state == WorkflowState.INTAKE_IN_PROGRESS:
-                trio_db_service = self.service_container.get("trio_db_service")
-                profile = await trio_db_service.get_user_profile(user_id)
-                if not profile or not is_profile_complete(profile):
-                    desired_state = None
-                    logger.info(
-                        "Skipping intake transition for user %s until profile is complete",
-                        user_id,
-                    )
-            if desired_state and desired_state != state:
-                if (
-                    desired_state == WorkflowState.THERAPY_IN_PROGRESS
-                    and state == WorkflowState.ASSESSMENT_COMPLETE
-                ):
-                    trio_db_service = self.service_container.get("trio_db_service")
-                    plan = await trio_db_service.get_latest_therapy_plan(user_id)
-                    if not plan or not plan.selected_therapy_style:
-                        desired_state = None
-                        logger.info(
-                            "Skipping therapy transition for user %s until therapy style is selected",
-                            user_id,
-                        )
-
-            if desired_state and desired_state != state:
-                event = session_event_map.get(normalized_session_type)
-                try:
-                    await self.workflow_engine.transition(
-                        user_id, desired_state, event=event
-                    )
-                    state = desired_state
-                    logger.info(
-                        "Transitioned user %s to %s for %s session",
-                        user_id,
-                        desired_state,
-                        normalized_session_type,
-                    )
-                except Exception as exc:  # Transition failures should not block session
-                    logger.warning(
-                        "Could not transition user %s to %s for %s session: %s",
-                        user_id,
-                        desired_state,
-                        normalized_session_type,
-                        exc,
-                    )
+            state = await maybe_transition_for_session_start(
+                user_id=user_id,
+                normalized_session_type=normalized_session_type,
+                state=state,
+                workflow_engine=self.workflow_engine,
+                service_container=self.service_container,
+            )
 
             agent_type = self.workflow_engine.get_current_agent(state)
             session_id = await self.create_session(user_id)
@@ -295,56 +249,28 @@ class SessionLifecycleManager:
 
         final_state = state
         follow_up = None
-        follow_up_args: tuple[Any, ...] = ()
+        follow_up_args = ()
         emit_session_id = self.get_active_session_id(user_id) or session_id
         if emit_session_id and not self.get_active_session_id(user_id):
             self.active_sessions.set_active_session_id(user_id, emit_session_id)
 
-        try:
-            if state == WorkflowState.THERAPY_IN_PROGRESS:
-                await self.workflow_engine.transition(
-                    user_id,
-                    WorkflowState.REFLECTION_IN_PROGRESS,
-                    event=WorkflowEvent.COMPLETE_SESSION,
-                )
-                final_state = WorkflowState.REFLECTION_IN_PROGRESS
-                self.conversation_manager.clear_context(session_id)
-                try:
-                    trio_db_service = self.service_container.get("trio_db_service")
-                    await trio_db_service.enqueue_session_enrichment_job(
-                        session_id, user_id
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to enqueue Tier 2 enrichment job for session %s",
-                        session_id,
-                        exc_info=True,
-                    )
-                follow_up = self._run_reflection
-                follow_up_args = (user_id, session_id)
-            elif state == WorkflowState.ASSESSMENT_IN_PROGRESS:
-                await self.workflow_engine.transition(
-                    user_id,
-                    WorkflowState.ASSESSMENT_COMPLETE,
-                    event=WorkflowEvent.COMPLETE_ASSESSMENT,
-                )
-                final_state = WorkflowState.ASSESSMENT_COMPLETE
-                self.conversation_manager.clear_context(session_id)
-        except Exception:
-            logger.error(
-                "Failed to advance workflow on session end (user=%s, session=%s, state=%s)",
-                user_id,
-                session_id,
-                state,
-                exc_info=True,
-            )
+        final_state, follow_up, follow_up_args = await advance_workflow_on_session_end(
+            user_id=user_id,
+            session_id=session_id,
+            state=state,
+            workflow_engine=self.workflow_engine,
+            conversation_manager=self.conversation_manager,
+            service_container=self.service_container,
+            run_reflection=self._run_reflection,
+        )
 
         if self._emit_next_action:
             try:
                 await self._emit_next_action(user_id, emit_session_id)
             except Exception:
                 logger.warning(
-                    "Could not emit workflow next action after ending session %s for user %s",
+                    "Could not emit workflow next action after ending session %s "
+                    "for user %s",
                     session_id,
                     user_id,
                     exc_info=True,
@@ -365,7 +291,8 @@ class SessionLifecycleManager:
             final_state = await self.workflow_engine.get_user_state(user_id)
         except Exception:
             logger.warning(
-                "Failed to refresh workflow state after session end (user=%s, session=%s)",
+                "Failed to refresh workflow state after session end "
+                "(user=%s, session=%s)",
                 user_id,
                 session_id,
                 exc_info=True,
@@ -376,14 +303,15 @@ class SessionLifecycleManager:
                 await self._emit_next_action(user_id, emit_session_id)
             except Exception:
                 logger.warning(
-                    "Could not emit workflow next action after follow-up for session %s",
+                    "Could not emit workflow next action after follow-up "
+                    "for session %s",
                     session_id,
                     exc_info=True,
                 )
 
         await self.conversation_manager.send_json_message(
             session_id,
-            "session_ended",
+            ServerMessageTypes.SESSION_ENDED,
             {
                 "reason": reason or "Session ended",
                 "workflow_state": final_state.value,
@@ -469,70 +397,9 @@ class SessionLifecycleManager:
         )
 
     async def _send_initial_greeting(self, user_id: str, session_id: str) -> None:
-        """
-        Send initial greeting by processing an empty message through the agent.
-
-        This triggers the agent's normal message processing flow, which will
-        generate an appropriate initial greeting based on the conversation context.
-        """
-        typing_started = False
-        try:
-            ws_ready = await self.conversation_manager.wait_for_websocket(
-                session_id, timeout_seconds=5.0
-            )
-            if not ws_ready:
-                logger.warning(
-                    "Skipping initial greeting for session %s: websocket never registered",
-                    session_id,
-                )
-                return
-
-            self.conversation_manager.mark_initial_greeting_sent(session_id)
-            await self.conversation_manager.send_typing_indicator(session_id, True)
-            typing_started = True
-
-            async for chunk in self._process_message(user_id, "", session_id):
-                await self.conversation_manager.send_stream_chunk(
-                    session_id, chunk, is_complete=False
-                )
-
-            await self.conversation_manager.send_stream_chunk(
-                session_id, "", is_complete=True
-            )
-
-            logger.info("Initial greeting sent for session %s", session_id)
-
-        except Exception as exc:
-            logger.error(
-                "Initial greeting failed for session %s: %s",
-                session_id,
-                exc,
-                exc_info=True,
-            )
-            try:
-                await self.conversation_manager.send_stream_chunk(
-                    session_id,
-                    f"\nERROR: Initial greeting failed: {type(exc).__name__}: {exc}\n",
-                    is_complete=False,
-                )
-                await self.conversation_manager.send_stream_chunk(
-                    session_id, "", is_complete=True
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to send initial-greeting error chunk for session %s",
-                    session_id,
-                    exc_info=True,
-                )
-        finally:
-            try:
-                if typing_started:
-                    await self.conversation_manager.send_typing_indicator(
-                        session_id, False
-                    )
-            except Exception:
-                logger.debug(
-                    "Failed to send typing_stop for session %s (likely disconnected)",
-                    session_id,
-                    exc_info=True,
-                )
+        await send_initial_greeting(
+            user_id=user_id,
+            session_id=session_id,
+            conversation_manager=self.conversation_manager,
+            process_message=self._process_message,
+        )

@@ -7,6 +7,7 @@ import logging
 from psychoanalyst_app.models.api_models import RequiredWorkflowAction
 from psychoanalyst_app.orchestration.models import WorkflowState
 from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
+from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ async def emit_workflow_next_action(
         action = await get_workflow_next_action(user_id, session_id=resolved_session_id)
         await conversation_manager.send_json_message(
             resolved_session_id,
-            "workflow_next_action",
+            ServerMessageTypes.WORKFLOW_NEXT_ACTION,
             action.model_dump(mode="json"),
         )
 

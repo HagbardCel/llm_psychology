@@ -1,0 +1,181 @@
+"""Background job helpers for orchestration response handling."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+import trio
+
+from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
+from psychoanalyst_app.orchestration.trio_conversation_manager import (
+    TrioConversationManager,
+)
+from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
+from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
+
+logger = logging.getLogger(__name__)
+
+EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
+RunReflectionFn = Callable[[str, str], Awaitable[None]]
+SurfaceReflectionFailureFn = Callable[[str, str, Exception], Awaitable[None]]
+
+
+async def send_assessment_recommendations(
+    *,
+    conversation_manager: TrioConversationManager,
+    session_id: str,
+    user_id: str,
+    recommendations: list[dict[str, Any]],
+) -> None:
+    payload = {
+        "session_id": session_id,
+        "user_id": user_id,
+        "recommendations": recommendations,
+    }
+    await conversation_manager.send_json_message(
+        session_id, ServerMessageTypes.ASSESSMENT_RECOMMENDATIONS, payload
+    )
+
+
+def queue_assessment_job(
+    *,
+    user_id: str,
+    session_id: str,
+    assessment_jobs: set[str],
+    nursery: trio.Nursery,
+    runner: Callable[[str, str, str | None], Awaitable[None]],
+) -> bool:
+    """Schedule assessment job if one is not already active for this user."""
+    if user_id in assessment_jobs:
+        return False
+    assessment_jobs.add(user_id)
+    nursery.start_soon(runner, user_id, session_id, session_id)
+    return True
+
+
+def queue_reflection_job(
+    *,
+    user_id: str,
+    session_id: str,
+    reflection_jobs: set[str],
+    nursery: trio.Nursery,
+    runner: Callable[[str, str, str | None], Awaitable[None]],
+) -> bool:
+    """Schedule reflection job if one is not already active for this session."""
+    if session_id in reflection_jobs:
+        return False
+    reflection_jobs.add(session_id)
+    nursery.start_soon(runner, user_id, session_id, session_id)
+    return True
+
+
+async def run_reflection_job(
+    *,
+    run_reflection: RunReflectionFn,
+    emit_next_action: EmitNextActionFn | None,
+    surface_reflection_failure: SurfaceReflectionFailureFn,
+    reflection_jobs: set[str],
+    timeout_seconds: int,
+    user_id: str,
+    session_id: str,
+    emit_session_id: str | None = None,
+) -> None:
+    """Run reflection with timeout/error handling and job de-dup cleanup."""
+    try:
+        with trio.fail_after(timeout_seconds):
+            await run_reflection(user_id, session_id)
+        if emit_next_action:
+            await emit_next_action(user_id, emit_session_id or session_id)
+    except trio.TooSlowError as exc:
+        logger.error(
+            "Reflection job timed out after %s seconds for session %s",
+            timeout_seconds,
+            session_id,
+            exc_info=True,
+        )
+        await surface_reflection_failure(user_id, session_id, exc)
+        if emit_next_action:
+            await emit_next_action(user_id, emit_session_id or session_id)
+    except Exception:
+        logger.error(
+            "Reflection job failed for session %s (user=%s)",
+            session_id,
+            user_id,
+            exc_info=True,
+        )
+    finally:
+        reflection_jobs.discard(session_id)
+
+
+async def run_assessment_job(
+    *,
+    workflow_engine: TrioWorkflowEngine,
+    conversation_manager: TrioConversationManager,
+    service_container: Any,
+    emit_next_action: EmitNextActionFn | None,
+    assessment_recommendations: dict[str, list[dict[str, Any]]],
+    assessment_jobs: set[str],
+    user_id: str,
+    intake_session_id: str,
+    emit_session_id: str | None = None,
+) -> None:
+    """Run backend assessment, emit recommendations, and close workflow state."""
+    try:
+        current_state = await workflow_engine.get_user_state(user_id)
+        if current_state not in (
+            WorkflowState.INTAKE_COMPLETE,
+            WorkflowState.ASSESSMENT_IN_PROGRESS,
+        ):
+            logger.info(
+                "Skipping assessment job for user %s (state=%s)",
+                user_id,
+                current_state,
+            )
+            return
+        target_session_id = emit_session_id or intake_session_id
+        if current_state == WorkflowState.INTAKE_COMPLETE:
+            await workflow_engine.transition(
+                user_id,
+                WorkflowState.ASSESSMENT_IN_PROGRESS,
+                event=WorkflowEvent.START_ASSESSMENT,
+            )
+            if emit_next_action:
+                await emit_next_action(user_id, target_session_id)
+        elif emit_next_action:
+            await emit_next_action(user_id, target_session_id)
+
+        context = await conversation_manager.get_context(intake_session_id)
+        assessment_agent = service_container.create_agent(
+            "ASSESSMENT",
+            UserContext(user_id=user_id),
+        )
+        agent_response = await assessment_agent.process_assessment(context)
+        recommendations = (agent_response.metadata or {}).get("recommendations")
+        if recommendations:
+            assessment_recommendations[user_id] = recommendations
+            await send_assessment_recommendations(
+                conversation_manager=conversation_manager,
+                session_id=target_session_id,
+                user_id=user_id,
+                recommendations=recommendations,
+            )
+
+        await workflow_engine.transition(
+            user_id,
+            WorkflowState.ASSESSMENT_COMPLETE,
+            event=WorkflowEvent.COMPLETE_ASSESSMENT,
+        )
+        if emit_next_action:
+            await emit_next_action(user_id, target_session_id)
+    except Exception:
+        logger.error(
+            "Assessment job failed for user %s (session=%s)",
+            user_id,
+            intake_session_id,
+            exc_info=True,
+        )
+    finally:
+        assessment_jobs.discard(user_id)

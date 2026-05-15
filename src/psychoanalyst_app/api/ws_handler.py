@@ -11,6 +11,7 @@ from psychoanalyst_app.orchestration.orchestrator_helpers import (
     session_type_for_workflow_state,
 )
 from psychoanalyst_app.models.api_models import RequiredWorkflowAction
+from psychoanalyst_app.utils.ws_protocol import ClientMessageTypes, ServerMessageTypes
 from psychoanalyst_app.utils.ws_messages import (
     chat_chunk_message,
     connected_message,
@@ -87,7 +88,7 @@ def register_ws_handler(app, server) -> None:
                 message = json.loads(raw_message)
                 msg_type = message.get("type")
 
-                if msg_type == "chat_message":
+                if msg_type == ClientMessageTypes.CHAT_MESSAGE:
                     if not session_id:
                         await websocket.close(1002, "No active session")
                         return
@@ -98,7 +99,7 @@ def register_ws_handler(app, server) -> None:
                     if action.required_action == RequiredWorkflowAction.WAIT:
                         await server.conversation_manager.send_json_message(
                             session_id,
-                            "error",
+                            ServerMessageTypes.ERROR,
                             {
                                 "message": (
                                     "Chat is disabled while the workflow is waiting."
@@ -114,7 +115,7 @@ def register_ws_handler(app, server) -> None:
                         session_id=session_id,
                         user_id=user_id,
                     )
-                elif msg_type == "end_session":
+                elif msg_type == ClientMessageTypes.END_SESSION:
                     if not session_id:
                         await websocket.close(1002, "No active session to end")
                         return
@@ -149,7 +150,7 @@ async def _handle_chat_message_ws(
     """Handle chat messages received over the WebSocket connection."""
     try:
         message = json.loads(raw_message)
-        if message.get("type") != "chat_message":
+        if message.get("type") != ClientMessageTypes.CHAT_MESSAGE:
             return
 
         message_content = message.get("data", {}).get("message", "").strip()

@@ -18,6 +18,7 @@ from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEng
 from psychoanalyst_app.services.session_enrichment_service import SessionEnrichmentService
 from psychoanalyst_app.services.session_enrichment_worker import run_session_enrichment_worker
 from psychoanalyst_app.ui.base_ui import BaseUI
+from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,10 @@ class TerminalWebSocket:
             data = json.loads(message)
             msg_type = data.get("type")
 
-            if msg_type == "typing_start":
+            if msg_type == ServerMessageTypes.TYPING_START:
                 print("\n🤖 Analyst: ", end="", flush=True)
 
-            elif msg_type == "chat_response_chunk":
+            elif msg_type == ServerMessageTypes.CHAT_RESPONSE_CHUNK:
                 chunk_data = data.get("data", {})
                 chunk = chunk_data.get("chunk", "")
                 is_complete = chunk_data.get("is_complete", False)

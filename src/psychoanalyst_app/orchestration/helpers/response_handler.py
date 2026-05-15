@@ -10,7 +10,6 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.structured_output_models import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
@@ -28,8 +27,16 @@ from psychoanalyst_app.orchestration.trio_conversation_manager import (
     TrioConversationManager,
 )
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
+from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 from .persistence import persist_therapy_plan_from_output, persist_tier3_update
+from .response_jobs import (
+    queue_assessment_job,
+    queue_reflection_job,
+    run_assessment_job,
+    run_reflection_job,
+    send_assessment_recommendations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +107,8 @@ class AgentResponseHandler:
             elif workflow_event == WorkflowEvent.COMPLETE_INTAKE:
                 if not (agent_response.metadata or {}).get("intake_complete"):
                     logger.info(
-                        "Intake completion not confirmed for user %s; skipping transition",
+                        "Intake completion not confirmed for user %s; "
+                        "skipping transition",
                         user_id,
                     )
                 else:
@@ -160,8 +168,11 @@ class AgentResponseHandler:
                 recommendations = agent_response.metadata.get("recommendations")
                 if recommendations:
                     self._assessment_recommendations[user_id] = recommendations
-                    await self._send_assessment_recommendations(
-                        session_id, user_id, recommendations
+                    await send_assessment_recommendations(
+                        conversation_manager=self.conversation_manager,
+                        session_id=session_id,
+                        user_id=user_id,
+                        recommendations=recommendations,
                     )
             return
 
@@ -369,7 +380,7 @@ class AgentResponseHandler:
             detail = f"error type: {type(exc).__name__}"
         await self.conversation_manager.send_json_message(
             session_id,
-            "error",
+            ServerMessageTypes.ERROR,
             {
                 "message": (
                     f"Reflection failed due to a backend error ({detail}). "
@@ -402,118 +413,51 @@ class AgentResponseHandler:
         self, user_id: str, session_id: str, emit_session_id: str | None = None
     ) -> None:
         """Run a reflection job and emit next action when done."""
-        timeout_seconds = self.service_container.config.REFLECTION_TIMEOUT_SECONDS
-        try:
-            with trio.fail_after(timeout_seconds):
-                await self.run_reflection(user_id, session_id)
-            if self._emit_next_action:
-                await self._emit_next_action(user_id, emit_session_id or session_id)
-        except trio.TooSlowError as exc:
-            logger.error(
-                "Reflection job timed out after %s seconds for session %s",
-                timeout_seconds,
-                session_id,
-                exc_info=True,
-            )
-            await self._surface_reflection_failure(user_id, session_id, exc)
-            if self._emit_next_action:
-                await self._emit_next_action(user_id, emit_session_id or session_id)
-        except Exception:
-            logger.error(
-                "Reflection job failed for session %s (user=%s)",
-                session_id,
-                user_id,
-                exc_info=True,
-            )
-        finally:
-            self._reflection_jobs.discard(session_id)
+        await run_reflection_job(
+            run_reflection=self.run_reflection,
+            emit_next_action=self._emit_next_action,
+            surface_reflection_failure=self._surface_reflection_failure,
+            reflection_jobs=self._reflection_jobs,
+            timeout_seconds=self.service_container.config.REFLECTION_TIMEOUT_SECONDS,
+            user_id=user_id,
+            session_id=session_id,
+            emit_session_id=emit_session_id,
+        )
 
     async def _run_assessment_job(
         self, user_id: str, intake_session_id: str, emit_session_id: str | None = None
     ) -> None:
         """Run backend assessment and emit recommendations + next actions."""
-        try:
-            current_state = await self.workflow_engine.get_user_state(user_id)
-            if current_state not in (
-                WorkflowState.INTAKE_COMPLETE,
-                WorkflowState.ASSESSMENT_IN_PROGRESS,
-            ):
-                logger.info(
-                    "Skipping assessment job for user %s (state=%s)",
-                    user_id,
-                    current_state,
-                )
-                return
-            target_session_id = emit_session_id or intake_session_id
-            if current_state == WorkflowState.INTAKE_COMPLETE:
-                await self.workflow_engine.transition(
-                    user_id,
-                    WorkflowState.ASSESSMENT_IN_PROGRESS,
-                    event=WorkflowEvent.START_ASSESSMENT,
-                )
-                if self._emit_next_action:
-                    await self._emit_next_action(user_id, target_session_id)
-            elif self._emit_next_action:
-                await self._emit_next_action(user_id, target_session_id)
-
-            context = await self.conversation_manager.get_context(intake_session_id)
-            assessment_agent = self.service_container.create_agent(
-                "ASSESSMENT",
-                UserContext(user_id=user_id),
-            )
-            agent_response = await assessment_agent.process_assessment(context)
-            recommendations = (agent_response.metadata or {}).get("recommendations")
-            if recommendations:
-                self._assessment_recommendations[user_id] = recommendations
-                await self.conversation_manager.send_json_message(
-                    target_session_id,
-                    "assessment_recommendations",
-                    {
-                        "session_id": target_session_id,
-                        "user_id": user_id,
-                        "recommendations": recommendations,
-                    },
-                )
-
-            await self.workflow_engine.transition(
-                user_id,
-                WorkflowState.ASSESSMENT_COMPLETE,
-                event=WorkflowEvent.COMPLETE_ASSESSMENT,
-            )
-            if self._emit_next_action:
-                await self._emit_next_action(user_id, target_session_id)
-        except Exception:
-            logger.error(
-                "Assessment job failed for user %s (session=%s)",
-                user_id,
-                intake_session_id,
-                exc_info=True,
-            )
-        finally:
-            self._assessment_jobs.discard(user_id)
+        await run_assessment_job(
+            workflow_engine=self.workflow_engine,
+            conversation_manager=self.conversation_manager,
+            service_container=self.service_container,
+            emit_next_action=self._emit_next_action,
+            assessment_recommendations=self._assessment_recommendations,
+            assessment_jobs=self._assessment_jobs,
+            user_id=user_id,
+            intake_session_id=intake_session_id,
+            emit_session_id=emit_session_id,
+        )
 
     async def ensure_assessment_job(self, user_id: str, session_id: str) -> None:
         """Ensure a single assessment job is running for the user."""
-        if user_id in self._assessment_jobs:
-            return
-        self._assessment_jobs.add(user_id)
-        self.nursery.start_soon(
-            self._run_assessment_job,
-            user_id,
-            session_id,
-            session_id,
+        queue_assessment_job(
+            user_id=user_id,
+            session_id=session_id,
+            assessment_jobs=self._assessment_jobs,
+            nursery=self.nursery,
+            runner=self._run_assessment_job,
         )
 
     async def ensure_reflection_job(self, user_id: str, session_id: str) -> None:
         """Ensure a single reflection job is running for the session."""
-        if session_id in self._reflection_jobs:
-            return
-        self._reflection_jobs.add(session_id)
-        self.nursery.start_soon(
-            self._run_reflection_job,
-            user_id,
-            session_id,
-            session_id,
+        queue_reflection_job(
+            user_id=user_id,
+            session_id=session_id,
+            reflection_jobs=self._reflection_jobs,
+            nursery=self.nursery,
+            runner=self._run_reflection_job,
         )
 
     async def emit_assessment_recommendations(
@@ -523,20 +467,11 @@ class AgentResponseHandler:
         recommendations = self._assessment_recommendations.get(user_id)
         if not recommendations:
             return
-        await self._send_assessment_recommendations(
-            session_id, user_id, recommendations
-        )
-
-    async def _send_assessment_recommendations(
-        self, session_id: str, user_id: str, recommendations: list[dict[str, Any]]
-    ) -> None:
-        payload = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "recommendations": recommendations,
-        }
-        await self.conversation_manager.send_json_message(
-            session_id, "assessment_recommendations", payload
+        await send_assessment_recommendations(
+            conversation_manager=self.conversation_manager,
+            session_id=session_id,
+            user_id=user_id,
+            recommendations=recommendations,
         )
 
 
