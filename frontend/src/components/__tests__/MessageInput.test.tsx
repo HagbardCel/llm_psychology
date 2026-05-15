@@ -363,7 +363,7 @@ describe('MessageInput', () => {
 
       const charCount = screen.getByText('750/1000');
       expect(charCount).toBeInTheDocument();
-      expect(charCount).toHaveStyle({ color: 'orange' });
+      expect(charCount).toHaveStyle({ color: 'rgb(255, 165, 0)' });
     });
 
     it('should show red character count for messages over 1000 characters', () => {
@@ -374,7 +374,7 @@ describe('MessageInput', () => {
 
       const charCount = screen.getByText('1001/1000');
       expect(charCount).toBeInTheDocument();
-      expect(charCount).toHaveStyle({ color: 'red' });
+      expect(charCount).toHaveStyle({ color: 'rgb(255, 0, 0)' });
     });
   });
 });

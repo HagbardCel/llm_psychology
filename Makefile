@@ -2,7 +2,7 @@
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: generate-schemas validate-schemas validate-docs validate-architecture
+.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-docs validate-architecture
 
 export PYTHONPATH := src
 CONSOLE_UI_LOG ?= logs/console-ui.log
@@ -26,6 +26,8 @@ help:
 	@echo "  test-integration  - Run integration tests only"
 	@echo "  test-frontend     - Run frontend Jest unit tests"
 	@echo "  test-e2e          - Run deterministic Playwright E2E"
+	@echo "  frontend-sync-deps - Refresh frontend dev node_modules Docker volume"
+	@echo "  validate-frontend - Run frontend type-check + Vite build (Docker)"
 	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
 	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
@@ -109,17 +111,28 @@ test-integration:
 # Run full suite (deterministic CI-grade, Docker)
 test-all:
 	$(MAKE) test
+	$(MAKE) validate-frontend
 	$(MAKE) test-frontend
 	$(MAKE) test-e2e
 
+# Refresh frontend dev dependencies in the named Docker volume from package-lock.json
+frontend-sync-deps:
+	docker compose run --rm --build frontend npm ci
+
+# Frontend validation in an isolated test container.
+# npm ci prevents stale image-layer node_modules from masking package-lock changes.
+# Use Vite directly here so validation does not rewrite generated type files.
+validate-frontend:
+	docker compose --profile test run --rm --build frontend-test sh -c "npm ci && npm run type-check && npx vite build"
+
 # Frontend unit tests (Jest, Docker)
 test-frontend:
-	docker compose --profile test run --rm frontend-test npm test -- --ci --colors=false
+	docker compose --profile test run --rm --build frontend-test npm test -- --ci --colors=false
 
 # Deterministic full-stack E2E (Playwright, Docker)
 test-e2e:
-	docker compose --profile test run --rm frontend-e2e npx playwright install chromium
-	docker compose --profile test run --rm frontend-e2e npm run test:e2e
+	docker compose --profile test run --rm --build frontend-e2e npx playwright install chromium
+	docker compose --profile test run --rm --build frontend-e2e npm run test:e2e
 
 # Real LLM/RAG smoke tests (Docker, requires secrets / external services)
 test-real-llm:

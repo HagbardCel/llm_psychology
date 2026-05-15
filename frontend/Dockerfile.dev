@@ -12,8 +12,8 @@ RUN apt-get update \
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev dependencies)
-RUN npm install
+# Install all dependencies exactly as locked (including dev dependencies)
+RUN npm ci
 
 # Install OS-level dependencies required by Playwright (for E2E tests)
 RUN npx playwright install-deps chromium

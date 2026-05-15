@@ -1,4 +1,19 @@
 import '@testing-library/jest-dom';
+import { TextDecoder, TextEncoder } from 'util';
+
+const testGlobal = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+};
+
+testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+
+if (!globalThis.TextEncoder) {
+    Object.defineProperty(globalThis, 'TextEncoder', { value: TextEncoder });
+}
+
+if (!globalThis.TextDecoder) {
+    Object.defineProperty(globalThis, 'TextDecoder', { value: TextDecoder });
+}
 
 // Silence specific benign deprecation warnings in the test environment
 const originalError = console.error;
