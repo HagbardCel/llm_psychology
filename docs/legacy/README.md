@@ -124,6 +124,18 @@ Implementation completion summaries and retrospectives.
 
 ---
 
+### 📋 [plans/](plans/)
+Historical implementation plans and todo lists that are no longer active guidance.
+
+**Documents:**
+- [clean-slate-2026-05-15/](plans/clean-slate-2026-05-15/) - Plans and todo files archived before creating the current finalization baseline
+
+**Key Learnings:**
+- Keep only one active finalization baseline in `docs/plans/`
+- Treat older plans as context, then reassess against current code before implementation
+
+---
+
 ## 🔄 Document Lifecycle
 
 Documents move to legacy when:

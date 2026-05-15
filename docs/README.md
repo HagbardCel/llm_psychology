@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-22
+last_reviewed: 2026-05-15
 review_cycle_days: 90
 source_of_truth_for: Documentation entrypoint and canonical navigation
 ---
@@ -38,10 +38,9 @@ Use these for focused implementation work; active docs remain the source of trut
 
 - `docs/current_issues/`: active troubleshooting and known issues.
 - `docs/features/`: feature-level implementation details.
-- `docs/plans/`: implementation plans in progress.
+- `docs/plans/`: current finalization baseline and implementation plans in progress.
 - `docs/assessments/`: architecture, testing, UX and project assessments.
 - `docs/reference/`: companion guides linked from active docs.
-- `docs/todo/`: tactical worklists.
 
 ## Archive and Legacy
 These paths are historical context, not canonical guidance:
