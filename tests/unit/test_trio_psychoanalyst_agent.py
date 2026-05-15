@@ -15,6 +15,7 @@ from psychoanalyst_app.models.data_models import (
     TherapyPlan,
     UserProfile,
 )
+from psychoanalyst_app.models.structured_output_models import DeepTopicSignalOutput
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
 
@@ -486,3 +487,61 @@ async def test_build_resumption_prompt_includes_emotional_state(
         or "overwhelmed" in prompt_lower
         or "emotional" in prompt_lower
     )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_should_offer_extension_blocks_when_llm_flags_deep_topic(
+    psychoanalyst_agent,
+):
+    psychoanalyst_agent.llm_service.generate_structured_output_async = AsyncMock(
+        return_value=DeepTopicSignalOutput(
+            in_deep_topic=True,
+            confidence="high",
+            rationale="Active emotionally vulnerable disclosure",
+        )
+    )
+    context = type(
+        "Context",
+        (),
+        {
+            "time_remaining_minutes": 3,
+            "can_extend": True,
+            "message_history": [
+                type(
+                    "Msg",
+                    (),
+                    {"role": "user", "content": "I feel exposed right now"},
+                )()
+            ],
+        },
+    )()
+
+    assert await psychoanalyst_agent._should_offer_extension(context) is False
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_should_offer_extension_uses_fallback_when_llm_signal_fails(
+    psychoanalyst_agent,
+):
+    psychoanalyst_agent.llm_service.generate_structured_output_async = AsyncMock(
+        side_effect=RuntimeError("llm unavailable")
+    )
+    context = type(
+        "Context",
+        (),
+        {
+            "time_remaining_minutes": 4,
+            "can_extend": True,
+            "message_history": [
+                type(
+                    "Msg",
+                    (),
+                    {"role": "user", "content": "Can we keep talking?"},
+                )()
+            ],
+        },
+    )()
+
+    assert await psychoanalyst_agent._should_offer_extension(context) is True

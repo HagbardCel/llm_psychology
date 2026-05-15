@@ -19,7 +19,12 @@ def build_style_assessment_prompt(
 Session Transcript:
 {session_summary}
 
-        Please provide a brief assessment of why this patient might or might not be
-        suitable for {style_id.upper()} therapy, focusing on the key indicators you
-        see in the transcript.
+        Return a structured assessment for {style_id.upper()} therapy.
+
+        Requirements:
+        - assessment: 2-4 sentences explaining suitability and key indicators.
+        - score: number between 0.0 and 1.0 (higher means stronger fit).
+        - key_topics: 1-5 short topic phrases directly grounded in the transcript.
+
+        Be specific, evidence-based, and avoid generic filler.
 """

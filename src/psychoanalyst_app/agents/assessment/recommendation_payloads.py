@@ -17,11 +17,11 @@ def build_structured_recommendations(
 ) -> list[TherapyStyleRecommendation]:
     """Convert recommendation dicts into typed payloads used by orchestration."""
     structured: list[TherapyStyleRecommendation] = []
-    for rank, rec in enumerate(recommendations[:limit]):
+    for rec in recommendations[:limit]:
         structured.append(
             TherapyStyleRecommendation(
                 style_name=rec["style_id"],
-                score=resolve_recommendation_score(rec, rank),
+                score=resolve_recommendation_score(rec),
                 explanation=rec["assessment"],
                 key_topics=extract_key_topics(rec),
             )

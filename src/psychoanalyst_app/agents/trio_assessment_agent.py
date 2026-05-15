@@ -7,14 +7,16 @@ approaches based on the user's needs and presenting concerns.
 Pure Trio implementation using structured concurrency.
 """
 
-import json
 import logging
-import uuid
-from datetime import datetime
 from typing import Any
 
 import trio
 
+from psychoanalyst_app.agents.assessment.intake_artifacts import (
+    extract_tier3_initial_formulation,
+    extract_tier4_initial_plan,
+    load_user_profile_context,
+)
 from psychoanalyst_app.agents.assessment.recommendation_payloads import (
     build_recommendation_metadata,
     build_structured_recommendations,
@@ -26,21 +28,18 @@ from psychoanalyst_app.agents.assessment.selection_handling import (
     build_selection_pending_response,
 )
 from psychoanalyst_app.agents.assessment.topic_extraction import extract_key_topics
-from psychoanalyst_app.agents.parsing import parse_continuation_choice, parse_style_selection
+from psychoanalyst_app.agents.parsing import (
+    parse_continuation_choice,
+    parse_style_selection,
+)
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.data_models import (
-    AnalyticOrientation,
-    CurrentFocus,
-    DefensiveOrganization,
-    PatientAnalysis,
     PatientAnalysisVersion,
-    RecurringNarrative,
     Session,
-    TransferenceImpressions,
 )
 from psychoanalyst_app.models.structured_output_models import (
     StructuredTherapyPlanOutput,
-    Tier4Extract,
+    StyleAssessmentOutput,
 )
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
@@ -49,11 +48,9 @@ from psychoanalyst_app.orchestration.models import (
     build_agent_response,
     continue_agent_response,
 )
-from psychoanalyst_app.prompts.assessment_prompts import (
-    TIER3_INITIAL_FORMULATION_PROMPT,
-    TIER4_INITIAL_PLAN_PROMPT,
+from psychoanalyst_app.prompts.assessment_prompt_builder import (
+    build_style_assessment_prompt,
 )
-from psychoanalyst_app.prompts.assessment_prompt_builder import build_style_assessment_prompt
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
 from psychoanalyst_app.services.style_service import StyleService
@@ -172,7 +169,6 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
                 metadata={"error": str(e)},
             )
 
-
     async def process_assessment(self, context: ConversationContext) -> AgentResponse:
         """
         Process assessment and generate recommendations using Trio.
@@ -190,9 +186,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             )
 
             # Convert to structured format
-            structured_recs = build_structured_recommendations(
-                recommendations, limit=3
-            )
+            structured_recs = build_structured_recommendations(recommendations, limit=3)
 
             # Format response content
             content = self._format_recommendations(structured_recs)
@@ -217,9 +211,9 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
                 metadata={"error": str(e)},
             )
 
-    def _resolve_recommendation_score(self, recommendation: dict[str, Any], rank: int) -> float:
-        """Resolve recommendation score with deterministic rank fallback."""
-        return resolve_recommendation_score(recommendation, rank)
+    def _resolve_recommendation_score(self, recommendation: dict[str, Any]) -> float:
+        """Resolve recommendation score from recommendation payload."""
+        return resolve_recommendation_score(recommendation)
 
     def _extract_key_topics(self, recommendation: dict[str, Any]) -> list[str]:
         """Extract key topics from recommendation payload with safe fallbacks."""
@@ -260,7 +254,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
 
     async def _generate_recommendations(
         self, message_history: list
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
         Generate therapy style recommendations based on the intake session using Trio.
 
@@ -281,7 +275,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         session_summary = "\n".join(session_context)
 
         # For each style, use the assessment prompt to evaluate suitability
-        style_assessments = {}
+        style_assessments: dict[str, dict[str, Any]] = {}
 
         # Use a nursery to run assessments concurrently
         async with trio.open_nursery() as nursery:
@@ -297,20 +291,34 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         recommendations = []
         for style_id in available_styles:
             if style_id in style_assessments:
+                style_assessment = style_assessments[style_id]
                 recommendations.append(
                     {
                         "style_id": style_id,
                         "name": style_id.upper(),
-                        "description": self.style_service.get_style_description(style_id),
-                        "assessment": style_assessments[style_id],
+                        "description": self.style_service.get_style_description(
+                            style_id
+                        ),
+                        "assessment": style_assessment["assessment"],
+                        "score": style_assessment["score"],
+                        "key_topics": style_assessment["key_topics"],
                     }
                 )
 
-        # Sort recommendations by relevance
-        # (for now, we'll keep all but limit to 3 in the UI)
+        recommendations.sort(
+            key=lambda recommendation: self._resolve_recommendation_score(
+                recommendation
+            ),
+            reverse=True,
+        )
         return recommendations
 
-    async def _assess_style(self, style_id: str, session_summary: str, results: dict):
+    async def _assess_style(
+        self,
+        style_id: str,
+        session_summary: str,
+        results: dict[str, dict[str, Any]],
+    ) -> None:
         """Helper to assess a single style asynchronously."""
         assessment_prompt = self.style_service.get_assessment_prompt(style_id)
 
@@ -321,9 +329,34 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
             session_summary=session_summary,
         )
 
-        # Generate assessment
-        assessment = await self.llm_service.generate_response_async(evaluation_prompt)
-        results[style_id] = assessment
+        try:
+            # Generate structured assessment payload with LLM-provided score/topics.
+            assessment_output = await self.llm_service.generate_structured_output_async(
+                evaluation_prompt,
+                StyleAssessmentOutput,
+                method="json_schema",
+            )
+            if not isinstance(assessment_output, StyleAssessmentOutput):
+                assessment_output = StyleAssessmentOutput.model_validate(
+                    assessment_output
+                )
+            results[style_id] = assessment_output.model_dump(mode="python")
+        except Exception:
+            logger.warning(
+                (
+                    "Structured assessment failed for style %s; "
+                    "using conservative fallback"
+                ),
+                style_id,
+                exc_info=True,
+            )
+            results[style_id] = {
+                "assessment": (
+                    "I do not have enough reliable signal to score this style yet."
+                ),
+                "score": 0.5,
+                "key_topics": [],
+            }
 
     async def create_initial_plan_with_style(
         self, intake_session: Session, selected_style: str
@@ -356,73 +389,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         Returns:
             Formatted patient background string, or None if not found
         """
-        try:
-            user_profile = await self.db_service.get_user_profile(user_id)
-
-            if not user_profile:
-                logger.warning(f"No user profile found for user {user_id}")
-                return None
-
-            # Format patient profile into readable context
-            display_name = user_profile.alias or user_profile.name
-            parts = [f"Patient: {display_name}"]
-
-            if user_profile.data_of_birth:
-                parts.append(f"DOB: {user_profile.data_of_birth}")
-            if user_profile.gender:
-                parts.append(f"Gender: {user_profile.gender}")
-            if user_profile.cultural_background:
-                parts.append(
-                    f"Cultural Background: "
-                    f"{user_profile.cultural_background}"
-                )
-
-            if user_profile.parents:
-                parts.append(f"Family - Parents: {user_profile.parents}")
-            if user_profile.siblings:
-                parts.append(
-                    f"Family - Siblings: {user_profile.siblings}"
-                )
-            if user_profile.family_atmosphere:
-                parts.append(
-                    f"Family Atmosphere: "
-                    f"{user_profile.family_atmosphere}"
-                )
-
-            if user_profile.education:
-                parts.append(f"Education: {user_profile.education}")
-            if user_profile.work_history:
-                parts.append(
-                    f"Work History: {user_profile.work_history}"
-                )
-            if user_profile.relationship_to_work:
-                parts.append(
-                    f"Relationship to Work: "
-                    f"{user_profile.relationship_to_work}"
-                )
-
-            if user_profile.relationships:
-                parts.append(
-                    f"Relationships: {user_profile.relationships}"
-                )
-            if user_profile.social_context:
-                parts.append(
-                    f"Social Context: {user_profile.social_context}"
-                )
-            if user_profile.current_situation:
-                parts.append(
-                    f"Current Situation: "
-                    f"{user_profile.current_situation}"
-                )
-
-            return "\n".join(parts)
-
-        except Exception as e:
-            logger.error(
-                f"Error loading patient profile for {user_id}: {e}",
-                exc_info=True,
-            )
-            return None
+        return await load_user_profile_context(self.db_service, user_id)
 
     async def _extract_tier3_initial_formulation(
         self,
@@ -443,55 +410,12 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         Returns:
             PatientAnalysisVersion v1, or None if extraction fails
         """
-        try:
-            # Format intake transcript
-            transcript_lines = []
-            for msg in intake_session.transcript:
-                role = "Therapist" if msg.role == "assistant" else "Patient"
-                transcript_lines.append(f"{role}: {msg.content}")
-
-            transcript = "\n".join(transcript_lines)
-
-            # Format extraction prompt
-            extraction_prompt = TIER3_INITIAL_FORMULATION_PROMPT.format(
-                patient_background=patient_background or "No background data",
-                intake_transcript=transcript,
-                therapy_style=therapy_style,
-            )
-
-            logger.info("Extracting Tier 3 initial formulation...")
-
-            analysis = await self.llm_service.generate_structured_output_async(
-                extraction_prompt,
-                PatientAnalysis,
-                method="json_schema",
-            )
-            if not isinstance(analysis, PatientAnalysis):
-                logger.error("Tier 3 extraction returned unexpected type")
-                return None
-
-            # Create versioned wrapper (v1)
-            analysis_version = PatientAnalysisVersion(
-                user_id=intake_session.user_id,
-                version=1,
-                analysis_data=analysis,
-                created_at=datetime.now(),
-                created_by_session=intake_session.session_id,
-                change_summary="Initial formulation created from intake assessment",
-            )
-
-            logger.info(
-                f"Successfully created Tier 3 v1 for user "
-                f"{intake_session.user_id}"
-            )
-
-            return analysis_version
-
-        except Exception as e:
-            logger.error(
-                f"Error extracting Tier 3 formulation: {e}", exc_info=True
-            )
-            return None
+        return await extract_tier3_initial_formulation(
+            llm_service=self.llm_service,
+            intake_session=intake_session,
+            therapy_style=therapy_style,
+            patient_background=patient_background,
+        )
 
     async def _extract_tier4_initial_plan(
         self,
@@ -512,63 +436,10 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
         Returns:
             Dict containing Tier 4 data, or None if extraction fails
         """
-        try:
-            # Format intake transcript
-            transcript_lines = []
-            for msg in intake_session.transcript:
-                role = "Therapist" if msg.role == "assistant" else "Patient"
-                transcript_lines.append(f"{role}: {msg.content}")
-
-            transcript = "\n".join(transcript_lines)
-
-            # Format Tier 3 formulation for context
-            if tier3_formulation:
-                analysis_data = tier3_formulation.analysis_data
-                formulation_summary = (
-                    f"Central Theme: {analysis_data.current_focus.theme}\n"
-                    f"Primary Defenses: "
-                    f"{', '.join(analysis_data.defenses.primary_defenses)}\n"
-                    f"Risk Areas: "
-                    f"{', '.join(analysis_data.orientation.risk_areas)}"
-                )
-            else:
-                formulation_summary = "No formulation available"
-
-            # Format extraction prompt
-            extraction_prompt = TIER4_INITIAL_PLAN_PROMPT.format(
-                patient_background=patient_background or "No background data",
-                intake_transcript=transcript,
-                therapy_style=therapy_style,
-                clinical_formulation=formulation_summary,
-            )
-
-            logger.info("Extracting Tier 4 initial treatment plan...")
-
-            tier4 = await self.llm_service.generate_structured_output_async(
-                extraction_prompt,
-                Tier4Extract,
-                method="json_schema",
-            )
-            if not isinstance(tier4, Tier4Extract):
-                logger.error("Tier 4 extraction returned unexpected type")
-                return None
-
-            tier4_payload = {
-                "initial_goals": tier4.initial_goals,
-                "current_progress": tier4.current_progress,
-                "planned_interventions": tier4.planned_interventions,
-                "status": tier4.status,
-            }
-
-            logger.info(
-                "Successfully extracted Tier 4 plan details for user %s",
-                intake_session.user_id,
-            )
-
-            return tier4_payload
-
-        except Exception as e:
-            logger.error(
-                f"Error extracting Tier 4 treatment plan: {e}", exc_info=True
-            )
-            return None
+        return await extract_tier4_initial_plan(
+            llm_service=self.llm_service,
+            intake_session=intake_session,
+            therapy_style=therapy_style,
+            patient_background=patient_background,
+            tier3_formulation=tier3_formulation,
+        )

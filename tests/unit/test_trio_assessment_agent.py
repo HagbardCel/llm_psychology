@@ -28,14 +28,12 @@ def _build_agent() -> TrioAssessmentAgent:
 def test_resolve_recommendation_score_prefers_payload_and_clamps():
     agent = _build_agent()
 
-    assert agent._resolve_recommendation_score({"score": 1.2}, 0) == 1.0
-    assert agent._resolve_recommendation_score({"score": -1}, 0) == 0.0
-    assert agent._resolve_recommendation_score({}, 0) == 0.9
-    assert agent._resolve_recommendation_score({}, 1) == 0.8
-    assert agent._resolve_recommendation_score({}, 2) == 0.7
+    assert agent._resolve_recommendation_score({"score": 1.2}) == 1.0
+    assert agent._resolve_recommendation_score({"score": -1}) == 0.0
+    assert agent._resolve_recommendation_score({}) == 0.5
 
 
-def test_extract_key_topics_uses_payload_or_assessment_lines():
+def test_extract_key_topics_uses_payload_only():
     agent = _build_agent()
 
     assert agent._extract_key_topics({"key_topics": ["anxiety", "work stress"]}) == [
@@ -46,23 +44,29 @@ def test_extract_key_topics_uses_payload_or_assessment_lines():
         "sleep",
         "avoidance",
     ]
-
-    extracted = agent._extract_key_topics(
-        {
-            "assessment": "- Work conflict.\n- Avoidance patterns\n\nGeneral summary line",
-        }
-    )
-    assert extracted == ["Work conflict", "Avoidance patterns", "General summary line"]
+    assert agent._extract_key_topics({"assessment": "- Work conflict"}) == []
 
 
 @pytest.mark.trio
-async def test_process_assessment_assigns_rank_scores_in_metadata():
+async def test_process_assessment_preserves_model_scores_in_metadata():
     agent = _build_agent()
     agent._generate_recommendations = AsyncMock(
         return_value=[
-            {"style_id": "freud", "assessment": "Depth-oriented approach"},
-            {"style_id": "jung", "assessment": "Symbolic and narrative framing"},
-            {"style_id": "cbt", "assessment": "Structured skills focus"},
+            {
+                "style_id": "freud",
+                "assessment": "Depth-oriented approach",
+                "score": 0.91,
+            },
+            {
+                "style_id": "jung",
+                "assessment": "Symbolic and narrative framing",
+                "score": 0.74,
+            },
+            {
+                "style_id": "cbt",
+                "assessment": "Structured skills focus",
+                "score": 0.52,
+            },
         ]
     )
 
@@ -87,4 +91,4 @@ async def test_process_assessment_assigns_rank_scores_in_metadata():
     response = await agent.process_assessment(context)
 
     scores = [item["score"] for item in response.metadata["recommendations"]]
-    assert scores == [0.9, 0.8, 0.7]
+    assert scores == [0.91, 0.74, 0.52]

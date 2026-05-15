@@ -27,10 +27,10 @@ from psychoanalyst_app.agents.psychoanalyst.topic_detection import is_in_deep_to
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.briefing_models import BriefingStatus
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
+from psychoanalyst_app.models.structured_output_models import DeepTopicSignalOutput
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
-    WorkflowEvent,
 )
 from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
     build_initial_prompt,
@@ -183,7 +183,7 @@ class TrioPsychoanalystAgent:
             # Check if session should end
             next_action, workflow_event = resolve_response_mode(
                 context,
-                should_offer_extension=self._should_offer_extension(context),
+                should_offer_extension=await self._should_offer_extension(context),
             )
 
             return AgentResponse(
@@ -296,7 +296,7 @@ class TrioPsychoanalystAgent:
             db_service=self.db_service,
         )
 
-    def _should_offer_extension(self, context: ConversationContext) -> bool:
+    async def _should_offer_extension(self, context: ConversationContext) -> bool:
         """
         Check if session extension should be offered.
 
@@ -306,18 +306,52 @@ class TrioPsychoanalystAgent:
         Returns:
             True if extension should be offered
         """
+        if not should_offer_extension(context, in_deep_topic=False):
+            return False
         return should_offer_extension(
             context,
-            in_deep_topic=self._is_in_deep_topic(context),
+            in_deep_topic=await self._is_in_deep_topic(context),
         )
 
-    def _is_in_deep_topic(self, context: ConversationContext) -> bool:
-        """Return whether the current exchange appears to be in a deep topic.
+    async def _is_in_deep_topic(self, context: ConversationContext) -> bool:
+        """Return whether the current exchange appears to be in a deep topic."""
+        try:
+            recent_messages = context.message_history[-6:]
+            if not recent_messages:
+                return is_in_deep_topic(context)
 
-        Current behavior is an explicit fallback: return False until
-        topic-depth heuristics are introduced.
-        """
-        return is_in_deep_topic(context)
+            transcript_lines: list[str] = []
+            for message in recent_messages:
+                role = "Therapist" if message.role == "assistant" else "Patient"
+                transcript_lines.append(f"{role}: {message.content}")
+
+            prompt = (
+                "Assess whether the conversation below is currently in a deep "
+                "emotionally sensitive topic where ending now would feel abrupt.\n\n"
+                "Return JSON with:\n"
+                '- in_deep_topic: boolean\n'
+                '- confidence: "high" | "medium" | "low"\n'
+                "- rationale: short explanation\n\n"
+                "Mark in_deep_topic=true only when there is active emotionally "
+                "intense disclosure, unresolved vulnerability, or a critical "
+                "breakthrough still unfolding.\n\n"
+                "Recent Transcript:\n"
+                f"{chr(10).join(transcript_lines)}"
+            )
+            signal_output = await self.llm_service.generate_structured_output_async(
+                prompt,
+                DeepTopicSignalOutput,
+                method="json_schema",
+            )
+            if not isinstance(signal_output, DeepTopicSignalOutput):
+                signal_output = DeepTopicSignalOutput.model_validate(signal_output)
+            return signal_output.in_deep_topic
+        except Exception:
+            logger.debug(
+                "Deep topic signal detection failed; using conservative fallback",
+                exc_info=True,
+            )
+            return is_in_deep_topic(context)
 
     async def _build_plan_context(self, therapy_plan: TherapyPlan) -> str:
         """

@@ -158,3 +158,23 @@ class StructuredTherapyPlanOutput(BaseModel):
     current_progress: str = Field(..., min_length=1, max_length=2000)
     planned_interventions: list[str] = Field(..., min_length=1)
     status: Literal["active", "paused", "completed"] = "active"
+
+
+class StyleAssessmentOutput(BaseModel):
+    """Structured assessment output for a single therapy style recommendation."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    assessment: str = Field(..., min_length=1, max_length=2000)
+    score: float = Field(..., ge=0.0, le=1.0)
+    key_topics: list[str] = Field(default_factory=list, max_length=5)
+
+
+class DeepTopicSignalOutput(BaseModel):
+    """Signal for whether the conversation is in a deep/sensitive topic."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    in_deep_topic: bool = False
+    confidence: Literal["high", "medium", "low"] | None = None
+    rationale: str | None = Field(default=None, max_length=500)

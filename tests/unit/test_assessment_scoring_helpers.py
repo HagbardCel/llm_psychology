@@ -10,13 +10,12 @@ from psychoanalyst_app.agents.assessment.topic_extraction import extract_key_top
 
 
 def test_resolve_recommendation_score_clamps_and_falls_back() -> None:
-    assert resolve_recommendation_score({"score": 2.0}, rank=0) == 1.0
-    assert resolve_recommendation_score({"score": -1.0}, rank=0) == 0.0
-    assert resolve_recommendation_score({}, rank=0) == 0.9
-    assert resolve_recommendation_score({}, rank=2) == 0.7
+    assert resolve_recommendation_score({"score": 2.0}) == 1.0
+    assert resolve_recommendation_score({"score": -1.0}) == 0.0
+    assert resolve_recommendation_score({}) == 0.5
 
 
-def test_extract_key_topics_uses_payload_before_assessment_parse() -> None:
+def test_extract_key_topics_uses_payload_and_skips_text_parsing() -> None:
     assert extract_key_topics({"key_topics": ["anxiety", "work"]}) == [
         "anxiety",
         "work",
@@ -25,11 +24,7 @@ def test_extract_key_topics_uses_payload_before_assessment_parse() -> None:
         "sleep",
         "avoidance",
     ]
-
-    parsed = extract_key_topics(
-        {"assessment": "- Work stress.\n2) Avoidance patterns\nGeneral insight"}
-    )
-    assert parsed == ["Work stress", "Avoidance patterns", "General insight"]
+    assert extract_key_topics({"assessment": "- Work stress.\nGeneral insight"}) == []
 
 
 def test_recommendation_payload_helpers_build_expected_shapes() -> None:
