@@ -5,7 +5,7 @@ import {
   Alert,
   Snackbar,
 } from '@mui/material';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { SessionHeader } from './SessionHeader';
 import { MessageHistory } from './MessageHistory';
 import { MessageInput } from './MessageInput';

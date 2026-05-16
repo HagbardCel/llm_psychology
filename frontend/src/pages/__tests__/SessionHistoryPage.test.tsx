@@ -1,26 +1,26 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SessionHistoryPage } from '../SessionHistoryPage';
 
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
+vi.mock('react-router', async () => ({
+  ...(await vi.importActual<typeof import('react-router')>('react-router')),
   useNavigate: () => mockNavigate,
 }));
 
-jest.mock('../../contexts/AppContext', () => ({
+vi.mock('../../contexts/AppContext', () => ({
   useCurrentUserId: () => 'test-user-id',
   useCurrentSessionId: () => 'test-session-id',
 }));
 
-const mockUseSessionHistory = jest.fn();
-jest.mock('../../hooks/useSessionHistory', () => ({
+const mockUseSessionHistory = vi.fn();
+vi.mock('../../hooks/useSessionHistory', () => ({
   useSessionHistory: (...args: any[]) => mockUseSessionHistory(...args),
 }));
 
 describe('SessionHistoryPage', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('shows loading state', () => {

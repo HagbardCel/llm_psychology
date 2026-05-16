@@ -2,6 +2,8 @@
  * Unit tests for version service
  */
 
+import type { Mock } from 'vitest';
+
 import {
   CLIENT_VERSION,
   CLIENT_TYPE,
@@ -75,11 +77,11 @@ describe('versionService', () => {
 
   describe('getBackendVersion', () => {
     beforeEach(() => {
-      global.fetch = jest.fn();
+      global.fetch = vi.fn();
     });
 
     afterEach(() => {
-      jest.resetAllMocks();
+      vi.resetAllMocks();
     });
 
     it('should fetch version info successfully', async () => {
@@ -89,7 +91,7 @@ describe('versionService', () => {
         server_time: '2025-12-03T10:00:00Z',
       };
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => mockResponse,
@@ -108,7 +110,7 @@ describe('versionService', () => {
     });
 
     it('should use custom base URL when provided', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => ({ api_version: '1.0.0', min_client_version: '1.0.0', server_time: '' }),
@@ -125,7 +127,7 @@ describe('versionService', () => {
     });
 
     it('should throw error on fetch failure', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
@@ -140,11 +142,11 @@ describe('versionService', () => {
 
   describe('checkVersionCompatibility', () => {
     beforeEach(() => {
-      global.fetch = jest.fn();
+      global.fetch = vi.fn();
     });
 
     afterEach(() => {
-      jest.resetAllMocks();
+      vi.resetAllMocks();
     });
 
     it('should check version compatibility successfully', async () => {
@@ -157,7 +159,7 @@ describe('versionService', () => {
         upgrade_recommended: false,
       };
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => mockResponse,
@@ -189,7 +191,7 @@ describe('versionService', () => {
         upgrade_recommended: false,
       };
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => mockResponse,
@@ -202,7 +204,7 @@ describe('versionService', () => {
     });
 
     it('should throw error on fetch failure', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: false,
         status: 400,
         statusText: 'Bad Request',
@@ -217,16 +219,16 @@ describe('versionService', () => {
 
   describe('performVersionCheck', () => {
     beforeEach(() => {
-      global.fetch = jest.fn();
-      jest.spyOn(console, 'error').mockImplementation(() => {});
+      global.fetch = vi.fn();
+      vi.spyOn(console, 'error').mockImplementation(() => {});
     });
 
     afterEach(() => {
-      jest.resetAllMocks();
+      vi.resetAllMocks();
     });
 
     it('should return error severity for incompatible version', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => ({
@@ -247,7 +249,7 @@ describe('versionService', () => {
     });
 
     it('should return warning severity for outdated version', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => ({
@@ -268,7 +270,7 @@ describe('versionService', () => {
     });
 
     it('should return info severity for compatible version', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as Mock).mockResolvedValue({
         ok: true,
         headers: mockJsonHeaders,
         json: async () => ({
@@ -288,7 +290,7 @@ describe('versionService', () => {
     });
 
     it('should handle fetch errors gracefully', async () => {
-      (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (global.fetch as Mock).mockRejectedValue(new Error('Network error'));
 
       const result = await performVersionCheck();
 

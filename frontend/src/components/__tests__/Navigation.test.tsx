@@ -1,32 +1,32 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { Navigation } from '../Navigation';
 import { UserStatus } from '../../types';
 
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 const mockLocation = { pathname: '/' };
 
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
+vi.mock('react-router', async () => ({
+  ...(await vi.importActual<typeof import('react-router')>('react-router')),
   useNavigate: () => mockNavigate,
   useLocation: () => mockLocation,
 }));
 
-jest.mock('../../contexts/AppContext', () => ({
+vi.mock('../../contexts/AppContext', () => ({
   useCurrentUserId: () => 'test-user-id',
   useCurrentSessionId: () => 'test-session-id',
 }));
 
-const mockUseUserProfile = jest.fn();
-jest.mock('../../hooks/useUserProfile', () => ({
+const mockUseUserProfile = vi.fn();
+vi.mock('../../hooks/useUserProfile', () => ({
   useUserProfile: (...args: any[]) => mockUseUserProfile(...args),
 }));
 
 describe('Navigation', () => {
-  const mockOnClose = jest.fn();
+  const mockOnClose = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockLocation.pathname = '/';
   });
 

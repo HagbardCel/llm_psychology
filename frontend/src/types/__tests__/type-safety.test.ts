@@ -2,7 +2,7 @@
  * Integration tests for type safety across the application
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect } from 'vitest';
 import type {
   User,
   UserStatus,

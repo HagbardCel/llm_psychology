@@ -12,7 +12,7 @@ import {
   Box,
   CircularProgress
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useSessionHistory } from '../hooks/useSessionHistory';
 

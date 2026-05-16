@@ -1,16 +1,16 @@
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 
 import { TherapySession } from '../TherapySession';
 import { AppProvider } from '../../contexts/AppContext';
 import type { SessionStartedEvent } from '../../types/websocket';
 
-const mockSendChatMessage = jest.fn();
-const mockSendEndSession = jest.fn();
-const mockRegisterStreamingChunkHandler = jest.fn();
-const mockRegisterSessionStartedHandler = jest.fn();
-const mockRegisterSessionEndedHandler = jest.fn();
-const mockRegisterWorkflowNextActionHandler = jest.fn();
+const mockSendChatMessage = vi.fn();
+const mockSendEndSession = vi.fn();
+const mockRegisterStreamingChunkHandler = vi.fn();
+const mockRegisterSessionStartedHandler = vi.fn();
+const mockRegisterSessionEndedHandler = vi.fn();
+const mockRegisterWorkflowNextActionHandler = vi.fn();
 
 let mockIsConnected = true;
 let mockConnectionStatus = { isConnected: true, isConnecting: false };
@@ -19,8 +19,8 @@ let streamingHandler: ((chunk: string, isComplete: boolean, fullResponse?: strin
 let sessionStartedHandler: ((event: SessionStartedEvent) => void) | null = null;
 let sessionEndedHandler: (() => void) | null = null;
 
-jest.mock('../../contexts/WebSocketContext', () => ({
-  useWebSocketContext: jest.fn(() => {
+vi.mock('../../contexts/WebSocketContext', () => ({
+  useWebSocketContext: vi.fn(() => {
     return {
       connectionStatus: mockConnectionStatus,
       lastMessage: mockLastMessage,
@@ -35,7 +35,7 @@ jest.mock('../../contexts/WebSocketContext', () => ({
   }),
 }));
 
-jest.mock('../SessionHeader', () => ({
+vi.mock('../SessionHeader', () => ({
   SessionHeader: ({ onEndSession }: any) => (
     <div data-testid="session-header">
       <button onClick={onEndSession} data-testid="end-session-btn">
@@ -45,7 +45,7 @@ jest.mock('../SessionHeader', () => ({
   ),
 }));
 
-jest.mock('../MessageHistory', () => ({
+vi.mock('../MessageHistory', () => ({
   MessageHistory: ({ messages, isLoading, streamingMessage, isStreaming }: any) => (
     <div data-testid="message-history">
       {messages.map((msg: any, i: number) => (
@@ -59,7 +59,7 @@ jest.mock('../MessageHistory', () => ({
   ),
 }));
 
-jest.mock('../MessageInput', () => ({
+vi.mock('../MessageInput', () => ({
   MessageInput: ({ onSendMessage, disabled, placeholder }: any) => (
     <div data-testid="message-input">
       <input
@@ -79,7 +79,7 @@ jest.mock('../MessageInput', () => ({
   ),
 }));
 
-jest.mock('../ConnectionStatus', () => ({
+vi.mock('../ConnectionStatus', () => ({
   ConnectionStatus: ({ status }: any) => (
     <div data-testid="connection-status">
       {status.isConnected ? 'Connected' : 'Disconnected'}
@@ -95,7 +95,7 @@ describe('TherapySession', () => {
   );
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockIsConnected = true;
     mockConnectionStatus = { isConnected: true, isConnecting: false };
     mockLastMessage = null;

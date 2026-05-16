@@ -9,24 +9,24 @@ describe('AppContext', () => {
   );
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
-    const originalGetItem = Storage.prototype.getItem.bind(localStorage);
-    jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
+    const originalGetItem = localStorage.getItem.bind(localStorage);
+    vi.spyOn(localStorage, 'getItem').mockImplementation((key: string) => {
       if (key === 'theme') return null;
       if (key === 'sidebarOpen') return null;
       if (key === 'current_user_id') return null;
       return originalGetItem(key);
     });
 
-    const originalSetItem = Storage.prototype.setItem.bind(localStorage);
-    jest.spyOn(Storage.prototype, 'setItem').mockImplementation((key: string, value: string) => {
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
       return originalSetItem(key, value);
     });
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('throws if used outside provider', () => {

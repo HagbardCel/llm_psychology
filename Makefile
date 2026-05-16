@@ -24,7 +24,7 @@ help:
 	@echo "  test-validate     - Full isolated Docker tests (pre-commit validation)"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests only"
-	@echo "  test-frontend     - Run frontend Jest unit tests"
+	@echo "  test-frontend     - Run frontend Vitest unit tests"
 	@echo "  test-e2e          - Run deterministic Playwright E2E"
 	@echo "  frontend-sync-deps - Refresh frontend dev node_modules Docker volume"
 	@echo "  validate-frontend - Run frontend type-check + Vite build (Docker)"
@@ -126,9 +126,9 @@ frontend-sync-deps:
 validate-frontend:
 	docker compose --profile test run --rm --build frontend-test sh -c "npm ci && npm run type-check && npx vite build"
 
-# Frontend unit tests (Jest, Docker)
+# Frontend unit tests (Vitest, Docker)
 test-frontend:
-	docker compose --profile test run --rm --build frontend-test npm test -- --ci --colors=false
+	docker compose --profile test run --rm --build frontend-test npm test
 
 # Deterministic full-stack E2E (Playwright, Docker)
 test-e2e:

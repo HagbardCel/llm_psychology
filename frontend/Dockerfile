@@ -1,5 +1,5 @@
 # Multi-stage build for React frontend
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -8,13 +8,14 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN npm run build
+# Build the application. Generated schemas/types are produced by the
+# Docker-only repo-level generation step, not inside the frontend image.
+RUN npm run type-check && npx vite build
 
 # Production stage
 FROM nginx:alpine

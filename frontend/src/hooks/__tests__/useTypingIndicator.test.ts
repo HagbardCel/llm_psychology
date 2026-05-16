@@ -2,11 +2,11 @@ import { renderHook, act } from '@testing-library/react';
 import { useTypingIndicator } from '../useTypingIndicator';
 
 describe('useTypingIndicator', () => {
-  jest.useFakeTimers();
+  vi.useFakeTimers();
 
   afterEach(() => {
-    jest.clearAllTimers();
-    jest.clearAllMocks();
+    vi.clearAllTimers();
+    vi.clearAllMocks();
   });
 
   it('should initialize with isTyping as false', () => {
@@ -42,7 +42,7 @@ describe('useTypingIndicator', () => {
   });
 
   it('should call onTypingStart callback when typing starts', () => {
-    const onTypingStart = jest.fn();
+    const onTypingStart = vi.fn();
     const { result } = renderHook(() => useTypingIndicator({ onTypingStart }));
 
     act(() => {
@@ -53,7 +53,7 @@ describe('useTypingIndicator', () => {
   });
 
   it('should call onTypingStop callback when typing stops', () => {
-    const onTypingStop = jest.fn();
+    const onTypingStop = vi.fn();
     const { result } = renderHook(() => useTypingIndicator({ onTypingStop }));
 
     act(() => {
@@ -68,7 +68,7 @@ describe('useTypingIndicator', () => {
   });
 
   it('should auto-stop typing after timeout', () => {
-    const onTypingStop = jest.fn();
+    const onTypingStop = vi.fn();
     const { result } = renderHook(() =>
       useTypingIndicator({ onTypingStop, typingTimeout: 1000 })
     );
@@ -80,7 +80,7 @@ describe('useTypingIndicator', () => {
     expect(result.current.isTyping).toBe(true);
 
     act(() => {
-      jest.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
     });
 
     expect(result.current.isTyping).toBe(false);
@@ -124,7 +124,7 @@ describe('useTypingIndicator', () => {
   });
 
   it('should reset timeout when startTyping is called again', () => {
-    const onTypingStop = jest.fn();
+    const onTypingStop = vi.fn();
     const { result } = renderHook(() =>
       useTypingIndicator({ onTypingStop, typingTimeout: 1000 })
     );
@@ -134,7 +134,7 @@ describe('useTypingIndicator', () => {
     });
 
     act(() => {
-      jest.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
     });
 
     // Still typing after 500ms
@@ -146,7 +146,7 @@ describe('useTypingIndicator', () => {
     });
 
     act(() => {
-      jest.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
     });
 
     // Still typing because timeout was reset
@@ -155,7 +155,7 @@ describe('useTypingIndicator', () => {
 
     // Advance another 500ms to reach 1000ms from last startTyping
     act(() => {
-      jest.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
     });
 
     expect(result.current.isTyping).toBe(false);

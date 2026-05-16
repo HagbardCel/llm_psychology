@@ -4,9 +4,9 @@ import { Session, TherapyStyle, AgentType, SessionStatus } from '../../types';
 import { format } from 'date-fns';
 
 describe('SessionHeader', () => {
-  const mockOnMenuClick = jest.fn();
-  const mockOnSettingsClick = jest.fn();
-  const mockOnEndSession = jest.fn();
+  const mockOnMenuClick = vi.fn();
+  const mockOnSettingsClick = vi.fn();
+  const mockOnEndSession = vi.fn();
 
   const createMockSession = (overrides?: Partial<Session>): Session => ({
     session_id: 'session-123',
@@ -28,11 +28,11 @@ describe('SessionHeader', () => {
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('Rendering & Basic Display', () => {

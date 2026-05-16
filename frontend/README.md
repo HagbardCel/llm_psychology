@@ -4,9 +4,8 @@ A modern React TypeScript application for the Virtual LLM-Driven Psychoanalyst p
 
 ## Features
 
-- 🖥️ Modern React 18+ with TypeScript
+- 🖥️ Modern React 19+ with TypeScript
 - 📱 Responsive design with Material-UI
-- 🔄 Progressive Web App (PWA) capabilities
 - 💾 Local storage for offline functionality
 - 🎨 Consistent design system
 - ♿ Accessibility compliant (WCAG 2.1)
@@ -82,13 +81,6 @@ cd /app/frontend
 npm run dev
 ```
 
-## PWA Features
-
-- Offline functionality
-- Install prompt
-- Background sync
-- Push notifications (future)
-
 ## Development
 
 ### Project Structure
@@ -106,7 +98,7 @@ src/
 ### Code Standards
 - TypeScript strict mode
 - ESLint + Prettier
-- Jest + React Testing Library
+- Vitest + React Testing Library
 - Material-UI components
 - Consistent naming conventions
 

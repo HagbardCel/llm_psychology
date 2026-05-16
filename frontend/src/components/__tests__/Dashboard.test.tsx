@@ -1,39 +1,39 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Dashboard } from '../Dashboard';
 
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
+vi.mock('react-router', async () => ({
+  ...(await vi.importActual<typeof import('react-router')>('react-router')),
   useNavigate: () => mockNavigate,
 }));
 
-jest.mock('../../contexts/AppContext', () => ({
+vi.mock('../../contexts/AppContext', () => ({
   useCurrentUserId: () => 'test-user-id',
   useCurrentSessionId: () => 'test-session-id',
 }));
 
-const mockUseUserProfile = jest.fn();
-jest.mock('../../hooks/useUserProfile', () => ({
+const mockUseUserProfile = vi.fn();
+vi.mock('../../hooks/useUserProfile', () => ({
   useUserProfile: (...args: any[]) => mockUseUserProfile(...args),
 }));
 
-const mockUseSessionHistory = jest.fn();
-jest.mock('../../hooks/useSessionHistory', () => ({
+const mockUseSessionHistory = vi.fn();
+vi.mock('../../hooks/useSessionHistory', () => ({
   useSessionHistory: (...args: any[]) => mockUseSessionHistory(...args),
 }));
 
-const mockUseTherapyPlan = jest.fn();
-jest.mock('../../hooks/useTherapyPlan', () => ({
+const mockUseTherapyPlan = vi.fn();
+vi.mock('../../hooks/useTherapyPlan', () => ({
   useTherapyPlan: (...args: any[]) => mockUseTherapyPlan(...args),
 }));
 
-const mockUseWorkflowNextAction = jest.fn();
-jest.mock('../../hooks/useWorkflowNavigation', () => ({
+const mockUseWorkflowNextAction = vi.fn();
+vi.mock('../../hooks/useWorkflowNavigation', () => ({
   useWorkflowNextAction: (...args: any[]) => mockUseWorkflowNextAction(...args),
 }));
 
-jest.mock('../shared', () => ({
+vi.mock('../shared', () => ({
   PageContainer: ({ title, children }: any) => (
     <div>
       <h1>{title}</h1>
@@ -45,7 +45,7 @@ jest.mock('../shared', () => ({
 
 describe('Dashboard', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('renders loading state while fetching data', () => {

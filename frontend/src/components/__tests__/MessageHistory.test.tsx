@@ -3,8 +3,8 @@ import { MessageHistory } from '../MessageHistory';
 import { Message } from '../../types';
 
 // Mock date-fns to avoid timezone issues
-jest.mock('date-fns', () => ({
-  format: jest.fn((date: Date, formatStr: string) => {
+vi.mock('date-fns', () => ({
+  format: vi.fn((date: Date, formatStr: string) => {
     if (formatStr === 'HH:mm') {
       return '12:30';
     }
@@ -14,7 +14,7 @@ jest.mock('date-fns', () => ({
 
 // Mock scrollIntoView (not available in jsdom)
 beforeAll(() => {
-  Element.prototype.scrollIntoView = jest.fn();
+  Element.prototype.scrollIntoView = vi.fn();
 });
 
 describe('MessageHistory', () => {
@@ -29,7 +29,7 @@ describe('MessageHistory', () => {
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('Rendering', () => {

@@ -98,8 +98,8 @@ x-frontend-base: &frontend-base
     start_period: 10s
 
 # Frontend test runner: same image, but without the persistent node_modules volume.
-# This avoids stale/partial node_modules in the shared volume causing Jest failures
-# (e.g., "ts-jest in the transform option was not found").
+# This avoids stale/partial node_modules in the shared volume causing Vitest
+# failures after package-lock changes.
 x-frontend-test-base: &frontend-test-base
   build:
     context: ./frontend
@@ -114,7 +114,6 @@ x-frontend-test-base: &frontend-test-base
     - ./frontend/scripts:/app/scripts:delegated
     - ./frontend/e2e:/app/e2e:delegated
     - ./frontend/playwright.config.ts:/app/playwright.config.ts:delegated
-    - ./frontend/jest.config.js:/app/jest.config.js:delegated
     - ./frontend/package.json:/app/package.json:delegated
     - ./frontend/package-lock.json:/app/package-lock.json:delegated
     - ./frontend/test-results:/app/test-results:delegated

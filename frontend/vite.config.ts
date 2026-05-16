@@ -1,6 +1,5 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
-import { VitePWA } from 'vite-plugin-pwa'
 import { execSync } from 'child_process'
 import { existsSync, statSync } from 'fs'
 import { join } from 'path'
@@ -56,30 +55,6 @@ export default defineConfig({
   plugins: [
     generateTypesPlugin(),
     react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
-      manifest: {
-        name: 'Psychoanalyst App',
-        short_name: 'PsychoAnalyst',
-        description: 'Virtual LLM-Driven Psychoanalyst application',
-        theme_color: '#1976d2',
-        background_color: '#ffffff',
-        display: 'standalone',
-        icons: [
-          {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png'
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png'
-          }
-        ]
-      }
-    })
   ],
   server: {
     host: '0.0.0.0',
@@ -93,6 +68,52 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return undefined
+          }
+
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/.test(id)) {
+            return 'vendor-react'
+          }
+
+          if (/[\\/]node_modules[\\/](@mui|@emotion)[\\/]/.test(id)) {
+            return 'vendor-mui'
+          }
+
+          if (/[\\/]node_modules[\\/](axios|date-fns|lucide-react)[\\/]/.test(id)) {
+            return 'vendor-shared'
+          }
+
+          return 'vendor'
+        },
+      },
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    environmentOptions: {
+      jsdom: {
+        url: 'http://localhost/',
+      },
+    },
+    globals: true,
+    setupFiles: ['./src/setupTests.ts'],
+    exclude: ['e2e/**', 'node_modules/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.d.ts', 'src/main.tsx', 'src/vite-env.d.ts'],
+      thresholds: {
+        branches: 80,
+        functions: 80,
+        lines: 80,
+        statements: 80,
+      },
+    },
   }
 })

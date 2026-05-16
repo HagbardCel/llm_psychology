@@ -70,7 +70,6 @@ Users can switch between terminal and web interfaces at any time:
 - Component architecture
 - State management
 - UI/UX design
-- PWA capabilities
 - TypeScript configuration
 
 🔄 **Next Steps:**

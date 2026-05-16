@@ -4,7 +4,7 @@ import { useLocalStorage, useLocalStorageValue } from '../useLocalStorage';
 describe('useLocalStorage', () => {
   beforeEach(() => {
     localStorage.clear();
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -29,7 +29,7 @@ describe('useLocalStorage', () => {
     });
 
     it('should return null and log error for invalid JSON', () => {
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       localStorage.setItem('invalid-json', 'not a json');
 
       const { result } = renderHook(() => useLocalStorage());
@@ -97,9 +97,9 @@ describe('useLocalStorage', () => {
     });
 
     it('should log error when localStorage.setItem throws', () => {
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const mockError = new Error('Quota exceeded');
-      jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
         throw mockError;
       });
 
@@ -115,7 +115,7 @@ describe('useLocalStorage', () => {
       );
 
       consoleErrorSpy.mockRestore();
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
     });
   });
 
@@ -143,9 +143,9 @@ describe('useLocalStorage', () => {
     });
 
     it('should log error when localStorage.removeItem throws', () => {
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const mockError = new Error('Remove error');
-      jest.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => {
+      vi.spyOn(localStorage, 'removeItem').mockImplementationOnce(() => {
         throw mockError;
       });
 
@@ -161,7 +161,7 @@ describe('useLocalStorage', () => {
       );
 
       consoleErrorSpy.mockRestore();
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
     });
   });
 
@@ -181,9 +181,9 @@ describe('useLocalStorage', () => {
     });
 
     it('should log error when localStorage.clear throws', () => {
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const mockError = new Error('Clear error');
-      jest.spyOn(Storage.prototype, 'clear').mockImplementationOnce(() => {
+      vi.spyOn(localStorage, 'clear').mockImplementationOnce(() => {
         throw mockError;
       });
 
@@ -199,7 +199,7 @@ describe('useLocalStorage', () => {
       );
 
       consoleErrorSpy.mockRestore();
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
     });
   });
 });
@@ -207,7 +207,7 @@ describe('useLocalStorage', () => {
 describe('useLocalStorageValue', () => {
   beforeEach(() => {
     localStorage.clear();
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -280,11 +280,11 @@ describe('useLocalStorageValue', () => {
   });
 
   it('should log error when setValue throws', () => {
-    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const mockError = new Error('Set error');
 
     // Mock setItem in the useLocalStorage hook
-    jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+    vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
       throw mockError;
     });
 
@@ -299,6 +299,6 @@ describe('useLocalStorageValue', () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 });

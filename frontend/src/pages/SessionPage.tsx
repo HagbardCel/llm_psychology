@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { TherapySession } from '../components/TherapySession';
 
 export function SessionPage() {

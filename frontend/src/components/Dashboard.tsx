@@ -12,7 +12,7 @@ import {
   Alert
 } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { PageContainer, WorkflowStepper } from './shared';
 import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useUserProfile } from '../hooks/useUserProfile';

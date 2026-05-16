@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
 import { routeForRequiredAction } from '../utils/workflow';

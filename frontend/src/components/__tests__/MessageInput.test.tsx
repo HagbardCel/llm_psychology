@@ -3,15 +3,15 @@ import userEvent from '@testing-library/user-event';
 import { MessageInput } from '../MessageInput';
 
 describe('MessageInput', () => {
-  const mockOnSendMessage = jest.fn();
-  const mockOnTypingChange = jest.fn();
+  const mockOnSendMessage = vi.fn();
+  const mockOnTypingChange = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('Rendering', () => {

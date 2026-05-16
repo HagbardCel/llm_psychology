@@ -1,14 +1,14 @@
 import { render, screen } from '@testing-library/react';
 import { SessionPage } from '../SessionPage';
 
-// Mock react-router-dom
-const mockUseParams = jest.fn();
-jest.mock('react-router-dom', () => ({
+// Mock react-router
+const mockUseParams = vi.fn();
+vi.mock('react-router', () => ({
   useParams: () => mockUseParams(),
 }));
 
 // Mock TherapySession component
-jest.mock('../../components/TherapySession', () => ({
+vi.mock('../../components/TherapySession', () => ({
   TherapySession: ({ sessionId }: { sessionId?: string }) => (
     <div data-testid="therapy-session-mock">
       TherapySession {sessionId ? `(${sessionId})` : '(no session)'}
@@ -18,7 +18,7 @@ jest.mock('../../components/TherapySession', () => ({
 
 describe('SessionPage', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should render TherapySession component', () => {

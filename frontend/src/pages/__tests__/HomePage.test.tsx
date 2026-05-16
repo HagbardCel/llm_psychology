@@ -2,13 +2,13 @@ import { render, screen } from '@testing-library/react';
 import { HomePage } from '../HomePage';
 
 // Mock the Dashboard component
-jest.mock('../../components/Dashboard', () => ({
+vi.mock('../../components/Dashboard', () => ({
   Dashboard: () => <div data-testid="dashboard-mock">Dashboard Component</div>,
 }));
 
 describe('HomePage', () => {
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should render Dashboard component', () => {

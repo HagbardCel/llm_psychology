@@ -4,7 +4,7 @@ import {
   Button,
   Box,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Home as HomeIcon } from '@mui/icons-material';
 
 export function NotFoundPage() {

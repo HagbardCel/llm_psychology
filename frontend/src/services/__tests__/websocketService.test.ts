@@ -15,8 +15,8 @@ class MockWebSocket {
   readyState: number = MockWebSocket.CONNECTING;
   url: string = '';
 
-  send = jest.fn();
-  close = jest.fn();
+  send = vi.fn();
+  close = vi.fn();
 
   private eventListeners: Map<string, Array<{ callback: Function; once?: boolean }>> = new Map();
 
@@ -122,7 +122,9 @@ describe('WebSocketService', () => {
   let service: WebSocketService;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
+    (MockWebSocket as any).lastInstance = undefined;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     service = new WebSocketService({
       url: 'ws://localhost:8000',
       userId: 'test-user'
@@ -133,6 +135,7 @@ describe('WebSocketService', () => {
     if (service) {
       service.disconnect();
     }
+    vi.restoreAllMocks();
   });
 
   describe('connect', () => {
@@ -176,6 +179,7 @@ describe('WebSocketService', () => {
     });
 
     test('returns false on connection error', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       const connectPromise = service.connect();
 
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
@@ -183,10 +187,11 @@ describe('WebSocketService', () => {
 
       const result = await connectPromise;
       expect(result).toBe(false);
+      expect(consoleError).toHaveBeenCalledWith('WebSocket error:', expect.any(Error));
     });
 
     test('calls connection status callback on connect', async () => {
-      const statusCallback = jest.fn();
+      const statusCallback = vi.fn();
       service.onConnectionStatusChange(statusCallback);
 
       const connectPromise = service.connect();
@@ -243,17 +248,18 @@ describe('WebSocketService', () => {
     });
 
     test('does not send message when not connected', () => {
-      const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       service.sendMessage('chat_message', { message: 'Hello' });
 
-      expect(mockWs?.send).not.toHaveBeenCalled();
+      expect((MockWebSocket as any).lastInstance).toBeUndefined();
+      expect(consoleWarn).toHaveBeenCalledWith('Cannot send message: not connected');
     });
   });
 
   describe('message handling', () => {
     test('handles incoming messages', async () => {
-      const messageCallback = jest.fn();
+      const messageCallback = vi.fn();
       service.onMessageReceived(messageCallback);
 
       const connectPromise = service.connect();
@@ -283,7 +289,7 @@ describe('WebSocketService', () => {
     });
 
     test('handles streaming chunk messages', async () => {
-      const chunkCallback = jest.fn();
+      const chunkCallback = vi.fn();
       service.onStreamingChunkReceived(chunkCallback);
 
       const connectPromise = service.connect();
@@ -305,7 +311,7 @@ describe('WebSocketService', () => {
     });
 
     test('handles session started messages', async () => {
-      const sessionCallback = jest.fn();
+      const sessionCallback = vi.fn();
       service.onSessionStarted(sessionCallback);
 
       const connectPromise = service.connect();
@@ -331,8 +337,8 @@ describe('WebSocketService', () => {
     });
 
     test('handles session ended messages', async () => {
-      const sessionEndedCallback = jest.fn();
-      const messageCallback = jest.fn();
+      const sessionEndedCallback = vi.fn();
+      const messageCallback = vi.fn();
       service.onSessionEnded(sessionEndedCallback);
       service.onMessageReceived(messageCallback);
 
@@ -362,11 +368,11 @@ describe('WebSocketService', () => {
 
   describe('reconnection', () => {
     beforeEach(() => {
-      jest.useFakeTimers();
+      vi.useFakeTimers();
     });
 
     afterEach(() => {
-      jest.useRealTimers();
+      vi.useRealTimers();
     });
 
     test('implements reconnection with exponential backoff', async () => {
@@ -387,7 +393,7 @@ describe('WebSocketService', () => {
       mockWs.simulateClose(1006, 'Connection lost');
 
       // First reconnect attempt after 1s
-      jest.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
 
       mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
       expect(mockWs).toBeDefined();
@@ -396,7 +402,7 @@ describe('WebSocketService', () => {
       mockWs.simulateClose(1006, 'Connection lost');
 
       // Second reconnect attempt after 2s (exponential backoff)
-      jest.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(2000);
 
       expect((MockWebSocket as any).lastInstance).toBeDefined();
     });
@@ -415,13 +421,14 @@ describe('WebSocketService', () => {
       service.disconnect();
 
       // Advance timers
-      jest.advanceTimersByTime(5000);
+      vi.advanceTimersByTime(5000);
 
       // Should not have created a new instance
       expect((MockWebSocket as any).lastInstance).toBe(initialInstance);
     });
 
     test('stops reconnecting after max attempts', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       service = new WebSocketService({
         url: 'ws://localhost:8000',
         userId: 'test-user',
@@ -429,7 +436,7 @@ describe('WebSocketService', () => {
         reconnectDelay: 1000
       });
 
-      const statusCallback = jest.fn();
+      const statusCallback = vi.fn();
       service.onConnectionStatusChange(statusCallback);
 
       const connectPromise = service.connect();
@@ -445,7 +452,7 @@ describe('WebSocketService', () => {
       // Simulate 3 failed reconnection attempts
       for (let i = 0; i < 3; i++) {
         const delay = 1000 * Math.pow(2, i);
-        jest.advanceTimersByTime(delay);
+        vi.advanceTimersByTime(delay);
 
         // Get the new socket created by reconnection attempt
         mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
@@ -461,6 +468,7 @@ describe('WebSocketService', () => {
           connectionError: 'Max reconnection attempts reached'
         })
       );
+      expect(consoleError).toHaveBeenCalledWith('WebSocket error:', expect.any(Error));
     });
   });
 
@@ -479,7 +487,7 @@ describe('WebSocketService', () => {
     });
 
     test('clears reconnection timeout', async () => {
-      jest.useFakeTimers();
+      vi.useFakeTimers();
 
       const connectPromise = service.connect();
 
@@ -495,12 +503,12 @@ describe('WebSocketService', () => {
       service.disconnect();
 
       // Advance timers
-      jest.advanceTimersByTime(5000);
+      vi.advanceTimersByTime(5000);
 
       // Should not have attempted reconnection
       expect((MockWebSocket as any).lastInstance).toBe(mockWs);
 
-      jest.useRealTimers();
+      vi.useRealTimers();
     });
   });
 

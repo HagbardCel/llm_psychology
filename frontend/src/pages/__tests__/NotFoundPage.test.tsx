@@ -1,15 +1,15 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { NotFoundPage } from '../NotFoundPage';
 
-// Mock react-router-dom
-const mockNavigate = jest.fn();
-jest.mock('react-router-dom', () => ({
+// Mock react-router
+const mockNavigate = vi.fn();
+vi.mock('react-router', () => ({
   useNavigate: () => mockNavigate,
 }));
 
 describe('NotFoundPage', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('Rendering', () => {
