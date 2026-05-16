@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: supporting
-last_reviewed: 2026-05-15
+last_reviewed: 2026-05-16
 review_cycle_days: 30
 source_of_truth_for: Current finalization baseline, open findings, and next improvement priorities
 ---
@@ -18,8 +18,10 @@ Use this file as the starting point for new remediation work. Historical plans m
 
 - The branch has a reproducible frontend validation path after the first finalization implementation wave.
 - Architecture simplification has progressed: active architecture docs are leaner, orchestration hotspots were split, structured assessment outputs were introduced, and WebSocket message constants now use generated protocol values in key paths.
-- Documentation, schema, architecture, frontend type-check/build, and frontend Jest checks pass through Docker.
-- The clearest remaining validation gap is a full backend suite plus deterministic E2E run after the next behavior-focused changes.
+- The Docker-only `make finalization-check` path now passes end to end after release-candidate hardening.
+- Default backend setup is lighter because local FAISS RAG dependencies are isolated behind the optional `RAG_BACKEND=faiss` path.
+- Profile login, session ending, console exit, and assessment failure fallback now have deterministic product-path coverage.
+- Non-blocking follow-up issues from the 2026-05-16 verification run are tracked in `docs/plans/RELEASE_CANDIDATE_TRACKING_ISSUES_2026-05-16.md`.
 
 ## Findings
 
@@ -34,11 +36,13 @@ The fix established lockfile-backed frontend Docker validation:
 - `make validate-frontend` runs type-check and Vite build in an isolated Docker container.
 - `make frontend-sync-deps` refreshes the dev frontend dependency volume.
 
-### P1 - Dependency Footprint and Docker Build Cost
+### P1 - Dependency Footprint and Docker Build Cost - Resolved 2026-05-16
 
 `make validate-architecture` completed successfully, but the first run pulled and exported a very large backend dependency stack, including heavy ML/runtime packages such as Torch, Triton, NVIDIA package families, FAISS, sentence-transformers, and ONNX-related dependencies.
 
-For a local-first project, this remains a maintainability and onboarding risk. The next improvement pass should separate required runtime dependencies from optional retrieval/embedding tooling and verify that the default developer path stays lightweight.
+The default backend path now uses `RAG_BACKEND=none` and no longer installs FAISS, sentence-transformers, Hugging Face Hub, or Torch through `requirements.txt`. Optional local retrieval is explicitly enabled with `RAG_BACKEND=faiss` and the separate RAG requirements path.
+
+Residual risk: the optional RAG install remains large and should be validated before local FAISS retrieval is treated as a supported release feature. Track that follow-up in `docs/plans/RELEASE_CANDIDATE_TRACKING_ISSUES_2026-05-16.md`.
 
 ### P1 - Documentation Drift and Planning Hygiene
 
@@ -46,7 +50,7 @@ The repository had many active files under `docs/plans` and `docs/todo`, includi
 
 The clean-slate action archived those files into `docs/legacy/plans/clean-slate-2026-05-15/` and kept this single baseline in `docs/plans`.
 
-### P1 - Product Finalization Gaps
+### P1 - Product Finalization Gaps - Resolved 2026-05-16
 
 Several product-facing areas still need focused review before finalization:
 
@@ -55,21 +59,27 @@ Several product-facing areas still need focused review before finalization:
 - assessment stability under quota exhaustion and provider failures,
 - consistency between active contracts, generated schemas, frontend types, and client behavior.
 
-Treat archived plans as input only. Reassess each item against the current implementation before fixing it.
+The release-candidate hardening pass closed these gaps:
 
-### P2 - Validation Breadth
+- the web UI lists existing profiles, supports login, and still allows new profile creation,
+- the web session-ending flow sends `end_session` and waits for `session_ended` before marking the session complete,
+- the console `/quit` and `/exit` flows wait briefly for `session_ended`,
+- failed or quota-exhausted assessment jobs emit a WebSocket `error`, send deterministic fallback recommendations, and transition to `ASSESSMENT_COMPLETE`,
+- frontend and backend tests now cover the hardened paths.
+
+### P2 - Validation Breadth - Resolved 2026-05-16
 
 Targeted backend and documentation checks passed, and frontend type-check/build plus Jest now pass. The full project is still not proven by one complete validation run because full backend tests and deterministic E2E were not rerun in this wave.
 
-The finalization path should establish one repeatable Docker-only validation command set that covers docs, schemas, backend tests, frontend type-check/build, and the most important user workflow tests.
+The project now has a single Docker-only `make finalization-check` target that runs docs, schemas, architecture, backend tests, frontend type-check/build, frontend Jest, and deterministic E2E in order. That target passed end to end on 2026-05-16.
 
 ## Recommended Next Sequence
 
-1. Run the full backend suite and deterministic E2E path through Docker.
-2. Slim optional ML/dependency paths so default local setup remains practical.
-3. Reassess session ending, profile selection, and assessment failure handling against current code before making product fixes.
-4. Update active docs and contracts in the same commits as behavior changes.
-5. Track frontend dependency audit output separately from this baseline if it becomes a release requirement.
+1. Keep `make finalization-check` green as the release-candidate gate.
+2. Review and disposition the active release-candidate follow-up list in `docs/plans/RELEASE_CANDIDATE_TRACKING_ISSUES_2026-05-16.md`.
+3. Decide whether frontend dependency audit findings are release-blocking.
+4. Validate the optional FAISS RAG install path before documenting it as a supported release feature.
+5. Update active docs and contracts in the same commits as future behavior changes.
 
 ## Validation Snapshot
 
@@ -83,10 +93,13 @@ Known passing checks after the first finalization implementation wave:
 - `make frontend-sync-deps`
 - targeted backend unit tests for Trio intake, schema generation, logging config, Trio assessment, and workflow next-action behavior
 
-Known validation gaps:
+2026-05-16 release-candidate hardening update:
 
-- full backend suite not rerun in this wave
-- deterministic E2E not rerun in this wave
+- `make finalization-check` passed end to end through Docker.
+- Backend tests passed with 318 passed, 2 skipped, and 1 warning.
+- Frontend Jest passed with 270 tests.
+- Deterministic Playwright E2E passed with 3 tests.
+- Remaining non-blocking issues are tracked in `docs/plans/RELEASE_CANDIDATE_TRACKING_ISSUES_2026-05-16.md`.
 
 ## Clean-Slate Archive
 
