@@ -1,5 +1,12 @@
 # Therapy style selection not working
 
+## Status
+
+Resolved 2026-05-16. The console UI now caches
+`assessment_recommendations`, prompts the user to choose a recommendation by
+number or style id when the workflow returns `select_therapy_style`, and submits
+the selected style to `/api/workflow/select_therapy_style`.
+
 ## Issue
 
 The therapy style selection should work by the user entering the number of his preferred style in the console-ui and the ui sending the respective signal to the backend. Instead the ui is currently asking the user to post a value to the backend, which does not make any sense. 

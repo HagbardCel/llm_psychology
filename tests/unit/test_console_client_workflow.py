@@ -158,6 +158,49 @@ async def test_select_therapy_style_posts_and_clears_pending_recommendations(
     assert client.pending_recommendations is None
 
 
+async def test_follow_workflow_runs_style_selection_action(console_client_cls):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+    )
+    client.current_session_id = "session-1"
+
+    actions = [
+        {"required_action": "select_therapy_style"},
+        {"required_action": "error", "error": "stop"},
+    ]
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return actions.pop(0)
+
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    called_select = False
+
+    async def fake_select_therapy_style() -> None:
+        nonlocal called_select
+        called_select = True
+
+    client._select_therapy_style = fake_select_therapy_style  # type: ignore[method-assign]
+
+    called_chat_loop = False
+
+    async def fake_chat_loop(_ws: Any) -> bool:
+        nonlocal called_chat_loop
+        called_chat_loop = True
+        return False
+
+    client._chat_loop = fake_chat_loop  # type: ignore[method-assign]
+
+    await client._follow_workflow(ws=None)
+
+    assert called_select is True
+    assert called_chat_loop is False
+
+
 async def test_request_end_session_waits_for_session_ended(console_client_cls):
     output = _StubOutput()
     client = console_client_cls(

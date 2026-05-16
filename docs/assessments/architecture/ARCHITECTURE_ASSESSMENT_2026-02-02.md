@@ -48,7 +48,7 @@ Top priorities:
 - `WorkflowNextAction` is a strong pattern for backend-owned workflow invariants.
 
 **Gaps / Recommendations**
-- Resolve “end of session while last prompt is on screen” (see `docs/current_issues/abrupt_intake_end.md`) by making session-end semantics explicit and testable (see recommendations under “Workflow & Session Time”).
+- The historical “end of session while last prompt is on screen” issue is archived at `docs/archive/current_issues/2026-05-16/abrupt_intake_end.md`; keep session-end semantics explicit and testable (see recommendations under “Workflow & Session Time”).
 
 ### 4) Stable contracts at boundaries (DTOs + schemas)
 **Status: Currently misaligned (P0)**
@@ -248,4 +248,3 @@ These are representative examples of misalignment that should be resolved under 
 - `frontend/src/types/generated/api.ts` exports `SessionBlockDTO` rather than `Session`, but `frontend/src/types/index.ts` imports `Session`.
 - `docs/session_block_lifecycle.md` describes a `session_blocks` table, but the DB layer is built around `sessions`.
 - `src/psychoanalyst_app/gateways/__init__.py` imports a missing module, indicating stale package structure.
-

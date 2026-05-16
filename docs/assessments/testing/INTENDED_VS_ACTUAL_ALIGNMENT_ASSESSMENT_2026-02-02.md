@@ -1,14 +1,14 @@
 # Intended vs Actual Alignment — Testing & Design Assessment
 **Date:** 2026-02-02  
 **Scope:** Backend (Trio orchestration + agents), Console UI workflow handling, and end-to-end workflow confidence  
-**Primary references:** `docs/design-principles.md`, `docs/user_journey.md`, `docs/session_lifecycle.md`, `docs/current_issues/*`
+**Primary references:** `docs/design-principles.md`, `docs/user_journey.md`, `docs/session_lifecycle.md`, historical issue notes under `docs/archive/current_issues/`
 
 ## Executive Summary
 
-Two currently observed user-facing failures highlight a broader “intended vs actual” drift problem:
+Two user-facing failures, later resolved during finalization work, highlighted a broader “intended vs actual” drift problem:
 
-1. **Abrupt intake end** (`docs/current_issues/abrupt_intake_end.md`): the system can transition into the next workflow phase while the user is still being asked a question, causing the UI to show a prompt that cannot be answered in-context.
-2. **Therapy style selection not working** (`docs/current_issues/select_assessment_style.md`): the Console UI leaks backend API instructions to the user and does not implement the workflow’s `select_therapy_style` action as a first-class UI step.
+1. **Abrupt intake end** (`docs/archive/current_issues/2026-05-16/abrupt_intake_end.md`): the system could transition into the next workflow phase while the user was still being asked a question, causing the UI to show a prompt that could not be answered in-context.
+2. **Therapy style selection not working** (`docs/archive/current_issues/2026-05-16/select_assessment_style.md`): the Console UI leaked backend API instructions to the user and did not implement the workflow’s `select_therapy_style` action as a first-class UI step.
 
 The key strategy to close the gap is to make the **workflow contract executable**:
 - enforce *turn-boundary invariants* in the orchestrator/agents, and
@@ -23,14 +23,10 @@ then back that with **small, deterministic regression tests** that fail on the e
 - Backend-driven workflow state machine; clients render based on `WorkflowNextActionDTO.required_action`.
 - Deterministic tests should prefer fakes/stubs over real LLM/RAG calls.
 
-### Evidence of drift in implementation
-- **Console UI** prints an API instruction instead of performing the workflow step:
-  - `console-ui/src/console_client.py` currently renders assessment recommendations and then prints:
-    - “To select a style, submit POST /api/workflow/select_therapy_style …”
-  - It also only explicitly handles `required_action == "wait"` and does not treat `select_therapy_style` as a UI step.
-- **Intake agent completion logic** can signal workflow completion while still prompting to continue:
-  - `src/psychoanalyst_app/agents/trio_intake_agent.py` builds a continuation prompt and may also set `WorkflowEvent.COMPLETE_INTAKE`, which triggers orchestration transitions and background assessment.
-  - This matches the failure mode: a “last question” appears, then the workflow advances and the client shows an assessment/wait state.
+### Historical drift evidence
+- **Console UI** printed an API instruction instead of performing the workflow step.
+- **Intake agent completion logic** could signal workflow completion while still prompting to continue.
+- These items are retained here as historical assessment context; current release-candidate status is tracked in `docs/plans/PROJECT_FINALIZATION_BASELINE_2026-05-15.md`.
 
 ### Test suite signal quality (high-level)
 - Strong baseline coverage exists for contracts, orchestration wiring, and deterministic “natural flow”:
@@ -139,4 +135,3 @@ These are not “delete immediately”, but they should be evaluated through the
 - **Client conformance:** both console and web clients handle every `required_action` value in the contract.
 - **Flake rate:** no reliance on fixed sleeps in default suites; event-driven waits with bounded timeouts.
 - **Confidence:** a single deterministic golden-path E2E test covers the full “new user → therapy start” workflow.
-

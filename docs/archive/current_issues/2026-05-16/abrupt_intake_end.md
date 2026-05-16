@@ -1,4 +1,12 @@
 # Abrupt intake end
+
+## Status
+
+Resolved 2026-05-16. Intake completion and time-up terminal messages now use
+direct static responses, so the backend does not ask another LLM-generated
+follow-up question immediately before advancing to assessment or continuing the
+intake in a future session.
+
 ## Issue
 The intake agent realizes the time is over, but asks one last question. Before the user can answer, however the intake session is abruptly ended.
 
