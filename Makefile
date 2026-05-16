@@ -234,7 +234,6 @@ reset-usertest:
 # Generate locked requirements from .in files with UV
 requirements:
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements.in -o requirements.txt
-	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-rag.in -o requirements-rag.txt
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-dev.in -o requirements-dev.txt
 
 # Sync environment with locked requirements using UV

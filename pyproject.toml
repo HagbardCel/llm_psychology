@@ -25,13 +25,6 @@ dependencies = [
     "quart-cors",
 ]
 
-[project.optional-dependencies]
-rag = [
-    "faiss-cpu>=1.7.4",
-    "sentence-transformers[onnx]>=3.2.0",
-    "huggingface-hub",
-]
-
 [project.scripts]
 psychoanalyst-app = "psychoanalyst_app.__main__:cli"
 psychoanalyst-server = "psychoanalyst_app.server:cli"

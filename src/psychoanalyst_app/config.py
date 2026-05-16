@@ -109,29 +109,36 @@ class Settings(BaseSettings):
     # Database Configuration
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
 
-    # Vector Database Configuration
+    # Retrieval Configuration
     RAG_BACKEND: str = Field(
         default="none",
         description=(
-            "RAG backend to use: 'none' for lightweight local startup, "
-            "'faiss' for local vector retrieval."
+            "RAG backend to use. Only 'none' is supported in the current release."
         ),
     )
-    VECTOR_DB_PATH: str = Field(default="data/vector_db")
+    VECTOR_DB_PATH: str = Field(
+        default="data/vector_db",
+        description="Reserved for future local retrieval extensions.",
+    )
 
     # Domain Knowledge Configuration
-    DOMAIN_KNOWLEDGE_PATH: str = Field(default="data/domain_knowledge")
+    DOMAIN_KNOWLEDGE_PATH: str = Field(
+        default="data/domain_knowledge",
+        description="Reserved for future local retrieval extensions.",
+    )
     STYLES_DIR: str | None = Field(
         default=None,
         description="Optional override directory for therapy style packs",
     )
 
-    # Embedding Configuration
+    # Deferred Retrieval Configuration
     USE_ONNX_EMBEDDINGS: bool = Field(
-        default=True, description="Use ONNX backend for faster embedding inference"
+        default=True,
+        description="Reserved for future local retrieval extensions.",
     )
     EMBEDDING_MODEL_NAME: str = Field(
-        default="all-MiniLM-L6-v2", description="Sentence transformer model name"
+        default="all-MiniLM-L6-v2",
+        description="Reserved for future local retrieval extensions.",
     )
 
     # Session Configuration

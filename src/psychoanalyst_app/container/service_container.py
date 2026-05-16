@@ -36,7 +36,7 @@ from psychoanalyst_app.exceptions import ConfigurationError
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.migration_service import MigrationService
-from psychoanalyst_app.services.rag_service import NoOpRAGService, RAGService
+from psychoanalyst_app.services.rag_service import NoOpRAGService
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -283,7 +283,7 @@ class ServiceContainer:
         """Resolve the configured LLM service for a given agent."""
         return get_llm_service_for_agent(self, agent_type)
 
-    def _create_rag_service(self) -> NoOpRAGService | RAGService:
+    def _create_rag_service(self) -> NoOpRAGService:
         """Create RAG service."""
         return create_rag_service(self)
 

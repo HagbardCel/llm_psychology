@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.migration_service import MigrationService
-from psychoanalyst_app.services.rag_service import NoOpRAGService, RAGService
+from psychoanalyst_app.services.rag_service import NoOpRAGService
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -51,31 +51,16 @@ def create_db_executor(container: ServiceContainer) -> TrioSQLiteExecutor:
     )
 
 
-def create_rag_service(container: ServiceContainer) -> NoOpRAGService | RAGService:
+def create_rag_service(container: ServiceContainer) -> NoOpRAGService:
     """Create RAGService."""
     backend = getattr(container.config, "RAG_BACKEND", "none").lower()
     if backend in {"", "none"}:
         logger.info("Created no-op RAGService (RAG_BACKEND=none)")
         return NoOpRAGService()
-    if backend != "faiss":
-        raise ValueError("RAG_BACKEND must be 'none' or 'faiss'")
-
-    logger.debug("Creating FAISS RAGService")
-    use_onnx = getattr(container.config, "USE_ONNX_EMBEDDINGS", True)
-    model_name = getattr(container.config, "EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
-    rag_service = RAGService(
-        domain_knowledge_path=container.config.DOMAIN_KNOWLEDGE_PATH,
-        vector_db_path=container.config.VECTOR_DB_PATH,
-        styles_dir=getattr(container.config, "STYLES_DIR", None),
-        use_onnx=use_onnx,
-        model_name=model_name,
+    raise ValueError(
+        "RAG_BACKEND currently supports only 'none'. "
+        "Local FAISS retrieval is deferred to a future extension."
     )
-    logger.info(
-        "Created FAISS-based RAGService with ONNX=%s, model=%s",
-        use_onnx,
-        model_name,
-    )
-    return rag_service
 
 
 def create_style_service(container: ServiceContainer) -> StyleService:

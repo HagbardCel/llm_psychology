@@ -9,7 +9,6 @@ from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.exceptions import ConfigurationError
 from psychoanalyst_app.services.rag_service import NoOpRAGService
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -32,28 +31,21 @@ def test_default_rag_backend_is_noop_without_heavy_imports(monkeypatch):
     assert rag_service.retrieve_relevant_knowledge("anything") == []
 
 
-def test_faiss_rag_backend_surfaces_missing_optional_dependency(
-    monkeypatch, tmp_path
-):
+def test_faiss_rag_backend_is_deferred_without_optional_imports(monkeypatch):
     def fail_import(name, *args, **kwargs):
-        if name == "faiss":
-            raise ModuleNotFoundError("No module named 'faiss'")
+        if name in {"faiss", "sentence_transformers"}:
+            raise AssertionError(
+                f"{name} should not be imported for unsupported RAG_BACKEND=faiss"
+            )
         return original_import(name, *args, **kwargs)
 
     original_import = __import__
     monkeypatch.setattr("builtins.__import__", fail_import)
 
-    vector_db = tmp_path / "vector_db"
-    vector_db.mkdir()
-    (vector_db / "faiss_index.bin").write_bytes(b"fake")
-    (vector_db / "data.pkl").write_bytes(b"fake")
     settings = Settings(_env_file=None).model_copy(
-        update={
-            "RAG_BACKEND": "faiss",
-            "VECTOR_DB_PATH": str(vector_db),
-        }
+        update={"RAG_BACKEND": "faiss"}
     )
     container = ServiceContainer(settings)
 
-    with pytest.raises(ConfigurationError, match="faiss"):
+    with pytest.raises(ConfigurationError, match="future extension"):
         container.get("rag_service")

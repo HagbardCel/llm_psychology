@@ -1,5 +1,0 @@
-# Optional FAISS RAG backend dependencies.
-# Install these only when running with RAG_BACKEND=faiss.
-faiss-cpu>=1.7.4
-sentence-transformers[onnx]>=3.2.0
-huggingface-hub
