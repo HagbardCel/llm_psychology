@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import trio
 
 
 class _StubOutput:
@@ -155,3 +156,52 @@ async def test_select_therapy_style_posts_and_clears_pending_recommendations(
         )
     ]
     assert client.pending_recommendations is None
+
+
+async def test_request_end_session_waits_for_session_ended(console_client_cls):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+    )
+    client.connected = True
+    client.current_session_id = "session-1"
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        async def send_message(self, message: str) -> None:
+            self.messages.append(message)
+            await client._handle_session_ended({"reason": "User ended session"})
+
+    ws = FakeWebSocket()
+    await client._request_end_session(ws, reason="User ended session")
+
+    assert ws.messages
+    assert client.session_end_requested is True
+
+
+async def test_request_end_session_reports_timeout(console_client_cls):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+    )
+    client.connected = True
+    client.current_session_id = "session-1"
+
+    class FakeWebSocket:
+        async def send_message(self, _message: str) -> None:
+            return None
+
+    with trio.fail_after(1):
+        await client._request_end_session(
+            FakeWebSocket(), reason="User ended session", timeout_seconds=0.01
+        )
+
+    assert any("not confirmed" in message for message in output.user_messages)

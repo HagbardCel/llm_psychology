@@ -59,6 +59,7 @@ class ConsoleClient:
         self.response_complete = trio.Event()
         self.current_session_id: Optional[str] = None
         self.session_end_requested = False
+        self.session_ended_event = trio.Event()
         self.pending_recommendations: list[dict[str, Any]] | None = None
         self.latest_workflow_action: dict[str, Any] | None = None
         self.registered = False
@@ -258,6 +259,7 @@ class ConsoleClient:
             f"\n👋 {reason}. Exiting console client.", flush=True
         )
         self.session_end_requested = True
+        self.session_ended_event.set()
         self.current_session_id = None
         self.session_ready = trio.Event()
         if self.waiting_for_response:
@@ -671,6 +673,22 @@ class ConsoleClient:
             logger.error(f"Error sending end_session: {e}")
             self.output.error(f"❌ Failed to end session: {e}")
 
+    async def _request_end_session(
+        self, ws, reason: str | None = None, timeout_seconds: float = 8.0
+    ) -> None:
+        """Send end_session and wait briefly for server confirmation."""
+        self.session_ended_event = trio.Event()
+        await self._send_end_session(ws, reason=reason)
+        if self.session_end_requested:
+            return
+        with trio.move_on_after(timeout_seconds) as cancel_scope:
+            await self.session_ended_event.wait()
+        if cancel_scope.cancelled_caught:
+            self.output.user_text(
+                "⚠️  Session end was not confirmed by the server in time.",
+                flush=True,
+            )
+
     async def _get_user_status(self) -> Dict[str, Any]:
         """Get user status from backend API."""
         if not self.current_session_id:
@@ -825,13 +843,17 @@ class ConsoleClient:
                     if user_message.startswith("/"):
                         command = user_message.lower().strip()
                         if command in ["/quit", "/end"]:
-                            await self._send_end_session(ws, reason="User ended session")
+                            await self._request_end_session(
+                                ws, reason="User ended session"
+                            )
                             self.output.user_text(
                                 "👋 Ending current session...", flush=True
                             )
                             return True
                         elif command == "/exit":
-                            await self._send_end_session(ws, reason="User exited console")
+                            await self._request_end_session(
+                                ws, reason="User exited console"
+                            )
                             self.output.user_text(
                                 "👋 Exiting console client. Take care.", flush=True
                             )
@@ -851,7 +873,7 @@ class ConsoleClient:
 
                     # Legacy exit keywords without slash exit the console completely
                     if user_message.lower() in ["quit", "exit", "bye"]:
-                        await self._send_end_session(ws, reason="User ended session")
+                        await self._request_end_session(ws, reason="User ended session")
                         self.output.user_text("👋 Exiting console client.", flush=True)
                         return True
 
@@ -867,7 +889,7 @@ class ConsoleClient:
                         return True
 
                 except KeyboardInterrupt:
-                    await self._send_end_session(ws, reason="User exited console")
+                    await self._request_end_session(ws, reason="User exited console")
                     self.output.user_text("\n👋 Exiting console client.", flush=True)
                     return True
                 except Exception as e:

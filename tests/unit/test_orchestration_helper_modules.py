@@ -16,10 +16,15 @@ from psychoanalyst_app.orchestration.helpers.response_handler import (
     AgentResponseHandler,
     _extract_error_code,
 )
+from psychoanalyst_app.orchestration.helpers.response_jobs import run_assessment_job
 from psychoanalyst_app.orchestration.helpers.session_lifecycle import (
     SessionLifecycleManager,
 )
-from psychoanalyst_app.orchestration.models import WorkflowState
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    WorkflowEvent,
+    WorkflowState,
+)
 
 
 def _session_with_agent(session_id: str, agent_name: str) -> Session:
@@ -159,3 +164,54 @@ async def test_response_handler_job_queues_are_idempotent() -> None:
     await handler.ensure_reflection_job("user_1", "session_1")
 
     assert nursery.start_soon.call_count == 2
+
+
+@pytest.mark.trio
+async def test_assessment_job_emits_error_and_fallback_recommendations() -> None:
+    workflow_engine = AsyncMock()
+    workflow_engine.get_user_state.return_value = WorkflowState.INTAKE_COMPLETE
+    conversation_manager = AsyncMock()
+    conversation_manager.get_context.return_value = SimpleNamespace()
+    assessment_agent = AsyncMock()
+    assessment_agent.process_assessment.return_value = AgentResponse(
+        content="failed",
+        next_action="continue",
+        metadata={"error": "quota exhausted"},
+    )
+    style_service = SimpleNamespace(
+        get_available_styles=lambda: ["cbt", "freud", "jung"]
+    )
+    service_container = MagicMock()
+    service_container.create_agent.return_value = assessment_agent
+    service_container.get.return_value = style_service
+    emitted_next_actions: list[tuple[str, str | None]] = []
+
+    async def emit_next_action(user_id: str, session_id: str | None) -> None:
+        emitted_next_actions.append((user_id, session_id))
+
+    assessment_recommendations: dict[str, list[dict[str, Any]]] = {}
+    assessment_jobs = {"user_1"}
+
+    await run_assessment_job(
+        workflow_engine=workflow_engine,
+        conversation_manager=conversation_manager,
+        service_container=service_container,
+        emit_next_action=emit_next_action,
+        assessment_recommendations=assessment_recommendations,
+        assessment_jobs=assessment_jobs,
+        user_id="user_1",
+        intake_session_id="session_1",
+    )
+
+    message_types = [
+        call.args[1] for call in conversation_manager.send_json_message.await_args_list
+    ]
+    assert "error" in message_types
+    assert "assessment_recommendations" in message_types
+    assert assessment_recommendations["user_1"][0]["style_id"] == "cbt"
+    workflow_engine.transition.assert_any_await(
+        "user_1",
+        WorkflowState.ASSESSMENT_COMPLETE,
+        event=WorkflowEvent.COMPLETE_ASSESSMENT,
+    )
+    assert assessment_jobs == set()
