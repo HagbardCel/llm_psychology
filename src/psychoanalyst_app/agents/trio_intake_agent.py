@@ -195,6 +195,19 @@ class TrioIntakeAgent:
 
                     next_action = "transition"
                     workflow_event = WorkflowEvent.COMPLETE_INTAKE
+                    return direct_agent_response(
+                        content=prompt,
+                        next_action=next_action,
+                        workflow_event=workflow_event,
+                        metadata={
+                            "topics_covered": context.topics_covered,
+                            "time_remaining_minutes": context.time_remaining_minutes,
+                            "can_extend": context.can_extend,
+                            "is_time_up": context.is_time_up,
+                            "user_profile": structured_profile,
+                            "intake_complete": is_complete,
+                        },
+                    )
                 elif context.is_time_up:
                     # Time is up but intake is not complete.
                     # We should NOT transition to INTAKE_COMPLETE.
@@ -205,6 +218,19 @@ class TrioIntakeAgent:
                     prompt = (
                         "Our time is up for today. We will continue this intake "
                         "in our next session."
+                    )
+                    return direct_agent_response(
+                        content=prompt,
+                        next_action=next_action,
+                        workflow_event=workflow_event,
+                        metadata={
+                            "topics_covered": context.topics_covered,
+                            "time_remaining_minutes": context.time_remaining_minutes,
+                            "can_extend": context.can_extend,
+                            "is_time_up": context.is_time_up,
+                            "user_profile": structured_profile,
+                            "intake_complete": is_complete,
+                        },
                     )
                 else:
                     next_action = "continue"

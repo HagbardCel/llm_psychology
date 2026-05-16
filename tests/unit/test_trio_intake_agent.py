@@ -75,6 +75,8 @@ async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
     assert response.content == CLOSING_PROMPT
     assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
     assert response.next_action == "transition"
+    assert response.metadata["is_direct_response"] is True
+    assert "?" not in response.content
 
 
 @pytest.mark.trio
@@ -106,3 +108,4 @@ async def test_time_up_without_completion_ends_with_notice(intake_agent):
     )
     assert response.workflow_event is None
     assert response.next_action == "continue"
+    assert response.metadata["is_direct_response"] is True

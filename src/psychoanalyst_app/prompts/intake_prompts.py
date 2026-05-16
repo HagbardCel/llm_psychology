@@ -42,15 +42,11 @@ Important guidelines:
 Continue the conversation naturally while systematically working through the remaining topics.
 """
 
-# Closing prompt for intake session
+# Closing message for intake session
 CLOSING_PROMPT = """
-You are concluding the intake session. Thank the user for their openness and participation.
-Provide a brief, professional summary of the key points discussed.
+Thank you for your openness today. We have completed the initial intake and gathered enough background to move into the assessment phase.
 
-Explain that the next step is the **Assessment & Style Selection** phase, where you will analyze this information
-to recommend a personalized therapy style (e.g., CBT, Freudian, Jungian) that best suits their needs.
-
-Conclude professionally and mention that you are ready to proceed to the assessment.
+The next step is Assessment and Style Selection, where I will analyze what you shared and recommend therapy styles that fit your needs. You will be notified when the recommendations are ready.
 """
 
 # Tier 1 extraction prompt for structured data extraction

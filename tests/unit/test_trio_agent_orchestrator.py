@@ -14,7 +14,9 @@ from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrc
 
 @pytest.fixture
 def mock_dependencies():
-    workflow_engine = AsyncMock()
+    workflow_engine = MagicMock()
+    workflow_engine.get_user_state = AsyncMock(return_value=WorkflowState.NEW)
+    workflow_engine.transition = AsyncMock()
     workflow_engine.get_user_state.return_value = WorkflowState.NEW
     return {
         "service_container": MagicMock(),
@@ -127,9 +129,14 @@ async def test_process_message_propagates_exceptions(orchestrator, mock_dependen
 async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     """Test successful therapy plan creation via orchestrator."""
     # Setup mocks
-    mock_db_service = AsyncMock()
+    mock_db_service = MagicMock()
+    mock_db_service.get_user_profile = AsyncMock()
+    mock_db_service.get_latest_therapy_plan = AsyncMock()
+    mock_db_service.save_therapy_plan = AsyncMock()
+    mock_db_service.update_user_profile = AsyncMock()
     mock_style_service = MagicMock()
-    mock_reflection_agent = AsyncMock()
+    mock_reflection_agent = MagicMock()
+    mock_reflection_agent.create_initial_plan_with_style = AsyncMock()
 
     # Mock service container
     def get_service(name):
@@ -211,7 +218,10 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
 ):
     """Test that creating plan twice returns existing version 1."""
     # Setup mocks
-    mock_db_service = AsyncMock()
+    mock_db_service = MagicMock()
+    mock_db_service.get_user_profile = AsyncMock()
+    mock_db_service.get_latest_therapy_plan = AsyncMock()
+    mock_db_service.save_therapy_plan = AsyncMock()
     mock_style_service = MagicMock()
 
     def get_service(name):
