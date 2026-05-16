@@ -2,8 +2,8 @@
 
 This document outlines the technologies used in the Virtual LLM-Driven Psychoanalyst application, rationale for technology choices, and version requirements.
 
-**Last Updated:** 2025-12-04
-**Last Verified:** 2025-12-22
+**Last Updated:** 2026-05-16
+**Last Verified:** 2026-05-16
 **System Version:** 2.0 (Trio Architecture)
 
 ## 📊 Stack Overview
@@ -11,7 +11,7 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Frontend Layer                        │
-│  React 18 + TypeScript + Material-UI + Vite            │
+│  React 19 + TypeScript + Material-UI + Vite            │
 └─────────────────────────────────────────────────────────┘
                             │
                     WebSocket + REST API
@@ -24,8 +24,8 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 ├───────────────┬───────────────┬───────────────┬─────────┤
 │               │               │               │         │
 ┌───────┐  ┌────────┐  ┌──────────┐  ┌────────┐  ┌──────┐
-│SQLite │  │ FAISS  │  │Google    │  │Pydantic│  │Trio  │
-│  DB   │  │ Vector │  │Gemini API│  │Schemas │  │ Core │
+│SQLite │  │ No-op  │  │Google    │  │Pydantic│  │Trio  │
+│  DB   │  │  RAG   │  │Gemini API│  │Schemas │  │ Core │
 └───────┘  └────────┘  └──────────┘  └────────┘  └──────┘
 ```
 
@@ -100,14 +100,13 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 - Schema defined in `src/services/trio_db_service.py`
 - Migration scripts in `src/services/migration_service.py`
 
-#### FAISS
-**Purpose:** Vector index for RAG (Retrieval-Augmented Generation)
-**Storage:** `data/vector_db/`
+#### RAG Backend
+**Purpose:** Retrieval boundary for agent prompt context
+**Current Backend:** `RAG_BACKEND=none`
 **Rationale:**
-- Embedding storage for therapeutic knowledge base
-- Fast similarity search for context retrieval
-- Local, file-backed index with low overhead
-- Explicit control over similarity metrics and persistence
+- Keeps the core product path lightweight and deterministic
+- Avoids large optional ML/vector dependencies during finalization
+- Leaves local vector retrieval as a future extension after core validation
 
 ---
 
@@ -170,19 +169,27 @@ The application supports configuring different Gemini models for different agent
 
 ### Core Framework
 
-#### React 18.2+
+#### Node.js 26
+**Purpose:** Frontend runtime and package tooling
+**Version:** 26.x with npm 11+
+**Rationale:**
+- Current runtime baseline before production launch
+- Aligns local, Docker, test, and production frontend builds
+- Supports current Vite, Vitest, React, and TypeScript tooling
+
+#### React 19.2+
 **Purpose:** UI framework
-**Version:** 18.2.0 or higher
+**Version:** 19.2.0 or higher
 **Rationale:**
 - Component-based architecture
 - Excellent TypeScript support
 - Rich ecosystem
-- Concurrent rendering features
+- Current React rendering and testing behavior
 - Hooks for state management
 
-#### TypeScript 5.0+
+#### TypeScript 6.0+
 **Purpose:** Type-safe JavaScript
-**Version:** 5.0 or higher
+**Version:** 6.0 or higher
 **Rationale:**
 - Compile-time type checking
 - Better IDE support
@@ -194,9 +201,9 @@ The application supports configuring different Gemini models for different agent
 
 ### UI Library
 
-#### Material-UI (MUI) 5.14+
+#### Material-UI (MUI) 7.3+
 **Purpose:** Component library
-**Version:** 5.14.0 or higher
+**Version:** 7.3.0 or higher
 **Rationale:**
 - Professional, accessible components
 - Theming system
@@ -215,9 +222,9 @@ The application supports configuring different Gemini models for different agent
 
 ### Build Tools
 
-#### Vite 4.4+
+#### Vite 8+
 **Purpose:** Build tool and dev server
-**Version:** 4.4.0 or higher
+**Version:** 8.0.0 or higher
 **Rationale:**
 - Extremely fast HMR (Hot Module Replacement)
 - Modern build pipeline
@@ -225,13 +232,13 @@ The application supports configuring different Gemini models for different agent
 - Plugin ecosystem
 - Better than Create React App for modern projects
 
-#### vite-plugin-pwa
-**Purpose:** Progressive Web App support
+#### Vitest
+**Purpose:** Frontend unit test runner
+**Version:** 4.1.0 or higher
 **Rationale:**
-- Offline capability
-- Install to home screen
-- Service worker management
-- Automatic caching strategies
+- Shares the Vite transform pipeline
+- Native TypeScript and ESM support
+- Lower configuration overhead than a separate Jest/ts-jest stack
 
 ---
 
@@ -309,14 +316,14 @@ The application supports configuring different Gemini models for different agent
 
 ### Frontend Testing
 
-#### Jest 29.6+
-**Purpose:** JavaScript test framework
-**Version:** 29.6.0 or higher
+#### Vitest 4.1+
+**Purpose:** JavaScript and React unit test framework
+**Version:** 4.1.0 or higher
 **Rationale:**
-- Fast test runner
-- Snapshot testing
-- Mocking capabilities
-- Wide adoption
+- Uses the same Vite transform path as the application
+- Native ESM and TypeScript support
+- Jest-compatible mocking APIs through `vi`
+- Coverage support through V8
 
 #### React Testing Library 13.4+
 **Purpose:** Component testing
@@ -357,9 +364,9 @@ The application supports configuring different Gemini models for different agent
 - Comprehensive rule set
 - Auto-fix capabilities
 
-#### ESLint 8.45+
+#### ESLint 10.4+
 **Purpose:** JavaScript/TypeScript linter
-**Version:** 8.45.0 or higher
+**Version:** 10.4.0 or higher
 **Rationale:**
 - TypeScript support
 - React-specific rules

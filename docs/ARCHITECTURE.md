@@ -314,13 +314,12 @@ Services provide low-level functionality to the system.
 
 #### RAGService (`src/psychoanalyst_app/services/rag_service.py`)
 
-**Purpose**: FAISS vector index for domain knowledge
+**Purpose**: No-op retrieval boundary for the current release
 
 **Features**:
-- Semantic search over therapy knowledge
-- Style-specific knowledge filtering (Freud, Jung, CBT)
-- Embedding generation
-- Relevance scoring
+- Keeps agent/orchestration call sites stable while retrieval is disabled
+- Returns empty retrieval results deterministically
+- Defers local vector retrieval to a future extension
 
 ## Data Models
 
