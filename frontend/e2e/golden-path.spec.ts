@@ -15,6 +15,7 @@ test.describe('Golden Path (Deterministic)', () => {
     await page.waitForURL(/\/profile/, { timeout: 15000 });
 
     // Save profile to advance workflow to intake
+    await page.getByRole('button', { name: /create new profile/i }).click({ timeout: 15000 });
     await page.getByRole('textbox', { name: /name/i }).fill('E2E User Updated');
     await page.getByRole('button', { name: /save changes|continue/i }).click();
 

@@ -224,6 +224,24 @@ describe('WebSocketService', () => {
       );
     });
 
+    test('sends end_session messages with optional reason', async () => {
+      const connectPromise = service.connect();
+
+      const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
+      mockWs.simulateOpen();
+
+      await connectPromise;
+
+      service.sendEndSession('User ended session');
+
+      expect(mockWs.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: 'end_session',
+          data: { reason: 'User ended session' }
+        })
+      );
+    });
+
     test('does not send message when not connected', () => {
       const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
 
@@ -310,6 +328,35 @@ describe('WebSocketService', () => {
       });
 
       expect(sessionCallback).toHaveBeenCalledWith(sessionData);
+    });
+
+    test('handles session ended messages', async () => {
+      const sessionEndedCallback = jest.fn();
+      const messageCallback = jest.fn();
+      service.onSessionEnded(sessionEndedCallback);
+      service.onMessageReceived(messageCallback);
+
+      const connectPromise = service.connect();
+
+      const mockWs = (MockWebSocket as any).lastInstance as MockWebSocket;
+      mockWs.simulateOpen();
+
+      await connectPromise;
+
+      const payload = {
+        reason: 'User ended session',
+        workflow_state: 'assessment_complete'
+      };
+
+      mockWs.simulateMessage({
+        type: 'session_ended',
+        data: payload
+      });
+
+      expect(sessionEndedCallback).toHaveBeenCalledWith(payload);
+      expect(messageCallback).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'session_ended' })
+      );
     });
   });
 

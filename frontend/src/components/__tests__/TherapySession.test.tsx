@@ -6,8 +6,10 @@ import { AppProvider } from '../../contexts/AppContext';
 import type { SessionStartedEvent } from '../../types/websocket';
 
 const mockSendChatMessage = jest.fn();
+const mockSendEndSession = jest.fn();
 const mockRegisterStreamingChunkHandler = jest.fn();
 const mockRegisterSessionStartedHandler = jest.fn();
+const mockRegisterSessionEndedHandler = jest.fn();
 const mockRegisterWorkflowNextActionHandler = jest.fn();
 
 let mockIsConnected = true;
@@ -15,6 +17,7 @@ let mockConnectionStatus = { isConnected: true, isConnecting: false };
 let mockLastMessage: any = null;
 let streamingHandler: ((chunk: string, isComplete: boolean, fullResponse?: string) => void) | null = null;
 let sessionStartedHandler: ((event: SessionStartedEvent) => void) | null = null;
+let sessionEndedHandler: (() => void) | null = null;
 
 jest.mock('../../contexts/WebSocketContext', () => ({
   useWebSocketContext: jest.fn(() => {
@@ -22,9 +25,11 @@ jest.mock('../../contexts/WebSocketContext', () => ({
       connectionStatus: mockConnectionStatus,
       lastMessage: mockLastMessage,
       sendChatMessage: mockSendChatMessage,
+      sendEndSession: mockSendEndSession,
       isConnected: mockIsConnected,
       registerStreamingChunkHandler: mockRegisterStreamingChunkHandler,
       registerSessionStartedHandler: mockRegisterSessionStartedHandler,
+      registerSessionEndedHandler: mockRegisterSessionEndedHandler,
       registerWorkflowNextActionHandler: mockRegisterWorkflowNextActionHandler,
     };
   }),
@@ -96,6 +101,7 @@ describe('TherapySession', () => {
     mockLastMessage = null;
     streamingHandler = null;
     sessionStartedHandler = null;
+    sessionEndedHandler = null;
     mockRegisterStreamingChunkHandler.mockImplementation((handler) => {
       streamingHandler = handler;
       return () => {
@@ -106,6 +112,12 @@ describe('TherapySession', () => {
       sessionStartedHandler = handler;
       return () => {
         sessionStartedHandler = null;
+      };
+    });
+    mockRegisterSessionEndedHandler.mockImplementation((handler) => {
+      sessionEndedHandler = handler;
+      return () => {
+        sessionEndedHandler = null;
       };
     });
     mockRegisterWorkflowNextActionHandler.mockImplementation(() => () => {});
@@ -262,8 +274,12 @@ describe('TherapySession', () => {
     });
 
     fireEvent.click(screen.getByTestId('end-session-btn'));
+    act(() => {
+      sessionEndedHandler?.();
+    });
 
     await waitFor(() => {
+      expect(mockSendEndSession).toHaveBeenCalledWith('User ended session');
       expect(screen.getByTestId('send-message-btn')).toBeDisabled();
     });
   });

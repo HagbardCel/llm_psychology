@@ -13,6 +13,7 @@ test.describe('WebSocket Reconnect', () => {
 
     await page.waitForURL(/\/profile/, { timeout: 15000 });
 
+    await page.getByRole('button', { name: /create new profile/i }).click({ timeout: 15000 });
     await page.getByRole('textbox', { name: /name/i }).fill('Reconnect User Updated');
     await page.getByRole('button', { name: /save changes|continue/i }).click();
 

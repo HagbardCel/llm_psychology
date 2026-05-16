@@ -11,7 +11,8 @@ import {
   StreamingChunkCallback,
   SessionStartedCallback,
   WS_MESSAGE_TYPES,
-  WorkflowNextActionEvent
+  WorkflowNextActionEvent,
+  SessionEndedEvent
 } from '../types/websocket';
 
 export class WebSocketService {
@@ -29,6 +30,7 @@ export class WebSocketService {
   private onStreamingChunk: StreamingChunkCallback | null = null;
   private onSessionStartedEvent: SessionStartedCallback | null = null;
   private onWorkflowNextActionEvent: ((event: WorkflowNextActionEvent) => void) | null = null;
+  private onSessionEndedEvent: ((event: SessionEndedEvent) => void) | null = null;
 
   constructor(config: WebSocketConfig) {
     this.config = config;
@@ -134,6 +136,10 @@ export class WebSocketService {
     this.sendMessage(WS_MESSAGE_TYPES.CHAT_MESSAGE, { message });
   }
 
+  sendEndSession(reason?: string): void {
+    this.sendMessage(WS_MESSAGE_TYPES.END_SESSION, reason ? { reason } : {});
+  }
+
   /**
    * Set connection status change callback
    */
@@ -167,6 +173,10 @@ export class WebSocketService {
    */
   onWorkflowNextAction(callback: (event: WorkflowNextActionEvent) => void): void {
     this.onWorkflowNextActionEvent = callback;
+  }
+
+  onSessionEnded(callback: (event: SessionEndedEvent) => void): void {
+    this.onSessionEndedEvent = callback;
   }
 
   /**
@@ -256,6 +266,15 @@ export class WebSocketService {
 
       case WS_MESSAGE_TYPES.ASSESSMENT_RECOMMENDATIONS:
         console.log('Assessment recommendations received:', message.data);
+        if (this.onMessage) {
+          this.onMessage(message as WebSocketResponse);
+        }
+        break;
+
+      case WS_MESSAGE_TYPES.SESSION_ENDED:
+        if (this.onSessionEndedEvent && message.data) {
+          this.onSessionEndedEvent(message.data as SessionEndedEvent);
+        }
         if (this.onMessage) {
           this.onMessage(message as WebSocketResponse);
         }

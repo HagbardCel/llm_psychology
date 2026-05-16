@@ -1,6 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient, ApiRequestError } from '../services/apiClient';
-import type { CreateUserProfileRequest, User, UserRegisterResponse, WorkflowNextAction } from '../types';
+import type {
+  CreateUserProfileRequest,
+  User,
+  UserProfileListResponse,
+  UserRegisterResponse,
+  WorkflowNextAction
+} from '../types';
 
 /**
  * User profile update payload
@@ -86,6 +92,35 @@ export function useRegisterUserProfile() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['user', data.session.user_id] });
+    },
+  });
+}
+
+export function useUserProfiles() {
+  return useQuery({
+    queryKey: ['user', 'profiles'],
+    queryFn: async () => {
+      const response = await apiClient.get<UserProfileListResponse>('/api/user/profiles');
+      return response.profiles;
+    },
+    staleTime: 1000 * 30,
+  });
+}
+
+export function useLoginUserProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      return apiClient.post<UserRegisterResponse>('/api/user/login', {
+        user_id: userId,
+      });
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['user', data.session.user_id] });
+      queryClient.invalidateQueries({
+        queryKey: ['workflow', 'next', data.session.user_id, data.session.session_id],
+      });
     },
   });
 }

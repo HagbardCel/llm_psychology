@@ -11,6 +11,7 @@ import {
   WebSocketConfig,
   StreamingChunkCallback,
   SessionStartedCallback,
+  SessionEndedEvent,
   WorkflowNextActionEvent
 } from '../types/websocket';
 
@@ -22,6 +23,7 @@ interface UseWebSocketOptions {
   reconnectDelay?: number;
   onStreamingChunk?: StreamingChunkCallback;
   onSessionStarted?: SessionStartedCallback;
+  onSessionEnded?: (event: SessionEndedEvent) => void;
   onWorkflowNextAction?: (event: WorkflowNextActionEvent) => void;
 }
 
@@ -30,6 +32,7 @@ interface UseWebSocketReturn {
   lastMessage: WebSocketResponse | null;
   sendMessage: (type: string, data?: Record<string, any>) => void;
   sendChatMessage: (message: string) => void;
+  sendEndSession: (reason?: string) => void;
   connect: () => Promise<boolean>;
   disconnect: () => void;
   isConnected: boolean;
@@ -44,6 +47,7 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     reconnectDelay = 1000,
     onStreamingChunk,
     onSessionStarted,
+    onSessionEnded,
     onWorkflowNextAction
   } = options;
 
@@ -77,6 +81,9 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     if (onSessionStarted) {
       serviceRef.current.onSessionStarted(onSessionStarted);
     }
+    if (onSessionEnded) {
+      serviceRef.current.onSessionEnded(onSessionEnded);
+    }
     if (onWorkflowNextAction) {
       serviceRef.current.onWorkflowNextAction(onWorkflowNextAction);
     }
@@ -93,6 +100,7 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     reconnectDelay,
     onStreamingChunk,
     onSessionStarted,
+    onSessionEnded,
     onWorkflowNextAction
   ]);
 
@@ -156,11 +164,18 @@ export const useWebSocket = (options: UseWebSocketOptions): UseWebSocketReturn =
     }
   }, []);
 
+  const sendEndSession = useCallback((reason?: string): void => {
+    if (serviceRef.current) {
+      serviceRef.current.sendEndSession(reason);
+    }
+  }, []);
+
   return {
     connectionStatus,
     lastMessage,
     sendMessage,
     sendChatMessage,
+    sendEndSession,
     connect,
     disconnect,
     isConnected: connectionStatus.isConnected

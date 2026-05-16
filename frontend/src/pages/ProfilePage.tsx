@@ -1,18 +1,42 @@
 import { useState, FormEvent, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Alert, Snackbar, CircularProgress } from '@mui/material';
+import {
+  Button,
+  Alert,
+  Snackbar,
+  CircularProgress,
+  Box,
+  Divider,
+  List,
+  ListItemButton,
+  ListItemText,
+  Typography,
+} from '@mui/material';
 import { PageContainer, FormField } from '../components/shared';
 import { useAppContext } from '../contexts/AppContext';
-import { useCreateUserProfile, useRegisterUserProfile, useUserProfile, useUpdateUserProfile } from '../hooks/useUserProfile';
+import {
+  useCreateUserProfile,
+  useLoginUserProfile,
+  useRegisterUserProfile,
+  useUserProfile,
+  useUserProfiles,
+  useUpdateUserProfile,
+} from '../hooks/useUserProfile';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
 import { routeForRequiredAction } from '../utils/workflow';
+import type { RequiredWorkflowAction } from '../types';
 
 /**
  * ProfilePage allows users to create or update their profile.
  * Refactored to use React Query for server state management.
  */
 export function ProfilePage() {
-  const { currentUserId: userId, currentSessionId: sessionId, setCurrentSessionId } =
+  const {
+    currentUserId: userId,
+    currentSessionId: sessionId,
+    setCurrentUserId,
+    setCurrentSessionId,
+  } =
     useAppContext();
   const navigate = useNavigate();
 
@@ -25,8 +49,10 @@ export function ProfilePage() {
   // Mutation for updating profile
   const { mutateAsync: createProfile, isPending: isCreating } = useCreateUserProfile();
   const { mutateAsync: registerProfile, isPending: isRegistering } = useRegisterUserProfile();
+  const { mutateAsync: loginProfile, isPending: isLoggingIn } = useLoginUserProfile();
   const { mutateAsync: updateProfile, isPending: isUpdating } = useUpdateUserProfile();
-  const isPending = isCreating || isUpdating || isRegistering;
+  const isPending = isCreating || isUpdating || isRegistering || isLoggingIn;
+  const { data: profiles = [], isLoading: profilesLoading } = useUserProfiles();
 
   // Get next action for navigation
   const { data: nextAction, refetch: refetchNextAction } = useWorkflowNextAction(
@@ -37,6 +63,7 @@ export function ProfilePage() {
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [creatingNew, setCreatingNew] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -128,6 +155,26 @@ export function ProfilePage() {
     }
   };
 
+  const navigateFromAction = (requiredAction?: RequiredWorkflowAction | null) => {
+    const targetRoute = routeForRequiredAction(requiredAction);
+    if (targetRoute && targetRoute !== '/profile') {
+      setTimeout(() => navigate(targetRoute), 300);
+    }
+  };
+
+  const handleLogin = async (selectedUserId: string) => {
+    setError(null);
+    try {
+      const response = await loginProfile(selectedUserId);
+      setCurrentUserId(selectedUserId);
+      setCurrentSessionId(response.session.session_id);
+      setSuccess(true);
+      navigateFromAction(response.workflow_next_action?.required_action);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to log in');
+    }
+  };
+
   if (userLoading) {
     return (
       <PageContainer title="Loading Profile..." maxWidth="sm">
@@ -138,14 +185,58 @@ export function ProfilePage() {
 
   return (
     <PageContainer
-      title={user ? 'Edit Profile' : 'Welcome!'}
+      title={user ? 'Edit Profile' : 'Profile'}
       subtitle={
         user
           ? 'Update your information'
-          : 'Tell us about yourself to get started'
+          : 'Select an existing profile or create a new one'
       }
       maxWidth="sm"
     >
+      {!user && !creatingNew && (
+        <Box sx={{ mb: 3 }}>
+          {profilesLoading ? (
+            <CircularProgress size={24} />
+          ) : profiles.length > 0 ? (
+            <List aria-label="Existing profiles" sx={{ mb: 2 }}>
+              {profiles.map((profile) => (
+                <ListItemButton
+                  key={profile.user_id}
+                  onClick={() => handleLogin(profile.user_id)}
+                  disabled={isPending}
+                  sx={{ px: 0 }}
+                >
+                  <ListItemText
+                    primary={profile.name}
+                    secondary={`${profile.status} - ${profile.primary_language}`}
+                  />
+                </ListItemButton>
+              ))}
+            </List>
+          ) : (
+            <Typography color="text.secondary" sx={{ mb: 2 }}>
+              No existing profiles found.
+            </Typography>
+          )}
+          <Button
+            variant="outlined"
+            fullWidth
+            onClick={() => setCreatingNew(true)}
+            disabled={isPending}
+          >
+            Create New Profile
+          </Button>
+          <Divider sx={{ my: 3 }} />
+        </Box>
+      )}
+
+      {error && !creatingNew && !user && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      {(user || creatingNew) && (
       <form onSubmit={handleSubmit}>
         <FormField
           label="Name"
@@ -206,6 +297,7 @@ export function ProfilePage() {
           )}
         </Button>
       </form>
+      )}
 
       <Snackbar
         open={success}

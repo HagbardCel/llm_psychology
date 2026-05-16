@@ -6,6 +6,7 @@ import type {
   AssessmentRecommendationsEvent,
   ConnectionStatus,
   WebSocketResponse,
+  SessionEndedEvent,
   StreamingChunkCallback,
   SessionStartedEvent,
   WorkflowNextActionEvent
@@ -18,12 +19,20 @@ interface WebSocketContextValue {
   assessmentRecommendations: AssessmentRecommendationsEvent | null;
   sendMessage: (type: string, data?: Record<string, any>) => void;
   sendChatMessage: (message: string) => void;
+  sendEndSession: (reason?: string) => void;
   connect: () => Promise<boolean>;
   disconnect: () => void;
   isConnected: boolean;
   registerStreamingChunkHandler: (handler: StreamingChunkCallback) => () => void;
-  registerSessionStartedHandler: (handler: (event: SessionStartedEvent) => void) => () => void;
-  registerWorkflowNextActionHandler: (handler: (event: WorkflowNextActionEvent) => void) => () => void;
+  registerSessionStartedHandler: (
+    handler: (event: SessionStartedEvent) => void
+  ) => () => void;
+  registerSessionEndedHandler: (
+    handler: (event: SessionEndedEvent) => void
+  ) => () => void;
+  registerWorkflowNextActionHandler: (
+    handler: (event: WorkflowNextActionEvent) => void
+  ) => () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextValue | undefined>(undefined);
@@ -42,7 +51,10 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   );
 
   const streamingHandlers = useRef<StreamingChunkCallback[]>([]);
-  const sessionStartedHandlers = useRef<Array<(event: SessionStartedEvent) => void>>([]);
+  const sessionStartedHandlers = useRef<Array<(event: SessionStartedEvent) => void>>(
+    []
+  );
+  const sessionEndedHandlers = useRef<Array<(event: SessionEndedEvent) => void>>([]);
   const workflowHandlers = useRef<Array<(event: WorkflowNextActionEvent) => void>>([]);
 
   const handleStreamingChunk = useCallback<StreamingChunkCallback>(
@@ -71,11 +83,19 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     });
   }, [currentSessionId, queryClient]);
 
+  const handleSessionEnded = useCallback((event: SessionEndedEvent) => {
+    setCurrentSessionId(null);
+    sessionEndedHandlers.current.forEach((handler) => {
+      handler(event);
+    });
+  }, [setCurrentSessionId]);
+
   const {
     connectionStatus,
     lastMessage,
     sendMessage,
     sendChatMessage,
+    sendEndSession,
     connect,
     disconnect,
     isConnected
@@ -84,6 +104,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     autoConnect: !!currentUserId && !!currentSessionId,
     onStreamingChunk: handleStreamingChunk,
     onSessionStarted: handleSessionStarted,
+    onSessionEnded: handleSessionEnded,
     onWorkflowNextAction: handleWorkflowNextAction,
   });
 
@@ -103,17 +124,32 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     };
   }, []);
 
-  const registerSessionStartedHandler = useCallback((handler: (event: SessionStartedEvent) => void) => {
-    sessionStartedHandlers.current = [...sessionStartedHandlers.current, handler];
-    if (lastSessionStarted) {
-      handler(lastSessionStarted);
-    }
-    return () => {
-      sessionStartedHandlers.current = sessionStartedHandlers.current.filter(
-        (candidate) => candidate !== handler
-      );
-    };
-  }, [lastSessionStarted]);
+  const registerSessionStartedHandler = useCallback(
+    (handler: (event: SessionStartedEvent) => void) => {
+      sessionStartedHandlers.current = [...sessionStartedHandlers.current, handler];
+      if (lastSessionStarted) {
+        handler(lastSessionStarted);
+      }
+      return () => {
+        sessionStartedHandlers.current = sessionStartedHandlers.current.filter(
+          (candidate) => candidate !== handler
+        );
+      };
+    },
+    [lastSessionStarted]
+  );
+
+  const registerSessionEndedHandler = useCallback(
+    (handler: (event: SessionEndedEvent) => void) => {
+      sessionEndedHandlers.current = [...sessionEndedHandlers.current, handler];
+      return () => {
+        sessionEndedHandlers.current = sessionEndedHandlers.current.filter(
+          (candidate) => candidate !== handler
+        );
+      };
+    },
+    []
+  );
 
   const registerWorkflowNextActionHandler = useCallback(
     (handler: (event: WorkflowNextActionEvent) => void) => {
@@ -135,11 +171,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         assessmentRecommendations,
         sendMessage,
         sendChatMessage,
+        sendEndSession,
         connect,
         disconnect,
         isConnected,
         registerStreamingChunkHandler,
         registerSessionStartedHandler,
+        registerSessionEndedHandler,
         registerWorkflowNextActionHandler,
       }}
     >

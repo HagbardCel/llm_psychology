@@ -118,6 +118,19 @@ export interface UserRegisterResponse {
   workflow_next_action: WorkflowNextAction;
 }
 
+export interface UserProfileSummary {
+  user_id: string;
+  name: string;
+  status: UserStatus;
+  primary_language: string;
+  plan_id?: string | null;
+  updated_at: string;
+}
+
+export interface UserProfileListResponse {
+  profiles: UserProfileSummary[];
+}
+
 // ============================================================================
 // CLIENT-ONLY TYPES (UI State, Not in Backend)
 // ============================================================================

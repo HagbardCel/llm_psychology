@@ -52,6 +52,7 @@ export function TherapySession({
 
   const streamBufferRef = useRef<string>('');
   const hasReceivedInitialMessageRef = useRef(false);
+  const endSessionTimeoutRef = useRef<number | null>(null);
 
   const messages = session?.transcript || [];
 
@@ -136,9 +137,11 @@ export function TherapySession({
     connectionStatus,
     lastMessage,
     sendChatMessage,
+    sendEndSession,
     isConnected,
     registerStreamingChunkHandler,
     registerSessionStartedHandler,
+    registerSessionEndedHandler,
     registerWorkflowNextActionHandler,
   } = useWebSocketContext();
 
@@ -184,6 +187,23 @@ export function TherapySession({
     if (isReadOnly) return;
     const unsubscribeStreaming = registerStreamingChunkHandler(handleStreamingChunk);
     const unsubscribeSession = registerSessionStartedHandler(handleSessionStarted);
+    const unsubscribeSessionEnded = registerSessionEndedHandler(() => {
+      if (endSessionTimeoutRef.current !== null) {
+        window.clearTimeout(endSessionTimeoutRef.current);
+        endSessionTimeoutRef.current = null;
+      }
+      setSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: SessionStatus.COMPLETED,
+              endTime: new Date(),
+            }
+          : prev
+      );
+      setIsLoading(false);
+      setIsSessionReady(false);
+    });
     const unsubscribeWorkflow = registerWorkflowNextActionHandler((event) => {
       if (event.required_action === 'wait') {
         setWaitPrompt(event.prompt || 'Assessment in progress. Please wait.');
@@ -194,13 +214,19 @@ export function TherapySession({
     return () => {
       unsubscribeStreaming();
       unsubscribeSession();
+      unsubscribeSessionEnded();
       unsubscribeWorkflow();
+      if (endSessionTimeoutRef.current !== null) {
+        window.clearTimeout(endSessionTimeoutRef.current);
+        endSessionTimeoutRef.current = null;
+      }
     };
   }, [
     handleSessionStarted,
     handleStreamingChunk,
     isReadOnly,
     registerSessionStartedHandler,
+    registerSessionEndedHandler,
     registerStreamingChunkHandler,
     registerWorkflowNextActionHandler
   ]);
@@ -325,15 +351,23 @@ export function TherapySession({
     if (!session) return;
 
     try {
-      const endedSession: Session = {
-        ...session,
-        status: SessionStatus.COMPLETED,
-        endTime: new Date(),
-      };
-
-      setSession(endedSession);
+      if (!isConnected) {
+        setError('Not connected to server. Please try again.');
+        return;
+      }
+      setIsLoading(true);
+      sendEndSession('User ended session');
+      if (endSessionTimeoutRef.current !== null) {
+        window.clearTimeout(endSessionTimeoutRef.current);
+      }
+      endSessionTimeoutRef.current = window.setTimeout(() => {
+        setIsLoading(false);
+        setError('Session ending was not confirmed by the server. Please try again.');
+        endSessionTimeoutRef.current = null;
+      }, 8000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to end session');
+      setIsLoading(false);
     }
   };
 
