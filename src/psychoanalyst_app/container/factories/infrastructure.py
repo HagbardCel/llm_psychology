@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.migration_service import MigrationService
-from psychoanalyst_app.services.rag_service import RAGService
+from psychoanalyst_app.services.rag_service import NoOpRAGService, RAGService
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -51,9 +51,16 @@ def create_db_executor(container: ServiceContainer) -> TrioSQLiteExecutor:
     )
 
 
-def create_rag_service(container: ServiceContainer) -> RAGService:
+def create_rag_service(container: ServiceContainer) -> NoOpRAGService | RAGService:
     """Create RAGService."""
-    logger.debug("Creating RAGService")
+    backend = getattr(container.config, "RAG_BACKEND", "none").lower()
+    if backend in {"", "none"}:
+        logger.info("Created no-op RAGService (RAG_BACKEND=none)")
+        return NoOpRAGService()
+    if backend != "faiss":
+        raise ValueError("RAG_BACKEND must be 'none' or 'faiss'")
+
+    logger.debug("Creating FAISS RAGService")
     use_onnx = getattr(container.config, "USE_ONNX_EMBEDDINGS", True)
     model_name = getattr(container.config, "EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
     rag_service = RAGService(

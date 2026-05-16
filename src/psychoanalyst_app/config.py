@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
 
     # Vector Database Configuration
+    RAG_BACKEND: str = Field(
+        default="none",
+        description=(
+            "RAG backend to use: 'none' for lightweight local startup, "
+            "'faiss' for local vector retrieval."
+        ),
+    )
     VECTOR_DB_PATH: str = Field(default="data/vector_db")
 
     # Domain Knowledge Configuration

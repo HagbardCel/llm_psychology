@@ -5,14 +5,33 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 
-import faiss
-import numpy as np
-
-from psychoanalyst_app.utils.embedding_utils import EmbeddingUtils
-
 logger = logging.getLogger(__name__)
 StylesDirArg = str | Path | None
 _DEFAULT_STYLES_SENTINEL = object()
+
+
+class NoOpRAGService:
+    """RAG service implementation used when local retrieval is disabled."""
+
+    backend = "none"
+
+    def retrieve_relevant_knowledge(
+        self, query: str, n_results: int = 3, filter_source: str | None = None
+    ) -> list[dict[str, Any]]:
+        return []
+
+    def get_knowledge_by_source(self, source: str) -> list[dict[str, Any]]:
+        return []
+
+    def add_user_session_to_rag(
+        self, session_summary: str, keywords: list[str], session_id: str
+    ) -> None:
+        return None
+
+    def retrieve_relevant_user_history(
+        self, query: str, user_id: str, n_results: int = 2
+    ) -> list[dict[str, Any]]:
+        return []
 
 
 class RAGService:
@@ -23,7 +42,7 @@ class RAGService:
         domain_knowledge_path: str,
         vector_db_path: str,
         *,
-        embedding_utils: EmbeddingUtils | None = None,
+        embedding_utils: Any | None = None,
         styles_dir: StylesDirArg | object = _DEFAULT_STYLES_SENTINEL,
         use_onnx: bool = True,
         model_name: str = "all-MiniLM-L6-v2",
@@ -50,9 +69,11 @@ class RAGService:
             resolved_styles = styles_path
 
         self.styles_dir = os.fspath(resolved_styles) if resolved_styles else None
-        self.embedding_utils = embedding_utils or EmbeddingUtils(
-            model_name=model_name, use_onnx=use_onnx
-        )
+        if embedding_utils is None:
+            from psychoanalyst_app.utils.embedding_utils import EmbeddingUtils
+
+            embedding_utils = EmbeddingUtils(model_name=model_name, use_onnx=use_onnx)
+        self.embedding_utils = embedding_utils
 
         # Storage for documents and metadata
         self.documents = []
@@ -85,7 +106,9 @@ class RAGService:
         sample_embedding = self.embedding_utils.generate_embedding("sample text")
         embedding_dim = len(sample_embedding)
 
-        # Create FAISS index (using inner product for cosine similarity with normalized vectors)
+        # Use inner product over normalized vectors for cosine similarity.
+        import faiss
+
         self.index = faiss.IndexFlatIP(embedding_dim)
 
         # Load domain knowledge
@@ -136,6 +159,9 @@ class RAGService:
             embeddings = self.embedding_utils.generate_embeddings(documents)
 
             # Normalize embeddings for cosine similarity with inner product
+            import faiss
+            import numpy as np
+
             embeddings_array = np.array(embeddings, dtype=np.float32)
             faiss.normalize_L2(embeddings_array)
 
@@ -175,6 +201,8 @@ class RAGService:
     def _save_index(self):
         """Save FAISS index and metadata to disk."""
         if self.index is not None:
+            import faiss
+
             # Save FAISS index
             faiss.write_index(self.index, self.index_path)
 
@@ -192,6 +220,8 @@ class RAGService:
     def _load_index(self):
         """Load FAISS index and metadata from disk."""
         logger.info("Loading existing FAISS index...")
+
+        import faiss
 
         # Load FAISS index
         self.index = faiss.read_index(self.index_path)
@@ -228,6 +258,9 @@ class RAGService:
             # Generate query embedding
             query_embedding = self.embedding_utils.generate_embedding(query)
             logger.debug("RAG generated embedding")
+            import faiss
+            import numpy as np
+
             query_vector = np.array([query_embedding], dtype=np.float32)
 
             # Normalize for cosine similarity

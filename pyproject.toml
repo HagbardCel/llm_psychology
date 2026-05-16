@@ -12,9 +12,6 @@ dependencies = [
     "langchain==1.0.8",
     "langchain-google-genai",
     "langchain-community",
-    "faiss-cpu>=1.7.4",
-    "sentence-transformers[onnx]>=3.2.0",
-    "huggingface-hub",
     "python-dotenv",
     "pydantic",
     "pydantic-settings",
@@ -26,6 +23,13 @@ dependencies = [
     "trio-websocket",
     "quart-trio",
     "quart-cors",
+]
+
+[project.optional-dependencies]
+rag = [
+    "faiss-cpu>=1.7.4",
+    "sentence-transformers[onnx]>=3.2.0",
+    "huggingface-hub",
 ]
 
 [project.scripts]

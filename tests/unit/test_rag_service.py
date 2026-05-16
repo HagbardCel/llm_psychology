@@ -4,6 +4,8 @@ import pytest
 
 from psychoanalyst_app.services.rag_service import RAGService
 
+pytest.importorskip("faiss", reason="FAISS RAG backend is optional")
+
 
 class _StubEmbeddingUtils:
     """

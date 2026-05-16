@@ -2,7 +2,7 @@
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-docs validate-architecture
+.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-docs validate-architecture finalization-check
 
 export PYTHONPATH := src
 CONSOLE_UI_LOG ?= logs/console-ui.log
@@ -42,6 +42,7 @@ help:
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
+	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-standalone     - Run standalone terminal UI (Docker)"
@@ -134,6 +135,17 @@ test-e2e:
 	docker compose --profile test run --rm --build frontend-e2e npx playwright install chromium
 	docker compose --profile test run --rm --build frontend-e2e npm run test:e2e
 
+# Full release-candidate validation path. Keep this order aligned with
+# docs/schema/architecture gates before runtime and browser validation.
+finalization-check:
+	$(MAKE) validate-docs
+	$(MAKE) validate-schemas
+	$(MAKE) validate-architecture
+	$(MAKE) test-validate
+	$(MAKE) validate-frontend
+	$(MAKE) test-frontend
+	$(MAKE) test-e2e
+
 # Real LLM/RAG smoke tests (Docker, requires secrets / external services)
 test-real-llm:
 	$(MAKE) check-usertest-key
@@ -222,6 +234,7 @@ reset-usertest:
 # Generate locked requirements from .in files with UV
 requirements:
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements.in -o requirements.txt
+	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-rag.in -o requirements-rag.txt
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-dev.in -o requirements-dev.txt
 
 # Sync environment with locked requirements using UV

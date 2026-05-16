@@ -282,8 +282,9 @@ Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app
 Loader/service:
 - `src/psychoanalyst_app/services/style_service.py` loads those prompts via `importlib.resources` for packaged/container runtime resolution (override with `settings.STYLES_DIR` when you explicitly need alternate style assets).
 
-### RAG uses FAISS (not a hosted vector DB)
-`src/psychoanalyst_app/services/rag_service.py` is a lean FAISS-backed retriever:
+### RAG is optional and local
+`RAG_BACKEND=none` is the default lightweight path and wires a no-op retriever.
+`RAG_BACKEND=faiss` enables the optional local FAISS retriever:
 - builds and persists a local FAISS index under `data/vector_db/`
 - embeds chunks from domain knowledge and style pack `knowledge.md`
 - returns top-N chunks with metadata for prompt injection
@@ -398,7 +399,7 @@ Configuration is provided by Pydantic settings:
 Important environment variables:
 - `GOOGLE_API_KEY` (LLM access)
 - `MODEL_NAME` and per-agent model overrides (`*_MODEL`)
-- `DATABASE_PATH`, `VECTOR_DB_PATH`, `DOMAIN_KNOWLEDGE_PATH`
+- `DATABASE_PATH`, `RAG_BACKEND`, `VECTOR_DB_PATH`, `DOMAIN_KNOWLEDGE_PATH`
 - CORS settings (`CORS_ALLOWED_ORIGINS`)
 
 `GEMINI_API_KEY` is still accepted as a fallback for older shells, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.
