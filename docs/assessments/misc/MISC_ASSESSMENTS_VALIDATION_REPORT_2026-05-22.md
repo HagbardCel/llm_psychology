@@ -17,7 +17,7 @@ This report validates the two miscellaneous assessments:
 
 Both documents identify real implementation risks, but their priorities often assume a production, multi-user, internet-facing deployment. The current project context is different: Docker-based, single-instance, local-laptop operation. Under that constraint, the highest-priority work is not production authentication or horizontal scaling. It is preserving local workflow continuity, avoiding local data loss, and making the backend resilient enough for a single user running real LLM workflows on one machine.
 
-The most important confirmed issue is assessment recommendation persistence. The application can complete an assessment, move the user to `ASSESSMENT_COMPLETE`, and then lose the recommendations on server restart because they live only in process memory. Since the style-selection page disables selection until recommendations are present, this can block the user from continuing.
+The highest-priority issue from this report, assessment recommendation persistence, has been resolved. The application now persists generated assessment recommendations to SQLite and reloads them when re-emitting recommendations after reconnect/restart, so a user at `ASSESSMENT_COMPLETE` is no longer stranded at style selection solely because the in-memory cache was lost.
 
 ## Prioritized Remediation Backlog
 
@@ -25,7 +25,7 @@ The most important confirmed issue is assessment recommendation persistence. The
 
 | Issue | Verdict | Local relevance | Evidence | Recommended action |
 | --- | --- | --- | --- | --- |
-| Assessment recommendations are process-local only | Confirmed | High. A local container restart, code reload, or crash can strand a user at style selection. | `ResponseHandler` stores recommendations in `_assessment_recommendations` and `emit_assessment_recommendations()` returns silently when absent. `assessment_recommendations_repo.py` exists, but `MigrationService._get_migrations()` only registers migrations 1 and 2, and the initial schema does not create `assessment_recommendations`. | Add migration for `assessment_recommendations`; expose save/get methods through `TrioDatabaseService`; persist recommendations when generated; fall back to DB lookup before re-emitting them. Add a regression test for reconnect after `ASSESSMENT_COMPLETE` with an empty in-memory cache. |
+| Assessment recommendations are process-local only | Solved | High. This previously allowed a local container restart, code reload, or crash to strand a user at style selection. | Migration 3 now creates `assessment_recommendations`, the initial schema includes the table, `TrioDatabaseService` exposes save/get methods, generated recommendations are persisted, and `emit_assessment_recommendations()` falls back to SQLite before returning. | Completed. Regression coverage verifies SQLite round-trip, schema presence, assessment-job persistence, and re-emission with an empty in-memory cache. |
 
 ### P1 - High-Value Local Reliability
 
@@ -66,10 +66,10 @@ The most important confirmed issue is assessment recommendation persistence. The
 
 The following code and docs were used to verify the assessment claims:
 
-- `src/psychoanalyst_app/orchestration/helpers/response_handler.py`: in-memory assessment recommendation cache and re-emission behavior.
-- `src/psychoanalyst_app/orchestration/helpers/response_jobs.py`: assessment job stores generated recommendations only in the provided in-memory dict.
-- `src/psychoanalyst_app/services/db/repos/assessment_recommendations_repo.py`: unused repository functions for recommendation persistence.
-- `src/psychoanalyst_app/services/migration_service.py`: migrations 1 and 2 only; no `assessment_recommendations` table; no WAL setup.
+- `src/psychoanalyst_app/orchestration/helpers/response_handler.py`: in-memory assessment recommendation cache, persistence on direct selection responses, and SQLite fallback during re-emission.
+- `src/psychoanalyst_app/orchestration/helpers/response_jobs.py`: assessment job stores generated recommendations in memory, persists them to SQLite, and emits them over WebSocket.
+- `src/psychoanalyst_app/services/db/repos/assessment_recommendations_repo.py`: repository functions used for recommendation persistence.
+- `src/psychoanalyst_app/services/migration_service.py`: migration 3 and the initial schema create `assessment_recommendations`; WAL setup remains absent.
 - `src/psychoanalyst_app/services/db/executor.py`: SQLite pool with foreign keys enabled, but no WAL or locked-write retry policy.
 - `src/psychoanalyst_app/orchestration/helpers/active_sessions.py` and `session_lifecycle.py`: process-local active session registry and session creation/rebinding behavior.
 - `src/psychoanalyst_app/api/request_utils.py` and `api/ws_handler.py`: user/session validation model based on explicit `user_id` and active session ownership, not authentication.
@@ -81,17 +81,16 @@ The following code and docs were used to verify the assessment claims:
 
 ## Recommended Implementation Order
 
-1. Persist assessment recommendations and add reconnect regression coverage.
-2. Enable SQLite WAL and locked-write retry/backoff.
-3. Add a local backup/export/restore procedure.
-4. Improve reconnect state synchronization around active sessions and assessment/style-selection state.
-5. Harden intake completion with structured validation.
-6. Improve user-facing LLM failure recovery.
-7. Revisit local security hardening only after the core local workflow is stable.
+1. Enable SQLite WAL and locked-write retry/backoff.
+2. Add a local backup/export/restore procedure.
+3. Improve reconnect state synchronization around active sessions and assessment/style-selection state.
+4. Harden intake completion with structured validation.
+5. Improve user-facing LLM failure recovery.
+6. Revisit local security hardening only after the core local workflow is stable.
 
 ## Testing Recommendations
 
-- Add a backend integration test that simulates `ASSESSMENT_COMPLETE` with empty in-memory recommendation cache and verifies recommendations can still be emitted from SQLite.
+- Completed: backend/unit regression coverage now verifies assessment recommendation SQLite round-trip and re-emission with an empty in-memory cache.
 - Add DB tests that verify WAL/busy timeout setup for file-backed SQLite connections.
 - Add unit tests for intake topic detection false positives and the new completion gate.
 - Add frontend or integration coverage for reconnecting to style selection after page refresh/server restart.
