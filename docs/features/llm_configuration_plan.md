@@ -261,7 +261,7 @@ REFLECTION_MODEL=gemini-2.5-flash
 ```markdown
 ### Multi-Model Support
 
-The application supports configuring different Gemini models for different agents:
+The application supports configuring different LLM models for different agents:
 - Each agent can use a dedicated model via environment variables
 - Falls back to `MODEL_NAME` if agent-specific model is not configured
 - Enables cost optimization by using cheaper models for simpler tasks

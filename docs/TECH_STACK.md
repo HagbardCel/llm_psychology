@@ -112,27 +112,31 @@ This document outlines the technologies used in the Virtual LLM-Driven Psychoana
 
 ### AI/ML Services
 
-#### Google Gemini API (gemini-2.5-flash)
+#### Configurable LLM Providers
 **Purpose:** Large Language Model for therapeutic conversations
-**API:** Google AI Studio / Vertex AI
+**APIs:** Google Gemini, Ollama, and OpenAI-compatible local servers such as LM Studio
 **Rationale:**
 - High-quality conversational AI
 - Streaming response support
-- Reasonable pricing
-- Good safety filters for therapeutic context
-- Function calling support
+- Gemini supports hosted models and native structured output
+- Ollama and LM Studio support private local inference for development and testing
+- Local providers avoid external API calls but require user-managed model quality,
+  hardware, and safety review
 
 **Alternative Considerations:**
 - OpenAI GPT-4: More expensive, similar quality
 - Anthropic Claude: Good alternative, different API
-- Local models: Privacy benefits but higher resource requirements
+- Local models: Privacy benefits but higher resource requirements and less
+  consistent structured output
 
 **Multi-Model Support:**
-The application supports configuring different Gemini models for different agents:
+The application supports configuring different models for different agents:
 - Each agent can use a dedicated model via environment variables
 - Falls back to `MODEL_NAME` if agent-specific model is not configured
 - Enables cost optimization by using cheaper models for simpler tasks
 - Example: Use `gemini-2.5-flash` for intake, `gemini-2.5-pro` for therapy
+- Select the backend with `LLM_PROVIDER=gemini|ollama|lmstudio|openai_compatible`
+  and optionally `LLM_BASE_URL`.
 
 #### Sentence Transformers
 **Purpose:** Text embeddings for RAG

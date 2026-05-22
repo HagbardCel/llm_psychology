@@ -59,6 +59,57 @@ make validate-schemas
 make generate-schemas
 ```
 
+## Docker-First Test Commands
+Run tests through Docker; do not run Python or Node directly on the host.
+
+### Default Deterministic Tests
+By default, tests use mocked LLM services and skip tests marked `real_llm`.
+Use these for normal development and pre-commit checks:
+
+```bash
+make docker-test-one TEST=tests/unit/test_llm_service.py
+make docker-test
+make test-validate
+```
+
+Equivalent direct pytest-in-Docker form:
+
+```bash
+docker compose --profile test run --rm test pytest tests/unit/test_llm_service.py
+```
+
+### Real LLM Tests
+Real LLM tests are marked `real_llm` and are skipped unless pytest receives
+`--no-mocks`. Use this only when the required API keys or local model servers
+are available:
+
+```bash
+docker compose --profile test run --rm test pytest -m real_llm --no-mocks
+```
+
+For a single real-LLM test through the Makefile, include `--no-mocks` in `TEST`:
+
+```bash
+make docker-test-one TEST="tests/real_llm/test_file.py --no-mocks"
+```
+
+### Local LM Studio Smoke Test
+The LM Studio smoke test is intentionally double opt-in:
+- `--no-mocks` disables the global `real_llm` skip.
+- `RUN_LMSTUDIO_SMOKE=1` confirms that the test should call a host-local model.
+
+Start LM Studio on the host with the OpenAI-compatible server listening on
+`localhost:1234`, then run:
+
+```bash
+docker compose --profile test run --rm \
+  -e RUN_LMSTUDIO_SMOKE=1 \
+  test pytest tests/real_llm/test_lmstudio_local_smoke.py --no-mocks
+```
+
+The test container reaches the host service at
+`http://host.docker.internal:1234/v1`.
+
 ## Governance
 Documentation policy, metadata requirements, and review cadence:
 

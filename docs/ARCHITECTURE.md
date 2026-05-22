@@ -304,11 +304,14 @@ Services provide low-level functionality to the system.
 
 #### LLMService (`src/psychoanalyst_app/services/llm_service.py`)
 
-**Purpose**: Google Gemini API integration
+**Purpose**: LLM provider integration for Gemini, Ollama, and OpenAI-compatible
+local servers such as LM Studio
 
 **Features**:
 - Streaming response generation
 - Context-aware prompts
+- Provider selection via configuration
+- Native Gemini structured output and JSON-validated local structured output
 - Token management
 - Error handling and retries
 
