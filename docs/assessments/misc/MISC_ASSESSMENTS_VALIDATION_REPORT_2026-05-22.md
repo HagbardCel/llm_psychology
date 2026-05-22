@@ -31,7 +31,7 @@ The highest-priority issue from this report, assessment recommendation persisten
 
 | Issue | Verdict | Local relevance | Evidence | Recommended action |
 | --- | --- | --- | --- | --- |
-| SQLite write resilience is weak | Confirmed, but narrower than the assessments state | Medium-high. A single local user can still trigger overlapping writes through chat persistence plus assessment/reflection/enrichment jobs. | Connections enable foreign keys only. No `PRAGMA journal_mode=WAL` or `synchronous=NORMAL` is set in `migration_service.py` or `services/db/executor.py`. The executor uses a pool of SQLite connections, but there is no explicit retry/backoff for `sqlite3.OperationalError: database is locked`. | Enable WAL on startup/migration for file-backed DBs, set `busy_timeout`, and add a small retry helper for locked write transactions. Keep SQLite; PostgreSQL is not needed for the current local target. |
+| SQLite write resilience is weak | Solved | Medium-high. A single local user can still trigger overlapping writes through chat persistence plus assessment/reflection/enrichment jobs, but the local SQLite setup is now more resilient. | Migration and pooled runtime connections apply shared SQLite pragmas: foreign keys, `busy_timeout`, and WAL plus `synchronous=NORMAL` for file-backed DBs. `TrioSQLiteExecutor.run_sync()` retries transient locked/busy `sqlite3.OperationalError` cases with rollback and backoff. | Completed. Regression coverage verifies file-backed WAL/synchronous/busy-timeout setup, migration connection pragmas, locked-error retry, and non-lock errors remaining non-retried. |
 | Local backup/export/restore is absent | Confirmed | Medium-high. The app stores therapy transcripts and plans in a local SQLite file; laptop failure or accidental deletion loses the user history. | No active backup or restore mechanism was found in `src/`; only legacy/archive docs mention backups. Current database path defaults to `data/psychoanalyst.db`. | Add a documented local backup procedure first. A later implementation can provide a Docker command or small app command that safely copies the SQLite DB using SQLite backup APIs. Avoid cloud backup recommendations for the local-only setup. |
 
 ### P2 - Important But Not Immediate
@@ -69,8 +69,8 @@ The following code and docs were used to verify the assessment claims:
 - `src/psychoanalyst_app/orchestration/helpers/response_handler.py`: in-memory assessment recommendation cache, persistence on direct selection responses, and SQLite fallback during re-emission.
 - `src/psychoanalyst_app/orchestration/helpers/response_jobs.py`: assessment job stores generated recommendations in memory, persists them to SQLite, and emits them over WebSocket.
 - `src/psychoanalyst_app/services/db/repos/assessment_recommendations_repo.py`: repository functions used for recommendation persistence.
-- `src/psychoanalyst_app/services/migration_service.py`: migration 3 and the initial schema create `assessment_recommendations`; WAL setup remains absent.
-- `src/psychoanalyst_app/services/db/executor.py`: SQLite pool with foreign keys enabled, but no WAL or locked-write retry policy.
+- `src/psychoanalyst_app/services/migration_service.py`: migration 3 and the initial schema create `assessment_recommendations`; migration connections now use the shared SQLite pragma setup.
+- `src/psychoanalyst_app/services/db/executor.py`: SQLite pool now applies shared pragmas and retries transient locked/busy write failures.
 - `src/psychoanalyst_app/orchestration/helpers/active_sessions.py` and `session_lifecycle.py`: process-local active session registry and session creation/rebinding behavior.
 - `src/psychoanalyst_app/api/request_utils.py` and `api/ws_handler.py`: user/session validation model based on explicit `user_id` and active session ownership, not authentication.
 - `frontend/src/services/websocketService.ts`: exponential reconnect without heartbeat, replay, or sequence ids.
@@ -81,17 +81,16 @@ The following code and docs were used to verify the assessment claims:
 
 ## Recommended Implementation Order
 
-1. Enable SQLite WAL and locked-write retry/backoff.
-2. Add a local backup/export/restore procedure.
-3. Improve reconnect state synchronization around active sessions and assessment/style-selection state.
-4. Harden intake completion with structured validation.
-5. Improve user-facing LLM failure recovery.
-6. Revisit local security hardening only after the core local workflow is stable.
+1. Add a local backup/export/restore procedure.
+2. Improve reconnect state synchronization around active sessions and assessment/style-selection state.
+3. Harden intake completion with structured validation.
+4. Improve user-facing LLM failure recovery.
+5. Revisit local security hardening only after the core local workflow is stable.
 
 ## Testing Recommendations
 
 - Completed: backend/unit regression coverage now verifies assessment recommendation SQLite round-trip and re-emission with an empty in-memory cache.
-- Add DB tests that verify WAL/busy timeout setup for file-backed SQLite connections.
+- Completed: DB tests now verify WAL/busy-timeout setup for file-backed SQLite connections and locked-error retry behavior.
 - Add unit tests for intake topic detection false positives and the new completion gate.
 - Add frontend or integration coverage for reconnecting to style selection after page refresh/server restart.
 
