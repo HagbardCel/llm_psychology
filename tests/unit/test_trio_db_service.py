@@ -9,7 +9,12 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
+from psychoanalyst_app.models.data_models import (
+    Message,
+    Session,
+    TherapyPlan,
+    UserProfile,
+)
 
 
 @pytest.fixture
@@ -263,12 +268,20 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
                 session_columns = {col[1] for col in cursor.fetchall()}
                 cursor.execute("PRAGMA table_info(user_profiles)")
                 profile_columns = {col[1] for col in cursor.fetchall()}
+                cursor.execute("PRAGMA table_info(assessment_recommendations)")
+                recommendation_columns = {col[1] for col in cursor.fetchall()}
                 return (
                     "session_briefing" in plan_columns
                     and "plan_id" in session_columns
                     and "session_summary" in session_columns
                     and "session_briefing" in session_columns
                     and "plan_id" in profile_columns
+                    and {
+                        "user_id",
+                        "intake_session_block_id",
+                        "recommendations",
+                        "created_at",
+                    }.issubset(recommendation_columns)
                 )
             finally:
                 conn.close()
@@ -315,3 +328,35 @@ async def test_update_session_reflection_persists_summary_and_briefing(
     assert stored is not None
     assert stored.session_summary == summary
     assert stored.session_briefing == briefing
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_assessment_recommendations_round_trip(test_db_service):
+    """Assessment recommendations persist for reconnect/restart recovery."""
+    profile = UserProfile(
+        user_id="assessment_user_1",
+        name="Assessment User",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    assert await test_db_service.save_user_profile(profile)
+
+    recommendations = [
+        {
+            "style_id": "cbt",
+            "explanation": "Structured practical support.",
+            "score": 0.92,
+        }
+    ]
+    saved = await test_db_service.save_assessment_recommendations(
+        user_id=profile.user_id,
+        intake_session_block_id="intake_session_1",
+        recommendations=recommendations,
+    )
+    assert saved is True
+
+    loaded = await test_db_service.get_latest_assessment_recommendations(
+        profile.user_id
+    )
+    assert loaded == recommendations

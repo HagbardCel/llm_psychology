@@ -15,6 +15,7 @@ from psychoanalyst_app.models.data_models import (
 from psychoanalyst_app.services.db.codecs import datetime_to_iso, iso_to_datetime
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.repos import (
+    assessment_recommendations_repo,
     enrichment_jobs_repo,
     llm_cache_repo,
     patient_analysis_repo,
@@ -259,6 +260,7 @@ class TrioDatabaseService:
             cursor = conn.cursor()
 
             # Clear all tables (order matters with foreign keys).
+            cursor.execute("DELETE FROM assessment_recommendations")
             cursor.execute("DELETE FROM session_enrichment_jobs")
             cursor.execute("DELETE FROM user_profile_history")
             cursor.execute("DELETE FROM patient_analysis")
@@ -299,6 +301,34 @@ class TrioDatabaseService:
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
+
+    # ========================================================================
+    # Assessment Recommendation Methods
+    # ========================================================================
+
+    async def save_assessment_recommendations(
+        self,
+        *,
+        user_id: str,
+        intake_session_block_id: str,
+        recommendations: list[dict[str, Any]],
+    ) -> bool:
+        """Persist generated assessment recommendations for recovery."""
+        return await assessment_recommendations_repo.save_assessment_recommendations(
+            self.executor,
+            user_id=user_id,
+            intake_session_block_id=intake_session_block_id,
+            recommendations=recommendations,
+            datetime_to_iso=datetime_to_iso,
+        )
+
+    async def get_latest_assessment_recommendations(
+        self, user_id: str
+    ) -> list[dict[str, Any]] | None:
+        """Fetch latest persisted assessment recommendations for a user."""
+        return await assessment_recommendations_repo.get_latest_assessment_recommendations(
+            self.executor, user_id
+        )
 
     # ========================================================================
     # LLM Cache Methods

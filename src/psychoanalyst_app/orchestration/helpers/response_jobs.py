@@ -60,6 +60,29 @@ async def send_assessment_failure(
     )
 
 
+async def persist_assessment_recommendations(
+    *,
+    service_container: Any,
+    user_id: str,
+    intake_session_id: str,
+    recommendations: list[dict[str, Any]],
+) -> None:
+    """Persist recommendations without blocking live workflow on failures."""
+    try:
+        trio_db_service = service_container.get("trio_db_service")
+        await trio_db_service.save_assessment_recommendations(
+            user_id=user_id,
+            intake_session_block_id=intake_session_id,
+            recommendations=recommendations,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to persist assessment recommendations for user %s",
+            user_id,
+            exc_info=True,
+        )
+
+
 def build_fallback_assessment_recommendations(
     service_container: Any,
 ) -> list[dict[str, Any]]:
@@ -247,6 +270,12 @@ async def run_assessment_job(
 
         if recommendations:
             assessment_recommendations[user_id] = recommendations
+            await persist_assessment_recommendations(
+                service_container=service_container,
+                user_id=user_id,
+                intake_session_id=intake_session_id,
+                recommendations=recommendations,
+            )
             await send_assessment_recommendations(
                 conversation_manager=conversation_manager,
                 session_id=target_session_id,

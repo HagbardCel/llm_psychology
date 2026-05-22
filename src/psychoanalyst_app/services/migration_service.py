@@ -97,6 +97,7 @@ class MigrationService:
         return [
             (1, self._migration_001_initial_schema),
             (2, self._migration_002_add_llm_cache),
+            (3, self._migration_003_add_assessment_recommendations),
         ]
 
     def _migration_001_initial_schema(self, conn: sqlite3.Connection):
@@ -242,6 +243,9 @@ class MigrationService:
             """
         )
 
+        # Assessment recommendations generated after intake.
+        self._create_assessment_recommendations_table(cursor)
+
         # Indexes.
         cursor.execute(
             """
@@ -350,5 +354,36 @@ class MigrationService:
             """
             CREATE INDEX IF NOT EXISTS idx_llm_cache_created_at
             ON llm_cache(created_at DESC)
+            """
+        )
+
+    def _migration_003_add_assessment_recommendations(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """Persist assessment recommendations for reconnect/restart recovery."""
+        cursor = conn.cursor()
+        self._create_assessment_recommendations_table(cursor)
+
+    def _create_assessment_recommendations_table(
+        self, cursor: sqlite3.Cursor
+    ) -> None:
+        """Create assessment recommendation table and lookup indexes."""
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assessment_recommendations (
+                user_id TEXT NOT NULL,
+                intake_session_block_id TEXT NOT NULL,
+                recommendations TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, intake_session_block_id),
+                FOREIGN KEY (user_id)
+                    REFERENCES user_profiles(user_id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assessment_recommendations_user_created
+            ON assessment_recommendations(user_id, created_at DESC)
             """
         )

@@ -181,9 +181,12 @@ async def test_assessment_job_emits_error_and_fallback_recommendations() -> None
     style_service = SimpleNamespace(
         get_available_styles=lambda: ["cbt", "freud", "jung"]
     )
+    db_service = AsyncMock()
     service_container = MagicMock()
     service_container.create_agent.return_value = assessment_agent
-    service_container.get.return_value = style_service
+    service_container.get.side_effect = lambda name: (
+        db_service if name == "trio_db_service" else style_service
+    )
     emitted_next_actions: list[tuple[str, str | None]] = []
 
     async def emit_next_action(user_id: str, session_id: str | None) -> None:
@@ -209,9 +212,46 @@ async def test_assessment_job_emits_error_and_fallback_recommendations() -> None
     assert "error" in message_types
     assert "assessment_recommendations" in message_types
     assert assessment_recommendations["user_1"][0]["style_id"] == "cbt"
+    db_service.save_assessment_recommendations.assert_awaited_once_with(
+        user_id="user_1",
+        intake_session_block_id="session_1",
+        recommendations=assessment_recommendations["user_1"],
+    )
     workflow_engine.transition.assert_any_await(
         "user_1",
         WorkflowState.ASSESSMENT_COMPLETE,
         event=WorkflowEvent.COMPLETE_ASSESSMENT,
     )
     assert assessment_jobs == set()
+
+
+@pytest.mark.trio
+async def test_response_handler_reemits_persisted_assessment_recommendations() -> None:
+    recommendations = [
+        {
+            "style_id": "cbt",
+            "explanation": "Structured practical support.",
+            "score": 0.9,
+        }
+    ]
+    db_service = AsyncMock()
+    db_service.get_latest_assessment_recommendations.return_value = recommendations
+    service_container = MagicMock()
+    service_container.get.return_value = db_service
+    handler = AgentResponseHandler(
+        service_container=service_container,
+        workflow_engine=AsyncMock(),
+        conversation_manager=AsyncMock(),
+        nursery=MagicMock(),
+        get_agent=AsyncMock(),
+    )
+
+    await handler.emit_assessment_recommendations("session_1", "user_1")
+
+    db_service.get_latest_assessment_recommendations.assert_awaited_once_with("user_1")
+    assert handler._assessment_recommendations["user_1"] == recommendations
+    handler.conversation_manager.send_json_message.assert_awaited_once()
+    args = handler.conversation_manager.send_json_message.await_args.args
+    assert args[0] == "session_1"
+    assert args[1] == "assessment_recommendations"
+    assert args[2]["recommendations"] == recommendations
