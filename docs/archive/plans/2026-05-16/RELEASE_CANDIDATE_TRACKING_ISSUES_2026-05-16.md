@@ -1,12 +1,18 @@
 ---
 owner: engineering
-status: active
+status: archived
 last_reviewed: 2026-05-16
 review_cycle_days: 14
-source_of_truth_for: Release-candidate follow-up issues after Docker finalization verification
+source_of_truth_for: Archived release-candidate follow-up closeout after Docker finalization verification
 ---
 
 # Release Candidate Tracking Issues (2026-05-16)
+
+## Archive Status
+
+This file is archived historical context. Every tracked item below was resolved
+or accepted as a release tolerance on 2026-05-16, and the current finalization
+baseline remains `docs/plans/PROJECT_FINALIZATION_BASELINE_2026-05-15.md`.
 
 ## Verification Context
 
@@ -18,9 +24,10 @@ The Docker-only release-candidate verification path passed on 2026-05-16 with:
 - deterministic Playwright E2E: 3 passed
 - `git diff --check`
 
-This file tracks non-blocking issues observed during that run. These should remain visible until they are either fixed, accepted as release tolerances, or moved into a dedicated dependency/security backlog.
+This file tracked non-blocking issues observed during that run. Each issue is
+now fixed or accepted as a release tolerance.
 
-## Issues To Track
+## Closed Issues
 
 ### P1 - Frontend Dependency Audit Findings - Resolved 2026-05-16
 

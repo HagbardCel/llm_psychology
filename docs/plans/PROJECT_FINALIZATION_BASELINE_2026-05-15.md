@@ -27,6 +27,8 @@ Use this file as the starting point for new remediation work. Historical plans m
 - Intake completion is now deterministic: terminal intake responses are direct static messages, so the backend no longer asks a final follow-up question immediately before advancing to assessment.
 - Console therapy style selection is verified as a first-class workflow action: recommendations are cached, the user can select by number or style id, and the console posts the selected style to the workflow endpoint.
 - The resolved `docs/current_issues` notes were archived under `docs/archive/current_issues/2026-05-16/`, so the current-issues folder no longer carries closed release-candidate problems.
+- Release validation now has generated-contract drift checks and a single Docker-only GitHub Actions gate that runs the same `make finalization-check` path used locally.
+- The resolved release-candidate tracking note was archived under `docs/archive/plans/2026-05-16/`, so `docs/plans/` contains only the active finalization baseline.
 
 ## Findings
 
@@ -49,11 +51,14 @@ The default backend path now uses `RAG_BACKEND=none` and no longer installs FAIS
 
 The optional RAG install risk was removed from release scope by deleting the active optional dependency files/package extra and making non-`none` RAG backends fail fast as future-extension work.
 
-### P1 - Documentation Drift and Planning Hygiene
+### P1 - Documentation Drift and Planning Hygiene - Resolved 2026-05-16
 
 The repository had many active files under `docs/plans` and `docs/todo`, including completed, superseded, and exploratory plans. This made it unclear which work remained authoritative.
 
 The clean-slate action archived those files into `docs/legacy/plans/clean-slate-2026-05-15/` and kept this single baseline in `docs/plans`.
+
+The post-verification release-candidate tracking note was also archived after
+all of its findings were resolved or accepted as release tolerances.
 
 ### P1 - Product Finalization Gaps - Resolved 2026-05-16
 
@@ -92,14 +97,21 @@ Targeted backend and documentation checks passed, and frontend type-check/build 
 
 The project now has a single Docker-only `make finalization-check` target that runs docs, schemas, architecture, backend tests, frontend type-check/build, frontend Vitest, and deterministic E2E in order. That target passed end to end on 2026-05-16.
 
+### P2 - Release Gate and Generated Contract Drift - Resolved 2026-05-16
+
+The local release-candidate gate was stronger than CI: the active GitHub Actions workflows were split across docs, architecture, and type-safety checks, and still used host Python/Node setup paths even though the project is Docker-only and the frontend requires Node 26 tooling.
+
+The gate now includes `make validate-generated-contracts`, which checks generated WebSocket protocol constants and frontend API types without rewriting tracked files. GitHub Actions now uses a single Docker-backed release-candidate workflow that runs `make finalization-check`, then verifies whitespace and stale generated diffs with `git diff --check` and `git diff --exit-code`.
+
 ## Recommended Next Sequence
 
 1. Keep `make finalization-check` green as the release-candidate gate.
 2. Keep the frontend dependency audit clean after the Node 26 and package refresh.
-3. Keep local FAISS RAG retrieval out of the release path until a future extension has its own dependency, image-size, and retrieval-quality validation plan.
-4. Recheck the accepted Node 26 Playwright `DEP0205` tolerance when upgrading Playwright beyond 1.60.0 or if CI begins failing on deprecation warnings.
-5. Keep `docs/current_issues/` reserved for active problems; move resolved issue notes to `docs/archive/current_issues/` with a status note.
-6. Update active docs and contracts in the same commits as future behavior changes.
+3. Keep generated contract drift checks in the release-candidate gate when changing schemas, WebSocket protocol constants, or frontend generated types.
+4. Keep local FAISS RAG retrieval out of the release path until a future extension has its own dependency, image-size, and retrieval-quality validation plan.
+5. Recheck the accepted Node 26 Playwright `DEP0205` tolerance when upgrading Playwright beyond 1.60.0 or if CI begins failing on deprecation warnings.
+6. Keep `docs/current_issues/` reserved for active problems; move resolved issue notes to `docs/archive/current_issues/` with a status note.
+7. Update active docs and contracts in the same commits as future behavior changes.
 
 ## Validation Snapshot
 
@@ -119,7 +131,9 @@ Known passing checks after the first finalization implementation wave:
 - Backend tests passed with 318 passed, 2 skipped, and 1 warning.
 - Frontend Vitest passed with 270 tests.
 - Deterministic Playwright E2E passed with 3 tests.
-- Remaining non-blocking issues are tracked in `docs/plans/RELEASE_CANDIDATE_TRACKING_ISSUES_2026-05-16.md`.
+- The temporary release-candidate tracking note later closed out all
+  non-blocking findings and was archived under
+  `docs/archive/plans/2026-05-16/`.
 
 2026-05-16 release-candidate signal cleanup update:
 
@@ -162,6 +176,31 @@ Known passing checks after the first finalization implementation wave:
 - `make validate-docs` passed with 11 active docs validated.
 - `git diff --check` passed.
 - Resolved current-issue notes were archived under `docs/archive/current_issues/2026-05-16/`.
+
+2026-05-16 release-gate consolidation update:
+
+- `make validate-generated-contracts` passed through Docker.
+- WebSocket generated files were confirmed up to date without rewriting tracked files.
+- Frontend generated API types were regenerated in a temporary file and matched the committed file after ignoring the volatile generation timestamp.
+- `make finalization-check` passed end to end through Docker with the new generated-contract gate included.
+- Backend tests passed with 315 passed and 6 skipped.
+- Frontend validation passed with no Vite large chunk warning; the largest emitted chunks remained `vendor-react` at approximately 395 kB and `vendor-mui` at approximately 389 kB minified.
+- Frontend Vitest passed with 270 tests.
+- Deterministic Playwright E2E passed with 3 tests; the accepted Node 26 Playwright `DEP0205` warnings still appear and remain an upstream tolerance.
+- GitHub Actions was consolidated to a Docker-only release-candidate workflow that runs `make finalization-check`, `git diff --check`, and `git diff --exit-code`.
+
+2026-05-16 planning closeout update:
+
+- The resolved release-candidate tracking note was moved from `docs/plans/`
+  to `docs/archive/plans/2026-05-16/` and marked `status: archived`.
+- `docs/plans/` now contains only this active finalization baseline.
+- `make validate-docs` passed with 11 active docs validated.
+- `make finalization-check` passed end to end through Docker.
+- Backend tests passed with 315 passed and 6 skipped.
+- Frontend Vitest passed with 270 tests.
+- Deterministic Playwright E2E passed with 3 tests; the accepted Node 26
+  Playwright `DEP0205` warnings still appear and remain an upstream tolerance.
+- `git diff --check` passed.
 
 ## Clean-Slate Archive
 
