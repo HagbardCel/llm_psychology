@@ -102,6 +102,21 @@ class TestServiceContainer:
         assert executor.connect_timeout_seconds == 12.0
         assert executor.pool_acquire_timeout_seconds == 12.0
 
+    def test_migration_service_uses_database_timeout_setting(self, tmp_path):
+        """Test migration service wiring honors DB timeout settings."""
+        db_path = str(tmp_path / "container_migration_service.db")
+        settings = Settings().model_copy(
+            update={
+                "DATABASE_PATH": db_path,
+                "DATABASE_POOL_TIMEOUT": 12,
+            }
+        )
+        container = ServiceContainer(settings)
+
+        migration_service = container.get("migration_service")
+
+        assert migration_service.busy_timeout_ms == 12000
+
     def test_llm_service_uses_logging_settings(self):
         """Test LLM service wiring honors payload logging settings."""
         settings = Settings(_env_file=None).model_copy(

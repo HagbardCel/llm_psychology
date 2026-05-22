@@ -296,6 +296,35 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
 
 @pytest.mark.trio
 @pytest.mark.unit
+async def test_migration_connection_configures_file_backed_sqlite(tmp_path):
+    """Migration connections should apply local SQLite resilience pragmas."""
+    from psychoanalyst_app.services.migration_service import MigrationService
+
+    migration_service = MigrationService(
+        str(tmp_path / "migration_pragmas.db"),
+        busy_timeout_seconds=9,
+    )
+
+    def _check_pragmas():
+        conn = migration_service._get_connection()
+        try:
+            return {
+                "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
+                "synchronous": conn.execute("PRAGMA synchronous").fetchone()[0],
+                "busy_timeout": conn.execute("PRAGMA busy_timeout").fetchone()[0],
+            }
+        finally:
+            conn.close()
+
+    pragmas = await trio.to_thread.run_sync(_check_pragmas)
+
+    assert pragmas["journal_mode"] == "wal"
+    assert pragmas["synchronous"] == 1
+    assert pragmas["busy_timeout"] == 9000
+
+
+@pytest.mark.trio
+@pytest.mark.unit
 async def test_update_session_reflection_persists_summary_and_briefing(
     test_db_service,
 ):
