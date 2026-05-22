@@ -140,6 +140,7 @@ class Settings(BaseSettings):
 
     # Database Configuration
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
+    DATABASE_BACKUP_DIR: str = Field(default="data/backups")
 
     # Retrieval Configuration
     RAG_BACKEND: str = Field(
