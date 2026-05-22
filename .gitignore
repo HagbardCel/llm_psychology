@@ -162,3 +162,5 @@ schemas/*.json
 !schemas/ws_protocol.json
 data/vector_db_usertest/data.pkl
 data/vector_db_usertest/faiss_index.bin
+.aider*
+.qwen/
