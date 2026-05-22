@@ -34,6 +34,17 @@ If you need to reset local databases during development, run:
 make clean-testdb
 ```
 
+To protect local therapy transcripts and plans before resetting or upgrading,
+create a SQLite backup:
+
+```bash
+make docker-db-backup
+```
+
+Backups are written to `data/backups/` with a manifest and can be verified with
+`make docker-db-backup-verify BACKUP=data/backups/<backup>.db`. See
+`docs/reference/ARCHITECTURE_OPERATIONS_GUIDE.md` for restore steps.
+
 ### 3. Build Dev Containers (Installs Dependencies Inside Docker)
 
 Run:

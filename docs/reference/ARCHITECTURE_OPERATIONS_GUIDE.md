@@ -43,6 +43,40 @@ make run-server
 docker compose --profile production up app
 ```
 
+## Local SQLite Backups
+
+The local database is stored at `data/psychoanalyst.db` by default. Backups must
+be created through SQLite's backup API instead of copying the file directly,
+because the app uses WAL mode and live writes may be split across sidecar files.
+
+Create a backup:
+
+```bash
+make docker-db-backup
+```
+
+The command writes a timestamped `.db` file and a `.manifest.json` file under
+`data/backups/`. The manifest records the source path, file size, SHA-256 hash,
+SQLite version, and `PRAGMA integrity_check` result.
+
+Verify a backup:
+
+```bash
+make docker-db-backup-verify BACKUP=data/backups/<backup>.db
+```
+
+Restore a backup:
+
+```bash
+make docker-down
+make docker-db-restore BACKUP=data/backups/<backup>.db
+```
+
+Restore verifies the backup first, creates a pre-restore safety backup of the
+current target database, replaces `data/psychoanalyst.db`, and removes stale
+SQLite `-wal`/`-shm` sidecar files. Keep backups on local encrypted storage if
+the database contains real sensitive data.
+
 ## Testing
 
 ### Test Structure
