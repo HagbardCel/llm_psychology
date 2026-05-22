@@ -11,6 +11,8 @@ authors = [{ name = "Psychoanalyst Team" }]
 dependencies = [
     "langchain==1.0.8",
     "langchain-google-genai",
+    "langchain-ollama==1.0.0",
+    "langchain-openai==1.0.3",
     "langchain-community",
     "python-dotenv",
     "pydantic",

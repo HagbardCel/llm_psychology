@@ -20,16 +20,27 @@ def get_or_create_llm_service_for_model(
     config_key: str = "DEFAULT",
 ) -> LLMService:
     """Get cached LLMService for model, or create and cache it."""
-    if model_name in container._llm_service_cache:
-        logger.debug("Reusing existing LLMService for model %s", model_name)
-        return container._llm_service_cache[model_name]
+    provider = container.config.LLM_PROVIDER
+    base_url = container.config.get_llm_base_url()
+    cache_key = (provider, model_name, base_url or "")
+    if cache_key in container._llm_service_cache:
+        logger.debug(
+            "Reusing existing LLMService for provider %s model %s",
+            provider,
+            model_name,
+        )
+        return container._llm_service_cache[cache_key]
 
-    if not container.config.GOOGLE_API_KEY:
+    if provider == "gemini" and not container.config.GOOGLE_API_KEY:
         raise ConfigurationError("GOOGLE_API_KEY must be configured")
 
     llm_service = LLMService(
-        api_key=container.config.GOOGLE_API_KEY,
+        provider=provider,
+        api_key=container.config.GOOGLE_API_KEY
+        if provider == "gemini"
+        else container.config.LLM_API_KEY,
         model_name=model_name,
+        base_url=base_url,
         rate_limit_enabled=container.config.LLM_RATE_LIMIT_ENABLED,
         requests_per_minute=container.config.LLM_REQUESTS_PER_MINUTE,
         burst_capacity=container.config.LLM_BURST_CAPACITY,
@@ -43,11 +54,14 @@ def get_or_create_llm_service_for_model(
         ),
     )
 
-    container._llm_service_cache[model_name] = llm_service
+    container._llm_service_cache[cache_key] = llm_service
     logger.info(
-        "Created new LLMService for model %s (source: %s), rate limiting: %s",
+        "Created new LLMService for provider %s model %s (source: %s), "
+        "base_url: %s, rate limiting: %s",
+        provider,
         model_name,
         config_key,
+        base_url or "<provider-default>",
         container.config.LLM_RATE_LIMIT_ENABLED,
     )
     return llm_service
@@ -67,7 +81,10 @@ def create_agent_llm_service(
     container: ServiceContainer, agent_type: str
 ) -> LLMService:
     """Create agent-specific LLM service."""
-    if not container.config.GOOGLE_API_KEY:
+    if (
+        container.config.LLM_PROVIDER == "gemini"
+        and not container.config.GOOGLE_API_KEY
+    ):
         raise ConfigurationError("GOOGLE_API_KEY must be configured")
     model_name = container.config.get_model_for_agent(agent_type)
     logger.debug(
