@@ -199,6 +199,107 @@ def test_generate_structured_output_uses_with_structured_output(fake_chat_model)
     assert fake_chat_model.with_structured_output_calls == [(_Schema, "json_schema")]
 
 
+def test_ollama_provider_builds_chat_ollama(monkeypatch):
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_chat_ollama(**kwargs):
+        captured.update(kwargs)
+        return _FakeChatModel()
+
+    monkeypatch.setattr(llm_module, "ChatOllama", _fake_chat_ollama)
+
+    service = LLMService(
+        provider="ollama",
+        model_name="llama3.1",
+        base_url="http://host.docker.internal:11434",
+        rate_limit_enabled=False,
+    )
+
+    assert service.provider == "ollama"
+    assert captured == {
+        "model": "llama3.1",
+        "temperature": 0.7,
+        "base_url": "http://host.docker.internal:11434",
+    }
+
+
+def test_lmstudio_provider_builds_openai_compatible_client(monkeypatch):
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_chat_openai(**kwargs):
+        captured.update(kwargs)
+        return _FakeChatModel()
+
+    monkeypatch.setattr(llm_module, "ChatOpenAI", _fake_chat_openai)
+
+    service = LLMService(
+        provider="lmstudio",
+        model_name="local-model",
+        base_url="http://host.docker.internal:1234/v1",
+        rate_limit_enabled=False,
+    )
+
+    assert service.provider == "lmstudio"
+    assert captured == {
+        "model": "local-model",
+        "api_key": "not-needed",
+        "temperature": 0.7,
+        "base_url": "http://host.docker.internal:1234/v1",
+    }
+
+
+def test_local_structured_output_parses_json(monkeypatch):
+    from pydantic import BaseModel
+
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    class _Schema(BaseModel):
+        ok: bool
+
+    fake = _FakeChatModel()
+    fake.response_content = '```json\n{"ok": true}\n```'
+    monkeypatch.setattr(llm_module, "ChatOllama", lambda **_kwargs: fake)
+
+    service = LLMService(
+        provider="ollama",
+        model_name="llama3.1",
+        rate_limit_enabled=False,
+    )
+
+    result = service.generate_structured_output("prompt", _Schema)
+
+    assert result == _Schema(ok=True)
+    assert fake.with_structured_output_calls == []
+    assert len(fake.invoke_calls) == 1
+    assert "Return only valid JSON" in fake.invoke_calls[0][0].content
+
+
+def test_local_structured_output_invalid_json_raises(monkeypatch):
+    from pydantic import BaseModel
+
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    class _Schema(BaseModel):
+        ok: bool
+
+    fake = _FakeChatModel()
+    fake.response_content = "not json"
+    monkeypatch.setattr(llm_module, "ChatOllama", lambda **_kwargs: fake)
+
+    service = LLMService(
+        provider="ollama",
+        model_name="llama3.1",
+        rate_limit_enabled=False,
+    )
+
+    with pytest.raises(LLMServiceError, match="structured output parsing failed"):
+        service.generate_structured_output("prompt", _Schema)
+
+
 def test_trio_rate_limiter_honors_capacity_and_rate():
     async def _main():
         limiter = TrioRateLimiter(rate=1.0, capacity=2.0)  # 1 token/sec, burst 2

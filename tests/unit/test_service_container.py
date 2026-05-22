@@ -126,6 +126,59 @@ class TestServiceContainer:
         assert llm_service.llm_call_logging_max_field_chars == 777
         assert llm_service.llm_call_logging_include_chunks is True
 
+    def test_local_llm_service_does_not_require_google_api_key(self):
+        """Test local providers can be wired without a Gemini key."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "llama3.1",
+                "LLM_PROVIDER": "ollama",
+                "LLM_BASE_URL": "http://ollama:11434",
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.provider == "ollama"
+        assert llm_service.model_name == "llama3.1"
+        assert llm_service.base_url == "http://ollama:11434"
+
+    def test_llm_service_cache_includes_provider_and_base_url(self):
+        """Test services are cached by provider/model/base URL, not model alone."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "shared-model",
+                "LLM_PROVIDER": "ollama",
+                "LLM_BASE_URL": "http://ollama:11434",
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            from psychoanalyst_app.container.factories.llm import (
+                get_or_create_llm_service_for_model,
+            )
+
+            container = ServiceContainer(settings)
+            first = container.get("llm_service")
+            container.config = settings.model_copy(
+                update={
+                    "LLM_PROVIDER": "lmstudio",
+                    "LLM_BASE_URL": "http://lmstudio:1234/v1",
+                }
+            )
+            second = get_or_create_llm_service_for_model(container, "shared-model")
+
+        assert first is not second
+        assert first.provider == "ollama"
+        assert second.provider == "lmstudio"
+
     def test_container_clear(self, container):
         """Test clearing container."""
         # Add a service
