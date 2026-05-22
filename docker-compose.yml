@@ -363,6 +363,7 @@ services:
       - PYTHONPATH=/app/src
       - PYTHONUNBUFFERED=1
       - PYTEST_ARGS=${PYTEST_ARGS:-}
+      - RUN_LMSTUDIO_SMOKE=${RUN_LMSTUDIO_SMOKE:-}
     env_file:
       - .env.test
     command: pytest ${PYTEST_ARGS:-tests/}

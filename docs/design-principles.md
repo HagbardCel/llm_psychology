@@ -25,7 +25,7 @@ If you need deeper detail on a specific area, this document links to the canonic
 - Domain Model vs Wire Model (Backend)
 - Persistence & Data Integrity (SQLite)
 - Workflow, Sessions, and Time
-- LLM Integration (Gemini via LangChain)
+- LLM Integration (Configurable LangChain providers)
 - Prompts, Styles, and RAG
 - WebSocket Protocol (Realtime Chat)
 - HTTP API Design
@@ -233,18 +233,18 @@ Session time tracking is derived from `ConversationContext`:
 
 ---
 
-## LLM Integration (Gemini via LangChain)
+## LLM Integration (Configurable LangChain providers)
 
 ### LLMService responsibilities
 `src/psychoanalyst_app/services/llm_service.py` encapsulates:
-- calling Gemini through `langchain_google_genai.ChatGoogleGenerativeAI`
+- calling Gemini, Ollama, or OpenAI-compatible local providers through LangChain
 - rate limiting via a Trio token bucket (`TrioRateLimiter`)
 - two output modes:
   - free-text streaming (`stream_response(...)`)
   - typed structured outputs (`generate_structured_output(...)` / async variant)
 
 Design rules:
-- Prefer structured outputs (Pydantic schema / JSON schema) for internal analysis, plan updates, and enrichment. Avoid “JSON scraping” from plain text.
+- Prefer structured outputs (Pydantic schema / JSON schema) for internal analysis, plan updates, and enrichment. Gemini uses native schema support; local providers use prompt-constrained JSON followed by Pydantic validation.
 - If you need streaming, bridge the blocking iterator via `src/psychoanalyst_app/utils/trio_streaming.py` rather than buffering the full response.
 
 ### Per-agent model selection

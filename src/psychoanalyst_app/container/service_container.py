@@ -91,8 +91,8 @@ class ServiceContainer:
         self._lock = RLock()
         self._initialized = False
 
-        # Cache for LLMService instances by model name
-        self._llm_service_cache: dict[str, Any] = {}
+        # Cache for LLMService instances by provider/model/base URL.
+        self._llm_service_cache: dict[tuple[str, str, str], Any] = {}
 
         logger.info("Initializing ServiceContainer")
         self._setup_factories()

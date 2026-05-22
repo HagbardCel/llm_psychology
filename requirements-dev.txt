@@ -132,6 +132,10 @@ langchain-core==1.1.0
     #   langgraph-prebuilt
 langchain-google-genai==3.1.0
     # via -r requirements.in
+langchain-ollama==1.0.0
+    # via -r requirements.in
+langchain-openai==1.0.3
+    # via -r requirements.in
 langchain-text-splitters==1.0.0
     # via langchain-classic
 langgraph==1.0.3

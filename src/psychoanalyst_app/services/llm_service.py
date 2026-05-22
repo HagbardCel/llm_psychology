@@ -23,6 +23,19 @@ try:
 except Exception:  # pragma: no cover - optional import fallback
     ResourceExhausted = None
 
+try:
+    from langchain_ollama import ChatOllama
+except Exception:  # pragma: no cover - optional dependency fallback
+    ChatOllama = None
+
+try:
+    from langchain_openai import ChatOpenAI
+except Exception:  # pragma: no cover - optional dependency fallback
+    ChatOpenAI = None
+
+
+SUPPORTED_LLM_PROVIDERS = {"gemini", "ollama", "lmstudio", "openai_compatible"}
+
 
 def _get_llm_call_logger() -> logging.Logger:
     llm_logger = logging.getLogger(LLM_CALL_LOGGER_NAME)
@@ -102,6 +115,8 @@ class LLMService:
         api_key: str | None = None,
         model_name: str = "",
         api_keys: list[str] | None = None,
+        provider: str = "gemini",
+        base_url: str | None = None,
         rate_limit_enabled: bool = True,
         requests_per_minute: float = 4.0,
         burst_capacity: int = 2,
@@ -113,9 +128,11 @@ class LLMService:
         """Initialize the LLM service with optional rate limiting.
 
         Args:
-            api_key: Google Gemini API key
+            api_key: Provider API key. Required for Gemini, optional locally.
             model_name: Name of the LLM model to use
             api_keys: Optional ordered list of API keys for quota rotation
+            provider: LLM provider: gemini, ollama, lmstudio, or openai_compatible
+            base_url: Optional base URL for local/OpenAI-compatible providers
             rate_limit_enabled: Enable rate limiting (default: True)
             requests_per_minute: Max requests per minute (default: 4.0)
             burst_capacity: Max concurrent requests (default: 2)
@@ -127,11 +144,20 @@ class LLMService:
         self.model_name = model_name
         if not self.model_name:
             raise ValueError("model_name must be provided")
+        self.provider = provider.strip().lower()
+        if self.provider not in SUPPORTED_LLM_PROVIDERS:
+            supported = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+            raise ValueError(
+                f"Unsupported LLM provider: {provider}. Use one of: {supported}"
+            )
+        self.base_url = base_url
         configured_keys = [key for key in (api_keys or []) if key]
         if not configured_keys and api_key:
             configured_keys = [api_key]
-        if not configured_keys:
+        if not configured_keys and self.provider == "gemini":
             raise ValueError("At least one LLM API key must be configured")
+        if not configured_keys:
+            configured_keys = ["local"]
 
         self._api_keys = configured_keys
         self._active_key_index = 0
@@ -161,10 +187,38 @@ class LLMService:
             self._rate_limiter = None
             logger.info("Rate limiting disabled")
 
-    def _build_llm_client(self, api_key: str) -> ChatGoogleGenerativeAI:
-        return ChatGoogleGenerativeAI(
-            model=self.model_name, google_api_key=api_key, temperature=0.7
-        )
+    def _build_llm_client(self, api_key: str) -> Any:
+        if self.provider == "gemini":
+            return ChatGoogleGenerativeAI(
+                model=self.model_name, google_api_key=api_key, temperature=0.7
+            )
+
+        if self.provider == "ollama":
+            if ChatOllama is None:
+                raise ValueError(
+                    "langchain-ollama must be installed for Ollama support"
+                )
+            kwargs: dict[str, Any] = {"model": self.model_name, "temperature": 0.7}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            return ChatOllama(**kwargs)
+
+        if self.provider in {"lmstudio", "openai_compatible"}:
+            if ChatOpenAI is None:
+                raise ValueError(
+                    "langchain-openai must be installed for OpenAI-compatible "
+                    "provider support"
+                )
+            kwargs = {
+                "model": self.model_name,
+                "api_key": api_key if api_key != "local" else "not-needed",
+                "temperature": 0.7,
+            }
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            return ChatOpenAI(**kwargs)
+
+        raise ValueError(f"Unsupported LLM provider: {self.provider}")
 
     def _is_quota_exhausted_error(self, error: Exception) -> bool:
         if ResourceExhausted is not None and isinstance(error, ResourceExhausted):
@@ -280,6 +334,7 @@ class LLMService:
 
         record = {
             "event": event,
+            "provider": self.provider,
             "model": self.model_name,
             **self._sanitize_payload(payload),
         }
@@ -437,12 +492,10 @@ class LLMService:
         *,
         method: str = "json_schema",
     ) -> Any:
-        """
-        Generate a structured output using Gemini's native structured output support.
+        """Generate a structured output and normalize it to the requested schema."""
+        if self.provider != "gemini":
+            return self._generate_structured_output_from_json_prompt(prompt, schema)
 
-        This avoids JSON scraping/parsing by relying on `response_mime_type` +
-        schema-guided decoding inside the Gemini API / LangChain integration.
-        """
         schema_payload: dict[str, Any]
         if isinstance(schema, type) and issubclass(schema, BaseModel):
             schema_payload = {"model": schema.__name__}
@@ -484,6 +537,72 @@ class LLMService:
             },
         )
         return response
+
+    def _generate_structured_output_from_json_prompt(
+        self,
+        prompt: str,
+        schema: dict | type[BaseModel],
+    ) -> Any:
+        """Use prompt-constrained JSON for providers without native schema support."""
+        schema_payload: dict[str, Any]
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            schema_payload = schema.model_json_schema()
+        else:
+            schema_payload = schema
+
+        structured_prompt = (
+            f"{prompt}\n\n"
+            "Return only valid JSON that conforms to this JSON Schema. "
+            "Do not include markdown fences, commentary, or extra text.\n\n"
+            f"JSON Schema:\n{json.dumps(schema_payload, ensure_ascii=True)}"
+        )
+        self._log_llm_call(
+            "request",
+            {
+                "call_type": "generate_structured_output",
+                "prompt": structured_prompt,
+                "schema": schema_payload,
+            },
+        )
+        response = self._invoke_with_key_rotation(
+            [HumanMessage(content=structured_prompt)]
+        )
+        content = getattr(response, "content", response)
+        if not isinstance(content, str):
+            content = str(content)
+        content = self._strip_json_markdown(content)
+
+        try:
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                parsed = schema.model_validate_json(content)
+            else:
+                parsed = json.loads(content)
+        except Exception as error:
+            raise LLMServiceError(
+                "LLM structured output parsing failed: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+        self._log_llm_call(
+            "response",
+            {
+                "call_type": "generate_structured_output",
+                "response": parsed,
+            },
+        )
+        return parsed
+
+    @staticmethod
+    def _strip_json_markdown(content: str) -> str:
+        stripped = content.strip()
+        if not stripped.startswith("```"):
+            return stripped
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
 
     def create_prompt_template(
         self, template: str, input_variables: list[str]

@@ -23,6 +23,26 @@ class Settings(BaseSettings):
     APP_ENV: str = Field(default="production")
 
     # LLM Configuration
+    LLM_PROVIDER: str = Field(
+        default="gemini",
+        description=(
+            "LLM provider to use: gemini, ollama, lmstudio, or openai_compatible"
+        ),
+    )
+    LLM_BASE_URL: str = Field(
+        default="",
+        description=(
+            "Optional LLM provider base URL. Local Docker defaults use "
+            "host.docker.internal for Ollama and LM Studio."
+        ),
+    )
+    LLM_API_KEY: str = Field(
+        default="",
+        description=(
+            "Generic API key for OpenAI-compatible providers. Local providers "
+            "can leave this unset."
+        ),
+    )
     GOOGLE_API_KEY: str = Field(default="", description="Primary API key for Gemini")
     GEMINI_API_KEY: str = Field(
         default="", description="Deprecated alias for GOOGLE_API_KEY"
@@ -85,6 +105,18 @@ class Settings(BaseSettings):
         """Apply compatibility shims after settings load."""
         if not self.GOOGLE_API_KEY and self.GEMINI_API_KEY:
             object.__setattr__(self, "GOOGLE_API_KEY", self.GEMINI_API_KEY)
+        normalized_provider = self.LLM_PROVIDER.strip().lower()
+        object.__setattr__(self, "LLM_PROVIDER", normalized_provider)
+
+    def get_llm_base_url(self) -> str | None:
+        """Resolve the configured/default base URL for the selected LLM provider."""
+        if self.LLM_BASE_URL:
+            return self.LLM_BASE_URL
+        if self.LLM_PROVIDER == "ollama":
+            return "http://host.docker.internal:11434"
+        if self.LLM_PROVIDER == "lmstudio":
+            return "http://host.docker.internal:1234/v1"
+        return None
 
     def get_model_for_agent(self, agent_type: str) -> str:
         """Resolve the configured model for a given agent."""

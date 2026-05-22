@@ -90,6 +90,33 @@ def test_config_class_fields(monkeypatch):
     assert settings.REFLECTION_MODEL == ""
 
 
+def test_local_llm_provider_config_defaults(monkeypatch):
+    """Test local provider config normalization and default base URLs."""
+    _clear_agent_model_env(monkeypatch)
+    monkeypatch.setenv("MODEL_NAME", "llama3.1")
+    monkeypatch.setenv("LLM_PROVIDER", "OLLAMA")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    settings = Settings()
+
+    assert settings.LLM_PROVIDER == "ollama"
+    assert settings.get_llm_base_url() == "http://host.docker.internal:11434"
+
+
+def test_lmstudio_provider_config_default_base_url(monkeypatch):
+    """Test LM Studio gets its OpenAI-compatible default URL."""
+    _clear_agent_model_env(monkeypatch)
+    monkeypatch.setenv("MODEL_NAME", "local-model")
+    monkeypatch.setenv("LLM_PROVIDER", "lmstudio")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    settings = Settings()
+
+    assert settings.get_llm_base_url() == "http://host.docker.internal:1234/v1"
+
+
 def test_default_llm_service_unchanged(monkeypatch):
     """Test that default llm_service still uses MODEL_NAME."""
     _clear_agent_model_env(monkeypatch)
