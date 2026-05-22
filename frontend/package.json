@@ -25,7 +25,8 @@
     "test:e2e:report": "playwright show-report",
     "generate:types": "npm run generate:schemas && npm run generate:ts",
     "generate:schemas": "node scripts/generate-schemas.js",
-    "generate:ts": "node scripts/generate-types.js"
+    "generate:ts": "node scripts/generate-types.js",
+    "check:generated-types": "node scripts/generate-types.js --check"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

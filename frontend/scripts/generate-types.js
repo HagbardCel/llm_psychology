@@ -7,7 +7,16 @@
  */
 
 import { execSync } from 'child_process';
-import { readdirSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -19,8 +28,8 @@ const DEFAULT_SCHEMA_DIRS = [
   join(__dirname, '../schemas'), // frontend container root
 ];
 const SCHEMAS_DIR = pickSchemaDir();
-const OUTPUT_FILE = join(__dirname, '../src/types/generated/api.ts');
-const OUTPUT_DIR = dirname(OUTPUT_FILE);
+const COMMITTED_OUTPUT_FILE = join(__dirname, '../src/types/generated/api.ts');
+const CHECK_MODE = process.argv.includes('--check');
 
 function pickSchemaDir() {
   const candidates = [
@@ -71,22 +80,23 @@ function findSchemaFiles() {
 /**
  * Generate TypeScript types using quicktype
  */
-function generateTypes(schemaFiles) {
+function generateTypes(schemaFiles, outputFile) {
   console.log('🔧 Generating TypeScript types from JSON Schemas...');
   console.log(`   Input: ${SCHEMAS_DIR}`);
-  console.log(`   Output: ${OUTPUT_FILE}`);
+  console.log(`   Output: ${outputFile}`);
   console.log(`   Schema files: ${schemaFiles.length}`);
 
   // Ensure output directory exists
-  if (!existsSync(OUTPUT_DIR)) {
-    mkdirSync(OUTPUT_DIR, { recursive: true });
+  const outputDir = dirname(outputFile);
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
   }
 
   try {
     // Build quicktype command
     const schemaArgs = schemaFiles.join(' ');
     const command = `npx quicktype ${schemaArgs} ` +
-      `-o ${OUTPUT_FILE} ` +
+      `-o ${outputFile} ` +
       `--lang typescript ` +
       `--src-lang schema ` +
       `--just-types ` +
@@ -99,10 +109,10 @@ function generateTypes(schemaFiles) {
     execSync(command, { stdio: 'inherit' });
 
     // Add header comment to generated file
-    addHeaderComment();
+    addHeaderComment(outputFile);
 
     console.log('✓ TypeScript types generated successfully');
-    console.log(`  Output: ${OUTPUT_FILE}`);
+    console.log(`  Output: ${outputFile}`);
   } catch (error) {
     console.error('✗ Failed to generate TypeScript types');
     console.error(error.message);
@@ -113,8 +123,8 @@ function generateTypes(schemaFiles) {
 /**
  * Add header comment to generated file
  */
-function addHeaderComment() {
-  const generatedCode = readFileSync(OUTPUT_FILE, 'utf-8');
+function addHeaderComment(outputFile) {
+  const generatedCode = readFileSync(outputFile, 'utf-8');
 
   const header = `/**
  * AUTO-GENERATED FILE - DO NOT EDIT
@@ -133,7 +143,47 @@ function addHeaderComment() {
 
 `;
 
-  writeFileSync(OUTPUT_FILE, header + generatedCode);
+  writeFileSync(outputFile, header + generatedCode);
+}
+
+function normalizeForComparison(content) {
+  return content.replace(
+    /^ \* Generated: .*$/m,
+    ' * Generated: <ignored>'
+  );
+}
+
+function checkTypes(schemaFiles) {
+  if (!existsSync(COMMITTED_OUTPUT_FILE)) {
+    console.error(`✗ Missing generated TypeScript API types: ${COMMITTED_OUTPUT_FILE}`);
+    process.exit(1);
+  }
+
+  const tmpDir = mkdtempSync(join(tmpdir(), 'psychoanalyst-generated-types-'));
+  const generatedOutput = join(tmpDir, 'api.ts');
+
+  try {
+    generateTypes(schemaFiles, generatedOutput);
+
+    const committed = normalizeForComparison(
+      readFileSync(COMMITTED_OUTPUT_FILE, 'utf-8')
+    );
+    const generated = normalizeForComparison(
+      readFileSync(generatedOutput, 'utf-8')
+    );
+
+    if (committed !== generated) {
+      console.error('✗ Generated TypeScript API types are out of date.');
+      console.error(
+        '  Run `docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts`.'
+      );
+      process.exit(1);
+    }
+
+    console.log('✓ Generated TypeScript API types are up to date');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -142,7 +192,12 @@ function addHeaderComment() {
 function main() {
   try {
     const schemaFiles = findSchemaFiles();
-    generateTypes(schemaFiles);
+    if (CHECK_MODE) {
+      checkTypes(schemaFiles);
+      return;
+    }
+
+    generateTypes(schemaFiles, COMMITTED_OUTPUT_FILE);
   } catch (error) {
     console.error('✗ Type generation failed');
     console.error(error.message);

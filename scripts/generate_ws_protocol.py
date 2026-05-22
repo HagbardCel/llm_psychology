@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+import difflib
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -205,32 +208,77 @@ def _render_typescript(
     return "\n".join(lines)
 
 
-def main() -> None:
+def _render_all() -> dict[Path, str]:
     version, client_types, server_types, connection_states, error_codes = _load_spec()
-    BACKEND_PATH.write_text(
-        _render_python(version, client_types, server_types), encoding="utf-8"
-    )
-    CONSOLE_PATH.write_text(
-        _render_console(
+    return {
+        BACKEND_PATH: _render_python(version, client_types, server_types),
+        CONSOLE_PATH: _render_console(
             version,
             client_types,
             server_types,
             connection_states,
             error_codes,
         ),
-        encoding="utf-8",
-    )
-    FRONTEND_PATH.write_text(
-        _render_typescript(
+        FRONTEND_PATH: _render_typescript(
             version,
             client_types,
             server_types,
             connection_states,
             error_codes,
         ),
-        encoding="utf-8",
+    }
+
+
+def _check_generated_files(rendered: dict[Path, str]) -> int:
+    drifted = False
+    for path, expected in rendered.items():
+        if not path.exists():
+            print(f"✗ Missing generated WebSocket protocol file: {path}")
+            drifted = True
+            continue
+
+        actual = path.read_text(encoding="utf-8")
+        if actual == expected:
+            continue
+
+        drifted = True
+        print(f"✗ WebSocket protocol file is out of date: {path}")
+        diff = difflib.unified_diff(
+            actual.splitlines(),
+            expected.splitlines(),
+            fromfile=f"{path} (committed)",
+            tofile=f"{path} (generated)",
+            lineterm="",
+        )
+        print("\n".join(diff))
+
+    if drifted:
+        print("\nRun `docker compose run --rm api python scripts/generate_ws_protocol.py`.")
+        return 1
+
+    print("✓ Generated WebSocket protocol files are up to date")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate WebSocket protocol constants from schemas/ws_protocol.json."
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate generated files without rewriting them.",
+    )
+    args = parser.parse_args(argv)
+
+    rendered = _render_all()
+    if args.check:
+        return _check_generated_files(rendered)
+
+    for path, content in rendered.items():
+        path.write_text(content, encoding="utf-8")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -105,12 +105,12 @@ export interface UserProfile {
 
 ### 2. Automatic Synchronization
 
-Type generation happens automatically:
+Type generation and drift checks happen through Docker:
 
 - **During development**: `make ui-web` (frontend container)
-- **During build**: `docker compose run --rm frontend npm run build`
-- **In CI/CD**: GitHub Actions workflow
-- **On demand**: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts`
+- **During validation**: `make validate-generated-contracts`
+- **During release-candidate validation**: `make finalization-check`
+- **On demand**: `docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts`
 
 ### 3. Frontend Extensions (UI-only data)
 
@@ -319,10 +319,13 @@ docker compose run --rm api pytest tests/unit/test_schema_generation.py -v
 
 ```bash
 # Generate TypeScript types from schemas
-docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:types
 
 # Run type generation only (no schema generation)
-docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
+docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts
+
+# Validate committed generated API types without rewriting tracked files
+make validate-generated-contracts
 
 # Type check without building
 docker compose run --rm frontend npm run type-check
@@ -336,7 +339,7 @@ docker compose run --rm frontend npm test src/types/__tests__
 ```bash
 # Complete type generation pipeline
 make generate-schemas
-docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts
+docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts
 
 # Or let the build do it automatically
 docker compose run --rm frontend npm run build
@@ -398,7 +401,7 @@ it('accepts backend JSON without conversion', () => {
 
 **Solution**:
 ```bash
-docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types
+docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:types
 ```
 
 ### Type Mismatch Errors
@@ -406,7 +409,7 @@ docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:typ
 **Problem**: TypeScript errors after backend model changes
 
 **Solution**:
-1. Regenerate types: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types`
+1. Regenerate types: `docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:types`
 2. Check what changed: `git diff src/types/generated/api.ts`
 3. Update your code to match new types
 
@@ -432,8 +435,9 @@ docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:typ
 
 **Solution**:
 ```bash
-# Force regeneration
-docker compose run --rm -v "$PWD:/app" frontend sh -lc "rm -f src/types/generated/api.ts && npm run generate:types"
+# Validate first; regenerate only when drift is intentional.
+make validate-generated-contracts
+docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts
 ```
 
 ## Best Practices
@@ -443,7 +447,7 @@ docker compose run --rm -v "$PWD:/app" frontend sh -lc "rm -f src/types/generate
 - **Define API models in backend Pydantic**
 - **Use generated types for API data**
 - **Add JSDoc comments to Pydantic models** (they appear in TypeScript)
-- **Run type generation before committing**
+- **Run `make validate-generated-contracts` before committing API/WS contract changes**
 - **Keep API DTOs snake_case in the UI; convert only when deriving UI-specific state**
 - **Add lightweight type-safety tests for UI extensions**
 
@@ -452,28 +456,32 @@ docker compose run --rm -v "$PWD:/app" frontend sh -lc "rm -f src/types/generate
 - **Don't manually edit generated types** (`generated/api.ts`)
 - **Don't duplicate type definitions** between backend and frontend
 - **Don't use `any` for API data**
-- **Don't commit generated files** (they're in `.gitignore`)
+- **Don't manually edit committed generated files; regenerate them from schemas**
 - **Don't bypass type checking** with `as any`
 - **Don't rename API fields in-flight unless you truly need a derived UI model**
 
 ### Recommended Workflow
 
 1. **Backend change**: Modify Pydantic model
-2. **Generate schemas**: `make generate-schemas`
-3. **Frontend build**: `make ui-web` (auto-generates types in Docker)
+2. **Generate schemas and types**: `make generate-schemas`, then `docker compose run --rm -v "$PWD/schemas:/app/schemas" frontend npm run generate:ts`
+3. **Validate generated artifacts**: `make validate-generated-contracts`
 4. **Fix type errors**: Update frontend code as needed
 5. **Test**: Run tests to verify
-6. **Commit**: Commit source files (not generated)
+6. **Commit**: Commit source changes and intentionally regenerated artifacts together
 
-## CI/CD Integration
+## CI Integration
 
 ### GitHub Actions Workflow
 
-`.github/workflows/type-safety.yml` validates types:
+`.github/workflows/release-candidate-validation.yml` runs the same Docker-only
+release gate used locally:
 
-1. **Backend Job**: Generate and validate schemas
-2. **Frontend Job**: Generate TypeScript types and build
-3. **Consistency Job**: Run type validation tests
+1. `make finalization-check`
+2. `git diff --check`
+3. `git diff --exit-code`
+
+Generated schema, WebSocket protocol, and frontend API type drift is checked by
+`make validate-generated-contracts`, which is included in `make finalization-check`.
 
 ### Pre-commit Hooks
 

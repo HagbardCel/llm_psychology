@@ -2,7 +2,7 @@
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-docs validate-architecture finalization-check
+.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-generated-contracts validate-docs validate-architecture finalization-check
 
 export PYTHONPATH := src
 CONSOLE_UI_LOG ?= logs/console-ui.log
@@ -40,6 +40,7 @@ help:
 	@echo "  run-e2e           - Run deterministic e2e server via Docker"
 	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models (Docker)"
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
+	@echo "  validate-generated-contracts - Validate committed generated protocol/types (Docker)"
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
@@ -140,6 +141,7 @@ test-e2e:
 finalization-check:
 	$(MAKE) validate-docs
 	$(MAKE) validate-schemas
+	$(MAKE) validate-generated-contracts
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
 	$(MAKE) validate-frontend
@@ -261,6 +263,12 @@ generate-schemas:
 validate-schemas:
 	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/validate_schemas.py
+
+# Validate generated WebSocket constants and frontend API types without rewriting files.
+validate-generated-contracts:
+	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" -v "$(PWD)/frontend/src:/app/frontend/src" api \
+		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py --check
+	docker compose --profile test run --rm -v "$(PWD)/schemas:/app/schemas" --build frontend-test sh -c "npm ci && npm run check:generated-types"
 
 # Validate docs metadata and canonical docs index (Docker)
 validate-docs:
