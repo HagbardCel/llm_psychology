@@ -10,6 +10,7 @@ import sqlite3
 
 from psychoanalyst_app.models.data_models import PatientAnalysisVersion
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     PATIENT_ANALYSIS_COLUMNS,
     analysis_version_from_row,
@@ -158,6 +159,7 @@ def _sync_save_analysis_version(
         conn.rollback()
         return False
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error saving analysis: %s", exc, exc_info=True)
         conn.rollback()
         return False
@@ -221,6 +223,7 @@ def _sync_save_analysis_version_and_supersede(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error superseding analysis: %s", exc, exc_info=True)
         conn.rollback()
         return False
@@ -302,6 +305,7 @@ def _sync_mark_analysis_superseded(
         conn.commit()
         return cursor.rowcount > 0
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error marking analysis superseded: %s", exc, exc_info=True)
         conn.rollback()
         return False

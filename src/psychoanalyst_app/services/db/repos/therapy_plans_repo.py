@@ -9,6 +9,7 @@ from typing import Callable
 
 from psychoanalyst_app.models.data_models import TherapyPlan
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     THERAPY_PLAN_COLUMNS,
     dump_json,
@@ -67,6 +68,7 @@ def _sync_save_therapy_plan(conn, plan: TherapyPlan, datetime_to_iso) -> bool:
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
+        reraise_locked_database_error(exc)
         logger.error("Error saving therapy plan %s: %s", plan.plan_id, exc, exc_info=True)
         return False
 

@@ -5,6 +5,8 @@ from datetime import datetime
 
 import trio
 
+from psychoanalyst_app.services.db.sqlite_config import configure_connection
+
 logger = logging.getLogger(__name__)
 
 
@@ -13,7 +15,7 @@ class MigrationService:
     Service for handling database migrations.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, *, busy_timeout_seconds: float = 30.0):
         """
         Initialize the migration service.
 
@@ -21,19 +23,27 @@ class MigrationService:
             db_path: Path to the SQLite database file.
         """
         self.db_path = db_path
+        self.busy_timeout_seconds = busy_timeout_seconds
+        self.busy_timeout_ms = int(busy_timeout_seconds * 1000)
         self._is_uri = db_path.startswith("file:")
 
     def _get_connection(self) -> sqlite3.Connection:
         """Create a database connection."""
         if self._is_uri:
             conn = sqlite3.connect(
-                self.db_path, timeout=30.0, uri=True, check_same_thread=False
+                self.db_path,
+                timeout=self.busy_timeout_seconds,
+                uri=True,
+                check_same_thread=False,
             )
         else:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout_seconds)
 
-        # Ensure FK constraints behave as expected in SQLite.
-        conn.execute("PRAGMA foreign_keys = ON")
+        configure_connection(
+            conn,
+            db_path=self.db_path,
+            busy_timeout_ms=self.busy_timeout_ms,
+        )
         return conn
 
     async def run_migrations(self):

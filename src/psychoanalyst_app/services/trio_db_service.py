@@ -23,6 +23,7 @@ from psychoanalyst_app.services.db.repos import (
     therapy_plans_repo,
     users_repo,
 )
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.migration_service import MigrationService
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,7 @@ class TrioDatabaseService:
             return True
 
         except Exception as e:
+            reraise_locked_database_error(e)
             logger.error(f"Error clearing database: {e}", exc_info=True)
             return False
 

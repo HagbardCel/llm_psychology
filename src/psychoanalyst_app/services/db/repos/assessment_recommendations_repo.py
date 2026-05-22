@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import dump_json, load_json
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ def _sync_save_assessment_recommendations(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
+        reraise_locked_database_error(exc)
         logger.error(
             "Error saving assessment recommendations for user %s: %s",
             user_id,

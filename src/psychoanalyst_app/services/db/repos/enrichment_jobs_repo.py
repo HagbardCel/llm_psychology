@@ -9,6 +9,7 @@ from typing import Any
 import sqlite3
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ def _sync_enqueue_job(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error enqueuing enrichment job: %s", exc, exc_info=True)
         conn.rollback()
         return False
@@ -101,6 +103,7 @@ def _sync_claim_next_job(
             "status": "processing",
         }
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error claiming enrichment job: %s", exc, exc_info=True)
         conn.rollback()
         return None
@@ -132,6 +135,7 @@ def _sync_mark_job_complete(
         conn.commit()
         return cursor.rowcount > 0
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error marking job complete: %s", exc, exc_info=True)
         conn.rollback()
         return False
@@ -165,7 +169,7 @@ def _sync_mark_job_failed(
         conn.commit()
         return cursor.rowcount > 0
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error marking job failed: %s", exc, exc_info=True)
         conn.rollback()
         return False
-
