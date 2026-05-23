@@ -126,6 +126,49 @@ async def test_session_lifecycle_find_intake_sessions_filters_transcript_agent()
 
 
 @pytest.mark.trio
+async def test_session_lifecycle_ensure_session_reuses_intake_after_memory_loss() -> (
+    None
+):
+    intake_session = _session_with_agent("intake_session", "INTAKE")
+    db_service = AsyncMock()
+    db_service.get_user_sessions.return_value = [intake_session]
+    db_service.get_session.return_value = intake_session
+    service_container = MagicMock()
+    service_container.get.return_value = db_service
+    workflow_engine = MagicMock()
+    workflow_engine.get_user_state = AsyncMock(
+        return_value=WorkflowState.INTAKE_IN_PROGRESS
+    )
+    workflow_engine.get_current_agent.return_value = "INTAKE"
+
+    async def _process(_a: str, _b: str, _c: str | None):
+        if False:  # pragma: no cover
+            yield ""
+
+    async def _run_reflection(_a: str, _b: str) -> None:
+        return None
+
+    manager = SessionLifecycleManager(
+        service_container=service_container,
+        workflow_engine=workflow_engine,
+        conversation_manager=MagicMock(),
+        nursery=MagicMock(),
+        process_message=_process,
+        run_reflection=_run_reflection,
+    )
+
+    session_info = await manager.ensure_session(
+        "user_1",
+        session_type="intake",
+        send_initial_message=False,
+    )
+
+    assert session_info.session_id == "intake_session"
+    assert manager.get_active_session_id("user_1") == "intake_session"
+    db_service.save_session.assert_not_called()
+
+
+@pytest.mark.trio
 async def test_persist_tier3_update_returns_false_when_payload_incomplete() -> None:
     db_service = AsyncMock()
     result = await persist_tier3_update(

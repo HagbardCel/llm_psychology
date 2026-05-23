@@ -12,7 +12,7 @@ import pytest
 import trio
 from trio_websocket import ConnectionClosed, ConnectionRejected, open_websocket_url
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.data_models import Message, Session, UserProfile, UserStatus
 
 pytestmark = pytest.mark.trio
 
@@ -24,6 +24,15 @@ async def wait_for_message(ws, target_type: str, *, max_messages: int = 1000):
         if msg.get("type") == target_type:
             return msg
     raise AssertionError(f"Expected {target_type} message")
+
+
+def _clear_in_memory_session_state(test_server_websocket, user_id: str) -> None:
+    server = test_server_websocket["server"]
+    session_id = server.orchestrator.get_active_session_id(user_id)
+    server.orchestrator.session_lifecycle.active_sessions.clear_active_session(
+        user_id, session_id
+    )
+    server.orchestrator.response_handler._assessment_recommendations.pop(user_id, None)
 
 
 @pytest.fixture
@@ -129,6 +138,122 @@ async def test_ws_workflow_next_action_follows_session_started(
         assert session_started_index is not None, "Expected session_started event"
         assert workflow_next_action_index is not None, "Expected workflow_next_action event"
         assert session_started_index < workflow_next_action_index
+
+
+@pytest.mark.integration
+async def test_ws_reconnect_reemits_style_selection_state_from_persistence(
+    test_server_websocket,
+):
+    """Reconnect after memory loss should restore style-selection state."""
+    user_id = "websocket_reconnect_assessment_user"
+    db_service = test_server_websocket["db_service"]
+    profile = UserProfile(
+        user_id=user_id,
+        name="Reconnect Assessment User",
+        data_of_birth=None,
+        profession="Tester",
+        status=UserStatus.ASSESSMENT_COMPLETE,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    intake_session = Session(
+        session_id="reconnect-intake-session",
+        user_id=user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="Intake complete.",
+                timestamp=datetime.now(),
+                agent="INTAKE",
+            )
+        ],
+        topics=[],
+    )
+    recommendations = [
+        {
+            "style_id": "cbt",
+            "explanation": "Structured support fits the current goals.",
+            "score": 0.9,
+        }
+    ]
+
+    await db_service.save_user_profile(profile)
+    await db_service.save_session(intake_session)
+    await db_service.save_assessment_recommendations(
+        user_id=user_id,
+        intake_session_block_id=intake_session.session_id,
+        recommendations=recommendations,
+    )
+    _clear_in_memory_session_state(test_server_websocket, user_id)
+
+    ws_url = f"{test_server_websocket['ws_url']}?user_id={user_id}"
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+    ) as ws:
+        session_started = await wait_for_message(ws, "session_started")
+        assert session_started["data"]["user_id"] == user_id
+
+        workflow_next_action = await wait_for_message(ws, "workflow_next_action")
+        assert (
+            workflow_next_action.get("data", {}).get("required_action")
+            == "select_therapy_style"
+        )
+
+        assessment_recommendations = await wait_for_message(
+            ws, "assessment_recommendations"
+        )
+        assert assessment_recommendations["data"]["user_id"] == user_id
+        assert assessment_recommendations["data"]["recommendations"] == recommendations
+
+
+@pytest.mark.integration
+async def test_ws_reconnect_reuses_persisted_intake_session_after_memory_loss(
+    test_server_websocket,
+):
+    """An intake user should rebind to the existing intake session on reconnect."""
+    user_id = "websocket_reconnect_intake_user"
+    db_service = test_server_websocket["db_service"]
+    profile = UserProfile(
+        user_id=user_id,
+        name="Reconnect Intake User",
+        data_of_birth=None,
+        profession="Tester",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    intake_session = Session(
+        session_id="persisted-intake-session",
+        user_id=user_id,
+        timestamp=datetime.now(),
+        transcript=[
+            Message(
+                role="assistant",
+                content="Intake started.",
+                timestamp=datetime.now(),
+                agent="INTAKE",
+            )
+        ],
+        topics=[],
+    )
+
+    await db_service.save_user_profile(profile)
+    await db_service.save_session(intake_session)
+    _clear_in_memory_session_state(test_server_websocket, user_id)
+
+    ws_url = f"{test_server_websocket['ws_url']}?user_id={user_id}"
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+    ) as ws:
+        _ = await wait_for_message(ws, "connected")
+        session_started = await wait_for_message(ws, "session_started")
+
+    assert session_started["data"]["session_id"] == intake_session.session_id
+    assert test_server_websocket["server"].orchestrator.get_active_session_id(
+        user_id
+    ) == intake_session.session_id
+
 
 @pytest.mark.integration
 async def test_ws_chat_response_chunk_contract(test_server_websocket, test_user):
