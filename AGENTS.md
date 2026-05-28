@@ -12,6 +12,7 @@
 ## Documentation Map (Read First)
 - `docs/README.md`: Doc index and pointers to deeper references.
 - `docs/design-principles.md`: Non-negotiable architecture rules, layering, and workflow invariants.
+- `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`: Current stabilization priorities, client support tiers, and frontend maintenance policy.
 - `docs/ARCHITECTURE.md`: System overview, orchestration flow, and component responsibilities.
 - `docs/user_journey.md`: Expected user flow and endpoint usage by client.
 - `docs/session_lifecycle.md`: Session orchestration details and state transitions.
@@ -63,6 +64,16 @@ Run all commands inside containers. Do not run Python or Node on the host.
 - If you change HTTP/WS contracts or API-facing models, update the contract docs and regenerate schemas/types.
 - When models change, regenerate schemas and frontend types.
 - Add tests for new behavior; keep deterministic tests in the default suite.
+
+## Foundation Stabilization Mode
+Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisfied, treat the backend, workflow engine, persistence model, API DTOs, WebSocket protocol, schema/type generation, LLM abstraction, and deterministic tests as the main product.
+
+- Maintain the WebSocket console UI as the reference client.
+- Keep the React frontend frozen except for contract compatibility, build/dependency maintenance, smoke-path repair, and explicit deferred product work.
+- Do not add React product features, UI redesigns, frontend-only workflow semantics, or frontend state transitions that bypass backend workflow authority.
+- Keep the standalone terminal UI in legacy/local-debug mode; do not add new features unless it uniquely supports foundation stabilization.
+- Prefer backend, protocol, and reference-client tests over expanding frontend tests for foundational behavior.
+- Any frontend change must state whether it is contract compatibility, build/dependency maintenance, smoke-path repair, or deferred product work.
 
 ## Schema and Type Generation (Containerized)
 - Generate JSON schemas: `docker compose run --rm api python scripts/generate_schemas.py`

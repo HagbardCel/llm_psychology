@@ -14,6 +14,7 @@ from psychoanalyst_app.models.data_models import (
     UserStatus,
 )
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ def _sync_save_user_profile(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
+        reraise_locked_database_error(exc)
         logger.error("Error saving user profile: %s", exc, exc_info=True)
         return False
 
@@ -93,6 +95,7 @@ def _sync_update_user_status(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error updating user status: %s", exc, exc_info=True)
         return False
 
@@ -169,6 +172,7 @@ def _sync_update_user_profile(
         conn.commit()
         return True
     except Exception as exc:  # pragma: no cover
+        reraise_locked_database_error(exc)
         logger.error("Error updating user profile: %s", exc, exc_info=True)
         conn.rollback()
         return False

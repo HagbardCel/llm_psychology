@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-15
+last_reviewed: 2026-05-28
 review_cycle_days: 90
 source_of_truth_for: Documentation entrypoint and canonical navigation
 ---
@@ -12,17 +12,19 @@ source_of_truth_for: Documentation entrypoint and canonical navigation
 Use this order if you are new to the codebase:
 
 1. `docs/design-principles.md` for architecture invariants and implementation rules.
-2. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
-3. `docs/user_journey.md` for end-to-end user and protocol flow.
-4. `docs/session_lifecycle.md` for workflow/session ownership details.
-5. `docs/contracts/HTTP_API_CONTRACT.md` and `docs/WEBSOCKET_PROTOCOL.md` for API contracts.
-6. `docs/TYPE_SYSTEM.md` for schema/type generation pipeline.
+2. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` for current stabilization priorities and client support tiers.
+3. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
+4. `docs/user_journey.md` for end-to-end user and protocol flow.
+5. `docs/session_lifecycle.md` for workflow/session ownership details.
+6. `docs/contracts/HTTP_API_CONTRACT.md` and `docs/WEBSOCKET_PROTOCOL.md` for API contracts.
+7. `docs/TYPE_SYSTEM.md` for schema/type generation pipeline.
 
 ## Active Docs (Canonical)
 These docs are the only canonical, actively governed set.
 
 - [Documentation Index](README.md)
 - [Design Principles](design-principles.md)
+- [Foundation Stabilization Plan](reference/FOUNDATION_STABILIZATION_PLAN.md)
 - [Architecture](ARCHITECTURE.md)
 - [User Journey](user_journey.md)
 - [Session Lifecycle](session_lifecycle.md)
@@ -40,7 +42,7 @@ Use these for focused implementation work; active docs remain the source of trut
 - `docs/features/`: feature-level implementation details.
 - `docs/plans/`: current finalization baseline and implementation plans in progress.
 - `docs/assessments/`: architecture, testing, UX and project assessments.
-- `docs/reference/`: companion guides linked from active docs.
+- `docs/reference/`: companion guides linked from active docs; includes the active foundation stabilization plan.
 
 ## Archive and Legacy
 These paths are historical context, not canonical guidance:

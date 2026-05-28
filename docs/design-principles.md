@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-22
+last_reviewed: 2026-05-28
 review_cycle_days: 90
 source_of_truth_for: Project-level architecture and implementation invariants
 ---
@@ -14,12 +14,14 @@ Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 
 If you need deeper detail on a specific area, this document links to the canonical deep-dives:
 - Architecture: `docs/ARCHITECTURE.md`
+- Foundation stabilization priorities: `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`
 - Type system pipeline: `docs/TYPE_SYSTEM.md`
 - WebSocket contract: `docs/WEBSOCKET_PROTOCOL.md`
 - Session lifecycle: `docs/session_lifecycle.md`
 
 ## Table of Contents
 - Non‑Negotiables (Project Invariants)
+- Foundation Stabilization Mode
 - System Overview (One Mental Model)
 - Composition & Dependency Injection (DI)
 - Domain Model vs Wire Model (Backend)
@@ -90,6 +92,24 @@ Canonical examples:
 - Message envelopes: `src/psychoanalyst_app/utils/ws_messages.py`
 - WebSocket contract: `docs/WEBSOCKET_PROTOCOL.md`
 - Console client streaming: `console-ui/src/console_client.py`
+
+---
+
+## Foundation Stabilization Mode
+
+Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisfied, the project is operated as a headless backend and protocol-contract project with one maintained reference client.
+
+Support tiers:
+- **Tier 0:** backend workflow engine, persistence, HTTP DTOs, WebSocket protocol, schema/type generation, generated protocol constants, LLM abstraction, deterministic fake-provider behavior, backend tests, and architecture/documentation validation.
+- **Tier 1:** WebSocket-based console UI as the canonical integration and manual-test client.
+- **Tier 2:** React web frontend as a frozen compatibility/demo client, maintained only for generated type compatibility, build/dependency fixes, contract regression fixes, and one golden smoke path.
+- **Tier 3:** standalone terminal UI as legacy or local-debug mode; avoid new features.
+
+Design rules during stabilization:
+- Backend owns workflow progression. Clients may render workflow state and submit explicit user actions, but must not mutate workflow state directly.
+- Contract changes must update specs, DTOs, schemas/generated artifacts, and deterministic tests before expanding client UX.
+- Prefer backend, protocol, and reference-client tests for foundational behavior; keep React tests focused on compatibility and the minimal browser smoke path.
+- Defer optional RAG, advanced UI flows, dashboard polish, multi-client feature parity, and frontend redesign until the foundation exit review.
 
 ---
 
@@ -338,6 +358,8 @@ Design rules:
 
 ## Frontend Design Principles (React + TypeScript)
 
+During foundation stabilization, the React frontend is a compatibility/demo client rather than the product development driver. Do not add React product features, UI redesigns, frontend-only workflow semantics, or state transitions that bypass backend workflow authority. Allowed frontend work is limited to contract compatibility, build/dependency maintenance, smoke-path repair, and explicitly deferred product work documented as such.
+
 ### The backend schema is the source of truth
 - Generated types: `frontend/src/types/generated/api.ts`
 - Re-export + UI-only extensions live in: `frontend/src/types/index.ts`
@@ -361,7 +383,7 @@ The web client implements the WS protocol defined in `docs/WEBSOCKET_PROTOCOL.md
 
 ## Console UI Design Principles (Trio client)
 
-The console client is intentionally close to the backend protocol for debugging and “lowest common denominator” UX:
+During foundation stabilization, the console client is the Tier 1 reference client. It should stay intentionally close to the backend protocol for debugging and “lowest common denominator” UX:
 - Trio runtime + structured concurrency
 - WS streaming chunk rendering
 - minimal UI state machine around “session started” and “waiting for initial greeting”
@@ -395,17 +417,18 @@ Configuration is provided by Pydantic settings:
 - `src/psychoanalyst_app/config.py` (`Settings`, `settings`)
 
 Important environment variables:
-- `GOOGLE_API_KEY` (LLM access)
+- `LLM_PROVIDER`, `LLM_BASE_URL` (LLM backend selection)
+- `GOOGLE_API_KEY` (Gemini access only)
 - `MODEL_NAME` and per-agent model overrides (`*_MODEL`)
 - `DATABASE_PATH`, `RAG_BACKEND` (`none` only in the current release)
 - CORS settings (`CORS_ALLOWED_ORIGINS`)
 
-`GEMINI_API_KEY` is still accepted as a fallback for older shells, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.
+`GEMINI_API_KEY` is still accepted as a fallback for older shells when using Gemini, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.
 
 ### LLM Model Policy
 - All model IDs live in environment files (`.env`, `.env.test`, `.env.usertest`). Code never embeds model names; it only reads `MODEL_NAME` + per-agent overrides.
-- Production defaults (`.env`): `MODEL_NAME=gemini-3.0-flash`; `ASSESSMENT_MODEL`, `PLANNING_MODEL`, and `REFLECTION_MODEL` override to `gemini-3.0-pro`; other agents inherit `MODEL_NAME`.
-- Testing + usertest (`.env.test`, `.env.usertest`): everyone uses `MODEL_NAME=gemini-2.5-flash-light` (keeps cost predictable for local/manual testing).
+- Local defaults (`.env`): `LLM_PROVIDER=openai_compatible`, `LLM_BASE_URL=http://host.docker.internal:8080/v1`, and `MODEL_NAME=local-model` for a host llama.cpp server. Override `MODEL_NAME` to match the model alias served locally.
+- Gemini/usertest defaults (`.env.usertest`): everyone uses `MODEL_NAME=gemini-2.5-flash-light` unless overridden (keeps cost predictable for manual cloud testing).
 - Rate limiting is controlled entirely via env (`LLM_RATE_LIMIT_ENABLED`, `LLM_REQUESTS_PER_MINUTE`, `LLM_BURST_CAPACITY`). The container reads those fields when constructing `LLMService`.
 
 ### Logging

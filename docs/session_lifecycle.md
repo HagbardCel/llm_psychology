@@ -38,6 +38,24 @@ WebSocket handshake. Clients should reconnect if they need a fresh session bindi
   - If `required_action` is not `wait`, it triggers an "initial greeting" by sending an empty message to the active agent.
   - If `required_action` is `wait`, the greeting is skipped and the wait prompt is used as the status notice.
 
+### 1.3. Reconnect and Refresh Recovery
+
+WebSocket connection setup is the authoritative state-sync point for clients.
+After a browser refresh, WebSocket reconnect, or local backend restart, the
+server revalidates the user, ensures the workflow-appropriate session, emits
+`session_started`, then emits `workflow_next_action`.
+
+- Clients must treat `session_started.session_id` as the current active session,
+  replacing any session id cached in local storage.
+- During intake, if active-session memory is empty, the server reuses the
+  persisted intake session rather than creating a duplicate intake session.
+- At style selection, `workflow_next_action=select_therapy_style` re-emits
+  persisted `assessment_recommendations`, so losing the in-memory recommendation
+  cache does not strand the user.
+- This recovery model is intentionally local/single-instance. It does not add
+  message replay, sequence ids, or shared active-session state for multi-instance
+  deployments.
+
 ## 2. Active Session Workflow
 
 The session flow is driven by the **Orchestrator**, which routes user messages to the appropriate **Agent** based on the user's **Workflow State**.

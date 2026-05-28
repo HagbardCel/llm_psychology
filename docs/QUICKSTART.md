@@ -7,7 +7,7 @@ This guide will get you up and running with the Virtual LLM-Driven Psychoanalyst
 ## Prerequisites
 
 - Docker and Docker Compose
-- Google Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
+- A local llama.cpp OpenAI-compatible server on `localhost:8080`
 - Modern web browser (for frontend)
 
 ## Installation
@@ -21,18 +21,33 @@ cp .env.example .env
 
 ### 2. Configure Environment
 
-Edit `.env` and add your Gemini API key:
+The default `.env` expects llama.cpp to expose an OpenAI-compatible API on
+`http://localhost:8080/v1`. If your server uses a different model alias, update:
 
 ```bash
-GOOGLE_API_KEY=your_api_key_here
+MODEL_NAME=local-model
 DATABASE_PATH=data/psychoanalyst.db
 ```
+
+To use Gemini instead, set `LLM_PROVIDER=gemini`, choose Gemini model names, and
+add `GOOGLE_API_KEY`.
 
 If you need to reset local databases during development, run:
 
 ```bash
 make clean-testdb
 ```
+
+To protect local therapy transcripts and plans before resetting or upgrading,
+create a SQLite backup:
+
+```bash
+make docker-db-backup
+```
+
+Backups are written to `data/backups/` with a manifest and can be verified with
+`make docker-db-backup-verify BACKUP=data/backups/<backup>.db`. See
+`docs/reference/ARCHITECTURE_OPERATIONS_GUIDE.md` for restore steps.
 
 ### 3. Build Dev Containers (Installs Dependencies Inside Docker)
 
@@ -435,13 +450,16 @@ Returns:
 - Review valid transitions in `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
 - Ensure proper sequence (can't skip intake/assessment)
 
-### API Key Issues
+### LLM Connection Issues
 
 **Problem**: LLM not responding
 
 **Solutions**:
-- Verify `GOOGLE_API_KEY` in `.env` (or `GEMINI_API_KEY` as a legacy alias)
-- Check API quota/limits
+- For local llama.cpp, verify it is running on `localhost:8080` and serving an
+  OpenAI-compatible `/v1` API.
+- Verify `LLM_PROVIDER`, `LLM_BASE_URL`, and `MODEL_NAME` in `.env`.
+- For Gemini only, verify `GOOGLE_API_KEY` in `.env` (or `GEMINI_API_KEY` as a
+  legacy alias) and check API quota/limits.
 - View logs: `docker compose logs -f api`
 
 ## Production Deployment
@@ -449,8 +467,9 @@ Returns:
 ### Environment Variables
 
 ```bash
-# Required
-GOOGLE_API_KEY=your_production_key
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=http://host.docker.internal:8080/v1
+MODEL_NAME=local-model
 DATABASE_PATH=/app/data/psychoanalyst.db
 
 # Optional
@@ -470,7 +489,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - MODEL_NAME=${MODEL_NAME}
       - DATABASE_PATH=/app/data/psychoanalyst.db
     volumes:
       - ./data:/app/data

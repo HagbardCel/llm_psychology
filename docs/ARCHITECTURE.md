@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-22
+last_reviewed: 2026-05-28
 review_cycle_days: 90
 source_of_truth_for: Runtime architecture boundaries and component responsibilities
 ---
@@ -11,6 +11,8 @@ source_of_truth_for: Runtime architecture boundaries and component responsibilit
 **Last Verified:** 2026-02-22
 
 Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
+Current stabilization priorities and client support tiers are defined in
+`docs/reference/FOUNDATION_STABILIZATION_PLAN.md`.
 
 ## Overview
 
@@ -23,6 +25,12 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 3. **Streaming First**: Real-time streaming of LLM responses for better UX
 4. **State Machine**: Workflow driven by explicit state transitions
 5. **Scalability**: Designed to support multiple concurrent users
+
+During foundation stabilization, maintenance priority is backend-first:
+- Tier 0 is the backend, workflow/session lifecycle, persistence, HTTP DTOs, WebSocket protocol, schema/type pipeline, LLM abstraction, and deterministic tests.
+- Tier 1 is the WebSocket console UI, used as the canonical integration and manual-test client.
+- Tier 2 is the React frontend, frozen except for compatibility, build/dependency maintenance, contract regression fixes, and one browser smoke path.
+- Tier 3 is the standalone terminal UI, kept only for legacy or local-debug value.
 
 ## System Architecture
 
@@ -244,6 +252,11 @@ async def process_message(
 
 Gateways connect client interfaces to the orchestration layer.
 
+Client support during foundation stabilization:
+- The console UI is the reference client for validating registration, WebSocket connection, workflow-next-action emission, streaming, session ending, and style selection.
+- The React frontend remains buildable and minimally usable, but it must not introduce frontend-owned workflow semantics or drive product behavior while contracts are unstable.
+- The standalone terminal UI should not receive new product features; migrate useful debugging behavior into the console UI or backend tests when practical.
+
 #### WebSocket Handler (`src/psychoanalyst_app/api/ws_handler.py`)
 
 **Purpose**: Handle real-time WebSocket communication
@@ -409,5 +422,5 @@ component responsibilities, and core data/control flow.
 
 ---
 
-**Last Updated**: 2026-02-22
+**Last Updated**: 2026-05-28
 **Version**: 2.1 (Trio Orchestration Architecture)

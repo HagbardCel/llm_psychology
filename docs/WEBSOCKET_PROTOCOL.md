@@ -76,6 +76,13 @@ If the user profile does not exist, the server sends an `error` message and clos
 the connection with code `1008` (`profile_not_found`). Clients must register first
 via `POST /api/user/register`.
 
+Reconnects and page refreshes use the same connection flow. Clients must treat
+the latest `session_started.session_id` as authoritative and replace any locally
+cached active session id with that value. After `session_started`, the server
+emits `workflow_next_action`; if that action is `select_therapy_style`, the
+server also emits the latest persisted `assessment_recommendations` when
+available.
+
 ---
 
 ## Message Format
@@ -261,7 +268,8 @@ Sent after successful session creation or resume.
 ```
 
 **Client Handling**:
-- Store `session_id` for subsequent HTTP requests
+- Store `session_id` for subsequent HTTP requests, replacing any stale locally
+  cached session id
 - Display agent type to user (optional)
 - Wait for the initial `chat_response_chunk` before accepting user input in chat flows
 - Update UI to "session active" state
@@ -549,8 +557,10 @@ Clients should implement exponential backoff:
 
 **Reconnection Behavior**:
 - On reconnection, the server rebinds an active session and emits `session_started`
-- Previous session context is maintained on server
-- Client should re-fetch session history if needed
+- The emitted `session_started.session_id` is the active session for subsequent
+  HTTP requests, even if it differs from local storage
+- Previous session context is maintained on server where the workflow supports it
+- Client should re-fetch session history and workflow-scoped data if needed
 
 ---
 

@@ -27,7 +27,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai_compatible}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - MODEL_NAME=${MODEL_NAME:-local-model}
       - DATABASE_PATH=/app/data/psychoanalyst.db
     volumes:
       - ./data:/app/data
@@ -42,6 +44,40 @@ make run-server
 # Production
 docker compose --profile production up app
 ```
+
+## Local SQLite Backups
+
+The local database is stored at `data/psychoanalyst.db` by default. Backups must
+be created through SQLite's backup API instead of copying the file directly,
+because the app uses WAL mode and live writes may be split across sidecar files.
+
+Create a backup:
+
+```bash
+make docker-db-backup
+```
+
+The command writes a timestamped `.db` file and a `.manifest.json` file under
+`data/backups/`. The manifest records the source path, file size, SHA-256 hash,
+SQLite version, and `PRAGMA integrity_check` result.
+
+Verify a backup:
+
+```bash
+make docker-db-backup-verify BACKUP=data/backups/<backup>.db
+```
+
+Restore a backup:
+
+```bash
+make docker-down
+make docker-db-restore BACKUP=data/backups/<backup>.db
+```
+
+Restore verifies the backup first, creates a pre-restore safety backup of the
+current target database, replaces `data/psychoanalyst.db`, and removes stale
+SQLite `-wal`/`-shm` sidecar files. Keep backups on local encrypted storage if
+the database contains real sensitive data.
 
 ## Testing
 

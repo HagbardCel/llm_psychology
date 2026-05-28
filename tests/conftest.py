@@ -515,6 +515,7 @@ async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_s
             "ws_url": f"ws://{server.host}:{server.port}/ws",
             "db_service": trio_db_service,
             "container": container,
+            "server": server,
         }
 
         # Cleanup: cancel the nursery to stop the server

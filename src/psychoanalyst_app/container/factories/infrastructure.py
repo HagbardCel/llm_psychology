@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 def create_migration_service(container: ServiceContainer) -> MigrationService:
     """Create MigrationService."""
     logger.debug("Creating MigrationService")
-    migration_service = MigrationService(db_path=container.config.DATABASE_PATH)
+    migration_service = MigrationService(
+        db_path=container.config.DATABASE_PATH,
+        busy_timeout_seconds=float(container.config.DATABASE_POOL_TIMEOUT),
+    )
     logger.info("Created MigrationService for %s", container.config.DATABASE_PATH)
     return migration_service
 

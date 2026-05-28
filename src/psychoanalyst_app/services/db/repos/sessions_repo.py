@@ -9,6 +9,7 @@ from typing import Callable
 
 from psychoanalyst_app.models.data_models import DetailedSession, Session
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
+from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     SESSION_COLUMNS,
     detailed_session_from_row,
@@ -81,6 +82,7 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
         )
         return False
     except Exception as exc:  # pragma: no cover - defensive logging
+        reraise_locked_database_error(exc)
         logger.error("Error saving session %s: %s", session.session_id, exc)
         return False
 

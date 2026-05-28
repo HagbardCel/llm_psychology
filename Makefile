@@ -1,5 +1,5 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
-.PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean docker-usertest
+.PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-generated-contracts validate-docs validate-architecture finalization-check
@@ -66,6 +66,9 @@ help:
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
 	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=prod|usertest, default: prod)"
+	@echo "  docker-db-backup  - Back up the local SQLite database"
+	@echo "  docker-db-backup-verify - Verify a backup (usage: make docker-db-backup-verify BACKUP=data/backups/file.db)"
+	@echo "  docker-db-restore - Restore a backup (usage: make docker-db-restore BACKUP=data/backups/file.db)"
 	@echo "  docker-test-reset - Reset test database"
 	@echo "  docker-clean      - Clean up all Docker resources"
 	@echo ""
@@ -390,6 +393,26 @@ docker-db-view:
 	echo "🌐 Access at: http://localhost:8080"; \
 	echo ""; \
 	DB_FILE=$$DB_FILE docker compose --profile debug up db-viewer
+
+# Back up the local production SQLite database.
+docker-db-backup:
+	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup backup
+
+# Verify a local SQLite backup.
+docker-db-backup-verify:
+	@if [ -z "$(BACKUP)" ]; then \
+		echo "Usage: make docker-db-backup-verify BACKUP=data/backups/<backup>.db"; \
+		exit 1; \
+	fi
+	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup verify "$(BACKUP)"
+
+# Restore a local SQLite backup. Stop running app containers before using this.
+docker-db-restore:
+	@if [ -z "$(BACKUP)" ]; then \
+		echo "Usage: make docker-db-restore BACKUP=data/backups/<backup>.db"; \
+		exit 1; \
+	fi
+	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup restore "$(BACKUP)" --replace
 
 # Reset test database (removes test data volume)
 docker-test-reset:

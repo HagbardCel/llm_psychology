@@ -104,6 +104,20 @@ def test_local_llm_provider_config_defaults(monkeypatch):
     assert settings.get_llm_base_url() == "http://host.docker.internal:11434"
 
 
+def test_default_llm_provider_is_local_llamacpp(monkeypatch):
+    """Test default Settings point to local llama.cpp, not Gemini."""
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.LLM_PROVIDER == "openai_compatible"
+    assert settings.MODEL_NAME == "local-model"
+    assert settings.get_llm_base_url() == "http://host.docker.internal:8080/v1"
+
+
 def test_lmstudio_provider_config_default_base_url(monkeypatch):
     """Test LM Studio gets its OpenAI-compatible default URL."""
     _clear_agent_model_env(monkeypatch)
@@ -115,6 +129,32 @@ def test_lmstudio_provider_config_default_base_url(monkeypatch):
     settings = Settings()
 
     assert settings.get_llm_base_url() == "http://host.docker.internal:1234/v1"
+
+
+def test_openai_compatible_provider_config_default_base_url(monkeypatch):
+    """Test generic OpenAI-compatible local servers get the llama.cpp default URL."""
+    _clear_agent_model_env(monkeypatch)
+    monkeypatch.setenv("MODEL_NAME", "local-model")
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    settings = Settings()
+
+    assert settings.get_llm_base_url() == "http://host.docker.internal:8080/v1"
+
+
+def test_openai_compatible_provider_config_custom_base_url(monkeypatch):
+    """Test explicit OpenAI-compatible base URLs override the llama.cpp default."""
+    _clear_agent_model_env(monkeypatch)
+    monkeypatch.setenv("MODEL_NAME", "local-model")
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "http://llamacpp:8080/v1")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    settings = Settings()
+
+    assert settings.get_llm_base_url() == "http://llamacpp:8080/v1"
 
 
 def test_default_llm_service_unchanged(monkeypatch):

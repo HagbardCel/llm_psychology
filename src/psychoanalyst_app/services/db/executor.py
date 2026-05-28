@@ -5,8 +5,14 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from typing import Any, Callable
 
 import trio
+
+from psychoanalyst_app.services.db.sqlite_config import (
+    configure_connection,
+    is_locked_database_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +27,16 @@ class TrioSQLiteExecutor:
         pool_size: int = 5,
         connect_timeout_seconds: float = 30.0,
         pool_acquire_timeout_seconds: float = 30.0,
+        locked_retry_attempts: int = 3,
+        locked_retry_initial_delay_seconds: float = 0.05,
     ):
         self.db_path = db_path
         self.pool_size = pool_size
         self.connect_timeout_seconds = connect_timeout_seconds
         self.pool_acquire_timeout_seconds = pool_acquire_timeout_seconds
+        self.busy_timeout_ms = int(connect_timeout_seconds * 1000)
+        self.locked_retry_attempts = locked_retry_attempts
+        self.locked_retry_initial_delay_seconds = locked_retry_initial_delay_seconds
         self._is_uri = db_path.startswith("file:")
         self._pool_send, self._pool_recv = trio.open_memory_channel(pool_size)
         self._connections: list[sqlite3.Connection] = []
@@ -47,7 +58,11 @@ class TrioSQLiteExecutor:
                 check_same_thread=False,
             )
 
-        conn.execute("PRAGMA foreign_keys = ON")
+        configure_connection(
+            conn,
+            db_path=self.db_path,
+            busy_timeout_ms=self.busy_timeout_ms,
+        )
         if row_factory:
             conn.row_factory = row_factory
         return conn
@@ -91,9 +106,30 @@ class TrioSQLiteExecutor:
             conn.row_factory = original_row_factory
             await self._pool_send.send(conn)
 
-    async def run_sync(self, func, *args):
+    async def run_sync(self, func: Callable[..., Any], *args: Any) -> Any:
         """Run blocking SQLite work in a worker thread."""
-        return await trio.to_thread.run_sync(func, *args)
+        attempt = 0
+        delay = self.locked_retry_initial_delay_seconds
+
+        while True:
+            try:
+                return await trio.to_thread.run_sync(func, *args)
+            except sqlite3.OperationalError as exc:
+                if (
+                    not is_locked_database_error(exc)
+                    or attempt >= self.locked_retry_attempts
+                ):
+                    raise
+                _rollback_if_connection(args)
+                attempt += 1
+                logger.warning(
+                    "SQLite database locked; retrying operation "
+                    "(attempt %s/%s)",
+                    attempt,
+                    self.locked_retry_attempts,
+                )
+                await trio.sleep(delay)
+                delay *= 2
 
     def close(self) -> None:
         """Close all pooled connections."""
@@ -110,3 +146,12 @@ class TrioSQLiteExecutor:
                 conn.close()
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.warning("Error closing SQLite connection: %s", exc)
+
+
+def _rollback_if_connection(args: tuple[Any, ...]) -> None:
+    if not args or not isinstance(args[0], sqlite3.Connection):
+        return
+    try:
+        args[0].rollback()
+    except sqlite3.Error:
+        logger.debug("SQLite rollback after locked error failed", exc_info=True)

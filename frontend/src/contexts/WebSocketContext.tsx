@@ -56,6 +56,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   );
   const sessionEndedHandlers = useRef<Array<(event: SessionEndedEvent) => void>>([]);
   const workflowHandlers = useRef<Array<(event: WorkflowNextActionEvent) => void>>([]);
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   const handleStreamingChunk = useCallback<StreamingChunkCallback>(
     (chunk, isComplete, fullResponse) => {
@@ -67,23 +72,35 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   );
 
   const handleSessionStarted = useCallback((event: SessionStartedEvent) => {
+    const previousSessionId = currentSessionIdRef.current;
+    currentSessionIdRef.current = event.session_id;
     setCurrentSessionId(event.session_id);
     setLastSessionStarted(event);
+    if (previousSessionId && previousSessionId !== event.session_id) {
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const queryKey = query.queryKey;
+          return Array.isArray(queryKey) && queryKey.includes(previousSessionId);
+        },
+      });
+    }
     sessionStartedHandlers.current.forEach((handler) => {
       handler(event);
     });
-  }, [setCurrentSessionId]);
+  }, [queryClient, setCurrentSessionId]);
 
   const handleWorkflowNextAction = useCallback((event: WorkflowNextActionEvent) => {
-    if (event.user_id && currentSessionId) {
-      queryClient.setQueryData(['workflow', 'next', event.user_id, currentSessionId], event);
+    const sessionId = currentSessionIdRef.current;
+    if (event.user_id && sessionId) {
+      queryClient.setQueryData(['workflow', 'next', event.user_id, sessionId], event);
     }
     workflowHandlers.current.forEach((handler) => {
       handler(event);
     });
-  }, [currentSessionId, queryClient]);
+  }, [queryClient]);
 
   const handleSessionEnded = useCallback((event: SessionEndedEvent) => {
+    currentSessionIdRef.current = null;
     setCurrentSessionId(null);
     sessionEndedHandlers.current.forEach((handler) => {
       handler(event);

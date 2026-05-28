@@ -9,7 +9,12 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
+from psychoanalyst_app.models.data_models import (
+    Message,
+    Session,
+    TherapyPlan,
+    UserProfile,
+)
 
 
 @pytest.fixture
@@ -263,12 +268,20 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
                 session_columns = {col[1] for col in cursor.fetchall()}
                 cursor.execute("PRAGMA table_info(user_profiles)")
                 profile_columns = {col[1] for col in cursor.fetchall()}
+                cursor.execute("PRAGMA table_info(assessment_recommendations)")
+                recommendation_columns = {col[1] for col in cursor.fetchall()}
                 return (
                     "session_briefing" in plan_columns
                     and "plan_id" in session_columns
                     and "session_summary" in session_columns
                     and "session_briefing" in session_columns
                     and "plan_id" in profile_columns
+                    and {
+                        "user_id",
+                        "intake_session_block_id",
+                        "recommendations",
+                        "created_at",
+                    }.issubset(recommendation_columns)
                 )
             finally:
                 conn.close()
@@ -279,6 +292,201 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
     assert (
         has_column is True
     ), "Expected session/user profile columns should exist in the schema"
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_migration_repairs_legacy_profile_schema_with_high_version(tmp_path):
+    """Legacy DBs with newer historical versions should still get current columns."""
+    import sqlite3
+
+    from psychoanalyst_app.models.data_models import UserProfile
+    from psychoanalyst_app.services.migration_service import MigrationService
+    from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    db_path = str(tmp_path / "legacy_profile_schema.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?)",
+            (datetime.now().isoformat(),),
+        )
+        cursor.execute(
+            """
+            CREATE TABLE user_profiles (
+                user_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                birthdate TEXT,
+                profession TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                alias TEXT,
+                data_of_birth TEXT,
+                gender TEXT,
+                cultural_background TEXT,
+                primary_language TEXT NOT NULL DEFAULT 'English',
+                parents TEXT,
+                siblings TEXT,
+                family_atmosphere TEXT,
+                significant_events TEXT,
+                education TEXT,
+                work_history TEXT,
+                relationship_to_work TEXT,
+                relationships TEXT,
+                social_context TEXT,
+                current_situation TEXT,
+                preferred_school TEXT,
+                session_mode TEXT NOT NULL DEFAULT 'virtual',
+                boundary_notes TEXT,
+                frame_notes TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                plan_id TEXT,
+                timestamp TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                topics TEXT,
+                session_summary TEXT,
+                session_briefing TEXT,
+                psychological_summary TEXT,
+                dominant_affects TEXT,
+                key_themes TEXT,
+                notable_interactions TEXT,
+                interpretations TEXT,
+                patient_reactions TEXT,
+                enriched INTEGER DEFAULT 0
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE therapy_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                plan_details TEXT NOT NULL,
+                initial_goals TEXT,
+                current_progress TEXT,
+                planned_interventions TEXT,
+                status TEXT DEFAULT 'active',
+                version INTEGER NOT NULL,
+                selected_therapy_style TEXT,
+                session_briefing TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE patient_analysis (
+                analysis_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                analysis_data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by_session TEXT,
+                change_summary TEXT,
+                superseded_by TEXT,
+                UNIQUE(user_id, version)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE session_enrichment_jobs (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE user_profile_history (
+                history_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                previous_profile_data TEXT NOT NULL,
+                new_profile_data TEXT NOT NULL,
+                change_summary TEXT,
+                created_at TEXT NOT NULL,
+                created_by_session TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migration_service = MigrationService(db_path)
+    db = TrioDatabaseService(db_path, migration_service=migration_service)
+    await db.initialize()
+    try:
+        assert await db.save_user_profile(
+            UserProfile(
+                user_id="legacy_user",
+                name="Legacy User",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+    finally:
+        db.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profiles)")}
+    finally:
+        conn.close()
+
+    assert "plan_id" in columns
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_migration_connection_configures_file_backed_sqlite(tmp_path):
+    """Migration connections should apply local SQLite resilience pragmas."""
+    from psychoanalyst_app.services.migration_service import MigrationService
+
+    migration_service = MigrationService(
+        str(tmp_path / "migration_pragmas.db"),
+        busy_timeout_seconds=9,
+    )
+
+    def _check_pragmas():
+        conn = migration_service._get_connection()
+        try:
+            return {
+                "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
+                "synchronous": conn.execute("PRAGMA synchronous").fetchone()[0],
+                "busy_timeout": conn.execute("PRAGMA busy_timeout").fetchone()[0],
+            }
+        finally:
+            conn.close()
+
+    pragmas = await trio.to_thread.run_sync(_check_pragmas)
+
+    assert pragmas["journal_mode"] == "wal"
+    assert pragmas["synchronous"] == 1
+    assert pragmas["busy_timeout"] == 9000
 
 
 @pytest.mark.trio
@@ -315,3 +523,35 @@ async def test_update_session_reflection_persists_summary_and_briefing(
     assert stored is not None
     assert stored.session_summary == summary
     assert stored.session_briefing == briefing
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_assessment_recommendations_round_trip(test_db_service):
+    """Assessment recommendations persist for reconnect/restart recovery."""
+    profile = UserProfile(
+        user_id="assessment_user_1",
+        name="Assessment User",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    assert await test_db_service.save_user_profile(profile)
+
+    recommendations = [
+        {
+            "style_id": "cbt",
+            "explanation": "Structured practical support.",
+            "score": 0.92,
+        }
+    ]
+    saved = await test_db_service.save_assessment_recommendations(
+        user_id=profile.user_id,
+        intake_session_block_id="intake_session_1",
+        recommendations=recommendations,
+    )
+    assert saved is True
+
+    loaded = await test_db_service.get_latest_assessment_recommendations(
+        profile.user_id
+    )
+    assert loaded == recommendations

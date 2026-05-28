@@ -31,6 +31,7 @@ from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 from .persistence import persist_therapy_plan_from_output, persist_tier3_update
 from .response_jobs import (
+    persist_assessment_recommendations,
     queue_assessment_job,
     queue_reflection_job,
     run_assessment_job,
@@ -168,6 +169,12 @@ class AgentResponseHandler:
                 recommendations = agent_response.metadata.get("recommendations")
                 if recommendations:
                     self._assessment_recommendations[user_id] = recommendations
+                    await persist_assessment_recommendations(
+                        service_container=self.service_container,
+                        user_id=user_id,
+                        intake_session_id=session_id,
+                        recommendations=recommendations,
+                    )
                     await send_assessment_recommendations(
                         conversation_manager=self.conversation_manager,
                         session_id=session_id,
@@ -463,10 +470,24 @@ class AgentResponseHandler:
     async def emit_assessment_recommendations(
         self, session_id: str, user_id: str
     ) -> None:
-        """Re-emit cached assessment recommendations if available."""
+        """Re-emit cached or persisted assessment recommendations if available."""
         recommendations = self._assessment_recommendations.get(user_id)
         if not recommendations:
-            return
+            try:
+                trio_db_service = self.service_container.get("trio_db_service")
+                recommendations = (
+                    await trio_db_service.get_latest_assessment_recommendations(user_id)
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to load assessment recommendations for user %s",
+                    user_id,
+                    exc_info=True,
+                )
+                recommendations = None
+            if not recommendations:
+                return
+            self._assessment_recommendations[user_id] = recommendations
         await send_assessment_recommendations(
             conversation_manager=self.conversation_manager,
             session_id=session_id,
