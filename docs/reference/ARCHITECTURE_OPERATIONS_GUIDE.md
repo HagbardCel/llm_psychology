@@ -27,7 +27,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai_compatible}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - MODEL_NAME=${MODEL_NAME:-local-model}
       - DATABASE_PATH=/app/data/psychoanalyst.db
     volumes:
       - ./data:/app/data

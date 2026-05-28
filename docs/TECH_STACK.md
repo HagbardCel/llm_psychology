@@ -134,9 +134,10 @@ The application supports configuring different models for different agents:
 - Each agent can use a dedicated model via environment variables
 - Falls back to `MODEL_NAME` if agent-specific model is not configured
 - Enables cost optimization by using cheaper models for simpler tasks
-- Example: Use `gemini-2.5-flash` for intake, `gemini-2.5-pro` for therapy
+- Example: Use a smaller local model for intake and a larger local model for therapy
 - Select the backend with `LLM_PROVIDER=gemini|ollama|lmstudio|openai_compatible`
-  and optionally `LLM_BASE_URL`.
+  and optionally `LLM_BASE_URL`. The default local backend is a llama.cpp
+  OpenAI-compatible server at `http://host.docker.internal:8080/v1`.
 
 #### Sentence Transformers
 **Purpose:** Text embeddings for RAG

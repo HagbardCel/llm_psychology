@@ -417,17 +417,18 @@ Configuration is provided by Pydantic settings:
 - `src/psychoanalyst_app/config.py` (`Settings`, `settings`)
 
 Important environment variables:
-- `GOOGLE_API_KEY` (LLM access)
+- `LLM_PROVIDER`, `LLM_BASE_URL` (LLM backend selection)
+- `GOOGLE_API_KEY` (Gemini access only)
 - `MODEL_NAME` and per-agent model overrides (`*_MODEL`)
 - `DATABASE_PATH`, `RAG_BACKEND` (`none` only in the current release)
 - CORS settings (`CORS_ALLOWED_ORIGINS`)
 
-`GEMINI_API_KEY` is still accepted as a fallback for older shells, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.
+`GEMINI_API_KEY` is still accepted as a fallback for older shells when using Gemini, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.
 
 ### LLM Model Policy
 - All model IDs live in environment files (`.env`, `.env.test`, `.env.usertest`). Code never embeds model names; it only reads `MODEL_NAME` + per-agent overrides.
-- Production defaults (`.env`): `MODEL_NAME=gemini-3.0-flash`; `ASSESSMENT_MODEL`, `PLANNING_MODEL`, and `REFLECTION_MODEL` override to `gemini-3.0-pro`; other agents inherit `MODEL_NAME`.
-- Testing + usertest (`.env.test`, `.env.usertest`): everyone uses `MODEL_NAME=gemini-2.5-flash-light` (keeps cost predictable for local/manual testing).
+- Local defaults (`.env`): `LLM_PROVIDER=openai_compatible`, `LLM_BASE_URL=http://host.docker.internal:8080/v1`, and `MODEL_NAME=local-model` for a host llama.cpp server. Override `MODEL_NAME` to match the model alias served locally.
+- Gemini/usertest defaults (`.env.usertest`): everyone uses `MODEL_NAME=gemini-2.5-flash-light` unless overridden (keeps cost predictable for manual cloud testing).
 - Rate limiting is controlled entirely via env (`LLM_RATE_LIMIT_ENABLED`, `LLM_REQUESTS_PER_MINUTE`, `LLM_BURST_CAPACITY`). The container reads those fields when constructing `LLMService`.
 
 ### Logging
