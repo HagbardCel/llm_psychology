@@ -42,12 +42,14 @@ async def main():
     websocket_url = os.getenv(
         "WEBSOCKET_URL", "http://localhost:8000"
     )  # Unified server on same port
+    websocket_origin = os.getenv("WEBSOCKET_ORIGIN", backend_url)
 
     output.system("Console UI configuration:")
     output.system("🧠 Virtual LLM-Driven Psychoanalyst - Console Interface")
     output.system("=" * 60)
     output.system(f"Backend: {backend_url}")
     output.system(f"WebSocket: {websocket_url}")
+    output.system(f"WebSocket Origin: {websocket_origin}")
     output.system(f"Client Version: v{CLIENT_VERSION}")
     output.system("=" * 60)
 
@@ -85,6 +87,7 @@ async def main():
         client = ConsoleClient(
             backend_url=backend_url,
             websocket_url=websocket_url,
+            websocket_origin=websocket_origin,
             user_id=user_id,
             output=output,
         )

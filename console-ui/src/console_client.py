@@ -35,9 +35,11 @@ class ConsoleClient:
         websocket_url: str,
         user_id: str | None,
         output: ConsoleOutput,
+        websocket_origin: str | None = None,
     ):
         self.backend_url = backend_url.rstrip("/")
-        self.websocket_url = websocket_url
+        self.websocket_url = websocket_url.rstrip("/")
+        self.websocket_origin = (websocket_origin or self.backend_url).rstrip("/")
         self.user_id = user_id
         self.output = output
 
@@ -65,6 +67,19 @@ class ConsoleClient:
         self.registered = False
         self.welcome_shown = False
         self.current_profile: dict[str, Any] | None = None
+
+    def _build_websocket_url(self) -> str:
+        """Build the backend WebSocket URL for the current user profile."""
+        ws_url = self.websocket_url.replace("http://", "ws://").replace(
+            "https://", "wss://"
+        )
+        if not ws_url.endswith("/ws"):
+            ws_url = f"{ws_url}/ws"
+        return f"{ws_url}?user_id={self.user_id}"
+
+    def _websocket_headers(self) -> list[tuple[str, str]]:
+        """Headers required by backend WebSocket origin validation."""
+        return [("Origin", self.websocket_origin)]
 
     def _show_welcome_message(self) -> None:
         """Display chat instructions once per session."""
@@ -985,24 +1000,14 @@ class ConsoleClient:
                 return
 
             # Connect to WebSocket and run with structured concurrency
-            ws_url = self.websocket_url.replace("http://", "ws://").replace(
-                "https://", "wss://"
-            )
-            if not ws_url.endswith("/ws"):
-                ws_url = f"{ws_url}/ws"
-
-            # Add user_id as query parameter (server only expects user_id, not token)
-            ws_url = f"{ws_url}?user_id={self.user_id}"
-
-            # Extract origin for CORS (required for WebSocket handshake)
-            origin = self.backend_url  # Use backend_url as origin (e.g., http://api-usertest:8000)
+            ws_url = self._build_websocket_url()
 
             logger.info(f"Connecting to WebSocket: {ws_url}")
 
             try:
                 # Include Origin header for CORS validation during WebSocket handshake
                 async with open_websocket_url(
-                    ws_url, extra_headers=[("Origin", origin)]
+                    ws_url, extra_headers=self._websocket_headers()
                 ) as ws:
                     self.ws = ws
                     self.connected = True

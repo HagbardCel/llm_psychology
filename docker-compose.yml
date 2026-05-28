@@ -193,6 +193,7 @@ services:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://api:8000
       - WEBSOCKET_URL=http://api:8000
+      - WEBSOCKET_ORIGIN=http://localhost:5173
       - USER_ID=console_user
       - AUTH_TOKEN=console_token
       - CONSOLE_LOG_PATH=/app/logs/console-ui.log
@@ -292,6 +293,7 @@ services:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://api-usertest:8000
       - WEBSOCKET_URL=http://api-usertest:8000
+      - WEBSOCKET_ORIGIN=http://localhost:5173
       - USER_ID=console_user_test
       - AUTH_TOKEN=console_token_test
       - CONSOLE_LOG_PATH=/app/logs/console-ui-usertest.log
