@@ -80,6 +80,37 @@ async def test_console_assessment_recommendations_do_not_leak_api_instructions(
     assert leaked is False
 
 
+async def test_console_websocket_connection_uses_configured_origin(
+    console_client_cls,
+):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://api:8000",
+        websocket_url="http://api:8000",
+        websocket_origin="http://localhost:5173",
+        user_id="console_user",
+        output=output,
+    )
+
+    assert client._build_websocket_url() == "ws://api:8000/ws?user_id=console_user"
+    assert client._websocket_headers() == [("Origin", "http://localhost:5173")]
+
+
+async def test_console_websocket_origin_defaults_to_backend_url(
+    console_client_cls,
+):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000/ws",
+        user_id="user-1",
+        output=output,
+    )
+
+    assert client._build_websocket_url() == "ws://localhost:8000/ws?user_id=user-1"
+    assert client._websocket_headers() == [("Origin", "http://localhost:8000")]
+
+
 async def test_chat_loop_returns_to_workflow_when_action_not_chat(
     console_client_cls,
 ):
