@@ -296,6 +296,172 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
 
 @pytest.mark.trio
 @pytest.mark.unit
+async def test_migration_repairs_legacy_profile_schema_with_high_version(tmp_path):
+    """Legacy DBs with newer historical versions should still get current columns."""
+    import sqlite3
+
+    from psychoanalyst_app.models.data_models import UserProfile
+    from psychoanalyst_app.services.migration_service import MigrationService
+    from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    db_path = str(tmp_path / "legacy_profile_schema.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?)",
+            (datetime.now().isoformat(),),
+        )
+        cursor.execute(
+            """
+            CREATE TABLE user_profiles (
+                user_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                birthdate TEXT,
+                profession TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                alias TEXT,
+                data_of_birth TEXT,
+                gender TEXT,
+                cultural_background TEXT,
+                primary_language TEXT NOT NULL DEFAULT 'English',
+                parents TEXT,
+                siblings TEXT,
+                family_atmosphere TEXT,
+                significant_events TEXT,
+                education TEXT,
+                work_history TEXT,
+                relationship_to_work TEXT,
+                relationships TEXT,
+                social_context TEXT,
+                current_situation TEXT,
+                preferred_school TEXT,
+                session_mode TEXT NOT NULL DEFAULT 'virtual',
+                boundary_notes TEXT,
+                frame_notes TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                plan_id TEXT,
+                timestamp TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                topics TEXT,
+                session_summary TEXT,
+                session_briefing TEXT,
+                psychological_summary TEXT,
+                dominant_affects TEXT,
+                key_themes TEXT,
+                notable_interactions TEXT,
+                interpretations TEXT,
+                patient_reactions TEXT,
+                enriched INTEGER DEFAULT 0
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE therapy_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                plan_details TEXT NOT NULL,
+                initial_goals TEXT,
+                current_progress TEXT,
+                planned_interventions TEXT,
+                status TEXT DEFAULT 'active',
+                version INTEGER NOT NULL,
+                selected_therapy_style TEXT,
+                session_briefing TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE patient_analysis (
+                analysis_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                analysis_data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by_session TEXT,
+                change_summary TEXT,
+                superseded_by TEXT,
+                UNIQUE(user_id, version)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE session_enrichment_jobs (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE user_profile_history (
+                history_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                previous_profile_data TEXT NOT NULL,
+                new_profile_data TEXT NOT NULL,
+                change_summary TEXT,
+                created_at TEXT NOT NULL,
+                created_by_session TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migration_service = MigrationService(db_path)
+    db = TrioDatabaseService(db_path, migration_service=migration_service)
+    await db.initialize()
+    try:
+        assert await db.save_user_profile(
+            UserProfile(
+                user_id="legacy_user",
+                name="Legacy User",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+    finally:
+        db.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profiles)")}
+    finally:
+        conn.close()
+
+    assert "plan_id" in columns
+
+
+@pytest.mark.trio
+@pytest.mark.unit
 async def test_migration_connection_configures_file_backed_sqlite(tmp_path):
     """Migration connections should apply local SQLite resilience pragmas."""
     from psychoanalyst_app.services.migration_service import MigrationService
