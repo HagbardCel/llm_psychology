@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     LLM_PROVIDER: str = Field(
-        default="gemini",
+        default="openai_compatible",
         description=(
             "LLM provider to use: gemini, ollama, lmstudio, or openai_compatible"
         ),
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         default="", description="Deprecated alias for GOOGLE_API_KEY"
     )
     MODEL_NAME: str = Field(
-        default="",
+        default="local-model",
         description=(
             "Default model name when an agent-specific override is not provided "
             "(set via environment/.env files)"
@@ -116,6 +116,8 @@ class Settings(BaseSettings):
             return "http://host.docker.internal:11434"
         if self.LLM_PROVIDER == "lmstudio":
             return "http://host.docker.internal:1234/v1"
+        if self.LLM_PROVIDER == "openai_compatible":
+            return "http://host.docker.internal:8080/v1"
         return None
 
     def get_model_for_agent(self, agent_type: str) -> str:

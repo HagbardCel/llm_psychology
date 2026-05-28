@@ -9,6 +9,7 @@ import pytest
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.exceptions import ConfigurationError
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 
 
@@ -161,6 +162,41 @@ class TestServiceContainer:
         assert llm_service.provider == "ollama"
         assert llm_service.model_name == "llama3.1"
         assert llm_service.base_url == "http://ollama:11434"
+
+    def test_default_local_llm_service_does_not_require_google_api_key(self):
+        """Test default local llama.cpp provider can be wired without a Gemini key."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "local-model",
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.provider == "openai_compatible"
+        assert llm_service.model_name == "local-model"
+        assert llm_service.base_url == "http://host.docker.internal:8080/v1"
+
+    def test_gemini_llm_service_requires_google_api_key(self):
+        """Test Gemini still fails fast without a configured Google key."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "gemini-3.0-flash",
+                "LLM_PROVIDER": "gemini",
+            }
+        )
+        container = ServiceContainer(settings)
+
+        with pytest.raises(
+            ConfigurationError, match="GOOGLE_API_KEY must be configured"
+        ):
+            container.get("llm_service")
 
     def test_llm_service_cache_includes_provider_and_base_url(self):
         """Test services are cached by provider/model/base URL, not model alone."""
