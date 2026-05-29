@@ -463,7 +463,7 @@ class TrioAgentOrchestrator:
 
             await self.workflow_engine.transition(
                 user_id,
-                WorkflowState.PLAN_COMPLETE,
+                WorkflowState.INITIAL_PLAN_COMPLETE,
             )
 
             logger.info(

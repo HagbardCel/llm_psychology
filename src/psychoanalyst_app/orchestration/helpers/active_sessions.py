@@ -36,7 +36,9 @@ def session_type_for_workflow_state(state: WorkflowState) -> str:
         WorkflowState.INTAKE_COMPLETE: "assessment",
         WorkflowState.ASSESSMENT_IN_PROGRESS: "assessment",
         WorkflowState.ASSESSMENT_COMPLETE: "therapy",
+        WorkflowState.INITIAL_PLAN_COMPLETE: "therapy",
         WorkflowState.THERAPY_IN_PROGRESS: "therapy",
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS: "therapy",
         WorkflowState.REFLECTION_IN_PROGRESS: "therapy",
         WorkflowState.PLAN_COMPLETE: "therapy",
     }

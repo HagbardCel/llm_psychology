@@ -14,6 +14,7 @@ def resolve_response_mode(
     """Resolve next action/workflow event from session timing and user status."""
     if context.user_profile.status in (
         UserStatus.ASSESSMENT_COMPLETE,
+        UserStatus.INITIAL_PLAN_COMPLETE,
         UserStatus.PLAN_COMPLETE,
     ):
         return ("transition", WorkflowEvent.START_THERAPY)

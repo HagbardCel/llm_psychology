@@ -110,7 +110,7 @@ These shapes are what all clients should assume on the wire.
 ### `WorkflowNextActionDTO`
 
 - `user_id`: `string`
-- `workflow_state`: `string` (enum value matching `WorkflowState`)
+- `workflow_state`: `string` (enum value matching `WorkflowState`: `new`, `intake_in_progress`, `intake_complete`, `assessment_in_progress`, `assessment_complete`, `initial_plan_complete`, `therapy_in_progress`, `plan_update_in_progress`, `reflection_in_progress`, `plan_complete`)
 - `required_action`: `"complete_profile" | "select_therapy_style" | "start_intake" | "continue_therapy" | "wait"`
 - `required_fields`: `string[]`
 - `defaults`: `{ [k: string]: string } | null`
@@ -343,6 +343,7 @@ These shapes are what all clients should assume on the wire.
 
 - Request: `WorkflowSelectTherapyStyleRequestDTO` (requires `session_id`)
 - Session must be active for the user; WebSocket presence is optional.
+- On success, the workflow moves from `assessment_complete` to `initial_plan_complete` and returns `required_action="continue_therapy"`.
 - **200**: `WorkflowNextActionDTO`
 - **400**: `{ "error": "<validation message>" }`
 - **404**: `{ "error": "User profile not found" }`

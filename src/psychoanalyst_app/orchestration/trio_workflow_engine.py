@@ -30,7 +30,9 @@ class TrioWorkflowEngine:
         WorkflowState.INTAKE_COMPLETE: "ASSESSMENT",
         WorkflowState.ASSESSMENT_IN_PROGRESS: "ASSESSMENT",
         WorkflowState.ASSESSMENT_COMPLETE: "PSYCHOANALYST",
+        WorkflowState.INITIAL_PLAN_COMPLETE: "PSYCHOANALYST",
         WorkflowState.THERAPY_IN_PROGRESS: "PSYCHOANALYST",
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS: "REFLECTION",
         WorkflowState.REFLECTION_IN_PROGRESS: "REFLECTION",
         WorkflowState.PLAN_COMPLETE: "PSYCHOANALYST",
     }
@@ -48,12 +50,19 @@ class TrioWorkflowEngine:
             WorkflowState.ASSESSMENT_IN_PROGRESS,  # Allow staying in progress
         ],
         WorkflowState.ASSESSMENT_COMPLETE: [
+            WorkflowState.INITIAL_PLAN_COMPLETE,
+        ],
+        WorkflowState.INITIAL_PLAN_COMPLETE: [
             WorkflowState.THERAPY_IN_PROGRESS,
-            WorkflowState.PLAN_COMPLETE,
+            WorkflowState.INITIAL_PLAN_COMPLETE,
         ],
         WorkflowState.THERAPY_IN_PROGRESS: [
-            WorkflowState.REFLECTION_IN_PROGRESS,
+            WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowState.THERAPY_IN_PROGRESS,  # Allow staying in progress
+        ],
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS: [
+            WorkflowState.PLAN_COMPLETE,
+            WorkflowState.PLAN_UPDATE_IN_PROGRESS,  # Allow staying in progress
         ],
         WorkflowState.REFLECTION_IN_PROGRESS: [
             WorkflowState.PLAN_COMPLETE,
@@ -72,7 +81,9 @@ class TrioWorkflowEngine:
         UserStatus.INTAKE_COMPLETE: WorkflowState.INTAKE_COMPLETE,
         UserStatus.ASSESSMENT_IN_PROGRESS: WorkflowState.ASSESSMENT_IN_PROGRESS,
         UserStatus.ASSESSMENT_COMPLETE: WorkflowState.ASSESSMENT_COMPLETE,
+        UserStatus.INITIAL_PLAN_COMPLETE: WorkflowState.INITIAL_PLAN_COMPLETE,
         UserStatus.THERAPY_IN_PROGRESS: WorkflowState.THERAPY_IN_PROGRESS,
+        UserStatus.PLAN_UPDATE_IN_PROGRESS: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
         UserStatus.REFLECTION_IN_PROGRESS: WorkflowState.REFLECTION_IN_PROGRESS,
         UserStatus.PLAN_COMPLETE: WorkflowState.PLAN_COMPLETE,
     }
@@ -84,7 +95,9 @@ class TrioWorkflowEngine:
         WorkflowState.INTAKE_COMPLETE: UserStatus.INTAKE_COMPLETE,
         WorkflowState.ASSESSMENT_IN_PROGRESS: UserStatus.ASSESSMENT_IN_PROGRESS,
         WorkflowState.ASSESSMENT_COMPLETE: UserStatus.ASSESSMENT_COMPLETE,
+        WorkflowState.INITIAL_PLAN_COMPLETE: UserStatus.INITIAL_PLAN_COMPLETE,
         WorkflowState.THERAPY_IN_PROGRESS: UserStatus.THERAPY_IN_PROGRESS,
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS: UserStatus.PLAN_UPDATE_IN_PROGRESS,
         WorkflowState.REFLECTION_IN_PROGRESS: UserStatus.REFLECTION_IN_PROGRESS,
         WorkflowState.PLAN_COMPLETE: UserStatus.PLAN_COMPLETE,
     }
@@ -232,8 +245,8 @@ class TrioWorkflowEngine:
             WorkflowEvent.START_ASSESSMENT: WorkflowState.ASSESSMENT_IN_PROGRESS,
             WorkflowEvent.COMPLETE_ASSESSMENT: WorkflowState.ASSESSMENT_COMPLETE,
             WorkflowEvent.START_THERAPY: WorkflowState.THERAPY_IN_PROGRESS,
-            WorkflowEvent.COMPLETE_SESSION: WorkflowState.REFLECTION_IN_PROGRESS,
-            WorkflowEvent.START_REFLECTION: WorkflowState.REFLECTION_IN_PROGRESS,
+            WorkflowEvent.COMPLETE_SESSION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+            WorkflowEvent.START_REFLECTION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowEvent.COMPLETE_REFLECTION: WorkflowState.PLAN_COMPLETE,
             WorkflowEvent.RESUME_THERAPY: WorkflowState.THERAPY_IN_PROGRESS,
         }

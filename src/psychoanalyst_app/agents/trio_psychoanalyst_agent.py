@@ -156,8 +156,24 @@ class TrioPsychoanalystAgent:
             # Get therapy plan
             therapy_plan = context.therapy_plan
             if not therapy_plan:
+                therapy_plan = await self.db_service.get_latest_therapy_plan(
+                    context.user_profile.user_id
+                )
+                context.therapy_plan = therapy_plan
+
+            if not therapy_plan:
+                logger.error(
+                    "Therapy context recovery found no plan for user %s "
+                    "(session=%s)",
+                    context.user_profile.user_id,
+                    context.session_id,
+                )
                 return AgentResponse(
-                    content="I apologize, but I don't have your therapy plan loaded. Please contact support.",
+                    content=(
+                        "Let's stay with what feels most urgent right now. "
+                        "Tell me one recent moment when the worry became strongest, "
+                        "and we can work from there."
+                    ),
                     next_action="continue",
                     workflow_event=None,
                     metadata={"error": "No therapy plan"},

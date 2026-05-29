@@ -79,7 +79,10 @@ export function NavigationDrawer({ open, onClose, variant }: NavigationDrawerPro
       label: 'Therapy Session',
       path: '/session/new',
       icon: <ChatIcon />,
-      locked: user.status < UserStatus.PLAN_COMPLETE
+      locked:
+        user.status !== UserStatus.INITIAL_PLAN_COMPLETE &&
+        user.status !== UserStatus.PLAN_COMPLETE &&
+        user.status !== UserStatus.THERAPY_IN_PROGRESS
     },
     { label: 'History', path: '/history', icon: <HistoryIcon /> },
     { label: 'Profile', path: '/profile', icon: <PersonIcon /> },
@@ -162,6 +165,10 @@ function getUserStatusLabel(status: UserStatus): string {
       return 'Assessment';
     case UserStatus.ASSESSMENT_COMPLETE:
       return 'Assessment Complete';
+    case UserStatus.INITIAL_PLAN_COMPLETE:
+      return 'Ready';
+    case UserStatus.PLAN_UPDATE_IN_PROGRESS:
+      return 'Updating Plan';
     case UserStatus.PLAN_COMPLETE:
       return 'Ready';
     case UserStatus.THERAPY_IN_PROGRESS:

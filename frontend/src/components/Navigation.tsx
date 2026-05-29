@@ -54,6 +54,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
         return 'warning';
       case UserStatus.INTAKE_COMPLETE:
         return 'info';
+      case UserStatus.INITIAL_PLAN_COMPLETE:
       case UserStatus.PLAN_COMPLETE:
         return 'success';
       default:
@@ -67,6 +68,8 @@ export function Navigation({ open, onClose }: NavigationProps) {
         return 'Setup Required';
       case UserStatus.INTAKE_COMPLETE:
         return 'Assessment Ready';
+      case UserStatus.INITIAL_PLAN_COMPLETE:
+        return 'Ready for Therapy';
       case UserStatus.PLAN_COMPLETE:
         return 'Ready for Therapy';
       default:
@@ -85,7 +88,9 @@ export function Navigation({ open, onClose }: NavigationProps) {
       text: 'New Session',
       icon: <PsychologyIcon />,
       path: '/session/new',
-      enabled: user?.status === UserStatus.PLAN_COMPLETE,
+      enabled:
+        user?.status === UserStatus.INITIAL_PLAN_COMPLETE ||
+        user?.status === UserStatus.PLAN_COMPLETE,
     },
     {
       text: 'Session History',

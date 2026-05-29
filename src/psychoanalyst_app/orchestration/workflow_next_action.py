@@ -83,16 +83,20 @@ def resolve_next_action(
         )
 
     if workflow_state in (
+        WorkflowState.INITIAL_PLAN_COMPLETE,
         WorkflowState.THERAPY_IN_PROGRESS,
         WorkflowState.PLAN_COMPLETE,
     ):
         return _continue_therapy_action(user_id, workflow_state)
 
-    if workflow_state == WorkflowState.REFLECTION_IN_PROGRESS:
+    if workflow_state in (
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+        WorkflowState.REFLECTION_IN_PROGRESS,
+    ):
         return _wait_action(
             user_id,
             workflow_state,
-            prompt="Reflection in progress. We'll notify you when it's ready.",
+            prompt="Session reflection in progress. We'll notify you when it's ready.",
         )
 
     # Default fallback when state is NEW but profile already exists
@@ -158,13 +162,19 @@ def _wait_action(user_id: str, state: WorkflowState, *, prompt: str) -> Workflow
 
 def _continue_therapy_action(user_id: str, state: WorkflowState) -> WorkflowNextActionDTO:
     """Helper for therapy continuation prompts."""
+    if state == WorkflowState.INITIAL_PLAN_COMPLETE:
+        prompt = "Your selected therapy style is ready. Start therapy whenever you're ready."
+    elif state == WorkflowState.PLAN_COMPLETE:
+        prompt = "Your session reflection is complete. Resume therapy whenever you're ready."
+    else:
+        prompt = "Resume your therapy session or start a new one whenever you're ready."
     return WorkflowNextActionDTO(
         user_id=user_id,
         workflow_state=state,
         required_action=RequiredWorkflowAction.CONTINUE_THERAPY,
         required_fields=[],
         defaults=None,
-        prompt="Resume your therapy session or start a new one whenever you're ready.",
+        prompt=prompt,
         blocking=False,
         timestamp=datetime.utcnow(),
     )

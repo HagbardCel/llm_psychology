@@ -189,7 +189,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     assert plan.selected_therapy_style == "freud"
     assert mock_reflection_agent.create_initial_plan_with_style.called
     mock_dependencies["workflow_engine"].transition.assert_called_once_with(
-        "test_user", WorkflowState.PLAN_COMPLETE
+        "test_user", WorkflowState.INITIAL_PLAN_COMPLETE
     )
 
 

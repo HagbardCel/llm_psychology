@@ -130,18 +130,43 @@ def test_selects_style_after_assessment_complete():
 
 
 def test_continues_therapy_after_plan_created():
-    """Therapy and planning states should return a continue action with populated plan."""
+    """Initial and recurring planning states should return continue actions."""
     profile = _complete_profile()
     plan = _therapy_plan()
-    action = resolve_next_action(
+    initial_action = resolve_next_action(
+        user_id=profile.user_id,
+        workflow_state=WorkflowState.INITIAL_PLAN_COMPLETE,
+        profile=profile,
+        plan=plan,
+    )
+    recurring_action = resolve_next_action(
         user_id=profile.user_id,
         workflow_state=WorkflowState.PLAN_COMPLETE,
         profile=profile,
         plan=plan,
     )
 
-    assert action.required_action == RequiredWorkflowAction.CONTINUE_THERAPY
-    assert not action.blocking
+    assert initial_action.required_action == RequiredWorkflowAction.CONTINUE_THERAPY
+    assert "selected therapy style is ready" in (initial_action.prompt or "")
+    assert not initial_action.blocking
+    assert recurring_action.required_action == RequiredWorkflowAction.CONTINUE_THERAPY
+    assert "session reflection is complete" in (recurring_action.prompt or "")
+    assert not recurring_action.blocking
+
+
+def test_waits_during_plan_update_in_progress():
+    """Post-session plan updates run in the backend while clients wait."""
+    profile = _complete_profile()
+    action = resolve_next_action(
+        user_id=profile.user_id,
+        workflow_state=WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+        profile=profile,
+        plan=_therapy_plan(),
+    )
+
+    assert action.required_action == RequiredWorkflowAction.WAIT
+    assert action.blocking
+    assert "Session reflection in progress" in (action.prompt or "")
 
 
 def test_session_info_influences_prompt():

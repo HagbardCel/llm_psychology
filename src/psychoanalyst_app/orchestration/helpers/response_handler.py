@@ -132,7 +132,7 @@ class AgentResponseHandler:
 
                 if (
                     current_state == WorkflowState.THERAPY_IN_PROGRESS
-                    and next_state == WorkflowState.REFLECTION_IN_PROGRESS
+                    and next_state == WorkflowState.PLAN_UPDATE_IN_PROGRESS
                 ):
                     try:
                         trio_db_service = self.service_container.get("trio_db_service")
@@ -250,7 +250,10 @@ class AgentResponseHandler:
         """Run reflection automatically after a therapy session completes."""
         try:
             state = await self.workflow_engine.get_user_state(user_id)
-            if state != WorkflowState.REFLECTION_IN_PROGRESS:
+            if state not in (
+                WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+                WorkflowState.REFLECTION_IN_PROGRESS,
+            ):
                 logger.info(
                     "Skipping auto reflection for session %s (state=%s)",
                     session_id,
@@ -390,10 +393,16 @@ class AgentResponseHandler:
             ServerMessageTypes.ERROR,
             {
                 "message": (
-                    f"Reflection failed due to a backend error ({detail}). "
-                    "You can continue your session while we investigate."
+                    "We can continue from what you shared last session. "
+                    "Let's take a moment to notice what feels most important "
+                    "to return to now."
                 )
             },
+        )
+        logger.error(
+            "Reflection recovery response emitted for session %s (%s)",
+            session_id,
+            detail,
         )
         try:
             await self.workflow_engine.transition(
