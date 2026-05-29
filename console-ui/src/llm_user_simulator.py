@@ -348,12 +348,17 @@ class LocalLLMUserSimulator:
                 "- Preferred therapy style: "
                 f"{workflow_preferences.get('therapy_style', 'cbt')}",
                 "",
-                f"Current workflow action: {context.workflow_action}",
+                f"Current phase: {context.simulator_phase}",
                 "",
                 "Recent transcript:",
                 transcript or "(none yet)",
                 "",
                 f"Console prompt: {context.prompt or 'Your response:'}",
+                "",
+                "Rules:",
+                "- Stay in the patient role.",
+                "- Do not ask for recommendations, plans, support, systems, records, backend state, or waiting.",
+                "- If therapy has started, respond about symptoms, thoughts, feelings, or the therapist's last message.",
                 "",
                 "Return exactly one patient reply, under 40 words.",
             ]

@@ -31,6 +31,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
         user_id="local_llm_smoke",
         session_id=None,
         workflow_action={"required_action": "start_intake"},
+        simulator_phase="You are answering intake questions.",
         pending_recommendations=None,
         transcript_tail=[],
         turn_index=0,

@@ -17,6 +17,7 @@ from .input_providers import (
     InputResult,
     InputProvider,
     infer_prompt_kind,
+    simulator_phase_for_action,
 )
 from .output import ConsoleOutput
 from .websocket_protocol import (
@@ -295,6 +296,8 @@ class ConsoleClient:
             self.output.user_text(
                 f"\n⏳ {prompt or 'Waiting for backend workflow...'}", flush=True
             )
+        if required_action not in {"start_intake", "continue_therapy"}:
+            self.response_complete.set()
 
     async def _handle_session_ended(self, data: Dict[str, Any]):
         """Handle server-side session end notification."""
@@ -473,6 +476,13 @@ class ConsoleClient:
                     session_id=self.current_session_id,
                 )
             self.pending_recommendations = None
+            self._append_transcript(
+                "system",
+                (
+                    f"The user selected {chosen_style.upper()}. "
+                    "The recommendation step is complete. Therapy has started."
+                ),
+            )
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.output.error(f"❌ Failed to save therapy style: {message}")
@@ -509,6 +519,7 @@ class ConsoleClient:
             user_id=self.user_id,
             session_id=self.current_session_id,
             workflow_action=self.latest_workflow_action,
+            simulator_phase=simulator_phase_for_action(self.latest_workflow_action),
             pending_recommendations=self.pending_recommendations,
             transcript_tail=self.transcript_tail[-8:],
             turn_index=self.turn_index,
@@ -1039,6 +1050,12 @@ class ConsoleClient:
 
                     if self.session_end_requested:
                         return True
+                    if (
+                        self.latest_workflow_action
+                        and self.latest_workflow_action.get("required_action")
+                        not in {"start_intake", "continue_therapy"}
+                    ):
+                        return False
 
                 except KeyboardInterrupt:
                     await self._request_end_session(ws, reason="User exited console")

@@ -187,6 +187,13 @@ async def test_select_therapy_style_posts_and_clears_pending_recommendations(
         )
     ]
     assert client.pending_recommendations is None
+    assert client.transcript_tail[-1] == {
+        "role": "system",
+        "content": (
+            "The user selected CBT. The recommendation step is complete. "
+            "Therapy has started."
+        ),
+    }
 
 
 async def test_probe_style_selection_failure_raises_after_attempt_limit(

@@ -61,6 +61,7 @@ async def test_scripted_input_provider_uses_structural_prompt_response(console_m
         user_id="user-1",
         session_id="session-1",
         workflow_action=None,
+        simulator_phase="You are choosing a therapy style.",
         pending_recommendations=None,
         transcript_tail=[],
         turn_index=0,
@@ -119,6 +120,7 @@ async def test_llm_input_provider_uses_scripted_chat_fallbacks(console_modules):
         user_id="user-1",
         session_id="session-1",
         workflow_action=None,
+        simulator_phase="You are in a therapy conversation.",
         pending_recommendations=None,
         transcript_tail=[],
         turn_index=0,
@@ -137,6 +139,49 @@ async def test_llm_input_provider_uses_scripted_chat_fallbacks(console_modules):
     assert first.input_origin == "fallback"
     assert second.text == "second"
     assert third.text == "default"
+
+
+async def test_local_llm_simulator_prompt_excludes_raw_workflow_fields(console_modules):
+    simulator_mod = console_modules["llm_user_simulator"]
+    simulator = simulator_mod.LocalLLMUserSimulator(
+        base_url="http://unused",
+        model="unused",
+    )
+    context = type(
+        "Context",
+        (),
+        {
+            "transcript_tail": [
+                {"role": "assistant", "content": "What is strongest tonight?"}
+            ],
+            "workflow_action": {
+                "required_action": "continue_therapy",
+                "workflow_state": "initial_plan_complete",
+                "prompt": "Internal backend prompt",
+                "session_id": "session-secret",
+            },
+            "simulator_phase": "You are in a therapy conversation.",
+            "pending_recommendations": [
+                {"style_id": "cbt", "explanation": "Internal recommendation"}
+            ],
+            "prompt": None,
+        },
+    )()
+
+    prompt = simulator._build_prompt(
+        {
+            "user": {"name": "Probe User", "primary_language": "English"},
+            "workflow_preferences": {"therapy_style": "cbt"},
+        },
+        context,
+    )
+
+    assert "Current phase: You are in a therapy conversation." in prompt
+    assert "workflow_state" not in prompt
+    assert "required_action" not in prompt
+    assert "Internal backend prompt" not in prompt
+    assert "session-secret" not in prompt
+    assert "Internal recommendation" not in prompt
 
 
 async def test_probe_chat_loop_reraises_provider_errors(console_modules):
@@ -529,6 +574,7 @@ async def test_local_llm_simulator_records_fallback_reasons(console_modules):
                 {
                     "transcript_tail": [],
                     "workflow_action": None,
+                    "simulator_phase": "You are in a therapy conversation.",
                     "prompt": None,
                 },
             )(),

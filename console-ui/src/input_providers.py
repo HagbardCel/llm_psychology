@@ -24,6 +24,7 @@ class InputContext:
     user_id: str | None
     session_id: str | None
     workflow_action: dict[str, Any] | None
+    simulator_phase: str
     pending_recommendations: list[dict[str, Any]] | None
     transcript_tail: list[dict[str, str]]
     turn_index: int
@@ -169,6 +170,23 @@ def infer_prompt_kind(prompt: str | None) -> str:
     if normalized.startswith("enter ") and "language" not in normalized:
         return "profile_field"
     return "prompt"
+
+
+def simulator_phase_for_action(workflow_action: dict[str, Any] | None) -> str:
+    """Return only patient-visible phase context for simulated chat input."""
+    if not isinstance(workflow_action, dict):
+        return "You are in a therapy conversation."
+
+    action = workflow_action.get("required_action")
+    if action == "start_intake":
+        return "You are answering intake questions."
+    if action == "continue_therapy":
+        return "You are in a therapy conversation."
+    if action == "select_therapy_style":
+        return "You are choosing a therapy style."
+    if action == "wait":
+        return "The conversation is paused."
+    return "You are in a therapy conversation."
 
 
 def _normalize_prompt(prompt: str) -> str:
