@@ -30,6 +30,14 @@ from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
 
+MAX_CONSECUTIVE_LLM_FAILURES = 2
+LLM_RETRY_ERROR_MESSAGE = (
+    "I ran into a problem while generating that response. Let's try again."
+)
+LLM_TERMINAL_ERROR_MESSAGE = (
+    "I am unable to generate a response right now. Please pause and try again later."
+)
+
 
 class TrioConversationManager:
     """
@@ -69,6 +77,7 @@ class TrioConversationManager:
         self.websockets: dict[str, Any] = {}
         self._websocket_ready_events: dict[str, trio.Event] = {}
         self._initial_greeting_sent: set[str] = set()
+        self._llm_failure_counts: dict[str, int] = {}
         self.config = config
 
     def register_websocket(self, session_id: str, ws: Any):
@@ -88,6 +97,7 @@ class TrioConversationManager:
             del self.websockets[session_id]
         if session_id in self._websocket_ready_events:
             del self._websocket_ready_events[session_id]
+        self._llm_failure_counts.pop(session_id, None)
         logger.info(f"Unregistered websocket for session {session_id}")
 
     def mark_initial_greeting_sent(self, session_id: str) -> None:
@@ -211,6 +221,7 @@ class TrioConversationManager:
         Yields:
             Response chunks as they're generated
         """
+        service = llm_service if llm_service is not None else self.llm_service
         try:
             # Retrieve RAG context if needed and therapy plan exists
             augmented_prompt = prompt
@@ -232,9 +243,6 @@ class TrioConversationManager:
             full_response = ""
             chunk_count = 0
 
-            # Use provided llm_service or fall back to default
-            service = llm_service if llm_service is not None else self.llm_service
-
             async for chunk in self._stream_llm_response(
                 augmented_prompt, conversation_history, service
             ):
@@ -251,16 +259,31 @@ class TrioConversationManager:
             await self.add_message(
                 context.session_id, "assistant", full_response, agent
             )
+            self._reset_llm_failure_count(context.session_id)
 
         except Exception as e:
             import traceback
 
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            logger.error(f"Error streaming response: {e}", exc_info=True)
-
-            error_summary = (
-                "I ran into a problem while generating that response. Let's try again."
+            failure_count = self._record_llm_failure(context.session_id, service, e)
+            logger.error(
+                "Error streaming response for session %s "
+                "(consecutive_llm_failures=%s): %s\n%s",
+                context.session_id,
+                failure_count,
+                e,
+                tb_str,
+                exc_info=True,
             )
+
+            error_summary = LLM_RETRY_ERROR_MESSAGE
+            if failure_count >= MAX_CONSECUTIVE_LLM_FAILURES:
+                error_summary = LLM_TERMINAL_ERROR_MESSAGE
+                logger.error(
+                    "Consecutive LLM failure limit reached for session %s",
+                    context.session_id,
+                )
+
             yield error_summary
             await self.add_message(
                 context.session_id,
@@ -268,6 +291,34 @@ class TrioConversationManager:
                 f"{error_summary}\n\nDetails logged as {type(e).__name__}.",
                 agent,
             )
+
+    def _reset_llm_failure_count(self, session_id: str) -> None:
+        self._llm_failure_counts.pop(session_id, None)
+
+    def _record_llm_failure(
+        self, session_id: str, llm_service: LLMService, exc: Exception
+    ) -> int:
+        failure_count = self._llm_failure_counts.get(session_id, 0) + 1
+        self._llm_failure_counts[session_id] = failure_count
+
+        llm_client = getattr(llm_service, "llm", None)
+        extra_body = getattr(llm_client, "extra_body", None)
+        extra_body_keys = (
+            sorted(str(key) for key in extra_body)
+            if isinstance(extra_body, dict)
+            else []
+        )
+        logger.error(
+            "LLM generation failure metadata: provider=%s model=%s base_url=%s "
+            "exception_type=%s exception_message=%s request_extra_body_keys=%s",
+            getattr(llm_service, "provider", "unknown"),
+            getattr(llm_service, "model_name", "unknown"),
+            getattr(llm_service, "base_url", None),
+            type(exc).__name__,
+            str(exc),
+            extra_body_keys,
+        )
+        return failure_count
 
     async def stream_static_response(
         self, content: str, context: ConversationContext, agent: str | None = None
@@ -502,6 +553,7 @@ Based on the above context and your therapeutic approach, respond to:
         if session_id in self.active_contexts:
             del self.active_contexts[session_id]
             logger.info(f"Cleared cached context for session {session_id}")
+        self._llm_failure_counts.pop(session_id, None)
 
     def get_active_sessions(self) -> list:
         """
