@@ -16,6 +16,7 @@ from psychoanalyst_app.models.data_models import (
     UserProfile,
 )
 from psychoanalyst_app.models.structured_output_models import DeepTopicSignalOutput
+from psychoanalyst_app.orchestration.models import ConversationContext
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
 
@@ -260,6 +261,67 @@ async def test_load_patient_context_includes_tiers(app_config):
     assert context_text is not None
     assert "=== PATIENT BACKGROUND ===" in context_text
     assert "=== TREATMENT GOALS ===" in context_text
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_process_message_recovers_plan_from_db(
+    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+):
+    """A stale context without a plan should reload the latest plan before fallback."""
+    psychoanalyst_agent.db_service.get_latest_therapy_plan = AsyncMock(
+        return_value=sample_therapy_plan
+    )
+    psychoanalyst_agent.db_service.get_user_profile = AsyncMock(
+        return_value=sample_user_profile
+    )
+    psychoanalyst_agent.db_service.get_recent_sessions = AsyncMock(return_value=[])
+    psychoanalyst_agent.db_service.get_latest_patient_analysis = AsyncMock(
+        return_value=None
+    )
+    psychoanalyst_agent.style_service.get_style_pack.return_value = None
+    psychoanalyst_agent.rag_service.retrieve_relevant_knowledge.return_value = []
+    context = ConversationContext(
+        session_id="session-1",
+        user_profile=sample_user_profile,
+        therapy_plan=None,
+        message_history=[],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=45,
+    )
+
+    response = await psychoanalyst_agent.process_message("hello", context)
+
+    assert response.metadata["therapy_style"] == sample_therapy_plan.selected_therapy_style
+    assert context.therapy_plan == sample_therapy_plan
+    assert "contact support" not in response.content.lower()
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_process_message_missing_plan_uses_therapeutic_recovery(
+    psychoanalyst_agent, sample_user_profile
+):
+    """The no-plan fallback must not expose platform language to the patient."""
+    psychoanalyst_agent.db_service.get_latest_therapy_plan = AsyncMock(return_value=None)
+    context = ConversationContext(
+        session_id="session-1",
+        user_profile=sample_user_profile,
+        therapy_plan=None,
+        message_history=[],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=45,
+    )
+
+    response = await psychoanalyst_agent.process_message("hello", context)
+
+    lowered = response.content.lower()
+    assert "contact support" not in lowered
+    assert "therapy plan" not in lowered
+    assert "backend" not in lowered
+    assert response.metadata["error"] == "No therapy plan"
 
 
 @pytest.mark.trio

@@ -54,7 +54,9 @@ describe('Type Safety Integration', () => {
         'INTAKE_COMPLETE',
         'ASSESSMENT_IN_PROGRESS',
         'ASSESSMENT_COMPLETE',
+        'INITIAL_PLAN_COMPLETE',
         'THERAPY_IN_PROGRESS',
+        'PLAN_UPDATE_IN_PROGRESS',
         'REFLECTION_IN_PROGRESS',
         'PLAN_COMPLETE',
       ];

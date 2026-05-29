@@ -93,7 +93,11 @@ async def _resolve_desired_start_state(
 
     if (
         desired_state == WorkflowState.THERAPY_IN_PROGRESS
-        and state == WorkflowState.ASSESSMENT_COMPLETE
+        and state in (
+            WorkflowState.ASSESSMENT_COMPLETE,
+            WorkflowState.INITIAL_PLAN_COMPLETE,
+            WorkflowState.PLAN_COMPLETE,
+        )
     ):
         plan = await trio_db_service.get_latest_therapy_plan(user_id)
         if not plan or not plan.selected_therapy_style:
@@ -126,10 +130,10 @@ async def advance_workflow_on_session_end(
         if state == WorkflowState.THERAPY_IN_PROGRESS:
             await workflow_engine.transition(
                 user_id,
-                WorkflowState.REFLECTION_IN_PROGRESS,
+                WorkflowState.PLAN_UPDATE_IN_PROGRESS,
                 event=WorkflowEvent.COMPLETE_SESSION,
             )
-            final_state = WorkflowState.REFLECTION_IN_PROGRESS
+            final_state = WorkflowState.PLAN_UPDATE_IN_PROGRESS
             conversation_manager.clear_context(session_id)
             try:
                 trio_db_service = service_container.get("trio_db_service")

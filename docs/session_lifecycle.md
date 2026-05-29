@@ -98,10 +98,11 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
   - **Therapy Plan:** Created only after the user completes
     `POST /api/workflow/select_therapy_style`.
   - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` when the job finishes.
+  - **Style Selection Update:** After a successful style selection, transitions user to `INITIAL_PLAN_COMPLETE`.
 
 ### 2.4. Phase 3: Therapy (`TrioPsychoanalystAgent` - _implied_)
 
-**Active when State = `THERAPY_IN_PROGRESS`**
+**Active when State = `INITIAL_PLAN_COMPLETE`, `THERAPY_IN_PROGRESS`, or `PLAN_COMPLETE`**
 
 - **Role:** Conducts actual therapy sessions based on the selected plan.
 - **Key Activities:**
@@ -110,9 +111,9 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
 - **Data Persistence:**
   - Continually updates `Session` transcript in `sessions` table.
 
-### 2.5. Phase 4: Reflection (`TrioReflectionAgent`)
+### 2.5. Phase 4: Plan Update (`TrioReflectionAgent`)
 
-**Active when State = `REFLECTION_IN_PROGRESS`**
+**Active when State = `PLAN_UPDATE_IN_PROGRESS`**
 
 - **Trigger:** Automatically activated when the `PsychoanalystAgent` detects the session time is up (`context.is_time_up`).
 - **Role:** Analyzes the completed session, generates insights, and prepares for the next session.

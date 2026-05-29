@@ -13,7 +13,11 @@ from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.models.data_models import UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowState
 from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
-from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
+from psychoanalyst_app.orchestration.trio_conversation_manager import (
+    LLM_RETRY_ERROR_MESSAGE,
+    LLM_TERMINAL_ERROR_MESSAGE,
+    TrioConversationManager,
+)
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
 
@@ -251,6 +255,70 @@ async def test_conversation_manager_stream_response(
     assert chunk_count > 0
     assert len(full_response) > 0
     assert "Hello" in full_response or len(full_response) > 10  # Basic sanity check
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_conversation_manager_limits_repeated_llm_failures(
+    conversation_manager, service_container, test_user
+):
+    """Repeated LLM failures stop returning the retry-loop fallback."""
+    import uuid
+
+    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.orchestration.models import ConversationContext
+
+    class FailingLLMService:
+        provider = "openai_compatible"
+        model_name = "local-model"
+        base_url = "http://host.docker.internal:8080/v1"
+        llm = type(
+            "FakeLLMClient",
+            (),
+            {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}},
+        )()
+
+        async def stream_response(self, _prompt, _conversation_history):
+            if False:
+                yield ""
+            raise RuntimeError("adapter broke")
+
+    trio_db_service = service_container.get("trio_db_service")
+    session_id = str(uuid.uuid4())
+    session = Session(
+        session_id=session_id,
+        user_id=test_user.user_id,
+        timestamp=datetime.now(),
+        transcript=[],
+        topics=[],
+    )
+    await trio_db_service.save_session(session)
+    context = ConversationContext(
+        session_id=session_id,
+        user_profile=test_user,
+        message_history=[],
+        therapy_plan=None,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+    failing_service = FailingLLMService()
+
+    first = [
+        chunk
+        async for chunk in conversation_manager.stream_response(
+            "Hello", context, use_rag=False, llm_service=failing_service
+        )
+    ]
+    second = [
+        chunk
+        async for chunk in conversation_manager.stream_response(
+            "Hello again", context, use_rag=False, llm_service=failing_service
+        )
+    ]
+
+    assert "".join(first) == LLM_RETRY_ERROR_MESSAGE
+    assert "".join(second) == LLM_TERMINAL_ERROR_MESSAGE
 
 
 @pytest.mark.trio

@@ -124,6 +124,7 @@ class LLMService:
         llm_call_logging_redact: bool = True,
         llm_call_logging_max_field_chars: int = 256,
         llm_call_logging_include_chunks: bool = False,
+        enable_thinking: bool = True,
     ):
         """Initialize the LLM service with optional rate limiting.
 
@@ -140,6 +141,7 @@ class LLMService:
             llm_call_logging_redact: Redact sensitive payload fields when logging
             llm_call_logging_max_field_chars: Max chars retained per payload field
             llm_call_logging_include_chunks: Include per-chunk payload logging
+            enable_thinking: Enable chain-of-thought for OpenAI-compatible providers
         """
         self.model_name = model_name
         if not self.model_name:
@@ -168,6 +170,7 @@ class LLMService:
             64, llm_call_logging_max_field_chars
         )
         self.llm_call_logging_include_chunks = llm_call_logging_include_chunks
+        self.enable_thinking = enable_thinking
         self._llm_call_logger = _get_llm_call_logger()
         self.llm = self._build_llm_client(self.api_key)
 
@@ -186,6 +189,13 @@ class LLMService:
         else:
             self._rate_limiter = None
             logger.info("Rate limiting disabled")
+
+    def _chat_template_kwargs_for_provider(self) -> dict[str, Any] | None:
+        if self.provider not in {"lmstudio", "openai_compatible"}:
+            return None
+        return {
+            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+        }
 
     def _build_llm_client(self, api_key: str) -> Any:
         if self.provider == "gemini":
@@ -216,6 +226,9 @@ class LLMService:
             }
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+            template_kwargs = self._chat_template_kwargs_for_provider()
+            if template_kwargs:
+                kwargs["extra_body"] = template_kwargs
             return ChatOpenAI(**kwargs)
 
         raise ValueError(f"Unsupported LLM provider: {self.provider}")

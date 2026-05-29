@@ -166,7 +166,7 @@ Request to end the active session.
 **Server Response**: `session_ended` message
 
 **Behavior**:
-- Server updates workflow state as needed (e.g., therapy → reflection).
+- Server updates workflow state as needed (e.g., `therapy_in_progress` → `plan_update_in_progress`).
 - Server emits `session_ended` to confirm shutdown and client should exit.
 
 **Example**:
@@ -300,6 +300,7 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 
 **Behavior**:
 - Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, continue therapy, or wait).
+- `initial_plan_complete` and `plan_complete` both use `required_action="continue_therapy"`; the prompt distinguishes first therapy start from post-reflection resumption.
 - Always includes the latest workflow state and recommended fields to collect.
 - `blocking` indicates whether the UI must satisfy this action before other workflows continue.
 - Sent after `session_started` so clients can render the appropriate onboarding form.
@@ -402,7 +403,7 @@ Indicates the server has ended the active session.
   "type": "session_ended",
   "data": {
     "reason": "User ended session",
-    "workflow_state": "ASSESSMENT_COMPLETE"
+    "workflow_state": "plan_update_in_progress"
   }
 }
 ```

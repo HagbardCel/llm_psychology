@@ -187,6 +187,49 @@ async def test_select_therapy_style_posts_and_clears_pending_recommendations(
         )
     ]
     assert client.pending_recommendations is None
+    assert client.transcript_tail[-1] == {
+        "role": "system",
+        "content": (
+            "The user selected CBT. The recommendation step is complete. "
+            "Therapy has started."
+        ),
+    }
+
+
+async def test_probe_style_selection_failure_raises_after_attempt_limit(
+    console_client_cls,
+):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+        probe_limits={"max_style_selection_attempts": 1},
+    )
+    client.current_session_id = "session-1"
+    client.pending_recommendations = [
+        {"style_id": "cbt", "explanation": "Test explanation"},
+    ]
+
+    async def fake_get_user_input(_prompt: str = "", _default: str | None = None) -> str:
+        return "cbt"
+
+    client._get_user_input = fake_get_user_input  # type: ignore[method-assign]
+
+    async def fake_api_request(
+        _method: str, _endpoint: str, **_kwargs: Any
+    ) -> dict[str, Any]:
+        raise TimeoutError()
+
+    client._api_request = fake_api_request  # type: ignore[method-assign]
+
+    with pytest.raises(
+        RuntimeError,
+        match="Therapy style selection failed after 1 attempt",
+    ):
+        await client._select_therapy_style()
+    assert output.errors == ["❌ Failed to save therapy style: TimeoutError"]
 
 
 async def test_follow_workflow_runs_style_selection_action(console_client_cls):

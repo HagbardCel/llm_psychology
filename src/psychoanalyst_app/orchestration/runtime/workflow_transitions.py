@@ -61,7 +61,10 @@ async def emit_workflow_next_action(
             action.model_dump(mode="json"),
         )
 
-        if action.workflow_state == WorkflowState.REFLECTION_IN_PROGRESS.value:
+        if action.workflow_state in (
+            WorkflowState.PLAN_UPDATE_IN_PROGRESS.value,
+            WorkflowState.REFLECTION_IN_PROGRESS.value,
+        ):
             await response_handler.ensure_reflection_job(user_id, resolved_session_id)
 
         if action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE:

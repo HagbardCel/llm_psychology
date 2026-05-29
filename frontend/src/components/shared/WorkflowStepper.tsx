@@ -21,7 +21,7 @@ const WORKFLOW_STEPS: WorkflowStep[] = [
     status: UserStatus.ASSESSMENT_IN_PROGRESS,
     route: '/assessment'
   },
-  { label: 'Therapy', status: UserStatus.PLAN_COMPLETE, route: '/session/new' }
+  { label: 'Therapy', status: UserStatus.INITIAL_PLAN_COMPLETE, route: '/session/new' }
 ];
 
 /**
@@ -69,8 +69,10 @@ function getActiveStepIndex(status: UserStatus): number {
     UserStatus.INTAKE_COMPLETE,
     UserStatus.ASSESSMENT_IN_PROGRESS,
     UserStatus.ASSESSMENT_COMPLETE,
+    UserStatus.INITIAL_PLAN_COMPLETE,
     UserStatus.PLAN_COMPLETE,
     UserStatus.THERAPY_IN_PROGRESS,
+    UserStatus.PLAN_UPDATE_IN_PROGRESS,
     UserStatus.REFLECTION_IN_PROGRESS
   ];
 

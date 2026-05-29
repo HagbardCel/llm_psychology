@@ -124,6 +124,7 @@ def create_workflow_routes(server) -> Blueprint:
             await server.orchestrator.create_therapy_plan(
                 style_request.user_id, style_request.selected_therapy_style
             )
+            server.conversation_manager.clear_context(style_request.session_id)
         except ValueError as exc:
             logger.error("Validation error selecting therapy style: %s", exc)
             status = 404 if "not found" in str(exc).lower() else 400
