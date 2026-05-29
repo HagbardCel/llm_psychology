@@ -52,6 +52,7 @@ def get_or_create_llm_service_for_model(
         llm_call_logging_include_chunks=(
             container.config.LLM_CALL_LOGGING_INCLUDE_CHUNKS
         ),
+        enable_thinking=container.config.LLM_ENABLE_THINKING,
     )
 
     container._llm_service_cache[cache_key] = llm_service

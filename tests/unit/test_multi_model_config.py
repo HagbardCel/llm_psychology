@@ -104,6 +104,16 @@ def test_local_llm_provider_config_defaults(monkeypatch):
     assert settings.get_llm_base_url() == "http://host.docker.internal:11434"
 
 
+def test_llm_enable_thinking_loads_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "false")
+    settings = Settings(_env_file=None)
+    assert settings.LLM_ENABLE_THINKING is False
+
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
+    settings = Settings(_env_file=None)
+    assert settings.LLM_ENABLE_THINKING is True
+
+
 def test_default_llm_provider_is_local_llamacpp(monkeypatch):
     """Test default Settings point to local llama.cpp, not Gemini."""
     monkeypatch.delenv("MODEL_NAME", raising=False)

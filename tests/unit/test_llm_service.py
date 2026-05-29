@@ -249,7 +249,54 @@ def test_lmstudio_provider_builds_openai_compatible_client(monkeypatch):
         "api_key": "not-needed",
         "temperature": 0.7,
         "base_url": "http://host.docker.internal:1234/v1",
+        "model_kwargs": {"chat_template_kwargs": {"enable_thinking": True}},
     }
+
+
+def test_openai_compatible_provider_disables_thinking(monkeypatch):
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_chat_openai(**kwargs):
+        captured.update(kwargs)
+        return _FakeChatModel()
+
+    monkeypatch.setattr(llm_module, "ChatOpenAI", _fake_chat_openai)
+
+    service = LLMService(
+        provider="openai_compatible",
+        model_name="local-model",
+        base_url="http://host.docker.internal:8080/v1",
+        rate_limit_enabled=False,
+        enable_thinking=False,
+    )
+
+    assert captured["model_kwargs"] == {
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
+def test_ollama_provider_does_not_send_thinking_kwargs(monkeypatch):
+    import psychoanalyst_app.services.llm_service as llm_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_chat_ollama(**kwargs):
+        captured.update(kwargs)
+        return _FakeChatModel()
+
+    monkeypatch.setattr(llm_module, "ChatOllama", _fake_chat_ollama)
+
+    LLMService(
+        provider="ollama",
+        model_name="llama3.1",
+        base_url="http://host.docker.internal:11434",
+        rate_limit_enabled=False,
+        enable_thinking=False,
+    )
+
+    assert "model_kwargs" not in captured
 
 
 def test_local_structured_output_parses_json(monkeypatch):

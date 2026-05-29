@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     LLM_BURST_CAPACITY: int = Field(
         default=2, description="Burst capacity for LLM requests"
     )
+    LLM_ENABLE_THINKING: bool = Field(
+        default=True,
+        description=(
+            "Enable model chain-of-thought / reasoning for OpenAI-compatible "
+            "providers (llama.cpp, LM Studio). Ignored for Gemini and Ollama."
+        ),
+    )
     LLM_CALL_LOGGING_ENABLED: bool = Field(
         default=False,
         description="Enable detailed LLM call payload logging to logs/llm_calls.log",
