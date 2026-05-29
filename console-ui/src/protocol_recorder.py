@@ -309,8 +309,25 @@ class ProtocolRecorder:
                 return max(0.0, (selected_at - wait_started_at).total_seconds())
         return None
 
-    def style_selection_to_therapy_ready_seconds(self) -> float | None:
-        """Return wall-clock seconds from style selection to continue_therapy."""
+    def style_submit_to_style_selected_seconds(self) -> float | None:
+        """Return seconds from submitted therapy style input to saved selection."""
+        latest_style_submit_at: datetime | None = None
+        for event in self.events:
+            if (
+                event.get("kind") == "user_input"
+                and event.get("prompt_kind") == "therapy_style"
+            ):
+                latest_style_submit_at = _parse_event_ts(event)
+                continue
+            if event.get("kind") == "therapy_style_selected":
+                selected_at = _parse_event_ts(event)
+                if latest_style_submit_at is None or selected_at is None:
+                    return None
+                return max(0.0, (selected_at - latest_style_submit_at).total_seconds())
+        return None
+
+    def style_selected_to_therapy_ready_seconds(self) -> float | None:
+        """Return wall-clock seconds from saved style selection to continue_therapy."""
         style_selected_at: datetime | None = None
         for event in self.events:
             if event.get("kind") == "therapy_style_selected":
@@ -380,7 +397,8 @@ class ProtocolRecorder:
         fallback_health = _fallback_health(fallback_rate, fallback_warn)
         wait_before_style = self.total_wait_seconds_before("select_therapy_style")
         assessment_wait = self.assessment_wait_seconds()
-        style_to_therapy = self.style_selection_to_therapy_ready_seconds()
+        style_submit_to_selected = self.style_submit_to_style_selected_seconds()
+        style_selected_to_therapy = self.style_selected_to_therapy_ready_seconds()
         wait_warn = float(criteria.get("warn_wait_seconds_before_style_selection", 0))
         wait_health = _wait_health(wait_before_style, wait_warn)
         session_end_state = self.session_end_workflow_state()
@@ -417,10 +435,16 @@ class ProtocolRecorder:
                 else "- assessment_wait_seconds: unknown"
             ),
             (
-                "- style_selection_to_therapy_ready_seconds: "
-                f"{style_to_therapy:.1f}s"
-                if style_to_therapy is not None
-                else "- style_selection_to_therapy_ready_seconds: unknown"
+                "- style_submit_to_style_selected_seconds: "
+                f"{style_submit_to_selected:.1f}s"
+                if style_submit_to_selected is not None
+                else "- style_submit_to_style_selected_seconds: unknown"
+            ),
+            (
+                "- style_selected_to_therapy_ready_seconds: "
+                f"{style_selected_to_therapy:.1f}s"
+                if style_selected_to_therapy is not None
+                else "- style_selected_to_therapy_ready_seconds: unknown"
             ),
             f"- Last valid workflow state seen: {self.latest_workflow_state() or 'unknown'}",
             f"- Last required action seen: {self.latest_required_action() or 'unknown'}",

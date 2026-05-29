@@ -219,6 +219,16 @@ async def test_recorder_writes_jsonl_and_markdown_summary(console_modules, tmp_p
     recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
     await recorder.record("workflow_action", action="select_therapy_style")
     recorder.events[-1]["ts"] = "2026-01-01T00:00:05+00:00"
+    await recorder.record_user_input(
+        "cbt",
+        "ScriptedInputProvider",
+        type(
+            "Context",
+            (),
+            {"prompt_kind": "therapy_style", "turn_index": 0},
+        )(),
+    )
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:07+00:00"
     await recorder.record("therapy_style_selected", selected_therapy_style="cbt")
     recorder.events[-1]["ts"] = "2026-01-01T00:00:10+00:00"
     await recorder.record("workflow_action", action="continue_therapy")
@@ -253,9 +263,28 @@ async def test_recorder_writes_jsonl_and_markdown_summary(console_modules, tmp_p
     assert "Status: PASS" in summary
     assert "Fallback reasons: empty_response: 1" in summary
     assert "assessment_wait_seconds: 5.0s" in summary
-    assert "style_selection_to_therapy_ready_seconds: 3.0s" in summary
+    assert "style_submit_to_style_selected_seconds: 3.0s" in summary
+    assert "style_selected_to_therapy_ready_seconds: 3.0s" in summary
+    assert "style_selection_to_therapy_ready_seconds" not in summary
     assert "## Errors" in summary
     assert "content_blank_after_strip" in summary
+
+
+async def test_recorder_uses_latest_style_submit_before_selection(
+    console_modules, tmp_path
+):
+    protocol_recorder = console_modules["protocol_recorder"]
+    recorder = protocol_recorder.ProtocolRecorder(tmp_path, "scenario")
+    context = type("Context", (), {"prompt_kind": "therapy_style", "turn_index": 0})()
+
+    await recorder.record_user_input("not-a-style", "ScriptedInputProvider", context)
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
+    await recorder.record_user_input("cbt", "ScriptedInputProvider", context)
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:04+00:00"
+    await recorder.record("therapy_style_selected", selected_therapy_style="cbt")
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:10+00:00"
+
+    assert recorder.style_submit_to_style_selected_seconds() == 6.0
 
 
 async def test_probe_user_ids_are_unique(console_modules):
