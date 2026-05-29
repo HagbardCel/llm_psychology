@@ -215,6 +215,14 @@ async def test_recorder_writes_jsonl_and_markdown_summary(console_modules, tmp_p
     recorder = protocol_recorder.ProtocolRecorder(tmp_path, "scenario")
 
     await recorder.record("ws_event", type="session_started")
+    await recorder.record("workflow_action", action="wait")
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
+    await recorder.record("workflow_action", action="select_therapy_style")
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:05+00:00"
+    await recorder.record("therapy_style_selected", selected_therapy_style="cbt")
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:10+00:00"
+    await recorder.record("workflow_action", action="continue_therapy")
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:13+00:00"
     await recorder.record_user_input(
         "hello",
         "ScriptedInputProvider",
@@ -244,6 +252,8 @@ async def test_recorder_writes_jsonl_and_markdown_summary(console_modules, tmp_p
     summary = recorder.latest_md_path.read_text(encoding="utf-8")
     assert "Status: PASS" in summary
     assert "Fallback reasons: empty_response: 1" in summary
+    assert "assessment_wait_seconds: 5.0s" in summary
+    assert "style_selection_to_therapy_ready_seconds: 3.0s" in summary
     assert "## Errors" in summary
     assert "content_blank_after_strip" in summary
 
@@ -271,9 +281,7 @@ async def test_runner_finds_simulator_errors_inside_exception_groups(console_mod
     )
 
     assert (
-        runner._find_nested_exception(
-            grouped, simulator_mod.LocalLLMUserSimulatorError
-        )
+        runner._find_nested_exception(grouped, simulator_mod.LocalLLMUserSimulatorError)
         is simulator_error
     )
     assert (
@@ -420,9 +428,7 @@ async def test_assertions_fail_on_wait_threshold_and_assistant_meta_phrase(
     assert any(name.startswith("forbid_assistant_phrase_") for name in failed_names)
 
 
-async def test_assertions_fail_on_premature_time_up_phrase(
-    console_modules, tmp_path
-):
+async def test_assertions_fail_on_premature_time_up_phrase(console_modules, tmp_path):
     runner = console_modules["workflow_probe_runner"]
     recorder_mod = console_modules["protocol_recorder"]
     recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
@@ -453,7 +459,47 @@ async def test_assertions_fail_on_premature_time_up_phrase(
     )
 
 
-async def test_assertions_check_final_workflow_state(
+async def test_assertions_fail_on_post_style_platform_artifacts(
+    console_modules, tmp_path
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+    context = type("Context", (), {"prompt_kind": "chat", "turn_index": 0})()
+
+    await recorder.record("therapy_style_selected", selected_therapy_style="cbt")
+    await recorder.record_user_input(
+        "I'm ready to hear recommendations from the backend.",
+        "LLMSimulatedUserProvider",
+        context,
+    )
+    await recorder.record_assistant_response(
+        "I don't have access to patient records, so contact support."
+    )
+
+    passed = await runner.run_assertions(
+        recorder=recorder,
+        scenario={"success_criteria": {}},
+        backend_url="http://unused",
+        user_id="user-1",
+    )
+
+    assert passed is False
+    failed_names = {
+        assertion["name"]
+        for assertion in recorder.assertions
+        if assertion["passed"] is False
+    }
+    assert any(
+        name.startswith("forbid_user_artifact_after_style_") for name in failed_names
+    )
+    assert any(
+        name.startswith("forbid_assistant_artifact_after_style_")
+        for name in failed_names
+    )
+
+
+async def test_assertions_check_therapy_phase_reached_and_session_closed_cleanly(
     console_modules, tmp_path, monkeypatch
 ):
     runner = console_modules["workflow_probe_runner"]
@@ -473,7 +519,7 @@ async def test_assertions_check_final_workflow_state(
         recorder=recorder,
         scenario={
             "success_criteria": {
-                "require_final_workflow_state": "therapy_in_progress"
+                "require_final_workflow_state": "plan_update_in_progress"
             }
         },
         backend_url="http://unused",
@@ -482,13 +528,13 @@ async def test_assertions_check_final_workflow_state(
 
     assert passed is False
     assert any(
-        assertion["name"] == "final_workflow_state"
+        assertion["name"] == "therapy_phase_reached_and_session_closed_cleanly"
         and assertion["passed"] is False
         for assertion in recorder.assertions
     )
 
 
-async def test_final_workflow_state_allows_completed_session_therapy_signal(
+async def test_final_workflow_state_allows_session_closed_at_plan_update(
     console_modules, tmp_path, monkeypatch
 ):
     runner = console_modules["workflow_probe_runner"]
@@ -509,17 +555,20 @@ async def test_final_workflow_state_allows_completed_session_therapy_signal(
         type("Context", (), {"prompt_kind": "chat", "turn_index": 0})(),
     )
     await recorder.record_workflow_action(
-        {"required_action": "continue_therapy", "workflow_state": "plan_complete"}
+        {"required_action": "continue_therapy", "workflow_state": "therapy_in_progress"}
     )
     await recorder.record_assistant_response("Let's continue therapy.")
     await recorder.record(
         "session_ended",
-        data={"workflow_state": "plan_complete", "reason": "Probe limit"},
+        data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
     )
+    status_fetch_called = False
 
     async def fake_fetch_user_status(
         _backend_url: str, _user_id: str, _session_id: str | None
     ) -> dict[str, Any]:
+        nonlocal status_fetch_called
+        status_fetch_called = True
         return {"error": "Session is not active for user"}
 
     monkeypatch.setattr(runner, "fetch_user_status", fake_fetch_user_status)
@@ -528,7 +577,57 @@ async def test_final_workflow_state_allows_completed_session_therapy_signal(
         recorder=recorder,
         scenario={
             "success_criteria": {
-                "require_final_workflow_state": "therapy_in_progress"
+                "require_final_workflow_state": "plan_update_in_progress"
+            }
+        },
+        backend_url="http://unused",
+        user_id="user-1",
+    )
+
+    assert passed is True
+    assert status_fetch_called is False
+    assert any(
+        assertion["name"] == "therapy_phase_reached_and_session_closed_cleanly"
+        and assertion["passed"] is True
+        for assertion in recorder.assertions
+    )
+    assert any(
+        assertion["name"] == "plan_update_started_after_session_close"
+        and assertion["passed"] is True
+        for assertion in recorder.assertions
+    )
+    assert any(
+        event.get("kind") == "final_user_status"
+        and event.get("data", {}).get("final_status_skipped_because_session_inactive")
+        is True
+        for event in recorder.events
+    )
+
+
+async def test_optional_therapy_session_to_plan_complete_assertion(
+    console_modules, tmp_path
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    await recorder.record("ws_event", type="session_started")
+    await recorder.record(
+        "session_ended",
+        data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
+    )
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
+    await recorder.record("workflow_action", workflow_state="plan_complete")
+    recorder.events[-1]["ts"] = "2026-01-01T00:01:30+00:00"
+
+    passed = await runner.run_assertions(
+        recorder=recorder,
+        scenario={
+            "success_criteria": {
+                "require_min_user_messages": 0,
+                "require_min_assistant_messages": 0,
+                "require_post_session_plan_complete": True,
+                "plan_complete_timeout_seconds": 120,
             }
         },
         backend_url="http://unused",
@@ -537,8 +636,46 @@ async def test_final_workflow_state_allows_completed_session_therapy_signal(
 
     assert passed is True
     assert any(
-        assertion["name"] == "final_workflow_state"
+        assertion["name"] == "therapy_session_to_plan_complete"
         and assertion["passed"] is True
+        for assertion in recorder.assertions
+    )
+
+
+async def test_optional_therapy_session_to_plan_complete_fails_after_timeout(
+    console_modules, tmp_path
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    await recorder.record("ws_event", type="session_started")
+    await recorder.record(
+        "session_ended",
+        data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
+    )
+    recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
+    await recorder.record("workflow_action", workflow_state="plan_complete")
+    recorder.events[-1]["ts"] = "2026-01-01T00:02:01+00:00"
+
+    passed = await runner.run_assertions(
+        recorder=recorder,
+        scenario={
+            "success_criteria": {
+                "require_min_user_messages": 0,
+                "require_min_assistant_messages": 0,
+                "require_post_session_plan_complete": True,
+                "plan_complete_timeout_seconds": 120,
+            }
+        },
+        backend_url="http://unused",
+        user_id="user-1",
+    )
+
+    assert passed is False
+    assert any(
+        assertion["name"] == "therapy_session_to_plan_complete"
+        and assertion["passed"] is False
         for assertion in recorder.assertions
     )
 

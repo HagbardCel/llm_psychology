@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -293,6 +294,22 @@ async def run_assertions(
         )
 
     forbidden_assistant_phrases = criteria.get("forbid_assistant_phrases") or []
+    forbidden_assistant_after_style_phrases = [
+        "contact support",
+        "support team",
+        "support channel",
+        "clinical platform",
+        "pre-loaded",
+        "loaded plan",
+        "patient records",
+        "external support",
+        "behind the scenes",
+        "system to contact",
+        "I don't have access",
+        "I can’t access",
+        "I can't access",
+        "no plan to wait on",
+    ]
     for phrase in forbidden_assistant_phrases:
         phrase_text = str(phrase)
         if not phrase_text:
@@ -301,6 +318,29 @@ async def run_assertions(
             f"forbid_assistant_phrase_{phrase_text[:32]}",
             not _assistant_phrase_present(recorder, phrase_text),
             detail=f"phrase={phrase_text!r}",
+        )
+
+    for phrase in forbidden_assistant_after_style_phrases:
+        await assert_event(
+            f"forbid_assistant_artifact_after_style_{phrase[:24]}",
+            not _assistant_phrase_after_style_selection(recorder, phrase),
+            detail=f"phrase={phrase!r}",
+        )
+
+    forbidden_user_after_style_phrases = [
+        "wait for recommendations",
+        "ready to hear recommendations",
+        "therapy plan loaded",
+        "support",
+        "system",
+        "backend",
+        *(criteria.get("forbid_user_phrases_after_style_selection") or []),
+    ]
+    for phrase in forbidden_user_after_style_phrases:
+        await assert_event(
+            f"forbid_user_artifact_after_style_{phrase[:24]}",
+            not _user_phrase_after_style_selection(recorder, phrase),
+            detail=f"phrase={phrase!r}",
         )
 
     forbidden = criteria.get("forbid_assistant_phrases_before_turn") or []
@@ -316,27 +356,72 @@ async def run_assertions(
         )
 
     if final_state := criteria.get("require_final_workflow_state"):
-        status = await fetch_user_status(backend_url, user_id, recorder.latest_session_id())
-        await recorder.record("final_user_status", data=status)
-        actual_state = (
-            status.get("workflow_state")
-            or status.get("status")
-            or recorder.latest_workflow_state()
-        )
-        therapy_reached = _therapy_reached(recorder)
-        if final_state == "therapy_in_progress" and recorder.session_end_seen():
-            final_state_passed = therapy_reached
+        session_ended = recorder.session_end_seen()
+        if session_ended:
+            await recorder.record(
+                "final_user_status",
+                data={"final_status_skipped_because_session_inactive": True},
+            )
+            actual_state = (
+                recorder.session_end_workflow_state()
+                or recorder.latest_workflow_state()
+            )
+            status_error = None
         else:
-            final_state_passed = actual_state == final_state
+            status = await fetch_user_status(
+                backend_url, user_id, recorder.latest_session_id()
+            )
+            await recorder.record("final_user_status", data=status)
+            actual_state = (
+                status.get("workflow_state")
+                or status.get("status")
+                or recorder.latest_workflow_state()
+            )
+            status_error = status.get("error")
+
+        therapy_reached = _therapy_reached(recorder)
+        therapy_closed_cleanly = therapy_reached and session_ended
+        final_state_passed = actual_state == final_state
+        if final_state == "plan_update_in_progress":
+            await assert_event(
+                "therapy_phase_reached_and_session_closed_cleanly",
+                therapy_closed_cleanly,
+                detail=(
+                    f"therapy_reached={therapy_reached}, "
+                    f"session_end_seen={session_ended}, "
+                    f"therapy_turns_after_style="
+                    f"{recorder.therapy_assistant_turns_after_style_selection()}"
+                ),
+            )
+            await assert_event(
+                "plan_update_started_after_session_close",
+                session_ended and final_state_passed,
+                detail=(
+                    f"expected={final_state}, actual={actual_state}, "
+                    f"session_end_workflow_state="
+                    f"{recorder.session_end_workflow_state()}"
+                ),
+            )
+        else:
+            await assert_event(
+                "final_workflow_state",
+                final_state_passed,
+                detail=(
+                    f"expected={final_state}, actual={actual_state}, "
+                    f"status_error={status_error}"
+                ),
+            )
+
+    if criteria.get("require_post_session_plan_complete"):
+        max_seconds = float(criteria.get("plan_complete_timeout_seconds", 120))
+        elapsed = recorder.plan_complete_after_plan_update_seconds()
         await assert_event(
-            "final_workflow_state",
-            final_state_passed,
+            "therapy_session_to_plan_complete",
+            elapsed is not None and elapsed <= max_seconds,
             detail=(
-                f"expected={final_state}, actual={actual_state}, "
-                f"therapy_reached={therapy_reached}, "
-                f"session_end_seen={recorder.session_end_seen()}, "
-                f"session_end_workflow_state={recorder.session_end_workflow_state()}, "
-                f"status_error={status.get('error')}"
+                f"elapsed_seconds={elapsed:.1f}, max={max_seconds:.1f}"
+                if elapsed is not None
+                else f"elapsed_seconds=unknown, max={max_seconds:.1f}"
             ),
         )
 
@@ -404,6 +489,47 @@ def _assistant_phrase_present(recorder: ProtocolRecorder, phrase: str) -> bool:
         for event in recorder.events
         if event.get("kind") == "assistant_response"
     )
+
+
+def _assistant_phrase_after_style_selection(
+    recorder: ProtocolRecorder, phrase: str
+) -> bool:
+    style_selected = False
+    phrase_lower = phrase.lower()
+    for event in recorder.events:
+        if event.get("kind") == "therapy_style_selected":
+            style_selected = True
+            continue
+        if not style_selected:
+            continue
+        if event.get("kind") != "assistant_response":
+            continue
+        if _phrase_matches(str(event.get("text") or ""), phrase_lower):
+            return True
+    return False
+
+
+def _user_phrase_after_style_selection(recorder: ProtocolRecorder, phrase: str) -> bool:
+    style_selected = False
+    phrase_lower = phrase.lower()
+    for event in recorder.events:
+        if event.get("kind") == "therapy_style_selected":
+            style_selected = True
+            continue
+        if not style_selected:
+            continue
+        if event.get("kind") != "user_input" or event.get("prompt_kind") != "chat":
+            continue
+        if _phrase_matches(str(event.get("text") or ""), phrase_lower):
+            return True
+    return False
+
+
+def _phrase_matches(text: str, phrase_lower: str) -> bool:
+    text_lower = text.lower()
+    if " " not in phrase_lower and re.fullmatch(r"[a-z0-9']+", phrase_lower):
+        return re.search(rf"\b{re.escape(phrase_lower)}\b", text_lower) is not None
+    return phrase_lower in text_lower
 
 
 def _therapy_reached(recorder: ProtocolRecorder) -> bool:

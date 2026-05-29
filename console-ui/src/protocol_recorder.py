@@ -293,6 +293,57 @@ class ProtocolRecorder:
                 total = max(total, float(event.get("total_wait_seconds") or 0))
         return total
 
+    def assessment_wait_seconds(self) -> float | None:
+        """Return wall-clock seconds from first wait action to style selection."""
+        wait_started_at: datetime | None = None
+        for event in self.events:
+            if event.get("kind") != "workflow_action":
+                continue
+            action = event.get("action")
+            if action == "wait" and wait_started_at is None:
+                wait_started_at = _parse_event_ts(event)
+            if action == "select_therapy_style" and wait_started_at is not None:
+                selected_at = _parse_event_ts(event)
+                if selected_at is None:
+                    return None
+                return max(0.0, (selected_at - wait_started_at).total_seconds())
+        return None
+
+    def style_selection_to_therapy_ready_seconds(self) -> float | None:
+        """Return wall-clock seconds from style selection to continue_therapy."""
+        style_selected_at: datetime | None = None
+        for event in self.events:
+            if event.get("kind") == "therapy_style_selected":
+                style_selected_at = _parse_event_ts(event)
+                continue
+            if (
+                style_selected_at is not None
+                and event.get("kind") == "workflow_action"
+                and event.get("action") == "continue_therapy"
+            ):
+                therapy_ready_at = _parse_event_ts(event)
+                if therapy_ready_at is None:
+                    return None
+                return max(0.0, (therapy_ready_at - style_selected_at).total_seconds())
+        return None
+
+    def plan_complete_after_plan_update_seconds(self) -> float | None:
+        """Return seconds from plan update start to observed plan_complete."""
+        plan_update_started_at: datetime | None = None
+        for event in self.events:
+            workflow_state = _event_workflow_state(event)
+            if (
+                workflow_state == "plan_update_in_progress"
+                and plan_update_started_at is None
+            ):
+                plan_update_started_at = _parse_event_ts(event)
+            if workflow_state == "plan_complete" and plan_update_started_at is not None:
+                completed_at = _parse_event_ts(event)
+                if completed_at is None:
+                    return None
+                return max(0.0, (completed_at - plan_update_started_at).total_seconds())
+        return None
+
     async def write_summary(
         self,
         status: str,
@@ -320,8 +371,7 @@ class ProtocolRecorder:
         fallback_count = sum(
             1
             for event in self.events
-            if event.get("kind") == "user_sim_model_call"
-            and event.get("fallback_used")
+            if event.get("kind") == "user_sim_model_call" and event.get("fallback_used")
         )
         fallback_rate = fallback_count / user_turns if user_turns else 0
         fallback_reasons = self.fallback_reason_counts()
@@ -329,6 +379,8 @@ class ProtocolRecorder:
         fallback_warn = float(criteria.get("warn_user_sim_fallback_rate", 0.2))
         fallback_health = _fallback_health(fallback_rate, fallback_warn)
         wait_before_style = self.total_wait_seconds_before("select_therapy_style")
+        assessment_wait = self.assessment_wait_seconds()
+        style_to_therapy = self.style_selection_to_therapy_ready_seconds()
         wait_warn = float(criteria.get("warn_wait_seconds_before_style_selection", 0))
         wait_health = _wait_health(wait_before_style, wait_warn)
         session_end_state = self.session_end_workflow_state()
@@ -359,6 +411,17 @@ class ProtocolRecorder:
             "- Wait before therapy style selection: "
             f"{wait_before_style:.1f}s"
             f"{f' ({wait_health})' if wait_warn else ''}",
+            (
+                "- assessment_wait_seconds: " f"{assessment_wait:.1f}s"
+                if assessment_wait is not None
+                else "- assessment_wait_seconds: unknown"
+            ),
+            (
+                "- style_selection_to_therapy_ready_seconds: "
+                f"{style_to_therapy:.1f}s"
+                if style_to_therapy is not None
+                else "- style_selection_to_therapy_ready_seconds: unknown"
+            ),
             f"- Last valid workflow state seen: {self.latest_workflow_state() or 'unknown'}",
             f"- Last required action seen: {self.latest_required_action() or 'unknown'}",
             f"- Session end seen: {self.session_end_seen()}",
@@ -382,8 +445,8 @@ class ProtocolRecorder:
         lines.extend(
             [
                 "",
-            "## Assertions",
-            "",
+                "## Assertions",
+                "",
             ]
         )
         if assertions:
@@ -480,3 +543,19 @@ def _wait_health(wait_seconds: float, warn_threshold: float) -> str:
     if wait_seconds <= warn_threshold:
         return "PASS"
     return "WARN"
+
+
+def _parse_event_ts(event: dict[str, Any]) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(event["ts"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _event_workflow_state(event: dict[str, Any]) -> str | None:
+    if event.get("workflow_state"):
+        return str(event["workflow_state"])
+    data = event.get("data")
+    if isinstance(data, dict) and data.get("workflow_state"):
+        return str(data["workflow_state"])
+    return None

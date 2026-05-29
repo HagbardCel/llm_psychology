@@ -46,7 +46,7 @@
     "require_no_ws_errors": true,
     "require_profile_created": true,
     "require_therapy_style_selected": true,
-    "require_final_workflow_state": "therapy_in_progress",
+    "require_final_workflow_state": "plan_update_in_progress",
     "require_min_user_messages": 3,
     "require_min_assistant_messages": 4,
     "require_unique_user_messages": 3,
@@ -72,6 +72,14 @@
       "not a licensed therapist or clinician",
       "can't provide a formal therapy plan",
       "can’t provide a formal therapy plan"
+    ],
+    "forbid_user_phrases_after_style_selection": [
+      "wait for recommendations",
+      "ready to hear recommendations",
+      "therapy plan loaded",
+      "support",
+      "system",
+      "backend"
     ],
     "forbid_assistant_phrases_before_turn": [
       {
