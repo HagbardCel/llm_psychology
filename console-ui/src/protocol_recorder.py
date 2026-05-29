@@ -30,8 +30,12 @@ class ProtocolRecorder:
         )
         self.jsonl_path = self.output_dir / f"{timestamp}_{safe_scenario}.jsonl"
         self.md_path = self.output_dir / f"{timestamp}_{safe_scenario}.md"
+        self.db_export_path = (
+            self.output_dir / f"{timestamp}_{safe_scenario}_db_export.json"
+        )
         self.latest_jsonl_path = self.output_dir / "latest.jsonl"
         self.latest_md_path = self.output_dir / "latest.md"
+        self.latest_db_export_path = self.output_dir / "latest_db_export.json"
         self.events: list[dict[str, Any]] = []
         self.assertions: list[dict[str, Any]] = []
         self.status = "RUNNING"
@@ -240,6 +244,33 @@ class ProtocolRecorder:
                 return str(data["session_id"])
         return None
 
+    def observed_session_ids(self) -> list[str]:
+        """Return session IDs observed anywhere in recorded event payloads."""
+        session_ids: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: Any) -> None:
+            if value is None:
+                return
+            session_id = str(value)
+            if session_id and session_id not in seen:
+                seen.add(session_id)
+                session_ids.append(session_id)
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                if "session_id" in value:
+                    add(value.get("session_id"))
+                for nested in value.values():
+                    walk(nested)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        for event in self.events:
+            walk(event)
+        return session_ids
+
     def latest_required_action(self) -> str | None:
         for event in reversed(self.events):
             if event.get("kind") == "workflow_action" and event.get("action"):
@@ -344,8 +375,8 @@ class ProtocolRecorder:
                 return max(0.0, (therapy_ready_at - style_selected_at).total_seconds())
         return None
 
-    def plan_complete_after_plan_update_seconds(self) -> float | None:
-        """Return seconds from plan update start to observed plan_complete."""
+    def plan_update_complete_after_plan_update_seconds(self) -> float | None:
+        """Return seconds from plan update start to observed plan_update_complete."""
         plan_update_started_at: datetime | None = None
         for event in self.events:
             workflow_state = _event_workflow_state(event)
@@ -354,7 +385,10 @@ class ProtocolRecorder:
                 and plan_update_started_at is None
             ):
                 plan_update_started_at = _parse_event_ts(event)
-            if workflow_state == "plan_complete" and plan_update_started_at is not None:
+            if (
+                workflow_state == "plan_update_complete"
+                and plan_update_started_at is not None
+            ):
                 completed_at = _parse_event_ts(event)
                 if completed_at is None:
                     return None
@@ -493,6 +527,7 @@ class ProtocolRecorder:
                 "",
                 f"- JSONL trace: {self.jsonl_path}",
                 f"- Markdown summary: {self.md_path}",
+                f"- DB export: {self.db_export_path}",
             ]
         )
 

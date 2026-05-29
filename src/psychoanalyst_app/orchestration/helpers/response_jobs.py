@@ -178,9 +178,10 @@ async def run_reflection_job(
             await emit_next_action(user_id, emit_session_id or session_id)
     except trio.TooSlowError as exc:
         logger.error(
-            "Reflection job timed out after %s seconds for session %s",
-            timeout_seconds,
+            "reflection_timeout session_id=%s user_id=%s timeout_seconds=%s",
             session_id,
+            user_id,
+            timeout_seconds,
             exc_info=True,
         )
         await surface_reflection_failure(user_id, session_id, exc)

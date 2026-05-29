@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
@@ -16,6 +18,7 @@ import httpx
 import trio
 
 from .console_client import ConsoleClient
+from .db_export import export_probe_db
 from .input_providers import LLMSimulatedUserProvider, ScriptedInputProvider
 from .llm_user_simulator import LocalLLMUserSimulator, LocalLLMUserSimulatorError
 from .output import ConsoleOutput, setup_logging
@@ -42,11 +45,13 @@ async def run_probe(args: argparse.Namespace) -> int:
         scenario_id=scenario_id,
         redact_model_context=not env_trace_prompts_enabled(),
     )
+    user_id = args.user_id or scenario.get("user_id") or new_probe_user_id()
 
     try:
         await check_backend(args.backend_url)
     except Exception as exc:
         await recorder.record_error("Backend unavailable", str(exc))
+        await write_db_export(recorder, scenario_id, user_id)
         await recorder.write_summary("FAIL", scenario)
         print(f"FAIL: backend unavailable: {exc}")
         print(f"See: {recorder.latest_md_path}")
@@ -56,12 +61,12 @@ async def run_probe(args: argparse.Namespace) -> int:
         provider = build_provider(args.mode, scenario, recorder)
     except Exception as exc:
         await recorder.record_error("Failed to configure input provider", str(exc))
+        await write_db_export(recorder, scenario_id, user_id)
         await recorder.write_summary("FAIL", scenario)
         print(f"FAIL: provider configuration error: {exc}")
         print(f"See: {recorder.latest_md_path}")
         return EXIT_CONFIG_ERROR
 
-    user_id = args.user_id or scenario.get("user_id") or new_probe_user_id()
     limits = scenario.get("limits") or {}
     workflow_preferences = scenario.get("workflow_preferences") or {}
     if workflow_preferences.get("profile_selection") == "create_new":
@@ -123,12 +128,48 @@ async def run_probe(args: argparse.Namespace) -> int:
             status = "FAIL"
             return_code = EXIT_UNEXPECTED
     finally:
+        await write_db_export(recorder, scenario_id, user_id)
         await recorder.write_summary(status, scenario)
 
     print(f"{status}: Console workflow probe completed.")
     print(f"See: {recorder.latest_md_path}")
     print(f"Trace: {recorder.latest_jsonl_path}")
+    print(f"DB export: {recorder.latest_db_export_path}")
     return return_code
+
+
+async def write_db_export(
+    recorder: ProtocolRecorder,
+    scenario_id: str,
+    user_id: str,
+) -> None:
+    """Write run-scoped DB export diagnostics without failing the probe."""
+    try:
+        db_path = os.getenv("DATABASE_PATH", "data/psychoanalyst.db")
+        payload = await trio.to_thread.run_sync(
+            partial(
+                export_probe_db,
+                db_path=db_path,
+                export_path=recorder.db_export_path,
+                latest_export_path=recorder.latest_db_export_path,
+                scenario_id=scenario_id,
+                user_id=user_id,
+                session_ids=recorder.observed_session_ids(),
+            )
+        )
+        row_counts = {
+            table: len(rows)
+            for table, rows in payload.get("tables", {}).items()
+            if isinstance(rows, list)
+        }
+        await recorder.record(
+            "db_export_completed",
+            path=str(recorder.db_export_path),
+            latest_path=str(recorder.latest_db_export_path),
+            row_counts=row_counts,
+        )
+    except Exception as exc:
+        await recorder.record_error("DB export failed", repr(exc))
 
 
 def load_scenario(path: str) -> dict[str, Any]:
@@ -357,7 +398,27 @@ async def run_assertions(
 
     if final_state := criteria.get("require_final_workflow_state"):
         session_ended = recorder.session_end_seen()
-        if session_ended:
+        if session_ended and (
+            final_state == "plan_update_complete"
+            or criteria.get("require_post_session_plan_update_complete")
+        ):
+            status = await wait_for_plan_update_complete(
+                backend_url=backend_url,
+                user_id=user_id,
+                session_id=recorder.latest_session_id(),
+                timeout_seconds=float(
+                    criteria.get("plan_update_complete_timeout_seconds", 120)
+                ),
+                recorder=recorder,
+            )
+            await recorder.record("final_user_status", data=status)
+            actual_state = (
+                status.get("workflow_state")
+                or recorder.session_end_workflow_state()
+                or recorder.latest_workflow_state()
+            )
+            status_error = status.get("error")
+        elif session_ended:
             await recorder.record(
                 "final_user_status",
                 data={"final_status_skipped_because_session_inactive": True},
@@ -382,7 +443,7 @@ async def run_assertions(
         therapy_reached = _therapy_reached(recorder)
         therapy_closed_cleanly = therapy_reached and session_ended
         final_state_passed = actual_state == final_state
-        if final_state == "plan_update_in_progress":
+        if final_state in {"plan_update_in_progress", "plan_update_complete"}:
             await assert_event(
                 "therapy_phase_reached_and_session_closed_cleanly",
                 therapy_closed_cleanly,
@@ -395,13 +456,24 @@ async def run_assertions(
             )
             await assert_event(
                 "plan_update_started_after_session_close",
-                session_ended and final_state_passed,
+                session_ended
+                and recorder.session_end_workflow_state()
+                == "plan_update_in_progress",
                 detail=(
-                    f"expected={final_state}, actual={actual_state}, "
+                    "expected_session_end=plan_update_in_progress, "
                     f"session_end_workflow_state="
                     f"{recorder.session_end_workflow_state()}"
                 ),
             )
+            if final_state == "plan_update_complete":
+                await assert_event(
+                    "final_workflow_state",
+                    final_state_passed,
+                    detail=(
+                        f"expected={final_state}, actual={actual_state}, "
+                        f"status_error={status_error}"
+                    ),
+                )
         else:
             await assert_event(
                 "final_workflow_state",
@@ -412,11 +484,11 @@ async def run_assertions(
                 ),
             )
 
-    if criteria.get("require_post_session_plan_complete"):
-        max_seconds = float(criteria.get("plan_complete_timeout_seconds", 120))
-        elapsed = recorder.plan_complete_after_plan_update_seconds()
+    if criteria.get("require_post_session_plan_update_complete"):
+        max_seconds = float(criteria.get("plan_update_complete_timeout_seconds", 120))
+        elapsed = recorder.plan_update_complete_after_plan_update_seconds()
         await assert_event(
-            "therapy_session_to_plan_complete",
+            "therapy_session_to_plan_update_complete",
             elapsed is not None and elapsed <= max_seconds,
             detail=(
                 f"elapsed_seconds={elapsed:.1f}, max={max_seconds:.1f}"
@@ -426,6 +498,118 @@ async def run_assertions(
         )
 
     return passed
+
+
+async def wait_for_plan_update_complete(
+    *,
+    backend_url: str,
+    user_id: str,
+    session_id: str | None,
+    timeout_seconds: float,
+    recorder: ProtocolRecorder,
+) -> dict[str, Any]:
+    """Poll user status until post-session reflection reaches plan_update_complete."""
+    if not session_id:
+        return {"error": "No session id recorded"}
+
+    started_at = trio.current_time()
+    deadline = trio.current_time() + timeout_seconds
+    last_status: dict[str, Any] = {}
+    last_api_error: str | None = None
+    last_db_state: str | None = None
+    while True:
+        last_status = await fetch_user_status(backend_url, user_id, session_id)
+        last_api_error = last_status.get("error")
+        workflow_state = last_status.get("workflow_state") or last_status.get("status")
+        if workflow_state == "plan_update_complete":
+            await recorder.record(
+                "plan_update_complete_observed",
+                source="api",
+                session_id=session_id,
+                elapsed_seconds=round(trio.current_time() - started_at, 3),
+            )
+            await recorder.record(
+                "workflow_action",
+                action=last_status.get("required_action"),
+                workflow_state="plan_update_complete",
+                session_id=session_id,
+            )
+            return last_status
+
+        db_workflow_state = await fetch_user_workflow_state_from_db(user_id)
+        last_db_state = db_workflow_state
+        await recorder.record(
+            "post_session_status_poll",
+            session_id=session_id,
+            api_workflow_state=workflow_state,
+            api_error=last_api_error,
+            db_workflow_state=db_workflow_state,
+            elapsed_seconds=round(trio.current_time() - started_at, 3),
+        )
+        if db_workflow_state == "plan_update_complete":
+            await recorder.record(
+                "plan_update_complete_observed",
+                source="database",
+                session_id=session_id,
+                elapsed_seconds=round(trio.current_time() - started_at, 3),
+            )
+            await recorder.record(
+                "workflow_action",
+                action=None,
+                workflow_state="plan_update_complete",
+                session_id=session_id,
+            )
+            return {
+                "user_id": user_id,
+                "workflow_state": db_workflow_state,
+                "source": "database",
+            }
+        if db_workflow_state and "workflow_state" not in last_status:
+            last_status = {
+                **last_status,
+                "workflow_state": db_workflow_state,
+                "source": "database",
+            }
+
+        remaining = deadline - trio.current_time()
+        if remaining <= 0:
+            return {
+                **last_status,
+                "error": "Timed out waiting for plan_update_complete",
+                "last_api_error": last_api_error,
+                "last_db_state": last_db_state,
+                "elapsed_seconds": round(trio.current_time() - started_at, 3),
+            }
+        await trio.sleep(min(2.0, remaining))
+
+
+async def fetch_user_workflow_state_from_db(user_id: str) -> str | None:
+    """Read persisted workflow state for post-session probe polling."""
+    db_path = os.getenv("DATABASE_PATH", "data/psychoanalyst.db")
+    return await trio.to_thread.run_sync(
+        partial(_sync_fetch_user_workflow_state_from_db, db_path, user_id)
+    )
+
+
+def _sync_fetch_user_workflow_state_from_db(
+    db_path: str, user_id: str
+) -> str | None:
+    path = Path(db_path)
+    if not path.exists():
+        return None
+
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.execute(
+            "SELECT status FROM user_profiles WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return str(row[0]) if row and row[0] is not None else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
 
 async def fetch_user_status(

@@ -64,7 +64,7 @@ def test_session_type_for_workflow_state_mapping() -> None:
     assert (
         session_type_for_workflow_state(WorkflowState.ASSESSMENT_COMPLETE) == "therapy"
     )
-    assert session_type_for_workflow_state(WorkflowState.PLAN_COMPLETE) == "therapy"
+    assert session_type_for_workflow_state(WorkflowState.PLAN_UPDATE_COMPLETE) == "therapy"
 
 
 @pytest.mark.trio
@@ -207,6 +207,86 @@ async def test_response_handler_job_queues_are_idempotent() -> None:
     await handler.ensure_reflection_job("user_1", "session_1")
 
     assert nursery.start_soon.call_count == 2
+
+
+@pytest.mark.trio
+async def test_run_reflection_success_without_event_completes_plan_update() -> None:
+    session = Session(
+        session_id="session_1",
+        user_id="user_1",
+        timestamp=datetime.now(),
+        transcript=[],
+        topics=[],
+    )
+    db_service = AsyncMock()
+    db_service.get_session.return_value = session
+    db_service.update_session_reflection.return_value = True
+    service_container = MagicMock()
+    service_container.get.return_value = db_service
+
+    workflow_engine = AsyncMock()
+    workflow_engine.get_user_state.side_effect = [
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+        WorkflowState.PLAN_UPDATE_COMPLETE,
+    ]
+
+    conversation_manager = MagicMock()
+    conversation_manager.get_context = AsyncMock(return_value=SimpleNamespace())
+    conversation_manager.clear_context = MagicMock()
+
+    reflection_agent = AsyncMock()
+    reflection_agent.process_reflection.return_value = AgentResponse(
+        content="done",
+        next_action="transition",
+        workflow_event=None,
+        metadata={},
+    )
+
+    handler = AgentResponseHandler(
+        service_container=service_container,
+        workflow_engine=workflow_engine,
+        conversation_manager=conversation_manager,
+        nursery=MagicMock(),
+        get_agent=AsyncMock(return_value=reflection_agent),
+    )
+
+    await handler.run_reflection("user_1", "session_1")
+
+    workflow_engine.transition.assert_awaited_once_with(
+        "user_1",
+        WorkflowState.PLAN_UPDATE_COMPLETE,
+        event=WorkflowEvent.COMPLETE_REFLECTION,
+    )
+    conversation_manager.clear_context.assert_called_once_with("session_1")
+
+
+@pytest.mark.trio
+async def test_surface_reflection_failure_completes_plan_update() -> None:
+    workflow_engine = AsyncMock()
+    conversation_manager = MagicMock()
+    conversation_manager.send_json_message = AsyncMock()
+    conversation_manager.clear_context = MagicMock()
+    handler = AgentResponseHandler(
+        service_container=SimpleNamespace(
+            config=SimpleNamespace(REFLECTION_TIMEOUT_SECONDS=60)
+        ),
+        workflow_engine=workflow_engine,
+        conversation_manager=conversation_manager,
+        nursery=MagicMock(),
+        get_agent=AsyncMock(),
+    )
+
+    await handler._surface_reflection_failure(
+        "user_1", "session_1", RuntimeError("reflection failed")
+    )
+
+    workflow_engine.transition.assert_awaited_once_with(
+        "user_1",
+        WorkflowState.PLAN_UPDATE_COMPLETE,
+        event=WorkflowEvent.COMPLETE_REFLECTION,
+    )
+    conversation_manager.clear_context.assert_called_once_with("session_1")
 
 
 @pytest.mark.trio

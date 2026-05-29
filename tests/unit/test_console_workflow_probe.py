@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ def console_modules(monkeypatch):
     monkeypatch.syspath_prepend(str(repo_root / "console-ui"))
     modules = {
         "input_providers": importlib.import_module("src.input_providers"),
+        "db_export": importlib.import_module("src.db_export"),
         "llm_user_simulator": importlib.import_module("src.llm_user_simulator"),
         "protocol_recorder": importlib.import_module("src.protocol_recorder"),
         "console_client": importlib.import_module("src.console_client"),
@@ -338,6 +341,176 @@ async def test_runner_detects_recorded_simulator_failure(console_modules, tmp_pa
     assert failure["http_status"] == 200
 
 
+async def test_recorder_collects_nested_observed_session_ids(
+    console_modules, tmp_path
+):
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    await recorder.record("profile_created", session_id="s1")
+    await recorder.record(
+        "ws_event",
+        data={
+            "session_id": "s2",
+            "nested": [{"session_id": "s3"}, {"session_id": "s1"}],
+        },
+    )
+
+    assert recorder.observed_session_ids() == ["s1", "s2", "s3"]
+
+
+async def test_db_export_filters_probe_rows(console_modules, tmp_path):
+    db_export = console_modules["db_export"]
+    db_path = tmp_path / "probe.db"
+    export_path = tmp_path / "run_db_export.json"
+    latest_path = tmp_path / "latest_db_export.json"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE user_profiles (
+                user_id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                plan_id TEXT,
+                timestamp TEXT
+            );
+            CREATE TABLE therapy_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE assessment_recommendations (
+                user_id TEXT,
+                intake_session_block_id TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE session_enrichment_jobs (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE user_profile_history (
+                history_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                created_by_session TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE patient_analysis (
+                analysis_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                created_by_session TEXT,
+                version INTEGER,
+                created_at TEXT
+            );
+            CREATE TABLE llm_cache (
+                cache_key TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_block_id TEXT,
+                created_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO user_profiles VALUES (?, ?, ?)",
+            ("probe-user", "plan-1", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO user_profiles VALUES (?, ?, ?)",
+            ("other-user", "other-plan", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+            ("session-1", "probe-user", "plan-1", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+            ("other-session", "other-user", "other-plan", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO therapy_plans VALUES (?, ?, ?)",
+            ("plan-1", "probe-user", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO assessment_recommendations VALUES (?, ?, ?)",
+            ("other-user", "session-1", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO session_enrichment_jobs VALUES (?, ?, ?)",
+            ("session-1", "probe-user", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO user_profile_history VALUES (?, ?, ?, ?)",
+            ("history-1", "probe-user", "session-1", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO patient_analysis VALUES (?, ?, ?, ?, ?)",
+            ("analysis-1", "probe-user", "session-1", 1, "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO llm_cache VALUES (?, ?, ?, ?)",
+            ("cache-user", "probe-user", None, "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO llm_cache VALUES (?, ?, ?, ?)",
+            ("cache-session", "other-user", "session-1", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO llm_cache VALUES (?, ?, ?, ?)",
+            ("cache-other", "other-user", "other-session", "2026-01-01T00:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = db_export.export_probe_db(
+        db_path=db_path,
+        export_path=export_path,
+        latest_export_path=latest_path,
+        scenario_id="scenario",
+        user_id="probe-user",
+        session_ids=["session-1"],
+    )
+
+    assert export_path.exists()
+    assert latest_path.exists()
+    assert json.loads(latest_path.read_text()) == payload
+    assert payload["metadata"]["session_ids"] == ["session-1"]
+    assert payload["metadata"]["plan_ids"] == ["plan-1"]
+    assert [row["user_id"] for row in payload["tables"]["user_profiles"]] == [
+        "probe-user"
+    ]
+    assert [row["session_id"] for row in payload["tables"]["sessions"]] == [
+        "session-1"
+    ]
+    assert {
+        row["cache_key"] for row in payload["tables"]["llm_cache"]
+    } == {"cache-user", "cache-session"}
+
+
+async def test_full_probe_scenario_requires_plan_update_complete():
+    repo_root = Path(__file__).resolve().parents[2]
+    scenario_path = (
+        repo_root
+        / "console-ui"
+        / "scenarios"
+        / "workflow-probes"
+        / "basic_new_user_intake_to_therapy.json"
+    )
+
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    criteria = scenario["success_criteria"]
+
+    assert criteria["require_final_workflow_state"] == "plan_update_complete"
+    assert criteria["require_post_session_plan_update_complete"] is True
+    assert criteria["plan_update_complete_timeout_seconds"] == 120
+
+
 async def test_assertions_fail_when_required_workflow_action_missing(
     console_modules, tmp_path
 ):
@@ -633,7 +806,7 @@ async def test_final_workflow_state_allows_session_closed_at_plan_update(
     )
 
 
-async def test_optional_therapy_session_to_plan_complete_assertion(
+async def test_optional_therapy_session_to_plan_update_complete_assertion(
     console_modules, tmp_path
 ):
     runner = console_modules["workflow_probe_runner"]
@@ -646,7 +819,7 @@ async def test_optional_therapy_session_to_plan_complete_assertion(
         data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
     )
     recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
-    await recorder.record("workflow_action", workflow_state="plan_complete")
+    await recorder.record("workflow_action", workflow_state="plan_update_complete")
     recorder.events[-1]["ts"] = "2026-01-01T00:01:30+00:00"
 
     passed = await runner.run_assertions(
@@ -655,8 +828,8 @@ async def test_optional_therapy_session_to_plan_complete_assertion(
             "success_criteria": {
                 "require_min_user_messages": 0,
                 "require_min_assistant_messages": 0,
-                "require_post_session_plan_complete": True,
-                "plan_complete_timeout_seconds": 120,
+                "require_post_session_plan_update_complete": True,
+                "plan_update_complete_timeout_seconds": 120,
             }
         },
         backend_url="http://unused",
@@ -665,13 +838,145 @@ async def test_optional_therapy_session_to_plan_complete_assertion(
 
     assert passed is True
     assert any(
-        assertion["name"] == "therapy_session_to_plan_complete"
+        assertion["name"] == "therapy_session_to_plan_update_complete"
         and assertion["passed"] is True
         for assertion in recorder.assertions
     )
 
 
-async def test_optional_therapy_session_to_plan_complete_fails_after_timeout(
+async def test_final_plan_update_complete_polls_after_session_end(
+    console_modules, tmp_path, monkeypatch
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    await recorder.record("ws_event", type="session_started", data={"session_id": "s1"})
+    await recorder.record("therapy_style_selected", selected_therapy_style="cbt")
+    await recorder.record_workflow_action(
+        {"required_action": "continue_therapy", "workflow_state": "therapy_in_progress"}
+    )
+    await recorder.record_assistant_response("Let's continue therapy.")
+    await recorder.record(
+        "session_ended",
+        data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
+    )
+
+    async def fake_fetch_user_status(
+        _backend_url: str, _user_id: str, session_id: str | None
+    ) -> dict[str, Any]:
+        assert session_id == "s1"
+        return {"workflow_state": "plan_update_complete"}
+
+    monkeypatch.setattr(runner, "fetch_user_status", fake_fetch_user_status)
+
+    passed = await runner.run_assertions(
+        recorder=recorder,
+        scenario={
+            "success_criteria": {
+                "require_min_user_messages": 0,
+                "require_min_assistant_messages": 0,
+                "require_final_workflow_state": "plan_update_complete",
+                "require_post_session_plan_update_complete": True,
+                "plan_update_complete_timeout_seconds": 120,
+            }
+        },
+        backend_url="http://unused",
+        user_id="user-1",
+    )
+
+    assert passed is True
+    assert any(
+        assertion["name"] == "final_workflow_state"
+        and assertion["passed"] is True
+        for assertion in recorder.assertions
+    )
+    assert any(
+        assertion["name"] == "therapy_session_to_plan_update_complete"
+        and assertion["passed"] is True
+        for assertion in recorder.assertions
+    )
+
+
+async def test_plan_update_complete_poll_falls_back_to_db_state(
+    console_modules, tmp_path, monkeypatch
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    async def fake_fetch_user_status(
+        _backend_url: str, _user_id: str, _session_id: str | None
+    ) -> dict[str, Any]:
+        return {"error": "Session is not active for user"}
+
+    async def fake_fetch_user_workflow_state_from_db(_user_id: str) -> str:
+        return "plan_update_complete"
+
+    monkeypatch.setattr(runner, "fetch_user_status", fake_fetch_user_status)
+    monkeypatch.setattr(
+        runner,
+        "fetch_user_workflow_state_from_db",
+        fake_fetch_user_workflow_state_from_db,
+    )
+
+    status = await runner.wait_for_plan_update_complete(
+        backend_url="http://unused",
+        user_id="user-1",
+        session_id="s1",
+        timeout_seconds=120,
+        recorder=recorder,
+    )
+
+    assert status == {
+        "user_id": "user-1",
+        "workflow_state": "plan_update_complete",
+        "source": "database",
+    }
+    assert recorder.latest_workflow_state() == "plan_update_complete"
+
+
+async def test_plan_update_complete_poll_timeout_reports_last_state(
+    console_modules, tmp_path, monkeypatch
+):
+    runner = console_modules["workflow_probe_runner"]
+    recorder_mod = console_modules["protocol_recorder"]
+    recorder = recorder_mod.ProtocolRecorder(tmp_path, "scenario")
+
+    async def fake_fetch_user_status(
+        _backend_url: str, _user_id: str, _session_id: str | None
+    ) -> dict[str, Any]:
+        return {"error": "Session is not active for user"}
+
+    async def fake_fetch_user_workflow_state_from_db(_user_id: str) -> str:
+        return "plan_update_in_progress"
+
+    monkeypatch.setattr(runner, "fetch_user_status", fake_fetch_user_status)
+    monkeypatch.setattr(
+        runner,
+        "fetch_user_workflow_state_from_db",
+        fake_fetch_user_workflow_state_from_db,
+    )
+
+    status = await runner.wait_for_plan_update_complete(
+        backend_url="http://unused",
+        user_id="user-1",
+        session_id="s1",
+        timeout_seconds=0,
+        recorder=recorder,
+    )
+
+    assert status["error"] == "Timed out waiting for plan_update_complete"
+    assert status["last_api_error"] == "Session is not active for user"
+    assert status["last_db_state"] == "plan_update_in_progress"
+    assert any(
+        event.get("kind") == "post_session_status_poll"
+        and event.get("db_workflow_state") == "plan_update_in_progress"
+        for event in recorder.events
+    )
+
+
+async def test_optional_therapy_session_to_plan_update_complete_fails_after_timeout(
     console_modules, tmp_path
 ):
     runner = console_modules["workflow_probe_runner"]
@@ -684,7 +989,7 @@ async def test_optional_therapy_session_to_plan_complete_fails_after_timeout(
         data={"workflow_state": "plan_update_in_progress", "reason": "Probe limit"},
     )
     recorder.events[-1]["ts"] = "2026-01-01T00:00:00+00:00"
-    await recorder.record("workflow_action", workflow_state="plan_complete")
+    await recorder.record("workflow_action", workflow_state="plan_update_complete")
     recorder.events[-1]["ts"] = "2026-01-01T00:02:01+00:00"
 
     passed = await runner.run_assertions(
@@ -693,8 +998,8 @@ async def test_optional_therapy_session_to_plan_complete_fails_after_timeout(
             "success_criteria": {
                 "require_min_user_messages": 0,
                 "require_min_assistant_messages": 0,
-                "require_post_session_plan_complete": True,
-                "plan_complete_timeout_seconds": 120,
+                "require_post_session_plan_update_complete": True,
+                "plan_update_complete_timeout_seconds": 120,
             }
         },
         backend_url="http://unused",
@@ -703,7 +1008,7 @@ async def test_optional_therapy_session_to_plan_complete_fails_after_timeout(
 
     assert passed is False
     assert any(
-        assertion["name"] == "therapy_session_to_plan_complete"
+        assertion["name"] == "therapy_session_to_plan_update_complete"
         and assertion["passed"] is False
         for assertion in recorder.assertions
     )

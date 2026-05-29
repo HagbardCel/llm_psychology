@@ -261,6 +261,12 @@ class AgentResponseHandler:
                 )
                 return
 
+            logger.info(
+                "reflection_started session_id=%s user_id=%s state=%s",
+                session_id,
+                user_id,
+                state.value,
+            )
             trio_db_service = self.service_container.get("trio_db_service")
             session = await trio_db_service.get_session(session_id)
             if not session:
@@ -356,6 +362,7 @@ class AgentResponseHandler:
                     tier3_update=tier3_update,
                 )
 
+            transitioned = False
             if agent_response.workflow_event:
                 next_state = self.workflow_engine.get_next_state(
                     state, agent_response.workflow_event
@@ -365,12 +372,39 @@ class AgentResponseHandler:
                     next_state,
                     event=agent_response.workflow_event,
                 )
+                transitioned = True
+
+            latest_state = await self.workflow_engine.get_user_state(user_id)
+            if latest_state in (
+                WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+                WorkflowState.REFLECTION_IN_PROGRESS,
+            ):
+                await self.workflow_engine.transition(
+                    user_id,
+                    WorkflowState.PLAN_UPDATE_COMPLETE,
+                    event=WorkflowEvent.COMPLETE_REFLECTION,
+                )
+                transitioned = True
+                logger.info(
+                    "reflection_recovered_to_plan_update_complete "
+                    "session_id=%s user_id=%s previous_state=%s",
+                    session_id,
+                    user_id,
+                    latest_state.value,
+                )
+
+            if transitioned:
                 self.conversation_manager.clear_context(session_id)
 
-            logger.info("Auto reflection complete for session %s", session_id)
+            logger.info(
+                "reflection_completed session_id=%s user_id=%s final_state=%s",
+                session_id,
+                user_id,
+                (await self.workflow_engine.get_user_state(user_id)).value,
+            )
         except Exception as exc:
             logger.error(
-                "Auto reflection failed for session %s",
+                "reflection_failed session_id=%s",
                 session_id,
                 exc_info=True,
             )
@@ -407,14 +441,16 @@ class AgentResponseHandler:
         try:
             await self.workflow_engine.transition(
                 user_id,
-                WorkflowState.PLAN_COMPLETE,
+                WorkflowState.PLAN_UPDATE_COMPLETE,
                 event=WorkflowEvent.COMPLETE_REFLECTION,
             )
             self.conversation_manager.clear_context(session_id)
             logger.info(
-                "Advanced workflow to PLAN_COMPLETE after reflection failure "
-                "for session %s",
+                "reflection_recovered_to_plan_update_complete "
+                "session_id=%s user_id=%s reason=%s",
                 session_id,
+                user_id,
+                detail,
             )
         except Exception:
             logger.warning(
