@@ -249,7 +249,7 @@ def test_lmstudio_provider_builds_openai_compatible_client(monkeypatch):
         "api_key": "not-needed",
         "temperature": 0.7,
         "base_url": "http://host.docker.internal:1234/v1",
-        "model_kwargs": {"chat_template_kwargs": {"enable_thinking": True}},
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
     }
 
 
@@ -272,9 +272,10 @@ def test_openai_compatible_provider_disables_thinking(monkeypatch):
         enable_thinking=False,
     )
 
-    assert captured["model_kwargs"] == {
+    assert captured["extra_body"] == {
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    assert "chat_template_kwargs" not in captured.get("model_kwargs", {})
 
 
 def test_ollama_provider_does_not_send_thinking_kwargs(monkeypatch):
@@ -297,6 +298,7 @@ def test_ollama_provider_does_not_send_thinking_kwargs(monkeypatch):
     )
 
     assert "model_kwargs" not in captured
+    assert "extra_body" not in captured
 
 
 def test_local_structured_output_parses_json(monkeypatch):

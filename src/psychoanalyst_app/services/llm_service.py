@@ -228,7 +228,7 @@ class LLMService:
                 kwargs["base_url"] = self.base_url
             template_kwargs = self._chat_template_kwargs_for_provider()
             if template_kwargs:
-                kwargs["model_kwargs"] = template_kwargs
+                kwargs["extra_body"] = template_kwargs
             return ChatOpenAI(**kwargs)
 
         raise ValueError(f"Unsupported LLM provider: {self.provider}")
