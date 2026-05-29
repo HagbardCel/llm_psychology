@@ -23,21 +23,21 @@ def test_workflow_engine_accepts_new_plan_state_path() -> None:
         WorkflowState.THERAPY_IN_PROGRESS, WorkflowState.PLAN_UPDATE_IN_PROGRESS
     )
     assert engine.can_transition(
-        WorkflowState.PLAN_UPDATE_IN_PROGRESS, WorkflowState.PLAN_COMPLETE
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS, WorkflowState.PLAN_UPDATE_COMPLETE
     )
     assert engine.can_transition(
-        WorkflowState.PLAN_COMPLETE, WorkflowState.THERAPY_IN_PROGRESS
+        WorkflowState.PLAN_UPDATE_COMPLETE, WorkflowState.THERAPY_IN_PROGRESS
     )
 
 
-def test_workflow_engine_rejects_overloaded_plan_complete_jump() -> None:
+def test_workflow_engine_rejects_overloaded_plan_update_complete_jump() -> None:
     engine = TrioWorkflowEngine(AsyncMock())
 
     assert not engine.can_transition(
-        WorkflowState.ASSESSMENT_COMPLETE, WorkflowState.PLAN_COMPLETE
+        WorkflowState.ASSESSMENT_COMPLETE, WorkflowState.PLAN_UPDATE_COMPLETE
     )
     assert not engine.can_transition(
-        WorkflowState.THERAPY_IN_PROGRESS, WorkflowState.PLAN_COMPLETE
+        WorkflowState.THERAPY_IN_PROGRESS, WorkflowState.PLAN_UPDATE_COMPLETE
     )
 
 
@@ -54,7 +54,7 @@ def test_workflow_engine_session_end_enters_plan_update() -> None:
         engine.get_next_state(
             WorkflowState.PLAN_UPDATE_IN_PROGRESS, WorkflowEvent.COMPLETE_REFLECTION
         )
-        == WorkflowState.PLAN_COMPLETE
+        == WorkflowState.PLAN_UPDATE_COMPLETE
     )
 
     with pytest.raises(InvalidStateTransitionError):

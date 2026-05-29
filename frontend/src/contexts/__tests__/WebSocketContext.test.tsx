@@ -142,7 +142,7 @@ describe('WebSocketProvider', () => {
       useWebSocketOptions.onSessionStarted(sessionStarted());
       useWebSocketOptions.onSessionEnded({
         reason: 'done',
-        workflow_state: 'plan_complete',
+        workflow_state: 'plan_update_complete',
       } satisfies SessionEndedEvent);
       useWebSocketOptions.onWorkflowNextAction(workflowNextAction());
     });

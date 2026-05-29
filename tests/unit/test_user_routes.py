@@ -72,7 +72,7 @@ async def test_profile_patch_rejects_status_update(trio_server):
             json={
                 "user_id": user_profile.user_id,
                 "session_id": session_info.session_id,
-                "status": "plan_complete",
+                "status": "plan_update_complete",
             },
         )
 

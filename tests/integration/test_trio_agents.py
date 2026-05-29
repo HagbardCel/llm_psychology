@@ -1284,7 +1284,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
         name="Versioning Test Patient",
         data_of_birth=None,
         profession="Designer",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -1668,7 +1668,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
         name="Stable Test Patient",
         data_of_birth=None,
         profession="Accountant",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )

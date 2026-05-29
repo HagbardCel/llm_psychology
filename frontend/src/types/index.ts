@@ -47,7 +47,7 @@ export const UserStatus = {
   THERAPY_IN_PROGRESS: 'THERAPY_IN_PROGRESS' as UserStatus,
   PLAN_UPDATE_IN_PROGRESS: 'PLAN_UPDATE_IN_PROGRESS' as UserStatus,
   REFLECTION_IN_PROGRESS: 'REFLECTION_IN_PROGRESS' as UserStatus,
-  PLAN_COMPLETE: 'PLAN_COMPLETE' as UserStatus,
+  PLAN_UPDATE_COMPLETE: 'PLAN_UPDATE_COMPLETE' as UserStatus,
 } as const;
 
 /** Topic (directly from backend) */

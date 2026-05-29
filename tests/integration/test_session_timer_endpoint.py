@@ -40,7 +40,7 @@ async def active_session(test_server_websocket, server_url):
     user_profile = UserProfile(
         user_id="test_user",
         name="Test User",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -148,7 +148,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     user_profile = UserProfile(
         user_id="test_user_ext",
         name="Test User",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -218,7 +218,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
     user_profile = UserProfile(
         user_id="test_user_timeup",
         name="Test User",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )

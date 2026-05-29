@@ -110,7 +110,7 @@ These shapes are what all clients should assume on the wire.
 ### `WorkflowNextActionDTO`
 
 - `user_id`: `string`
-- `workflow_state`: `string` (enum value matching `WorkflowState`: `new`, `intake_in_progress`, `intake_complete`, `assessment_in_progress`, `assessment_complete`, `initial_plan_complete`, `therapy_in_progress`, `plan_update_in_progress`, `reflection_in_progress`, `plan_complete`)
+- `workflow_state`: `string` (enum value matching `WorkflowState`: `new`, `intake_in_progress`, `intake_complete`, `assessment_in_progress`, `assessment_complete`, `initial_plan_complete`, `therapy_in_progress`, `plan_update_in_progress`, `reflection_in_progress`, `plan_update_complete`)
 - `required_action`: `"complete_profile" | "select_therapy_style" | "start_intake" | "continue_therapy" | "wait"`
 - `required_fields`: `string[]`
 - `defaults`: `{ [k: string]: string } | null`

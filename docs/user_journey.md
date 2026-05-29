@@ -22,9 +22,9 @@ stateDiagram-v2
     ASSESSMENT_COMPLETE --> INITIAL_PLAN_COMPLETE: Workflow step (select therapy style)
     INITIAL_PLAN_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nfirst therapy session
     THERAPY_IN_PROGRESS --> PLAN_UPDATE_IN_PROGRESS: session ends
-    PLAN_UPDATE_IN_PROGRESS --> PLAN_COMPLETE: TrioReflectionAgent
-    PLAN_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nnext session
-    PLAN_COMPLETE --> [*]
+    PLAN_UPDATE_IN_PROGRESS --> PLAN_UPDATE_COMPLETE: TrioReflectionAgent
+    PLAN_UPDATE_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nnext session
+    PLAN_UPDATE_COMPLETE --> [*]
 ```
 
 ## HTTP and WebSocket Event Flow (with DTOs)
@@ -173,7 +173,7 @@ The user journey is defined by a series of `WorkflowState` transitions.
 ### 4. Therapy Sessions
 
 - **Purpose**: Conduct therapeutic conversations based on the selected style and established therapy plan.
-- **Workflow State**: `INITIAL_PLAN_COMPLETE` -> `THERAPY_IN_PROGRESS`, then recurring `PLAN_COMPLETE` -> `THERAPY_IN_PROGRESS`
+- **Workflow State**: `INITIAL_PLAN_COMPLETE` -> `THERAPY_IN_PROGRESS`, then recurring `PLAN_UPDATE_COMPLETE` -> `THERAPY_IN_PROGRESS`
 - **Responsible Agent**: `TrioPsychoanalystAgent`
 - **Key Activities**:
   - Engages in dialogue using style-specific prompts and knowledge.
@@ -186,7 +186,7 @@ The user journey is defined by a series of `WorkflowState` transitions.
 ### 5. Reflection & Planning
 
 - **Purpose**: Review the completed session, update the therapy plan, and prepare for the next session.
-- **Workflow State**: `PLAN_UPDATE_IN_PROGRESS` -> `PLAN_COMPLETE`
+- **Workflow State**: `PLAN_UPDATE_IN_PROGRESS` -> `PLAN_UPDATE_COMPLETE`
 - **Responsible Agent**: `TrioReflectionAgent` (coordinates `TrioMemoryAgent` and `TrioPlanningAgent`)
 - **Key Activities**:
   - Analyzes session for key themes, emotional state, and insights.

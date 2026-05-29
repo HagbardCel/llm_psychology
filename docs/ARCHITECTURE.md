@@ -114,7 +114,7 @@ class WorkflowState(Enum):
     ASSESSMENT_COMPLETE = "assessment_complete"    # Ready for therapy
     THERAPY_IN_PROGRESS = "therapy_in_progress"    # Active therapy session
     REFLECTION_IN_PROGRESS = "reflection_in_progress"  # Post-session reflection
-    PLAN_COMPLETE = "plan_complete"                # Ready for next session
+    PLAN_UPDATE_COMPLETE = "plan_update_complete"                # Ready for next session
 ```
 
 **State Transitions**:
@@ -122,7 +122,7 @@ class WorkflowState(Enum):
 NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
   → ASSESSMENT_IN_PROGRESS → ASSESSMENT_COMPLETE
   → THERAPY_IN_PROGRESS → REFLECTION_IN_PROGRESS
-  → PLAN_COMPLETE → THERAPY_IN_PROGRESS (cycle)
+  → PLAN_UPDATE_COMPLETE → THERAPY_IN_PROGRESS (cycle)
 ```
 
 #### TrioConversationManager (`src/psychoanalyst_app/orchestration/trio_conversation_manager.py`)

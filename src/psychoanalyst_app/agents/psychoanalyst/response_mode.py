@@ -15,7 +15,7 @@ def resolve_response_mode(
     if context.user_profile.status in (
         UserStatus.ASSESSMENT_COMPLETE,
         UserStatus.INITIAL_PLAN_COMPLETE,
-        UserStatus.PLAN_COMPLETE,
+        UserStatus.PLAN_UPDATE_COMPLETE,
     ):
         return ("transition", WorkflowEvent.START_THERAPY)
     if context.is_time_up:

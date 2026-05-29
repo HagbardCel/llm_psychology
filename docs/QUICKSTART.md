@@ -269,7 +269,7 @@ Agent: I see. When we catastrophize, we often overlook context.
 
 ### Step 4: Reflection (Post-Session)
 
-**State**: `THERAPY_IN_PROGRESS` → `REFLECTION_IN_PROGRESS` → `PLAN_COMPLETE`
+**State**: `THERAPY_IN_PROGRESS` → `REFLECTION_IN_PROGRESS` → `PLAN_UPDATE_COMPLETE`
 
 **Purpose**: Process insights and update therapy plan
 

@@ -55,7 +55,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
       case UserStatus.INTAKE_COMPLETE:
         return 'info';
       case UserStatus.INITIAL_PLAN_COMPLETE:
-      case UserStatus.PLAN_COMPLETE:
+      case UserStatus.PLAN_UPDATE_COMPLETE:
         return 'success';
       default:
         return 'default';
@@ -70,7 +70,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
         return 'Assessment Ready';
       case UserStatus.INITIAL_PLAN_COMPLETE:
         return 'Ready for Therapy';
-      case UserStatus.PLAN_COMPLETE:
+      case UserStatus.PLAN_UPDATE_COMPLETE:
         return 'Ready for Therapy';
       default:
         return 'Unknown';
@@ -90,7 +90,7 @@ export function Navigation({ open, onClose }: NavigationProps) {
       path: '/session/new',
       enabled:
         user?.status === UserStatus.INITIAL_PLAN_COMPLETE ||
-        user?.status === UserStatus.PLAN_COMPLETE,
+        user?.status === UserStatus.PLAN_UPDATE_COMPLETE,
     },
     {
       text: 'Session History',

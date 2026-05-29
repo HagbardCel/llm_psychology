@@ -58,7 +58,7 @@ describe('Type Safety Integration', () => {
         'THERAPY_IN_PROGRESS',
         'PLAN_UPDATE_IN_PROGRESS',
         'REFLECTION_IN_PROGRESS',
-        'PLAN_COMPLETE',
+        'PLAN_UPDATE_COMPLETE',
       ];
 
       validStatuses.forEach(status => {

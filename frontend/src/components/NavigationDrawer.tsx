@@ -81,7 +81,7 @@ export function NavigationDrawer({ open, onClose, variant }: NavigationDrawerPro
       icon: <ChatIcon />,
       locked:
         user.status !== UserStatus.INITIAL_PLAN_COMPLETE &&
-        user.status !== UserStatus.PLAN_COMPLETE &&
+        user.status !== UserStatus.PLAN_UPDATE_COMPLETE &&
         user.status !== UserStatus.THERAPY_IN_PROGRESS
     },
     { label: 'History', path: '/history', icon: <HistoryIcon /> },
@@ -169,7 +169,7 @@ function getUserStatusLabel(status: UserStatus): string {
       return 'Ready';
     case UserStatus.PLAN_UPDATE_IN_PROGRESS:
       return 'Updating Plan';
-    case UserStatus.PLAN_COMPLETE:
+    case UserStatus.PLAN_UPDATE_COMPLETE:
       return 'Ready';
     case UserStatus.THERAPY_IN_PROGRESS:
       return 'In Therapy';

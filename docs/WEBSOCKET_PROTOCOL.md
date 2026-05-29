@@ -300,7 +300,7 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 
 **Behavior**:
 - Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, continue therapy, or wait).
-- `initial_plan_complete` and `plan_complete` both use `required_action="continue_therapy"`; the prompt distinguishes first therapy start from post-reflection resumption.
+- `initial_plan_complete` and `plan_update_complete` both use `required_action="continue_therapy"`; the prompt distinguishes first therapy start from post-reflection resumption.
 - Always includes the latest workflow state and recommended fields to collect.
 - `blocking` indicates whether the UI must satisfy this action before other workflows continue.
 - Sent after `session_started` so clients can render the appropriate onboarding form.

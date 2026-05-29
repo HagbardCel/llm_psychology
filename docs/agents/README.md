@@ -27,7 +27,7 @@ The orchestrator uses this mapping to pick the agent on each user message.
 | ASSESSMENT_COMPLETE | PSYCHOANALYST | `TrioPsychoanalystAgent` |
 | THERAPY_IN_PROGRESS | PSYCHOANALYST | `TrioPsychoanalystAgent` |
 | REFLECTION_IN_PROGRESS | REFLECTION | `TrioReflectionAgent` |
-| PLAN_COMPLETE | PSYCHOANALYST | `TrioPsychoanalystAgent` |
+| PLAN_UPDATE_COMPLETE | PSYCHOANALYST | `TrioPsychoanalystAgent` |
 
 ## Execution Pipeline (High Level)
 
@@ -76,7 +76,7 @@ sequenceDiagram
         Handler->>Jobs: ensure_reflection_job
         Jobs->>Agent: process_reflection(session)
         Jobs->>DB: persist plan/profile/tier updates
-        Jobs->>WF: transition to PLAN_COMPLETE
+        Jobs->>WF: transition to PLAN_UPDATE_COMPLETE
     end
 ```
 

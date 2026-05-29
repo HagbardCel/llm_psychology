@@ -34,7 +34,7 @@ class TrioWorkflowEngine:
         WorkflowState.THERAPY_IN_PROGRESS: "PSYCHOANALYST",
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: "REFLECTION",
         WorkflowState.REFLECTION_IN_PROGRESS: "REFLECTION",
-        WorkflowState.PLAN_COMPLETE: "PSYCHOANALYST",
+        WorkflowState.PLAN_UPDATE_COMPLETE: "PSYCHOANALYST",
     }
 
     # Valid state transitions
@@ -61,16 +61,16 @@ class TrioWorkflowEngine:
             WorkflowState.THERAPY_IN_PROGRESS,  # Allow staying in progress
         ],
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: [
-            WorkflowState.PLAN_COMPLETE,
+            WorkflowState.PLAN_UPDATE_COMPLETE,
             WorkflowState.PLAN_UPDATE_IN_PROGRESS,  # Allow staying in progress
         ],
         WorkflowState.REFLECTION_IN_PROGRESS: [
-            WorkflowState.PLAN_COMPLETE,
+            WorkflowState.PLAN_UPDATE_COMPLETE,
             WorkflowState.REFLECTION_IN_PROGRESS,  # Allow staying in progress
         ],
-        WorkflowState.PLAN_COMPLETE: [
+        WorkflowState.PLAN_UPDATE_COMPLETE: [
             WorkflowState.THERAPY_IN_PROGRESS,  # Can resume therapy
-            WorkflowState.PLAN_COMPLETE,  # Allow staying in state
+            WorkflowState.PLAN_UPDATE_COMPLETE,  # Allow staying in state
         ],
     }
 
@@ -85,7 +85,7 @@ class TrioWorkflowEngine:
         UserStatus.THERAPY_IN_PROGRESS: WorkflowState.THERAPY_IN_PROGRESS,
         UserStatus.PLAN_UPDATE_IN_PROGRESS: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
         UserStatus.REFLECTION_IN_PROGRESS: WorkflowState.REFLECTION_IN_PROGRESS,
-        UserStatus.PLAN_COMPLETE: WorkflowState.PLAN_COMPLETE,
+        UserStatus.PLAN_UPDATE_COMPLETE: WorkflowState.PLAN_UPDATE_COMPLETE,
     }
 
     # Mapping from WorkflowState to UserStatus (for persistence)
@@ -99,7 +99,7 @@ class TrioWorkflowEngine:
         WorkflowState.THERAPY_IN_PROGRESS: UserStatus.THERAPY_IN_PROGRESS,
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: UserStatus.PLAN_UPDATE_IN_PROGRESS,
         WorkflowState.REFLECTION_IN_PROGRESS: UserStatus.REFLECTION_IN_PROGRESS,
-        WorkflowState.PLAN_COMPLETE: UserStatus.PLAN_COMPLETE,
+        WorkflowState.PLAN_UPDATE_COMPLETE: UserStatus.PLAN_UPDATE_COMPLETE,
     }
 
     def __init__(self, trio_db_service: TrioDatabaseService):
@@ -247,7 +247,7 @@ class TrioWorkflowEngine:
             WorkflowEvent.START_THERAPY: WorkflowState.THERAPY_IN_PROGRESS,
             WorkflowEvent.COMPLETE_SESSION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowEvent.START_REFLECTION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
-            WorkflowEvent.COMPLETE_REFLECTION: WorkflowState.PLAN_COMPLETE,
+            WorkflowEvent.COMPLETE_REFLECTION: WorkflowState.PLAN_UPDATE_COMPLETE,
             WorkflowEvent.RESUME_THERAPY: WorkflowState.THERAPY_IN_PROGRESS,
         }
 

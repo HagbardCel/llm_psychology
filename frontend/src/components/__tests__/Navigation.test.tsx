@@ -49,7 +49,7 @@ describe('Navigation', () => {
 
   it('renders expected menu items', () => {
     mockUseUserProfile.mockReturnValue({
-      data: { id: 'test-user-id', name: 'Test User', status: UserStatus.PLAN_COMPLETE },
+      data: { id: 'test-user-id', name: 'Test User', status: UserStatus.PLAN_UPDATE_COMPLETE },
       isLoading: false,
       error: null,
     });
@@ -69,7 +69,7 @@ describe('Navigation', () => {
 
   it('navigates and closes when clicking an enabled item', () => {
     mockUseUserProfile.mockReturnValue({
-      data: { id: 'test-user-id', name: 'Test User', status: UserStatus.PLAN_COMPLETE },
+      data: { id: 'test-user-id', name: 'Test User', status: UserStatus.PLAN_UPDATE_COMPLETE },
       isLoading: false,
       error: null,
     });

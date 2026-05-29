@@ -6,7 +6,7 @@ and session context to generate prompts and drive workflow transitions.
 
 ## Trigger / Invocation
 - Routed by workflow states `ASSESSMENT_COMPLETE`, `THERAPY_IN_PROGRESS`,
-  and `PLAN_COMPLETE`.
+  and `PLAN_UPDATE_COMPLETE`.
 - Entry point: `process_message`.
 
 References:

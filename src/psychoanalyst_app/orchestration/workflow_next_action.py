@@ -85,7 +85,7 @@ def resolve_next_action(
     if workflow_state in (
         WorkflowState.INITIAL_PLAN_COMPLETE,
         WorkflowState.THERAPY_IN_PROGRESS,
-        WorkflowState.PLAN_COMPLETE,
+        WorkflowState.PLAN_UPDATE_COMPLETE,
     ):
         return _continue_therapy_action(user_id, workflow_state)
 
@@ -164,7 +164,7 @@ def _continue_therapy_action(user_id: str, state: WorkflowState) -> WorkflowNext
     """Helper for therapy continuation prompts."""
     if state == WorkflowState.INITIAL_PLAN_COMPLETE:
         prompt = "Your selected therapy style is ready. Start therapy whenever you're ready."
-    elif state == WorkflowState.PLAN_COMPLETE:
+    elif state == WorkflowState.PLAN_UPDATE_COMPLETE:
         prompt = "Your session reflection is complete. Resume therapy whenever you're ready."
     else:
         prompt = "Resume your therapy session or start a new one whenever you're ready."

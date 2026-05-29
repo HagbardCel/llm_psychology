@@ -21,7 +21,7 @@ class WorkflowState(Enum):
     The workflow progresses through these states:
     NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE → ASSESSMENT_IN_PROGRESS →
     ASSESSMENT_COMPLETE → INITIAL_PLAN_COMPLETE → THERAPY_IN_PROGRESS →
-    PLAN_UPDATE_IN_PROGRESS → PLAN_COMPLETE → (loop back to THERAPY_IN_PROGRESS)
+    PLAN_UPDATE_IN_PROGRESS → PLAN_UPDATE_COMPLETE → (loop back to THERAPY_IN_PROGRESS)
     """
 
     NEW = "new"
@@ -33,7 +33,7 @@ class WorkflowState(Enum):
     THERAPY_IN_PROGRESS = "therapy_in_progress"
     PLAN_UPDATE_IN_PROGRESS = "plan_update_in_progress"
     REFLECTION_IN_PROGRESS = "reflection_in_progress"
-    PLAN_COMPLETE = "plan_complete"
+    PLAN_UPDATE_COMPLETE = "plan_update_complete"
 
 
 class WorkflowEvent(Enum):

@@ -79,7 +79,7 @@ StructuredTherapyPlanOutput (emitted in `metadata.therapy_plan_output`):
 
 ## Failure Modes and Fallbacks
 - Reflection job uses timeout handling and surfaces an error message to the UI.
-- On failure, the workflow may still advance to `PLAN_COMPLETE`.
+- On failure, the workflow may still advance to `PLAN_UPDATE_COMPLETE`.
 
 ## Removal Impact
 - Therapy plan updates and session briefings are never produced.

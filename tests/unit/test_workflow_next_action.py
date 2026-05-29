@@ -141,7 +141,7 @@ def test_continues_therapy_after_plan_created():
     )
     recurring_action = resolve_next_action(
         user_id=profile.user_id,
-        workflow_state=WorkflowState.PLAN_COMPLETE,
+        workflow_state=WorkflowState.PLAN_UPDATE_COMPLETE,
         profile=profile,
         plan=plan,
     )

@@ -40,6 +40,6 @@ def session_type_for_workflow_state(state: WorkflowState) -> str:
         WorkflowState.THERAPY_IN_PROGRESS: "therapy",
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: "therapy",
         WorkflowState.REFLECTION_IN_PROGRESS: "therapy",
-        WorkflowState.PLAN_COMPLETE: "therapy",
+        WorkflowState.PLAN_UPDATE_COMPLETE: "therapy",
     }
     return state_map.get(state, "therapy")

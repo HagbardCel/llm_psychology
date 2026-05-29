@@ -70,7 +70,7 @@ function getActiveStepIndex(status: UserStatus): number {
     UserStatus.ASSESSMENT_IN_PROGRESS,
     UserStatus.ASSESSMENT_COMPLETE,
     UserStatus.INITIAL_PLAN_COMPLETE,
-    UserStatus.PLAN_COMPLETE,
+    UserStatus.PLAN_UPDATE_COMPLETE,
     UserStatus.THERAPY_IN_PROGRESS,
     UserStatus.PLAN_UPDATE_IN_PROGRESS,
     UserStatus.REFLECTION_IN_PROGRESS

@@ -99,7 +99,7 @@ The interaction flow is driven by the **Orchestrator**, which routes user messag
   - **Briefing Generation:** Creates a comprehensive `SessionBriefing` for the next session (critical for continuity).
 - **Data Persistence:**
   - **Therapy Plan:** Updates `TherapyPlan` with new version, plan details, and `session_briefing`.
-  - **State Update:** Transitions user to `PLAN_COMPLETE` (ready for next session).
+  - **State Update:** Transitions user to `PLAN_UPDATE_COMPLETE` (ready for next session).
 
 ### 2.6. Session Continuity (The Loop)
 

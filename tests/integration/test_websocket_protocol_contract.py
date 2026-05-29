@@ -42,7 +42,7 @@ async def test_user(test_server_websocket) -> UserProfile:
         name="WebSocket Test User",
         data_of_birth=None,
         profession="Tester",
-        status=UserStatus.PLAN_COMPLETE,
+        status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -353,7 +353,7 @@ async def test_ws_end_session_contract(test_server_websocket, test_user):
         assert data.get("reason") == "User ended session"
         assert data.get("workflow_state") in {
             "reflection_in_progress",
-            "plan_complete",
+            "plan_update_complete",
         }
 
 

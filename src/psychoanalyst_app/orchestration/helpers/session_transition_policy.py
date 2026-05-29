@@ -96,7 +96,7 @@ async def _resolve_desired_start_state(
         and state in (
             WorkflowState.ASSESSMENT_COMPLETE,
             WorkflowState.INITIAL_PLAN_COMPLETE,
-            WorkflowState.PLAN_COMPLETE,
+            WorkflowState.PLAN_UPDATE_COMPLETE,
         )
     ):
         plan = await trio_db_service.get_latest_therapy_plan(user_id)
