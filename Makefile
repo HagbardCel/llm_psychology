@@ -1,6 +1,7 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
+.PHONY: probe-console-deterministic probe-console-local-llm test-local-llm-user-simulator-smoke probe-console-logs check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-generated-contracts validate-docs validate-architecture finalization-check
 
@@ -50,6 +51,10 @@ help:
 	@echo "  ui-standalone-test - Run standalone terminal in usertest mode"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
+	@echo "  probe-console-deterministic - Run scripted console workflow probe"
+	@echo "  probe-console-local-llm - Run local-LLM simulated console workflow probe"
+	@echo "  test-local-llm-user-simulator-smoke - Check local LLM user simulator only"
+	@echo "  probe-console-logs - Print latest console workflow probe summary"
 	@echo "  ui-web            - Run web UI (Docker, browser interface)"
 	@echo "  ui-web-test       - Run web UI in usertest mode"
 	@echo "  ui-all            - Run all UI modes simultaneously"
@@ -472,6 +477,40 @@ ui-console-test:
 	@docker compose --profile usertest-console up --build --remove-orphans -d api-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
 	@docker compose --profile usertest-console run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
+# Scripted console workflow probe against deterministic backend.
+probe-console-deterministic:
+	@mkdir -p logs/workflow-probes
+	@docker compose --profile test up --build --remove-orphans -d --wait api-e2e
+	@ENV_FILE=.env.test PROBE_BACKEND_URL=http://api-e2e:8000 PROBE_WEBSOCKET_URL=http://api-e2e:8000 PROBE_MODE=scripted \
+		PROBE_SCENARIO=/app/scenarios/workflow-probes/basic_new_user_intake_smoke.json \
+		docker compose --profile workflow-probe run --rm --build console-ui-probe
+
+# Local LLM simulated-user probe against usertest backend.
+probe-console-local-llm:
+	$(MAKE) check-usertest-env
+	@mkdir -p logs/workflow-probes
+	@ENV_FILE=.env.usertest PROBE_SESSION_DURATION_MINUTES=$${PROBE_SESSION_DURATION_MINUTES:-10} \
+		docker compose --profile workflow-probe up --build --remove-orphans -d --wait api-usertest-probe
+	@ENV_FILE=.env.usertest PROBE_MODE=local-llm \
+		PROBE_BACKEND_URL=http://api-usertest-probe:8000 \
+		PROBE_WEBSOCKET_URL=http://api-usertest-probe:8000 \
+		PROBE_SCENARIO=/app/scenarios/workflow-probes/basic_new_user_intake_to_therapy.json \
+		docker compose --profile workflow-probe run --rm --build console-ui-probe
+
+test-local-llm-user-simulator-smoke:
+	$(MAKE) check-usertest-env
+	@mkdir -p logs/workflow-probes
+	@ENV_FILE=.env.usertest docker compose --profile workflow-probe run --rm --build --no-deps console-ui-probe \
+		python -m src.user_simulator_smoke --output-dir /app/logs/workflow-probes
+
+probe-console-logs:
+	@if [ -f logs/workflow-probes/latest.md ]; then \
+		cat logs/workflow-probes/latest.md; \
+	else \
+		echo "No workflow probe summary found at logs/workflow-probes/latest.md"; \
+		exit 1; \
+	fi
+
 # Web UI (browser interface)
 ui-web:
 	@echo "🌐 Starting Web UI..."
@@ -565,5 +604,12 @@ check-usertest-key:
 		echo "❌ GOOGLE_API_KEY is not configured in .env.usertest."; \
 		echo "   Please edit .env.usertest and provide your real API key before running user-test commands."; \
 		echo "   (This profile uses real Gemini responses: MODEL_NAME=$${MODEL_NAME:-unset})"; \
+		exit 1; \
+	fi
+
+check-usertest-env:
+	@if [ ! -f .env.usertest ]; then \
+		echo "❌ .env.usertest is missing."; \
+		echo "   Copy .env.usertest.template to .env.usertest and configure the backend LLM."; \
 		exit 1; \
 	fi

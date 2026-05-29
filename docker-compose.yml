@@ -53,6 +53,7 @@ x-console-base: &console-base
   volumes:
     - ./console-ui/src:/app/src:delegated
     - ./console-ui/main.py:/app/main.py:delegated
+    - ./console-ui/scenarios:/app/scenarios:ro
     - ./data:/app/data
     - ./logs:/app/logs
   environment:
@@ -281,6 +282,25 @@ services:
       - "8001:8000"
 
   # ============================================
+  # Workflow Probe API Server
+  # Uses usertest config with probe-specific runtime overrides.
+  # ============================================
+  api-usertest-probe:
+    <<: *api-base
+    container_name: psychoanalyst_api_usertest_probe
+    profiles: ["workflow-probe"]
+    environment:
+      - APP_ENV=development
+      - PYTHONUNBUFFERED=1
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - SESSION_DURATION_MINUTES=${PROBE_SESSION_DURATION_MINUTES:-10}
+    env_file:
+      - .env.usertest
+    ports:
+      - "8003:8000"
+
+  # ============================================
   # User Testing Mode - Console UI Service
   # WebSocket-based terminal client in usertest mode
   # Usage: make ui-console-test
@@ -302,6 +322,34 @@ services:
     depends_on:
       api-usertest:
         condition: service_healthy
+
+  # ============================================
+  # Workflow Probe - Simulated Console User
+  # Usage: make probe-console-deterministic or make probe-console-local-llm
+  # ============================================
+  console-ui-probe:
+    <<: *console-base
+    container_name: psychoanalyst_console_probe
+    profiles: ["workflow-probe"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BACKEND_URL=${PROBE_BACKEND_URL:-http://api-usertest:8000}
+      - WEBSOCKET_URL=${PROBE_WEBSOCKET_URL:-http://api-usertest:8000}
+      - WEBSOCKET_ORIGIN=${PROBE_WEBSOCKET_ORIGIN:-http://localhost:5173}
+      - USER_ID=${PROBE_USER_ID:-}
+      - CONSOLE_LOG_PATH=/app/logs/console-ui-probe.log
+      - USER_SIM_LLM_BASE_URL=${USER_SIM_LLM_BASE_URL:-}
+      - USER_SIM_LLM_MODEL=${USER_SIM_LLM_MODEL:-}
+      - USER_SIM_LLM_API_KEY=${USER_SIM_LLM_API_KEY:-not-needed}
+      - USER_SIM_LLM_TEMPERATURE=${USER_SIM_LLM_TEMPERATURE:-0}
+      - USER_SIM_TRACE_PROMPTS=${USER_SIM_TRACE_PROMPTS:-}
+    env_file:
+      - ${ENV_FILE:-.env.usertest}
+    command: >
+      python -m src.workflow_probe_runner
+      --scenario ${PROBE_SCENARIO:-/app/scenarios/workflow-probes/basic_new_user_intake_smoke.json}
+      --output-dir /app/logs/workflow-probes
+      --mode ${PROBE_MODE:-scripted}
 
   # ============================================
   # User Testing Mode - Frontend Service
