@@ -77,6 +77,7 @@ class TrioConversationManager:
         self.websockets: dict[str, Any] = {}
         self._websocket_ready_events: dict[str, trio.Event] = {}
         self._initial_greeting_sent: set[str] = set()
+        self._initial_greeting_pending: set[str] = set()
         self._llm_failure_counts: dict[str, int] = {}
         self.config = config
 
@@ -88,7 +89,8 @@ class TrioConversationManager:
             event = trio.Event()
             self._websocket_ready_events[session_id] = event
         event.set()
-        self._initial_greeting_sent.discard(session_id)
+        if session_id not in self._initial_greeting_pending:
+            self._initial_greeting_sent.discard(session_id)
         logger.info(f"Registered websocket for session {session_id}")
 
     def unregister_websocket(self, session_id: str):
@@ -101,12 +103,25 @@ class TrioConversationManager:
         logger.info(f"Unregistered websocket for session {session_id}")
 
     def mark_initial_greeting_sent(self, session_id: str) -> None:
-        """Record that the initial greeting has been sent for a session."""
+        """Record that an initial greeting was scheduled for a session."""
         self._initial_greeting_sent.add(session_id)
 
     def has_initial_greeting_sent(self, session_id: str) -> bool:
-        """Check whether the initial greeting has been sent for a session."""
+        """Check whether the initial greeting was already scheduled."""
         return session_id in self._initial_greeting_sent
+
+    def mark_initial_greeting_pending(self, session_id: str) -> None:
+        """Prevent chat input while the initial greeting is being delivered."""
+        self._initial_greeting_sent.add(session_id)
+        self._initial_greeting_pending.add(session_id)
+
+    def mark_initial_greeting_complete(self, session_id: str) -> None:
+        """Allow chat input after initial greeting delivery finishes."""
+        self._initial_greeting_pending.discard(session_id)
+
+    def is_initial_greeting_pending(self, session_id: str) -> bool:
+        """Return whether a session is still delivering its initial greeting."""
+        return session_id in self._initial_greeting_pending
 
     async def wait_for_websocket(self, session_id: str, *, timeout_seconds: float) -> bool:
         """Wait until a websocket is registered for the given session."""

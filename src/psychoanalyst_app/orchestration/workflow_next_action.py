@@ -34,6 +34,7 @@ def resolve_next_action(
     This resolver is deterministic and side-effect free to keep HTTP and WebSocket
     handlers aligned.
     """
+    session_id = session.session_id if session else None
     if not profile or not is_profile_complete(profile):
         return WorkflowNextActionDTO(
             user_id=user_id,
@@ -44,6 +45,7 @@ def resolve_next_action(
             prompt=DEFAULT_PROFILE_PROMPT,
             blocking=True,
             timestamp=datetime.utcnow(),
+            session_id=session_id,
         )
 
     if workflow_state == WorkflowState.INTAKE_IN_PROGRESS:
@@ -52,6 +54,7 @@ def resolve_next_action(
             workflow_state,
             title="Continue your intake session",
             prompt=_session_prompt(workflow_state, session),
+            session_id=session_id,
         )
 
     if workflow_state == WorkflowState.ASSESSMENT_IN_PROGRESS:
@@ -59,6 +62,7 @@ def resolve_next_action(
             user_id,
             workflow_state,
             prompt="Assessment in progress. We'll notify you when it's ready.",
+            session_id=session_id,
         )
 
     if workflow_state == WorkflowState.INTAKE_COMPLETE:
@@ -66,11 +70,14 @@ def resolve_next_action(
             user_id,
             workflow_state,
             prompt="Assessment in progress. We'll notify you when it's ready.",
+            session_id=session_id,
         )
 
     if workflow_state == WorkflowState.ASSESSMENT_COMPLETE:
         if plan and plan.selected_therapy_style:
-            return _continue_therapy_action(user_id, workflow_state)
+            return _continue_therapy_action(
+                user_id, workflow_state, session_id=session_id
+            )
         return WorkflowNextActionDTO(
             user_id=user_id,
             workflow_state=workflow_state,
@@ -80,6 +87,7 @@ def resolve_next_action(
             prompt="Select a therapy style to generate your personalized plan.",
             blocking=True,
             timestamp=datetime.utcnow(),
+            session_id=session_id,
         )
 
     if workflow_state in (
@@ -87,7 +95,7 @@ def resolve_next_action(
         WorkflowState.THERAPY_IN_PROGRESS,
         WorkflowState.PLAN_UPDATE_COMPLETE,
     ):
-        return _continue_therapy_action(user_id, workflow_state)
+        return _continue_therapy_action(user_id, workflow_state, session_id=session_id)
 
     if workflow_state in (
         WorkflowState.PLAN_UPDATE_IN_PROGRESS,
@@ -97,6 +105,7 @@ def resolve_next_action(
             user_id,
             workflow_state,
             prompt="Session reflection in progress. We'll notify you when it's ready.",
+            session_id=session_id,
         )
 
     # Default fallback when state is NEW but profile already exists
@@ -105,6 +114,7 @@ def resolve_next_action(
         workflow_state,
         title="Continue your intake session",
         prompt=_session_prompt(workflow_state, session),
+        session_id=session_id,
     )
 
 
@@ -131,7 +141,12 @@ def _session_prompt(state: WorkflowState, session: SessionInfo | None) -> str:
 
 
 def _start_session_action(
-    user_id: str, state: WorkflowState, *, title: str, prompt: str
+    user_id: str,
+    state: WorkflowState,
+    *,
+    title: str,
+    prompt: str,
+    session_id: str | None,
 ) -> WorkflowNextActionDTO:
     """Helper for intake/assessment start actions."""
     return WorkflowNextActionDTO(
@@ -143,10 +158,13 @@ def _start_session_action(
         prompt=prompt,
         blocking=False,
         timestamp=datetime.utcnow(),
+        session_id=session_id,
     )
 
 
-def _wait_action(user_id: str, state: WorkflowState, *, prompt: str) -> WorkflowNextActionDTO:
+def _wait_action(
+    user_id: str, state: WorkflowState, *, prompt: str, session_id: str | None
+) -> WorkflowNextActionDTO:
     """Helper for backend-driven wait states."""
     return WorkflowNextActionDTO(
         user_id=user_id,
@@ -157,10 +175,13 @@ def _wait_action(user_id: str, state: WorkflowState, *, prompt: str) -> Workflow
         prompt=prompt,
         blocking=True,
         timestamp=datetime.utcnow(),
+        session_id=session_id,
     )
 
 
-def _continue_therapy_action(user_id: str, state: WorkflowState) -> WorkflowNextActionDTO:
+def _continue_therapy_action(
+    user_id: str, state: WorkflowState, *, session_id: str | None
+) -> WorkflowNextActionDTO:
     """Helper for therapy continuation prompts."""
     if state == WorkflowState.INITIAL_PLAN_COMPLETE:
         prompt = "Your selected therapy style is ready. Start therapy whenever you're ready."
@@ -177,4 +198,5 @@ def _continue_therapy_action(user_id: str, state: WorkflowState) -> WorkflowNext
         prompt=prompt,
         blocking=False,
         timestamp=datetime.utcnow(),
+        session_id=session_id,
     )

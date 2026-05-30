@@ -314,6 +314,50 @@ async def test_ws_chat_response_chunk_contract(test_server_websocket, test_user)
 
 
 @pytest.mark.integration
+async def test_ws_rejects_chat_while_initial_greeting_is_pending(
+    test_server_websocket, test_user
+):
+    ws_url = f"{test_server_websocket['ws_url']}?user_id={test_user.user_id}"
+
+    async with open_websocket_url(
+        ws_url, extra_headers=[("Origin", "http://127.0.0.1")]
+    ) as ws:
+        _ = await wait_for_message(ws, "connected")
+        session_started = await wait_for_message(ws, "session_started")
+        workflow_next_action = await wait_for_message(ws, "workflow_next_action")
+        if workflow_next_action.get("data", {}).get("required_action") in {
+            "start_intake",
+            "continue_therapy",
+        }:
+            with trio.fail_after(5):
+                for _ in range(1000):
+                    msg = json.loads(await ws.get_message())
+                    if (
+                        msg.get("type") == "chat_response_chunk"
+                        and msg.get("data", {}).get("is_complete")
+                    ):
+                        break
+
+        session_id = session_started["data"]["session_id"]
+        manager = test_server_websocket["server"].conversation_manager
+        manager.mark_initial_greeting_pending(session_id)
+        try:
+            await ws.send_message(
+                json.dumps(
+                    {
+                        "type": "chat_message",
+                        "data": {"message": "Hello too early"},
+                    }
+                )
+            )
+
+            error = await wait_for_message(ws, "error")
+            assert error["data"]["code"] == "chat_disabled_initial_greeting"
+        finally:
+            manager.mark_initial_greeting_complete(session_id)
+
+
+@pytest.mark.integration
 async def test_ws_end_session_contract(test_server_websocket, test_user):
     ws_url = f"{test_server_websocket['ws_url']}?user_id={test_user.user_id}"
 

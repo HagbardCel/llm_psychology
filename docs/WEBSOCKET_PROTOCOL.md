@@ -293,7 +293,10 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
     "defaults": null,
     "prompt": "Continue your intake session.",
     "blocking": false,
-    "timestamp": "2025-12-22T14:30:00Z"
+    "timestamp": "2025-12-22T14:30:00Z",
+    "session_id": "session-456",
+    "state_signature": "09b2...",
+    "emission_source": "process_message_final_emit"
   }
 }
 ```
@@ -302,6 +305,10 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 - Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, continue therapy, or wait).
 - `initial_plan_complete` and `plan_update_complete` both use `required_action="continue_therapy"`; the prompt distinguishes first therapy start from post-reflection resumption.
 - Always includes the latest workflow state and recommended fields to collect.
+- Includes a stable `state_signature` for equivalent workflow instructions. Unlike
+  `timestamp`, it remains unchanged when the backend reevaluates the same state.
+- Includes `emission_source` on pushed events so protocol traces identify the
+  backend path that produced an event.
 - `blocking` indicates whether the UI must satisfy this action before other workflows continue.
 - Sent after `session_started` so clients can render the appropriate onboarding form.
 
@@ -309,8 +316,9 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 - Render forms based on `required_action` (`complete_profile` → show profile form, `select_therapy_style` → show style picker, `start_intake`/`continue_therapy` → show the session UI, `wait` → show progress state).
 - Use `required_fields` to dynamically drive data collection and `defaults` to prefill fields.
 - Display the `prompt` as the wait/status notice when `required_action` is `wait`.
-- Ignore duplicate events that do not change `timestamp`.
+- Ignore duplicate displays that do not change `state_signature`.
 - Do not send `chat_message` while `required_action` is `wait`.
+- Do not enable chat input until the automatic initial greeting has finished.
 
 ### `chat_response_chunk`
 
@@ -505,6 +513,7 @@ Error message from server.
 {
   "type": "error",
   "data": {
+    "code": string,    // Stable machine-readable code when available
     "message": string  // Human-readable error message
   }
 }
@@ -515,6 +524,7 @@ Error message from server.
 {
   "type": "error",
   "data": {
+    "code": "internal_error",
     "message": "Failed to generate response. Please try again."
   }
 }
@@ -525,6 +535,10 @@ Error message from server.
 - Log error for debugging
 - Allow user to retry
 - Do not disconnect
+
+**Workflow Guard Codes**:
+- `chat_disabled_initial_greeting`: wait for the automatic initial greeting to finish before sending chat.
+- `chat_disabled_workflow_wait`: re-fetch `workflow_next_action`; chat is disabled while the backend action is `wait`.
 
 ---
 

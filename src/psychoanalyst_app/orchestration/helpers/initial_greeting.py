@@ -39,7 +39,6 @@ async def send_initial_greeting(
             )
             return
 
-        conversation_manager.mark_initial_greeting_sent(session_id)
         await conversation_manager.send_typing_indicator(session_id, True)
         typing_started = True
 
@@ -74,6 +73,7 @@ async def send_initial_greeting(
                 exc_info=True,
             )
     finally:
+        conversation_manager.mark_initial_greeting_complete(session_id)
         if typing_started:
             try:
                 await conversation_manager.send_typing_indicator(session_id, False)

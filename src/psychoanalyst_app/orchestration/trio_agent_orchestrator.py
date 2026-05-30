@@ -85,6 +85,7 @@ class TrioAgentOrchestrator:
         self.conversation_manager = conversation_manager
         self.nursery = nursery
         self.agents: dict[str, Any] = {}  # Cache of agent instances
+        self._emitted_workflow_signatures: dict[str, str] = {}
         self.response_handler = AgentResponseHandler(
             service_container=self.service_container,
             workflow_engine=self.workflow_engine,
@@ -192,7 +193,11 @@ class TrioAgentOrchestrator:
                 agent_response,
             )
             try:
-                await self.emit_workflow_next_action(user_id, session_id)
+                await self.emit_workflow_next_action(
+                    user_id,
+                    session_id,
+                    emission_source="process_message_final_emit",
+                )
             except Exception:
                 logger.warning(
                     "Failed to emit workflow next action after agent response",
@@ -301,7 +306,13 @@ class TrioAgentOrchestrator:
         )
 
     async def emit_workflow_next_action(
-        self, user_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        session_id: str | None = None,
+        *,
+        emission_source: str = "orchestrator_emit",
+        include_resume_payloads: bool = False,
+        force_emit: bool = False,
     ) -> None:
         """
         Send the workflow next action event to the WebSocket session if available.
@@ -314,6 +325,10 @@ class TrioAgentOrchestrator:
             response_handler=self.response_handler,
             send_initial_greeting=self.send_initial_greeting,
             get_workflow_next_action=self.get_workflow_next_action,
+            emitted_signatures=self._emitted_workflow_signatures,
+            emission_source=emission_source,
+            include_resume_payloads=include_resume_payloads,
+            force_emit=force_emit,
         )
 
     async def emit_assessment_recommendations(

@@ -194,6 +194,7 @@ class SessionLifecycleManager:
             if send_initial_message:
                 # Trigger the agent's normal message processing with an empty message.
                 # This avoids introducing a separate "greeting" code path per agent.
+                self.conversation_manager.mark_initial_greeting_pending(session_id)
                 self.nursery.start_soon(
                     self._send_initial_greeting, user_id, session_id
                 )
@@ -229,6 +230,7 @@ class SessionLifecycleManager:
 
     def send_initial_greeting(self, user_id: str, session_id: str) -> None:
         """Schedule the initial greeting for a session."""
+        self.conversation_manager.mark_initial_greeting_pending(session_id)
         self.nursery.start_soon(self._send_initial_greeting, user_id, session_id)
 
     async def end_session(

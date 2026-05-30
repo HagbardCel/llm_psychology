@@ -230,10 +230,6 @@ async def run_assessment_job(
                 WorkflowState.ASSESSMENT_IN_PROGRESS,
                 event=WorkflowEvent.START_ASSESSMENT,
             )
-            if emit_next_action:
-                await emit_next_action(user_id, target_session_id)
-        elif emit_next_action:
-            await emit_next_action(user_id, target_session_id)
 
         context = await conversation_manager.get_context(intake_session_id)
         assessment_agent = service_container.create_agent(

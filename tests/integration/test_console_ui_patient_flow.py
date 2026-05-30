@@ -982,7 +982,13 @@ async def test_complete_patient_journey_intake_to_therapy(
 
             # Transition to therapy
             await orchestrator.workflow_engine.transition(
-                user_id, WorkflowState.THERAPY_IN_PROGRESS, WorkflowEvent.START_THERAPY
+                user_id,
+                WorkflowState.INITIAL_PLAN_COMPLETE,
+            )
+            await orchestrator.workflow_engine.transition(
+                user_id,
+                WorkflowState.THERAPY_IN_PROGRESS,
+                WorkflowEvent.START_THERAPY,
             )
 
             # Continue with the existing session for therapy

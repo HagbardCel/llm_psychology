@@ -51,5 +51,7 @@ class ErrorCodes:
     INVALID_MESSAGE_FORMAT: Final[str] = "invalid_message_format"
     MISSING_REQUIRED_FIELD: Final[str] = "missing_required_field"
     SESSION_NOT_FOUND: Final[str] = "session_not_found"
+    CHAT_DISABLED_INITIAL_GREETING: Final[str] = "chat_disabled_initial_greeting"
+    CHAT_DISABLED_WORKFLOW_WAIT: Final[str] = "chat_disabled_workflow_wait"
     INTERNAL_ERROR: Final[str] = "internal_error"
     RATE_LIMIT_EXCEEDED: Final[str] = "rate_limit_exceeded"

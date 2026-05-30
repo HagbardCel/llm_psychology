@@ -119,6 +119,14 @@ class AgentResponseHandler:
                     await self.workflow_engine.transition(
                         user_id, next_state, event=workflow_event
                     )
+                    assessment_state = self.workflow_engine.get_next_state(
+                        next_state, WorkflowEvent.START_ASSESSMENT
+                    )
+                    await self.workflow_engine.transition(
+                        user_id,
+                        assessment_state,
+                        event=WorkflowEvent.START_ASSESSMENT,
+                    )
                     self.conversation_manager.clear_context(session_id)
                     await self.ensure_assessment_job(user_id, session_id)
             else:

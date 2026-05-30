@@ -176,6 +176,27 @@ async def test_workflow_engine_can_transition(workflow_engine):
 
 @pytest.mark.trio
 @pytest.mark.integration
+async def test_conversation_manager_preserves_pending_greeting_across_reconnect(
+    conversation_manager,
+):
+    session_id = "reconnecting-session"
+    conversation_manager.mark_initial_greeting_pending(session_id)
+
+    conversation_manager.register_websocket(session_id, object())
+    conversation_manager.register_websocket(session_id, object())
+
+    assert conversation_manager.has_initial_greeting_sent(session_id) is True
+    assert conversation_manager.is_initial_greeting_pending(session_id) is True
+
+    conversation_manager.mark_initial_greeting_complete(session_id)
+    conversation_manager.register_websocket(session_id, object())
+
+    assert conversation_manager.has_initial_greeting_sent(session_id) is False
+    assert conversation_manager.is_initial_greeting_pending(session_id) is False
+
+
+@pytest.mark.trio
+@pytest.mark.integration
 async def test_conversation_manager_add_message(
     conversation_manager, service_container
 ):

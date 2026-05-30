@@ -99,6 +99,27 @@ def test_waits_during_assessment_in_progress():
     assert "Assessment in progress" in (action.prompt or "")
 
 
+def test_equivalent_actions_have_stable_state_signature():
+    """Fresh timestamps must not prevent workflow display deduplication."""
+    profile = _complete_profile()
+
+    first = resolve_next_action(
+        user_id=profile.user_id,
+        workflow_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
+        profile=profile,
+        plan=None,
+    )
+    second = resolve_next_action(
+        user_id=profile.user_id,
+        workflow_state=WorkflowState.ASSESSMENT_IN_PROGRESS,
+        profile=profile,
+        plan=None,
+    )
+
+    assert first.state_signature
+    assert first.state_signature == second.state_signature
+
+
 def test_waits_after_intake_complete():
     """Intake completion should return a wait action while assessment runs."""
     profile = _complete_profile()

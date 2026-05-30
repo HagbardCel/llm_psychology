@@ -32,6 +32,8 @@ export const WS_ERROR_CODES = {
   INVALID_MESSAGE_FORMAT: 'invalid_message_format',
   MISSING_REQUIRED_FIELD: 'missing_required_field',
   SESSION_NOT_FOUND: 'session_not_found',
+  CHAT_DISABLED_INITIAL_GREETING: 'chat_disabled_initial_greeting',
+  CHAT_DISABLED_WORKFLOW_WAIT: 'chat_disabled_workflow_wait',
   INTERNAL_ERROR: 'internal_error',
   RATE_LIMIT_EXCEEDED: 'rate_limit_exceeded',
 } as const;

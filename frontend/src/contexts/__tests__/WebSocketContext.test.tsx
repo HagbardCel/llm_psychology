@@ -82,6 +82,7 @@ function workflowNextAction(
     prompt: 'Select a therapy style.',
     blocking: true,
     timestamp: new Date().toISOString(),
+    state_signature: 'assessment-complete-select-style',
     ...overrides,
   };
 }

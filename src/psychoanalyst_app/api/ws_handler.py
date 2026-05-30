@@ -77,7 +77,13 @@ def register_ws_handler(app, server) -> None:
         session_id = session_info.session_id
         server.conversation_manager.register_websocket(session_id, websocket)
         await websocket.send(json.dumps(session_started_message(session_info)))
-        await server.orchestrator.emit_workflow_next_action(user_id, session_id)
+        await server.orchestrator.emit_workflow_next_action(
+            user_id,
+            session_id,
+            emission_source="websocket_connect_emit",
+            include_resume_payloads=True,
+            force_emit=True,
+        )
         await server.orchestrator.ensure_assessment_job(user_id, session_id)
 
         logger.info("WebSocket connection established for user: %s", user_id)
@@ -93,6 +99,22 @@ def register_ws_handler(app, server) -> None:
                         await websocket.close(1002, "No active session")
                         return
 
+                    if server.conversation_manager.is_initial_greeting_pending(
+                        session_id
+                    ):
+                        await server.conversation_manager.send_json_message(
+                            session_id,
+                            ServerMessageTypes.ERROR,
+                            {
+                                "code": "chat_disabled_initial_greeting",
+                                "message": (
+                                    "Chat is disabled until the initial greeting "
+                                    "finishes."
+                                ),
+                            },
+                        )
+                        continue
+
                     action = await server.orchestrator.get_workflow_next_action(
                         user_id, session_id=session_id
                     )
@@ -101,6 +123,7 @@ def register_ws_handler(app, server) -> None:
                             session_id,
                             ServerMessageTypes.ERROR,
                             {
+                                "code": "chat_disabled_workflow_wait",
                                 "message": (
                                     "Chat is disabled while the workflow is waiting."
                                 )

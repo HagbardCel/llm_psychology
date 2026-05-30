@@ -118,6 +118,9 @@ export interface WorkflowNextActionEvent {
   prompt?: string | null;
   blocking: boolean;
   timestamp: string;
+  session_id?: string | null;
+  state_signature: string;
+  emission_source?: string | null;
 }
 
 /**

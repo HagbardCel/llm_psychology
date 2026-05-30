@@ -57,10 +57,12 @@ async def test_get_or_create_cached_agent_reuses_cache() -> None:
 
 
 @pytest.mark.trio
-async def test_emit_workflow_next_action_triggers_followups() -> None:
+async def test_emit_workflow_next_action_sends_navigation_event_only() -> None:
     action = SimpleNamespace(
         workflow_state=WorkflowState.REFLECTION_IN_PROGRESS.value,
         required_action=RequiredWorkflowAction.SELECT_THERAPY_STYLE,
+        state_signature="signature_1",
+        emission_source=None,
         model_dump=lambda mode="json": {"required_action": "select_therapy_style"},
     )
     get_action = AsyncMock(return_value=action)
@@ -84,16 +86,76 @@ async def test_emit_workflow_next_action_triggers_followups() -> None:
         response_handler=response_handler,
         send_initial_greeting=send_initial_greeting,
         get_workflow_next_action=get_action,
+        emitted_signatures={},
+        emission_source="test_emit",
     )
 
     conversation_manager.send_json_message.assert_awaited_once()
-    response_handler.ensure_reflection_job.assert_awaited_once_with(
-        "user_1", "session_1"
+    response_handler.ensure_reflection_job.assert_not_awaited()
+    response_handler.emit_assessment_recommendations.assert_not_awaited()
+    send_initial_greeting.assert_not_called()
+
+
+@pytest.mark.trio
+async def test_emit_workflow_next_action_replays_recommendations_on_resume() -> None:
+    action = SimpleNamespace(
+        workflow_state=WorkflowState.ASSESSMENT_COMPLETE.value,
+        required_action=RequiredWorkflowAction.SELECT_THERAPY_STYLE,
+        state_signature="signature_1",
+        emission_source=None,
+        model_dump=lambda mode="json": {"required_action": "select_therapy_style"},
     )
+    response_handler = SimpleNamespace(
+        emit_assessment_recommendations=AsyncMock(),
+    )
+    await emit_workflow_next_action(
+        user_id="user_1",
+        session_id="session_1",
+        session_lifecycle=SimpleNamespace(get_active_session_id=lambda _uid: None),
+        conversation_manager=SimpleNamespace(
+            send_json_message=AsyncMock(),
+            has_initial_greeting_sent=lambda _sid: False,
+        ),
+        response_handler=response_handler,
+        send_initial_greeting=MagicMock(),
+        get_workflow_next_action=AsyncMock(return_value=action),
+        emitted_signatures={},
+        emission_source="websocket_connect_emit",
+        include_resume_payloads=True,
+        force_emit=True,
+    )
+
     response_handler.emit_assessment_recommendations.assert_awaited_once_with(
         "session_1", "user_1"
     )
-    send_initial_greeting.assert_not_called()
+
+
+@pytest.mark.trio
+async def test_emit_workflow_next_action_suppresses_equivalent_normal_event() -> None:
+    action = SimpleNamespace(
+        workflow_state=WorkflowState.ASSESSMENT_IN_PROGRESS.value,
+        required_action=RequiredWorkflowAction.WAIT,
+        state_signature="signature_1",
+        emission_source=None,
+        model_dump=lambda mode="json": {"required_action": "wait"},
+    )
+    conversation_manager = SimpleNamespace(
+        send_json_message=AsyncMock(),
+        has_initial_greeting_sent=lambda _sid: False,
+    )
+    await emit_workflow_next_action(
+        user_id="user_1",
+        session_id="session_1",
+        session_lifecycle=SimpleNamespace(get_active_session_id=lambda _uid: None),
+        conversation_manager=conversation_manager,
+        response_handler=SimpleNamespace(),
+        send_initial_greeting=MagicMock(),
+        get_workflow_next_action=AsyncMock(return_value=action),
+        emitted_signatures={"user_1": "signature_1"},
+        emission_source="test_emit",
+    )
+
+    conversation_manager.send_json_message.assert_not_awaited()
 
 
 @pytest.mark.trio

@@ -28,6 +28,8 @@
     "invalid_message_format",
     "missing_required_field",
     "session_not_found",
+    "chat_disabled_initial_greeting",
+    "chat_disabled_workflow_wait",
     "internal_error",
     "rate_limit_exceeded"
   ]

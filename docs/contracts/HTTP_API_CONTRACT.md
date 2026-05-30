@@ -117,6 +117,9 @@ These shapes are what all clients should assume on the wire.
 - `prompt`: `string | null`
 - `blocking`: `boolean`
 - `timestamp`: `string` (ISO 8601)
+- `session_id`: `string | null`
+- `state_signature`: `string` (stable across equivalent reevaluations)
+- `emission_source`: `string | null` (set for pushed workflow events)
 
 ### `WorkflowCompleteProfileRequestDTO`
 

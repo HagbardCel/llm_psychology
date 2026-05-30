@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from psychoanalyst_app.models.api_models import RequiredWorkflowAction
-from psychoanalyst_app.orchestration.models import WorkflowState
 from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
@@ -47,27 +46,43 @@ async def emit_workflow_next_action(
     response_handler,
     send_initial_greeting,
     get_workflow_next_action,
+    emitted_signatures: dict[str, str],
+    emission_source: str,
+    include_resume_payloads: bool = False,
+    force_emit: bool = False,
 ) -> None:
-    """Emit workflow_next_action event and trigger dependent background jobs."""
+    """Emit a workflow event, suppressing equivalent normal delivery."""
     resolved_session_id = session_id or session_lifecycle.get_active_session_id(user_id)
     if not resolved_session_id:
         return
 
     try:
         action = await get_workflow_next_action(user_id, session_id=resolved_session_id)
+        action.emission_source = emission_source
+        if (
+            not force_emit
+            and emitted_signatures.get(user_id) == action.state_signature
+        ):
+            logger.debug(
+                "Suppressing duplicate workflow next action "
+                "(user=%s, session=%s, signature=%s, source=%s)",
+                user_id,
+                resolved_session_id,
+                action.state_signature,
+                emission_source,
+            )
+            return
         await conversation_manager.send_json_message(
             resolved_session_id,
             ServerMessageTypes.WORKFLOW_NEXT_ACTION,
             action.model_dump(mode="json"),
         )
+        emitted_signatures[user_id] = action.state_signature
 
-        if action.workflow_state in (
-            WorkflowState.PLAN_UPDATE_IN_PROGRESS.value,
-            WorkflowState.REFLECTION_IN_PROGRESS.value,
+        if (
+            include_resume_payloads
+            and action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE
         ):
-            await response_handler.ensure_reflection_job(user_id, resolved_session_id)
-
-        if action.required_action == RequiredWorkflowAction.SELECT_THERAPY_STYLE:
             await response_handler.emit_assessment_recommendations(
                 resolved_session_id,
                 user_id,

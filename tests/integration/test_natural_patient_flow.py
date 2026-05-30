@@ -699,12 +699,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                     },
                 )
                 assert response.status_code == 200, response.text
-                response = await client.post(
-                    f"{test_server['url']}/api/sessions",
-                    json={"user_id": user_id},
-                )
-                assert response.status_code == 201, response.text
-                therapy_session_id = response.json()["session_id"]
+                therapy_session_id = session_id
 
             nursery.cancel_scope.cancel()
 
