@@ -1,0 +1,39 @@
+{
+  "id": "first_session_smoke",
+  "description": "Create a new profile, complete intake, select a style, enter therapy, end the first session, and persist post-session updates.",
+  "user": {
+    "name": "Console Probe User",
+    "primary_language": "English"
+  },
+  "persona": {
+    "presenting_problem": "work-related anxiety and sleep disruption",
+    "style": "cooperative, reflective, concise"
+  },
+  "workflow_preferences": {
+    "therapy_style": "cbt"
+  },
+  "structural_answers": {
+    "profile_selection": "1",
+    "profile_name": "Console Probe User",
+    "primary_language": "English",
+    "therapy_style": "cbt"
+  },
+  "limits": {
+    "max_total_turns": 14,
+    "overall_timeout_seconds": 420,
+    "api_timeout_seconds": 180,
+    "plan_update_timeout_seconds": 120
+  },
+  "milestones": {
+    "required_actions": [
+      "start_intake",
+      "select_therapy_style",
+      "continue_therapy"
+    ],
+    "forbidden_platform_phrases": [
+      "system messages can slip through",
+      "therapy plan isn't currently loaded",
+      "restore your access"
+    ]
+  }
+}

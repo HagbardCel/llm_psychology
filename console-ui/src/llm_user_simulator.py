@@ -76,10 +76,8 @@ class LocalLLMUserSimulator:
         self,
         scenario: dict[str, Any],
         context: Any,
-        fallback_response: str,
     ) -> dict[str, str | None]:
         prompt = self._build_prompt(scenario, context)
-        allow_fallback = bool(scenario.get("allow_user_sim_fallback", False))
         result = await self._chat_completion(prompt)
         sanitized = sanitize_user_reply(result.content)
         failure_reason = self._reply_failure_reason(result, sanitized)
@@ -95,20 +93,6 @@ class LocalLLMUserSimulator:
             failure_reason = self._reply_failure_reason(result, sanitized)
 
         if failure_reason:
-            if allow_fallback:
-                if self.recorder:
-                    await self.recorder.record_model_call(
-                        prompt=prompt,
-                        raw_response=result.content,
-                        sanitized_response=fallback_response,
-                        fallback_used=True,
-                        fallback_reason=failure_reason,
-                    )
-                return {
-                    "text": fallback_response,
-                    "input_origin": "fallback",
-                    "fallback_reason": failure_reason,
-                }
             raise LocalLLMUserSimulatorError(
                 failure_reason,
                 f"Local user simulator failed: {failure_reason}",

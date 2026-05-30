@@ -11,6 +11,7 @@ import uuid
 from typing import Optional, Dict, Any
 import httpx
 
+from .event_sink import ConsoleEventSink, NoOpConsoleEventSink
 from .input_providers import (
     HumanInputProvider,
     InputContext,
@@ -43,8 +44,8 @@ class ConsoleClient:
         output: ConsoleOutput,
         websocket_origin: str | None = None,
         input_provider: InputProvider | None = None,
-        recorder: Any | None = None,
-        probe_limits: dict[str, Any] | None = None,
+        event_sink: ConsoleEventSink | None = None,
+        api_timeout_seconds: float = 60.0,
     ):
         self.backend_url = backend_url.rstrip("/")
         self.websocket_url = websocket_url.rstrip("/")
@@ -52,8 +53,8 @@ class ConsoleClient:
         self.user_id = user_id
         self.output = output
         self.input_provider = input_provider or HumanInputProvider(output)
-        self.recorder = recorder
-        self.probe_limits = probe_limits or {}
+        self.event_sink = event_sink or NoOpConsoleEventSink()
+        self.api_timeout_seconds = api_timeout_seconds
 
         # HTTP session for API calls
         self.http_client: Optional[httpx.AsyncClient] = None
@@ -76,16 +77,11 @@ class ConsoleClient:
         self.session_ended_event = trio.Event()
         self.pending_recommendations: list[dict[str, Any]] | None = None
         self.latest_workflow_action: dict[str, Any] | None = None
+        self.last_recommendations_signature: str | None = None
+        self.last_displayed_wait_signature: str | None = None
         self.registered = False
         self.welcome_shown = False
         self.current_profile: dict[str, Any] | None = None
-        self.transcript_tail: list[dict[str, str]] = []
-        self.turn_index = 0
-        self.chat_turns_by_action: dict[str, int] = {
-            "start_intake": 0,
-            "continue_therapy": 0,
-        }
-        self.style_selection_failures = 0
 
     def _build_websocket_url(self) -> str:
         """Build the backend WebSocket URL for the current user profile."""
@@ -141,8 +137,7 @@ class ConsoleClient:
         data = message.get("data", {})
 
         logger.debug(f"Received message type: {msg_type}")
-        if self.recorder:
-            await self.recorder.record_ws_event(message)
+        await self.event_sink.emit("ws_message", message=message)
 
         if msg_type == ServerMessageTypes.CHAT_RESPONSE_CHUNK:
             await self._handle_chat_response_chunk(data)
@@ -196,9 +191,9 @@ class ConsoleClient:
                     self.current_message = ""
                     if full_message:
                         self.output.log_chat("therapist", full_message)
-                        self._append_transcript("assistant", full_message)
-                        if self.recorder:
-                            await self.recorder.record_assistant_response(full_message)
+                        await self.event_sink.emit(
+                            "assistant_response", text=full_message
+                        )
 
                 # If we were waiting for initial message, show welcome UI and signal ready
                 if self.waiting_for_initial_message:
@@ -208,7 +203,7 @@ class ConsoleClient:
                     self.session_ready.set()
 
                 # Signal response complete for regular messages
-                if self.waiting_for_response:
+                elif self.waiting_for_response:
                     self.response_complete.set()
                     self.waiting_for_response = False
 
@@ -224,8 +219,7 @@ class ConsoleClient:
         # Always wait for the initial message before allowing user input.
         self.waiting_for_initial_message = True
         self.welcome_shown = False
-        if self.recorder:
-            await self.recorder.record("session_started", data=data)
+        await self.event_sink.emit("session_started", data=data)
 
     async def _handle_connected(self, data: Dict[str, Any]):
         """Handle connection confirmation."""
@@ -253,8 +247,7 @@ class ConsoleClient:
     async def _handle_error(self, data: Dict[str, Any]):
         """Handle WebSocket errors."""
         self.output.error(f"\n❌ Error: {data.get('message', data)}")
-        if self.recorder:
-            await self.recorder.record_error("WebSocket error", data)
+        await self.event_sink.emit("error", message="WebSocket error", data=data)
 
     async def _handle_assessment_recommendations(self, data: Dict[str, Any]):
         """Display assessment recommendations without interrupting the chat flow."""
@@ -263,6 +256,11 @@ class ConsoleClient:
             logger.info("Received assessment_recommendations without payload")
             return
         self.pending_recommendations = recommendations
+        signature = json.dumps(recommendations, sort_keys=True, separators=(",", ":"))
+        if signature == self.last_recommendations_signature:
+            logger.debug("Suppressing duplicate assessment recommendations display")
+            return
+        self.last_recommendations_signature = signature
 
         self.output.user_text("\n" + "=" * 60, flush=True)
         self.output.user_text("🎯 ASSESSMENT RECOMMENDATIONS", flush=True)
@@ -288,16 +286,9 @@ class ConsoleClient:
     async def _handle_workflow_next_action(self, data: Dict[str, Any]):
         """Store workflow next action updates for display/polling."""
         self.latest_workflow_action = data
-        if self.recorder:
-            await self.recorder.record_workflow_action(data)
-        required_action = data.get("required_action")
-        prompt = data.get("prompt")
-        if required_action == "wait":
-            self.output.user_text(
-                f"\n⏳ {prompt or 'Waiting for backend workflow...'}", flush=True
-            )
-        if required_action not in {"start_intake", "continue_therapy"}:
-            self.response_complete.set()
+        await self.event_sink.emit(
+            "workflow_action", action=data, delivery_source="websocket"
+        )
 
     async def _handle_session_ended(self, data: Dict[str, Any]):
         """Handle server-side session end notification."""
@@ -312,8 +303,7 @@ class ConsoleClient:
         if self.waiting_for_response:
             self.response_complete.set()
             self.waiting_for_response = False
-        if self.recorder:
-            await self.recorder.record("session_ended", data=data)
+        await self.event_sink.emit("session_ended", data=data)
 
     async def _api_request(
         self, method: str, endpoint: str, **kwargs
@@ -445,7 +435,9 @@ class ConsoleClient:
             self.output.user_text(
                 "⚠️  Invalid selection. Please try again.", flush=True
             )
-            await self._record_style_selection_failure("Invalid therapy style selection")
+            await self.event_sink.emit(
+                "error", message="Invalid therapy style selection"
+            )
             return
 
         try:
@@ -453,8 +445,9 @@ class ConsoleClient:
                 self.output.user_text(
                     "⚠️  No active session. Please reconnect.", flush=True
                 )
-                await self._record_style_selection_failure(
-                    "No active session during therapy style selection"
+                await self.event_sink.emit(
+                    "error",
+                    message="No active session during therapy style selection",
                 )
                 return
             await self._api_request(
@@ -469,41 +462,19 @@ class ConsoleClient:
             self.output.user_text(
                 "✅ Therapy style saved. Re-checking workflow...", flush=True
             )
-            if self.recorder:
-                await self.recorder.record(
-                    "therapy_style_selected",
-                    selected_therapy_style=chosen_style,
-                    session_id=self.current_session_id,
-                )
-            self.pending_recommendations = None
-            self._append_transcript(
-                "system",
-                (
-                    f"The user selected {chosen_style.upper()}. "
-                    "The recommendation step is complete. Therapy has started."
-                ),
+            await self.event_sink.emit(
+                "therapy_style_selected",
+                selected_therapy_style=chosen_style,
+                session_id=self.current_session_id,
             )
+            self.pending_recommendations = None
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.output.error(f"❌ Failed to save therapy style: {message}")
-            await self._record_style_selection_failure(message)
-
-    async def _record_style_selection_failure(self, message: str) -> None:
-        self.style_selection_failures += 1
-        if self.recorder:
-            await self.recorder.record_error(
-                "Therapy style selection failed",
-                {
-                    "message": message,
-                    "attempt": self.style_selection_failures,
-                    "session_id": self.current_session_id,
-                },
-            )
-        max_attempts = int(self.probe_limits.get("max_style_selection_attempts", 0) or 0)
-        if max_attempts and self.style_selection_failures >= max_attempts:
-            raise RuntimeError(
-                "Therapy style selection failed after "
-                f"{self.style_selection_failures} attempt(s): {message}"
+            await self.event_sink.emit(
+                "error",
+                message="Therapy style selection failed",
+                data={"message": message, "session_id": self.current_session_id},
             )
 
     async def _get_user_input(
@@ -521,11 +492,10 @@ class ConsoleClient:
             workflow_action=self.latest_workflow_action,
             simulator_phase=simulator_phase_for_action(self.latest_workflow_action),
             pending_recommendations=self.pending_recommendations,
-            transcript_tail=self.transcript_tail[-8:],
-            turn_index=self.turn_index,
+            transcript_tail=[],
+            turn_index=0,
         )
-        if self.recorder:
-            await self.recorder.record_prompt(context)
+        await self.event_sink.emit("prompt", context=context)
 
         provider_result = await self.input_provider.get_input(context)
         if isinstance(provider_result, InputResult):
@@ -539,25 +509,25 @@ class ConsoleClient:
 
         if not user_input and default is not None:
             self.output.log_input(f"{default} (default)")
-            if self.recorder:
-                await self.recorder.record_user_input(
-                    default,
-                    self.input_provider.__class__.__name__,
-                    context,
-                    used_default=True,
-                    input_origin=input_origin,
-                    fallback_reason=fallback_reason,
-                )
-            return default
-        self.output.log_input(user_input)
-        if self.recorder:
-            await self.recorder.record_user_input(
-                user_input,
-                self.input_provider.__class__.__name__,
-                context,
+            await self.event_sink.emit(
+                "user_input",
+                text=default,
+                source=self.input_provider.__class__.__name__,
+                context=context,
+                used_default=True,
                 input_origin=input_origin,
                 fallback_reason=fallback_reason,
             )
+            return default
+        self.output.log_input(user_input)
+        await self.event_sink.emit(
+            "user_input",
+            text=user_input,
+            source=self.input_provider.__class__.__name__,
+            context=context,
+            input_origin=input_origin,
+            fallback_reason=fallback_reason,
+        )
         return user_input
 
     async def _fetch_profiles(self) -> list[dict[str, Any]] | None:
@@ -589,10 +559,6 @@ class ConsoleClient:
                 "ℹ️  No profiles found. Creating a new profile.",
                 flush=True,
             )
-            return await self._create_new_profile()
-
-        if self.probe_limits.get("profile_selection") == "create_new":
-            self.output.system("Probe requested new profile creation.")
             return await self._create_new_profile()
 
         self.output.user_text("\n👤 Select a profile:", flush=True)
@@ -678,12 +644,11 @@ class ConsoleClient:
         self.registered = True
 
         await self._load_profile_details(profile_summary)
-        if self.recorder:
-            await self.recorder.record(
-                "profile_selected",
-                user_id=self.user_id,
-                session_id=self.current_session_id,
-            )
+        await self.event_sink.emit(
+            "profile_selected",
+            user_id=self.user_id,
+            session_id=self.current_session_id,
+        )
         self.output.user_text(
             "✅ Logged in. Connecting to WebSocket...", flush=True
         )
@@ -765,12 +730,11 @@ class ConsoleClient:
         self.latest_workflow_action = response.get("workflow_next_action")
         self.registered = True
         self.current_profile = response
-        if self.recorder:
-            await self.recorder.record(
-                "profile_created",
-                user_id=self.user_id,
-                session_id=self.current_session_id,
-            )
+        await self.event_sink.emit(
+            "profile_created",
+            user_id=self.user_id,
+            session_id=self.current_session_id,
+        )
         self.output.user_text(
             "✅ Profile registered. Connecting to WebSocket...", flush=True
         )
@@ -946,21 +910,30 @@ class ConsoleClient:
         )
         self.connected = False
 
-    async def _await_session_ready(self, timeout_seconds: float = 8.0) -> None:
-        """Wait for initial greeting, but fall back to allowing input on timeout."""
+    async def _await_session_ready(self, timeout_seconds: float | None = None) -> bool:
+        """Wait for the initial greeting without enabling overlapping chat."""
         if self.session_ready.is_set():
-            return
+            return True
+        if timeout_seconds is None:
+            timeout_seconds = 60.0
         with trio.move_on_after(timeout_seconds) as cancel_scope:
             await self.session_ready.wait()
         if cancel_scope.cancelled_caught:
-            self.output.system(
-                "Initial greeting not received in time; allowing user input."
+            message = (
+                "Initial greeting did not finish in time. "
+                "Chat remains disabled to avoid overlapping responses."
+            )
+            self.output.error(f"❌ {message}")
+            await self.event_sink.emit(
+                "error",
+                message="Initial greeting timeout",
+                data={"timeout_seconds": timeout_seconds},
             )
             self.waiting_for_initial_message = False
             if not self.is_streaming:
                 self.output.user_text(" " * 30, end="\r", log=False)
-            self._show_welcome_message()
-            self.session_ready.set()
+            return False
+        return True
 
     async def _chat_loop(self, ws) -> bool:
         """
@@ -978,8 +951,6 @@ class ConsoleClient:
                 if required_action not in {"start_intake", "continue_therapy"}:
                     # Workflow advanced to a non-chat step (e.g., wait/style selection).
                     return False
-                if await self._probe_chat_limit_reached(ws, required_action):
-                    return True
                 try:
                     user_message = await self._get_user_input()
 
@@ -1021,32 +992,26 @@ class ConsoleClient:
                         self.output.user_text("👋 Exiting console client.", flush=True)
                         return True
 
+                    latest_action = await self._get_next_action()
+                    self.latest_workflow_action = latest_action
+                    latest_required_action = latest_action.get("required_action")
+                    if latest_required_action not in {
+                        "start_intake",
+                        "continue_therapy",
+                    }:
+                        await self.event_sink.emit(
+                            "discarded_input",
+                            reason="workflow_advanced_before_send",
+                            required_action=latest_required_action,
+                        )
+                        return False
+
                     await self._display_message("user", user_message)
-                    self._append_transcript("user", user_message)
-                    self.turn_index += 1
-                    self.chat_turns_by_action[required_action] = (
-                        self.chat_turns_by_action.get(required_action, 0) + 1
-                    )
 
                     self.waiting_for_response = True
                     self.response_complete = trio.Event()
                     await self._send_chat_message(ws, user_message)
-
-                    response_timeout = float(
-                        self.probe_limits.get("response_timeout_seconds", 0) or 0
-                    )
-                    if response_timeout:
-                        with trio.move_on_after(response_timeout) as cancel_scope:
-                            await self.response_complete.wait()
-                        if cancel_scope.cancelled_caught:
-                            if self.recorder:
-                                await self.recorder.record_error(
-                                    "Timed out waiting for assistant response",
-                                    {"timeout_seconds": response_timeout},
-                                )
-                            return True
-                    else:
-                        await self.response_complete.wait()
+                    await self.response_complete.wait()
 
                     if self.session_end_requested:
                         return True
@@ -1062,39 +1027,30 @@ class ConsoleClient:
                     self.output.user_text("\n👋 Exiting console client.", flush=True)
                     return True
                 except Exception as e:
-                    if self.probe_limits:
-                        if self.recorder:
-                            reason = getattr(e, "reason", None)
-                            metadata = getattr(e, "metadata", None)
-                            if reason:
-                                await self.recorder.record_error(
-                                    "Local user simulator failed",
-                                    {
-                                        "reason": reason,
-                                        **(metadata if isinstance(metadata, dict) else {}),
-                                    },
-                                )
-                            else:
-                                await self.recorder.record_error(
-                                    "Probe input/chat loop failed", repr(e)
-                                )
-                        raise
                     logger.error(f"Error in chat loop: {e}")
                     self.output.error(f"❌ Error: {e}")
+                    await self.event_sink.emit(
+                        "error", message="Chat loop failed", data=repr(e)
+                    )
+                    raise
         finally:
             self.waiting_for_response = False
 
     async def _follow_workflow(self, ws):
         """Drive the console experience based on the backend workflow."""
         wait_count = 0
+        next_wait_heartbeat_seconds = 60
 
         while True:
             next_action = await self._get_next_action()
             action = next_action.get("required_action")
             prompt = next_action.get("prompt")
             self.latest_workflow_action = next_action
-            if self.recorder:
-                await self.recorder.record_workflow_action(next_action)
+            await self.event_sink.emit(
+                "workflow_action",
+                action=next_action,
+                delivery_source="http_poll",
+            )
             self.output.system(
                 f"Workflow action: {action} prompt={prompt!r}"
             )
@@ -1108,7 +1064,19 @@ class ConsoleClient:
             if action == "wait":
                 reason = prompt or "Waiting for backend instructions."
                 wait_count += 1
-                if wait_count == 1:
+                wait_signature = next_action.get("state_signature") or json.dumps(
+                    {
+                        "workflow_state": next_action.get("workflow_state"),
+                        "required_action": action,
+                        "prompt": prompt,
+                        "session_id": next_action.get("session_id"),
+                    },
+                    sort_keys=True,
+                )
+                if wait_signature != self.last_displayed_wait_signature:
+                    self.last_displayed_wait_signature = wait_signature
+                    wait_count = 1
+                    next_wait_heartbeat_seconds = 60
                     self.output.user_text(
                         f"⏳ Backend requested wait: {reason}", flush=True
                     )
@@ -1116,26 +1084,18 @@ class ConsoleClient:
                         "   Waiting for workflow to advance... (Ctrl+C to exit)",
                         flush=True,
                     )
-                elif wait_count % 10 == 0:
+                elif (wait_count - 1) * 2 >= next_wait_heartbeat_seconds:
                     self.output.user_text(
-                        f"⏳ Still waiting: {reason}", flush=True
+                        "⏳ Still waiting "
+                        f"({next_wait_heartbeat_seconds}s elapsed): {reason}",
+                        flush=True,
                     )
+                    next_wait_heartbeat_seconds += 60
 
                 if not self.connected:
                     self.output.user_text(
                         "⚠️  Connection lost while waiting. Exiting.", flush=True
                     )
-                    break
-
-                wait_timeout = float(
-                    self.probe_limits.get("wait_timeout_seconds", 0) or 0
-                )
-                if wait_timeout and wait_count * 2 >= wait_timeout:
-                    if self.recorder:
-                        await self.recorder.record_error(
-                            "Workflow wait timeout",
-                            {"timeout_seconds": wait_timeout, "prompt": prompt},
-                        )
                     break
 
                 await trio.sleep(2)
@@ -1162,7 +1122,8 @@ class ConsoleClient:
                     )
                     break
 
-                await self._await_session_ready()
+                if not await self._await_session_ready():
+                    break
                 exit_console = await self._chat_loop(ws)
 
                 if exit_console:
@@ -1175,45 +1136,11 @@ class ConsoleClient:
             )
             break
 
-    def _append_transcript(self, role: str, content: str) -> None:
-        self.transcript_tail.append({"role": role, "content": content})
-        max_tail = int(self.probe_limits.get("transcript_tail_limit", 12) or 12)
-        if len(self.transcript_tail) > max_tail:
-            self.transcript_tail = self.transcript_tail[-max_tail:]
-
-    async def _probe_chat_limit_reached(self, ws, required_action: str) -> bool:
-        if not self.probe_limits:
-            return False
-
-        max_total = int(self.probe_limits.get("max_total_turns", 0) or 0)
-        if max_total and self.turn_index >= max_total:
-            await self._request_end_session(ws, reason="Probe turn limit reached")
-            return True
-
-        action_limit_key = {
-            "start_intake": "max_intake_turns",
-            "continue_therapy": "max_therapy_turns",
-        }.get(required_action)
-        if action_limit_key:
-            max_action_turns = int(self.probe_limits.get(action_limit_key, 0) or 0)
-            if (
-                max_action_turns
-                and self.chat_turns_by_action.get(required_action, 0) >= max_action_turns
-            ):
-                await self._request_end_session(
-                    ws, reason=f"Probe {required_action} turn limit reached"
-                )
-                return True
-        return False
-
     async def run(self):
         """Run the console client interface with structured concurrency."""
         # Create HTTP client
-        api_timeout_seconds = float(
-            self.probe_limits.get("api_timeout_seconds", 60) or 60
-        )
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(api_timeout_seconds)
+            timeout=httpx.Timeout(self.api_timeout_seconds)
         ) as http_client:
             self.http_client = http_client
 

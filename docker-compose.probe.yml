@@ -1,0 +1,47 @@
+services:
+  api-probe:
+    extends:
+      file: docker-compose.yml
+      service: api
+    container_name: psychoanalyst_api_probe
+    environment:
+      - APP_ENV=development
+      - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
+      - VECTOR_DB_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/vector_db
+      - LLM_PROVIDER=openai_compatible
+      - SESSION_DURATION_MINUTES=${PROBE_SESSION_DURATION_MINUTES:-10}
+      - REFLECTION_TIMEOUT_SECONDS=${PROBE_REFLECTION_TIMEOUT_SECONDS:-90}
+    env_file:
+      - .env
+    ports: []
+
+  console-probe-runner:
+    build:
+      context: ./console-ui
+      dockerfile: Dockerfile
+    container_name: psychoanalyst_console_probe
+    volumes:
+      - ./console-ui/src:/app/src:delegated
+      - ./console-ui/scenarios:/app/scenarios:ro
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BACKEND_URL=http://api-probe:8000
+      - WEBSOCKET_URL=http://api-probe:8000
+      - WEBSOCKET_ORIGIN=http://localhost:5173
+      - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
+    env_file:
+      - .env
+    depends_on:
+      api-probe:
+        condition: service_healthy
+    networks:
+      - app-network
+    command:
+      - python
+      - -m
+      - src.workflow_probe.runner
+      - --scenario
+      - /app/scenarios/workflow-probes/first_session_smoke.json
+      - --output-dir
+      - /app/logs/workflow-probes/${PROBE_RUN_NAME}
