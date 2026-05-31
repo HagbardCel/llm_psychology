@@ -58,10 +58,8 @@ Databases created before this model must be reset with
   - Transcript plus Tier 2 enrichment fields (clinical summary, affects, themes).
   - `enriched` indicates if Tier 2 data was added.
 - `TherapyPlan`
-  - Long running treatment plan with `plan_details` plus extracted summaries.
+  - Long running treatment plan with typed focus, themes, and timeline fields.
   - `session_briefing` stores briefing payloads for resumptions.
-- `DomainKnowledgeChunk`
-  - RAG knowledge chunks used by the vector store.
 
 ## Field Reference (Core Models)
 
@@ -125,7 +123,9 @@ Databases created before this model must be reset with
 | updated_at | datetime | ISO 8601 in storage. |
 | version | int | Incremented on updates. |
 | selected_therapy_style | str or null | `freud`, `jung`, `cbt`, etc. |
-| plan_details | dict | Legacy plan structure (JSON). |
+| focus | str | Current therapeutic focus. |
+| themes | list[str] | Current tracked themes. |
+| timeline | str or null | Optional planning horizon. |
 | initial_goals | list[str] | Tier 4 fields. |
 | current_progress | str | Tier 4 fields. |
 | planned_interventions | list[str] | Tier 4 fields. |
@@ -253,8 +253,8 @@ erDiagram
   - Enriched sessions are immutable (updates blocked once `enriched = 1`).
 - `therapy_plans`
   - Stores `TherapyPlan` plus Tier 4 fields.
-  - `plan_details`, `initial_goals`, `planned_interventions`,
-    and `session_briefing` are JSON blobs.
+  - `themes`, `initial_goals`, `planned_interventions`, and `session_briefing`
+    are JSON blobs; `focus` and `timeline` are text columns.
 - `patient_analysis`
   - Stores `PatientAnalysisVersion` data as JSON in `analysis_data`
     with versioning metadata.

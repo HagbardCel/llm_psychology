@@ -236,4 +236,4 @@ The system supports multiple therapy styles, managed by the `StyleService`. Each
 - **Key Entities**:
   - **Users**: `UserProfile` (JSON/Pydantic model).
   - **Sessions**: `Session` (JSON/Pydantic model, contains list of `Message`s).
-  - **Plans**: `TherapyPlan` (JSON/Pydantic model, contains `plan_details` and `session_briefing`).
+  - **Plans**: `TherapyPlan` (typed focus/themes/timeline fields plus `session_briefing`).

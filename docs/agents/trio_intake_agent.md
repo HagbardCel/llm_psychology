@@ -44,11 +44,9 @@ StructuredTherapyPlanOutput (not emitted by intake; shown for downstream referen
 ```json
 {
   "selected_therapy_style": "psychoanalysis",
-  "plan_details": {
-    "focus": "Attachment patterns and anxiety regulation",
-    "themes": ["loss", "self-criticism", "avoidance"],
-    "techniques": ["free association", "reflective listening"]
-  },
+  "focus": "Attachment patterns and anxiety regulation",
+  "themes": ["loss", "self-criticism", "avoidance"],
+  "timeline": "12 weeks",
   "initial_goals": ["Increase insight into triggers", "Improve sleep routine"],
   "current_progress": "Baseline established",
   "planned_interventions": ["Dream exploration", "Journaling prompts"],

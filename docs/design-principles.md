@@ -295,7 +295,7 @@ Agents (`src/psychoanalyst_app/agents/reflection/agent.py`,
 
 ### Therapy styles are “style packs”
 Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app/styles/<style_id>/` (e.g., `freud`, `jung`, `cbt`), typically including:
-- `knowledge.md` (RAG source)
+- `knowledge.md` (reserved knowledge asset for a future retrieval extension)
 - `description.txt` (patient-facing)
 - `therapist_prompt.txt`, `reflection_prompt.txt`, `assessment_prompt.txt` (style-specific instructions)
 
@@ -305,9 +305,9 @@ Loader/service:
   with `settings.STYLES_DIR` when you explicitly need alternate style assets).
 
 ### RAG is disabled for the current release
-`RAG_BACKEND=none` is the only supported path and wires a no-op retriever.
-Local vector retrieval is deferred to a future extension after the core product
-path is fully tested and stable.
+The current release wires a no-op retriever unconditionally. Local vector
+retrieval is deferred to a future extension after the core product path is
+fully tested and stable.
 
 Design rule:
 - Keep retrieval optional; it is an enhancement, not a hard dependency for correctness.
@@ -397,7 +397,7 @@ Important environment variables:
 - `LLM_PROVIDER`, `LLM_BASE_URL` (LLM backend selection)
 - `GOOGLE_API_KEY` (Gemini access only)
 - `MODEL_NAME` and per-agent model overrides (`*_MODEL`)
-- `DATABASE_PATH`, `RAG_BACKEND` (`none` only in the current release)
+- `DATABASE_PATH`
 - CORS settings (`CORS_ALLOWED_ORIGINS`)
 
 `GEMINI_API_KEY` is still accepted as a fallback for older shells when using Gemini, but `GOOGLE_API_KEY` is the canonical variable and is what `Settings` persists. Keep sensitive configuration in the appropriate `.env.*` file instead of hardcoding defaults in code.

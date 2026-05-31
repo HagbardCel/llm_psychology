@@ -10,7 +10,6 @@ source_of_truth_for: WebSocket message envelope, event semantics, and versioned 
 
 **Version**: 1.2.3
 **Date**: 2025-12-29
-**Last Verified**: 2026-02-14
 **Status**: Active
 **Maintainer**: Backend Team
 
@@ -740,5 +739,3 @@ For questions about this protocol:
 ---
 
 **Document Maintainer**: Backend Team
-**Last Updated**: 2025-12-22
-**Next Review**: After Phase 1 completion

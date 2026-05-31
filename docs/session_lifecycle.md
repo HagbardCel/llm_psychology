@@ -187,4 +187,4 @@ Data is persisted in `data/psychoanalyst.db` (SQLite) via `TrioDatabaseService`.
 | :------------------ | :-------------------------------------------------- | :-------------------------------- |
 | **`sessions`**      | `session_id`, `transcript` (JSON), `topics` (JSON)  | All Agents (per message)          |
 | **`user_profiles`** | `name`, `status` (Workflow State), `profession`     | Intake Agent, Orchestrator        |
-| **`therapy_plans`** | `selected_therapy_style`, `plan_details`, `version` | Planning Agent (via Reflection) |
+| **`therapy_plans`** | `selected_therapy_style`, `focus`, `themes`, `timeline`, `version` | Planning Agent (via Reflection) |

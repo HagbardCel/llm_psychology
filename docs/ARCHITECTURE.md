@@ -8,15 +8,15 @@ source_of_truth_for: Runtime architecture boundaries and component responsibilit
 
 # Architecture Documentation
 
-**Last Verified:** 2026-02-22
-
 Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 Current stabilization priorities and client support tiers are defined in
 `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`.
 
 ## Overview
 
-The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, modular architecture that separates business logic from interface concerns. The system uses an **orchestration-based architecture** with streaming LLM responses for real-time user interactions.
+The local therapist tool separates business logic from interface concerns. It
+uses an **orchestration-based architecture** with streaming LLM responses for
+real-time user interactions on a local laptop.
 
 ## Architecture Principles
 
@@ -24,7 +24,7 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 2. **Unified API**: The supported console client uses the public backend contract
 3. **Streaming First**: Real-time streaming of LLM responses for better UX
 4. **State Machine**: Workflow driven by explicit state transitions
-5. **Scalability**: Designed to support multiple concurrent users
+5. **Local Reliability**: Keep session isolation correct without adding hosted deployment complexity
 
 During foundation stabilization, maintenance priority is backend-first:
 - Tier 0 is the backend, workflow/session lifecycle, persistence, HTTP DTOs, WebSocket protocol, schema/type pipeline, LLM abstraction, and deterministic tests.
@@ -137,13 +137,13 @@ NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE
 **Responsibilities**:
 - Stream LLM responses chunk-by-chunk
 - Maintain conversation context and history
-- Integrate RAG (Retrieval-Augmented Generation)
+- Preserve an optional no-op retrieval extension point
 - Manage session time and extensions
 - Persist messages to database
 
 **Key Features**:
 - Real-time streaming of LLM outputs
-- RAG context injection for therapy-style-specific knowledge
+- Deterministic no-op retrieval until a local extension is deliberately added
 - Session time tracking with extension support
 - Message history preservation
 
@@ -419,14 +419,4 @@ Server → Client:
 
 ## Operations and Playbooks
 
-Operational detail (deployment, testing, troubleshooting, monitoring, and
-extension playbooks) now lives in:
-- `docs/reference/ARCHITECTURE_OPERATIONS_GUIDE.md`
-
-This active architecture doc intentionally stays focused on runtime boundaries,
-component responsibilities, and core data/control flow.
-
----
-
-**Last Updated**: 2026-05-28
-**Version**: 2.1 (Trio Orchestration Architecture)
+Local setup and maintainer commands are summarized in the root `README.md`.

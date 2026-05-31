@@ -103,7 +103,9 @@ These shapes are what all clients should assume on the wire.
 - `supersedes_plan_id`: `string | null`
 - `superseded_by_plan_id`: `string | null`
 - `selected_therapy_style`: `string | null`
-- `plan_details`: `object`
+- `focus`: `string`
+- `themes`: `string[]`
+- `timeline`: `string | null`
 - `initial_goals`: `string[]`
 - `current_progress`: `string`
 - `planned_interventions`: `string[]`
