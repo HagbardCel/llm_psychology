@@ -291,7 +291,7 @@ Container keys:
 ### Prompts live close to the domain
 Prompts are versioned as code assets:
 - shared prompt templates: `src/psychoanalyst_app/prompts/*`
-- psychoanalyst prompt composition: `src/psychoanalyst_app/prompts/therapist_prompt_builder.py`
+- therapist prompt composition: `src/psychoanalyst_app/agents/therapist/prompts.py`
 
 Design rule:
 - Prefer small prompt composition helpers that receive typed inputs and produce a single string prompt.
@@ -299,7 +299,7 @@ Design rule:
 Example helper modules:
 - Reflection: `src/psychoanalyst_app/agents/reflection/helpers.py` (prompt assembly + structured outputs for Tier updates)
 - Planning: `src/psychoanalyst_app/agents/planning/helpers.py` (plan strategy models, RAG requests, structured extraction, recommendation scoring)
-Agents (`src/psychoanalyst_app/agents/trio_reflection_agent.py`, `src/psychoanalyst_app/agents/trio_planning_agent.py`) now orchestrate these helpers instead of holding mega-methods.
+Agents (`src/psychoanalyst_app/agents/reflection/agent.py`, `src/psychoanalyst_app/agents/planning/agent.py`) now orchestrate these helpers instead of holding mega-methods.
 
 ### Therapy styles are “style packs”
 Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app/styles/<style_id>/` (e.g., `freud`, `jung`, `cbt`), typically including:

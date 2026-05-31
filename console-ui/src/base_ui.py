@@ -1,11 +1,11 @@
-"""Abstract base class for UI implementations in the Virtual LLM-Driven Psychoanalyst application."""
+"""Abstract base class for UI implementations in the Virtual LLM-Driven Therapist application."""
 
 from abc import ABC, abstractmethod
 from typing import Optional
 
 
 class BaseUI(ABC):
-    """Abstract base class defining the UI interface for the psychoanalyst application.
+    """Abstract base class defining the UI interface for the therapist application.
 
     This abstraction allows for different UI implementations (TUI, Web, etc.) to be
     swapped without changing the core application logic.

@@ -1,7 +1,7 @@
 """
 Integration tests for Trio-native agents.
 
-Tests all 6 ported agents: Memory, Planning, Intake, Reflection, Assessment, Psychoanalyst
+Tests all 6 ported agents: Memory, Planning, Intake, Reflection, Assessment, Therapist
 """
 
 import uuid
@@ -38,7 +38,7 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.orchestrator_helpers import (
+from psychoanalyst_app.orchestration.persistence import (
     persist_therapy_plan_from_output,
     persist_tier3_update,
 )
@@ -959,7 +959,7 @@ async def test_full_agent_workflow(
     assert comprehensive_reflection is not None
     assert "session_context" in comprehensive_reflection
 
-    # Step 4: Psychoanalyst agent is ready to conduct therapy
+    # Step 4: Therapist agent is ready to conduct therapy
     therapist_agent = TrioTherapistAgent(
         llm_service,
         trio_db_service,

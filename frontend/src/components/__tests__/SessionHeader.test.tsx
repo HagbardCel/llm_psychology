@@ -75,10 +75,10 @@ describe('SessionHeader', () => {
       expect(psychologyIcon).toBeInTheDocument();
     });
 
-    it('should display "Psychoanalyst" title when no session', () => {
+    it('should display "Therapist" title when no session', () => {
       render(<SessionHeader onMenuClick={mockOnMenuClick} />);
 
-      expect(screen.getByText('Psychoanalyst')).toBeInTheDocument();
+      expect(screen.getByText('Therapist')).toBeInTheDocument();
     });
 
     it('should render more options button', () => {

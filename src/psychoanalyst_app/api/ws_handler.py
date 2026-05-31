@@ -7,7 +7,7 @@ import logging
 
 from quart import websocket
 
-from psychoanalyst_app.orchestration.orchestrator_helpers import (
+from psychoanalyst_app.orchestration.active_sessions import (
     session_type_for_workflow_state,
 )
 from psychoanalyst_app.models.http import RequiredWorkflowAction

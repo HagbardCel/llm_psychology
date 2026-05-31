@@ -11,7 +11,7 @@ therapy style preferences, and memory insights. Tracks plan evolution.
   `build_structured_plan_output`.
 
 References:
-- `src/psychoanalyst_app/agents/trio_planning_agent.py`
+- `src/psychoanalyst_app/agents/planning/agent.py`
 
 ## Inputs
 - `Session` and current `TherapyPlan` where applicable.
@@ -64,8 +64,9 @@ StructuredTherapyPlanOutput (emitted by this agent):
 
 ## Dependencies
 - Planning analysis: `psychoanalyst_app/agents/planning/analysis.py`.
-- Planning extractors: `psychoanalyst_app/agents/planning/extractors.py`.
+- Planning extraction: `psychoanalyst_app/agents/planning/extraction.py`.
 - Formatting helpers: `psychoanalyst_app/agents/planning/formatting.py`.
+- Co-located prompts: `psychoanalyst_app/agents/planning/prompts.py`.
 
 ## Failure Modes and Fallbacks
 - Raises `PlanningError` for unrecoverable plan creation failures.

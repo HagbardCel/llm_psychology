@@ -212,10 +212,6 @@ class TestServiceContainer:
             "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
             return_value=Mock(),
         ):
-            from psychoanalyst_app.container.factories.llm import (
-                get_or_create_llm_service_for_model,
-            )
-
             container = ServiceContainer(settings)
             first = container.get("llm_service")
             container.config = settings.model_copy(
@@ -224,7 +220,7 @@ class TestServiceContainer:
                     "LLM_BASE_URL": "http://lmstudio:1234/v1",
                 }
             )
-            second = get_or_create_llm_service_for_model(container, "shared-model")
+            second = container._get_or_create_llm_service_for_model("shared-model")
 
         assert first is not second
         assert first.provider == "ollama"
@@ -332,7 +328,7 @@ class TestServiceContainerAgentCreation:
         container,
         user_context,
     ):
-        """Test Trio psychoanalyst agent creation."""
+        """Test Trio therapist agent creation."""
         mock_agent = Mock()
         mock_therapist_agent.return_value = mock_agent
         mock_reflection = Mock()

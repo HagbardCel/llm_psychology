@@ -10,10 +10,7 @@ from werkzeug.local import LocalProxy
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.domain import Message, TherapyPlan
 from psychoanalyst_app.orchestration.models import ConversationContext
-from psychoanalyst_app.orchestration.runtime.session_bootstrap import (
-    load_conversation_context,
-)
-from psychoanalyst_app.orchestration.runtime.stream_dispatch import (
+from psychoanalyst_app.orchestration.stream_dispatch import (
     run_background_streamer,
     send_json_message,
     send_stream_chunk,
@@ -560,15 +557,35 @@ Based on the above context and your therapeutic approach, respond to:
             logger.debug(f"Retrieved context from cache: {session_id}")
             return self.active_contexts[session_id]
 
-        # Load from database
         try:
-            context = await load_conversation_context(
-                db_service=self.db_service,
-                config=self.config,
+            session = await self.db_service.get_session(session_id)
+            if not session:
+                raise ValueError(f"Session not found: {session_id}")
+
+            user_profile = await self.db_service.get_user_profile(session.user_id)
+            if not user_profile:
+                raise ValueError(f"User profile not found: {session.user_id}")
+
+            therapy_plan = None
+            try:
+                therapy_plan = await self.db_service.get_current_therapy_plan(
+                    session.user_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "No therapy plan found for user %s: %s", session.user_id, exc
+                )
+
+            context = ConversationContext(
                 session_id=session_id,
+                user_profile=user_profile,
+                therapy_plan=therapy_plan,
+                message_history=session.transcript,
+                topics_covered=[topic.name for topic in session.topics],
+                session_start_time=session.timestamp,
+                duration_minutes=self.config.SESSION_DURATION_MINUTES,
             )
 
-            # Cache it
             self.active_contexts[session_id] = context
             logger.info(f"Loaded and cached context for session {session_id}")
 

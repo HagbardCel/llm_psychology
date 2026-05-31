@@ -159,7 +159,7 @@ function checkTypes(schemaFiles) {
     process.exit(1);
   }
 
-  const tmpDir = mkdtempSync(join(tmpdir(), 'psychoanalyst-generated-types-'));
+  const tmpDir = mkdtempSync(join(tmpdir(), 'therapist-generated-types-'));
   const generatedOutput = join(tmpDir, 'api.ts');
 
   try {

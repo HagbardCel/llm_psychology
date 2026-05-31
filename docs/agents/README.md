@@ -42,7 +42,7 @@ The orchestrator uses this mapping to pick the agent on each user message.
 References:
 - `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py`
 - `src/psychoanalyst_app/orchestration/process_messages.py`
-- `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`
+- `src/psychoanalyst_app/orchestration/response_handler.py`
 
 ## Workflow Sequence Diagram (Foreground + Background Jobs)
 
@@ -100,7 +100,8 @@ Some agents are triggered by workflow events rather than a direct user message:
 References:
 - `src/psychoanalyst_app/orchestration/agent_output_validators.py`
 - `src/psychoanalyst_app/orchestration/process_messages.py`
-- `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`
+- `src/psychoanalyst_app/orchestration/response_handler.py`
+- `src/psychoanalyst_app/orchestration/persistence.py`
 
 ## Per-Agent Docs
 

@@ -27,7 +27,7 @@ from psychoanalyst_app.models.http import (
     user_profile_to_dto,
     user_profile_summary_to_dto,
 )
-from psychoanalyst_app.orchestration.orchestrator_helpers import (
+from psychoanalyst_app.orchestration.active_sessions import (
     session_type_for_workflow_state,
 )
 from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile

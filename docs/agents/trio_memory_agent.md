@@ -10,7 +10,7 @@ patterns, and continuity context for planning and reflection.
   `identify_patterns`, `get_recent_context`, `get_continuity_context`.
 
 References:
-- `src/psychoanalyst_app/agents/trio_memory_agent.py`
+- `src/psychoanalyst_app/agents/memory/agent.py`
 
 ## Inputs
 - `Session` transcript for analysis.
@@ -63,7 +63,8 @@ StructuredTherapyPlanOutput (not emitted by memory; shown for reference):
 - Caches memory for up to one hour to reduce repeated work.
 
 ## Dependencies
-- Prompt builder: `psychoanalyst_app/prompts/memory_prompt_builder.py`.
+- Co-located prompts: `psychoanalyst_app/agents/memory/prompts.py`.
+- Memory analysis: `psychoanalyst_app/agents/memory/analysis.py`.
 - Structured output model: `SessionAnalysis`.
 
 ## Failure Modes and Fallbacks

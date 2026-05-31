@@ -11,8 +11,9 @@ style selection, plus optional plan creation with the selected style.
   `process_assessment` after intake completion.
 
 References:
-- `src/psychoanalyst_app/agents/trio_assessment_agent.py`
-- `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`
+- `src/psychoanalyst_app/agents/assessment/agent.py`
+- `src/psychoanalyst_app/orchestration/response_handler.py`
+- `src/psychoanalyst_app/orchestration/response_jobs.py`
 
 ## Inputs
 - `ConversationContext` (message history for intake summary).
@@ -68,9 +69,10 @@ StructuredTherapyPlanOutput (produced when `create_initial_plan_with_style` is u
 - Background job emits `assessment_recommendations` events over WebSocket.
 
 ## Dependencies
-- Prompt builder: `psychoanalyst_app/prompts/assessment_prompt_builder.py`.
-- Prompts: `psychoanalyst_app/prompts/assessment_prompts.py`.
-- Parsing helpers: `psychoanalyst_app/agents/parsing.py`.
+- Co-located prompts: `psychoanalyst_app/agents/assessment/prompts.py`.
+- Recommendation extraction/scoring: `psychoanalyst_app/agents/assessment/recommendations.py`.
+- Style selection helpers: `psychoanalyst_app/agents/assessment/selection.py`.
+- Initial formulation helpers: `psychoanalyst_app/agents/assessment/initial_formulation.py`.
 
 ## Failure Modes and Fallbacks
 - If selection cannot be parsed, agent asks for clarification and stays in

@@ -6,6 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
+from typing import Any
 
 import trio
 
@@ -13,6 +14,7 @@ from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.models.domain import Message, Session
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
+    WorkflowEvent,
     WorkflowState,
 )
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
@@ -27,14 +29,58 @@ from .session_transition_policy import (
     advance_workflow_on_session_end,
     maybe_transition_for_session_start,
 )
-from .session_rollover import start_therapy_session as rollover_to_therapy_session
-from .session_follow_up import run_session_end_follow_up
 
 logger = logging.getLogger(__name__)
 
 ProcessMessageFn = Callable[[str, str, str | None], AsyncIterator[str]]
 RunReflectionFn = Callable[[str, str], Awaitable[None]]
 EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
+
+
+async def run_session_end_follow_up(
+    user_id: str,
+    session_id: str,
+    follow_up: RunReflectionFn,
+    follow_up_args: tuple[Any, ...],
+    workflow_engine: TrioWorkflowEngine,
+    emit_next_action: EmitNextActionFn | None,
+) -> None:
+    """Complete reflection after the client-visible session lifecycle has ended."""
+    try:
+        await follow_up(*follow_up_args)
+    except Exception:
+        logger.error(
+            "Follow-up job failed for session %s (user=%s)",
+            session_id,
+            user_id,
+            exc_info=True,
+        )
+
+    try:
+        final_state = await workflow_engine.get_user_state(user_id)
+        logger.info(
+            "Post-session follow-up finished for session %s in state %s",
+            session_id,
+            final_state,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to refresh workflow state after session end "
+            "(user=%s, session=%s)",
+            user_id,
+            session_id,
+            exc_info=True,
+        )
+
+    if emit_next_action:
+        try:
+            await emit_next_action(user_id, session_id)
+        except Exception:
+            logger.warning(
+                "Could not emit workflow next action after follow-up for session %s",
+                session_id,
+                exc_info=True,
+            )
 
 
 class SessionLifecycleManager:
@@ -381,7 +427,68 @@ class SessionLifecycleManager:
         self, user_id: str, current_session_id: str
     ) -> SessionInfo:
         """Replace the intake control session with a plan-linked therapy session."""
-        return await rollover_to_therapy_session(self, user_id, current_session_id)
+        if not self.is_session_active(user_id, current_session_id):
+            raise ValueError("Intake session is not active for this user")
+
+        db_service = self.service_container.get("trio_db_service")
+        current_session = await db_service.get_session(current_session_id)
+        if not current_session or current_session.session_type != "intake":
+            raise ValueError("Therapy can only start from the active intake session")
+        if (
+            await self.workflow_engine.get_user_state(user_id)
+            != WorkflowState.INITIAL_PLAN_COMPLETE
+        ):
+            raise ValueError(
+                "Therapy can only start after the initial plan is complete"
+            )
+
+        plan = await db_service.get_current_therapy_plan(user_id)
+        if not plan or not plan.selected_therapy_style:
+            raise ValueError("Therapy plan with selected style not found")
+
+        new_session_id = str(uuid.uuid4())
+        therapy_session = Session(
+            session_id=new_session_id,
+            user_id=user_id,
+            session_type="therapy",
+            plan_id=plan.plan_id,
+            timestamp=datetime.now(),
+            transcript=[
+                Message(
+                    role="system",
+                    content="Session started",
+                    timestamp=datetime.now(),
+                )
+            ],
+            topics=[],
+        )
+        if not await db_service.save_session(therapy_session):
+            raise ValueError("Failed to save therapy session to database")
+
+        await self.workflow_engine.transition(
+            user_id,
+            WorkflowState.THERAPY_IN_PROGRESS,
+            event=WorkflowEvent.START_THERAPY,
+        )
+        self.active_sessions.set_active_session_id(user_id, new_session_id)
+        self.conversation_manager.clear_context(current_session_id)
+
+        ws = self.conversation_manager.websockets.get(current_session_id)
+        if ws is not None:
+            self.conversation_manager.unregister_websocket(current_session_id)
+            self.conversation_manager.register_websocket(new_session_id, ws)
+
+        session_info = await self._build_session_info(user_id, new_session_id)
+        if ws is not None:
+            await self.conversation_manager.send_json_message(
+                new_session_id,
+                ServerMessageTypes.SESSION_STARTED,
+                session_info.to_dict(),
+            )
+            if self._emit_next_action:
+                await self._emit_next_action(user_id, new_session_id)
+        self.send_initial_greeting(user_id, new_session_id)
+        return session_info
 
     async def _build_session_info(self, user_id: str, session_id: str) -> SessionInfo:
         trio_db_service = self.service_container.get("trio_db_service")

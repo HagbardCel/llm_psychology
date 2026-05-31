@@ -199,7 +199,7 @@ async def process_message(
     """
 ```
 
-#### TrioIntakeAgent (`src/psychoanalyst_app/agents/trio_intake_agent.py`)
+#### TrioIntakeAgent (`src/psychoanalyst_app/agents/intake/agent.py`)
 
 **Purpose**: Collect initial user information
 
@@ -213,7 +213,7 @@ async def process_message(
 - All core topics covered
 - Sufficient context for assessment
 
-#### TrioAssessmentAgent (`src/psychoanalyst_app/agents/trio_assessment_agent.py`)
+#### TrioAssessmentAgent (`src/psychoanalyst_app/agents/assessment/agent.py`)
 
 **Purpose**: Analyze intake data and recommend therapy styles
 
@@ -227,7 +227,7 @@ async def process_message(
 - TherapyStyleRecommendation objects
 - Initial TherapyPlan with selected style
 
-#### TrioTherapistAgent (`src/psychoanalyst_app/agents/trio_therapist_agent.py`)
+#### TrioTherapistAgent (`src/psychoanalyst_app/agents/therapist/agent.py`)
 
 **Purpose**: Conduct main therapy sessions
 
@@ -243,7 +243,7 @@ async def process_message(
 - Time-aware responses
 - Graceful session closing
 
-#### TrioReflectionAgent (`src/psychoanalyst_app/agents/trio_reflection_agent.py`)
+#### TrioReflectionAgent (`src/psychoanalyst_app/agents/reflection/agent.py`)
 
 **Purpose**: Post-session reflection and plan updates
 

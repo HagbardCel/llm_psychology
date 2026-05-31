@@ -1,6 +1,6 @@
-# Psychoanalyst Frontend
+# Therapist Frontend
 
-A modern React TypeScript application for the Virtual LLM-Driven Psychoanalyst platform.
+A modern React TypeScript application for the Virtual LLM-Driven Therapist platform.
 
 ## Features
 
@@ -45,7 +45,7 @@ npm run preview
 - `MessageHistory` - Scrollable message display
 - `MessageInput` - Text input with send functionality
 - `SessionHeader` - Session info and controls
-- `Navigation` - App navigation and routing
+- `NavigationDrawer` - App navigation and routing
 - `Dashboard` - Main user dashboard
 
 ### State Management
@@ -64,21 +64,18 @@ The frontend integrates with the Python backend API through:
 
 ### Running Both Interfaces
 
-**Terminal Interface (Original):**
+**Terminal Interface:**
 ```bash
-cd /app
-python -m psychoanalyst_app
+make ui-console
 ```
 
 **Web Interface:**
 ```bash
 # Start backend API server
-cd /app
-python main_launcher.py web
+make docker-up
 
 # In another terminal, start frontend
-cd /app/frontend
-npm run dev
+make ui-web
 ```
 
 ## Development

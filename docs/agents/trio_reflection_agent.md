@@ -11,8 +11,9 @@ session summaries/briefings, and produces Tier 2/3 enrichments.
 - Entry points: `process_message` (orchestrator) and `process_reflection`.
 
 References:
-- `src/psychoanalyst_app/agents/trio_reflection_agent.py`
-- `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`
+- `src/psychoanalyst_app/agents/reflection/agent.py`
+- `src/psychoanalyst_app/orchestration/response_handler.py`
+- `src/psychoanalyst_app/orchestration/persistence.py`
 
 ## Inputs
 - `Session` reconstructed from `ConversationContext`.
@@ -72,10 +73,14 @@ StructuredTherapyPlanOutput (emitted in `metadata.therapy_plan_output`):
   - Optional Tier 1 profile updates
 
 ## Dependencies
-- Reflection extractors and helpers:
-  - `psychoanalyst_app/agents/reflection/extractors.py`
-  - `psychoanalyst_app/agents/reflection/helpers.py`
-- Prompt builders: `psychoanalyst_app/prompts/reflection_prompt_builder.py`.
+- Co-located prompts: `psychoanalyst_app/agents/reflection/prompts.py`.
+- Tier pipelines:
+  - `psychoanalyst_app/agents/reflection/tier1_pipeline.py`
+  - `psychoanalyst_app/agents/reflection/tier2_pipeline.py`
+  - `psychoanalyst_app/agents/reflection/tier3_pipeline.py`
+  - `psychoanalyst_app/agents/reflection/tier4_pipeline.py`
+- Session summary helpers: `psychoanalyst_app/agents/reflection/session_summary.py`.
+- Insights pipeline: `psychoanalyst_app/agents/reflection/insights_pipeline.py`.
 
 ## Failure Modes and Fallbacks
 - Reflection job uses timeout handling and surfaces an error message to the UI.

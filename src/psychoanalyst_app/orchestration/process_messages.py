@@ -8,7 +8,7 @@ from typing import Any
 
 from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
-from psychoanalyst_app.orchestration.profile_persistence import (
+from psychoanalyst_app.orchestration.profile_helpers import (
     persist_structured_user_profile_output,
 )
 

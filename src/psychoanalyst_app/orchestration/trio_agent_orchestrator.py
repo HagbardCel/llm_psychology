@@ -15,6 +15,7 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.http import (
     WorkflowNextActionDTO,
 )
@@ -25,9 +26,7 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.orchestrator_helpers import (
-    AgentResponseHandler,
-    SessionLifecycleManager,
+from psychoanalyst_app.orchestration.persistence import (
     persist_therapy_plan_from_output,
 )
 from psychoanalyst_app.orchestration.process_messages import (
@@ -39,10 +38,9 @@ from psychoanalyst_app.orchestration.process_messages import (
     stream_agent_response,
 )
 from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
-from psychoanalyst_app.orchestration.runtime.agent_resolution import (
-    get_or_create_cached_agent,
-)
-from psychoanalyst_app.orchestration.runtime.workflow_transitions import (
+from psychoanalyst_app.orchestration.response_handler import AgentResponseHandler
+from psychoanalyst_app.orchestration.session_lifecycle import SessionLifecycleManager
+from psychoanalyst_app.orchestration.workflow_transitions import (
     emit_workflow_next_action as emit_workflow_next_action_runtime,
     get_workflow_next_action as get_workflow_next_action_runtime,
 )
@@ -528,29 +526,24 @@ class TrioAgentOrchestrator:
             raise
 
     async def _get_or_create_agent(self, agent_type: str, user_id: str):
-        """
-        Get or create an agent instance.
+        """Return cached agent instance or create+cache a new one."""
+        cache_key = f"{agent_type}_{user_id}"
+        if cache_key in self.agents:
+            logger.debug("Retrieved cached agent: %s", cache_key)
+            return self.agents[cache_key]
 
-        Args:
-            agent_type: Type of agent to get
-            user_id: User identifier
-
-        Returns:
-            Agent instance
-
-        Raises:
-            ValueError: If agent_type is unknown
-        """
         try:
-            return await get_or_create_cached_agent(
-                cache=self.agents,
-                service_container=self.service_container,
-                agent_type=agent_type,
-                user_id=user_id,
+            logger.info("Creating agent: %s for user %s", agent_type, user_id)
+            agent = self.service_container.create_agent(
+                agent_type, UserContext(user_id=user_id)
             )
         except ValueError:
             logger.error(f"Unknown agent type requested: {agent_type}")
             raise
+
+        self.agents[cache_key] = agent
+        logger.info("Cached agent: %s", cache_key)
+        return agent
 
     async def end_session(
         self, user_id: str, session_id: str, reason: str | None = None

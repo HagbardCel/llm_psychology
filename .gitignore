@@ -163,13 +163,16 @@ schemas/*.json
 !schemas/ws_protocol.json
 data/vector_db_usertest/data.pkl
 data/vector_db_usertest/faiss_index.bin
+# AI assistant local config (not project-tracked)
 .aider*
 .qwen/
+.gemini/
+.claude/
+.clinerules/
+.agent/
 
 # Codegraph workspace database / daemon artifacts
-.codegraph
 .codegraph/
 
 # Playwright run metadata
 frontend/test-results/
-frontend/test-results/.last-run.json

@@ -1,4 +1,4 @@
-"""Console UI package for the Virtual LLM-Driven Psychoanalyst application."""
+"""Console UI package for the Virtual LLM-Driven Therapist application."""
 
 from src.console_client import ConsoleClient
 from src.base_ui import BaseUI

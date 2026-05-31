@@ -92,7 +92,7 @@ export function SessionHeader({
 
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h6" component="div">
-            {session && session.agentType ? getAgentDisplayName(session.agentType) : 'Psychoanalyst'}
+            {session && session.agentType ? getAgentDisplayName(session.agentType) : 'Therapist'}
           </Typography>
           
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>

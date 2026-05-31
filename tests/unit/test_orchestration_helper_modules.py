@@ -7,17 +7,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from psychoanalyst_app.models.domain import Message, Session
-from psychoanalyst_app.orchestration.helpers.active_sessions import (
+from psychoanalyst_app.orchestration.active_sessions import (
     ActiveSessionRegistry,
     session_type_for_workflow_state,
 )
-from psychoanalyst_app.orchestration.helpers.persistence import persist_tier3_update
-from psychoanalyst_app.orchestration.helpers.response_handler import (
+from psychoanalyst_app.orchestration.persistence import persist_tier3_update
+from psychoanalyst_app.orchestration.response_handler import (
     AgentResponseHandler,
     _extract_error_code,
 )
-from psychoanalyst_app.orchestration.helpers.response_jobs import run_assessment_job
-from psychoanalyst_app.orchestration.helpers.session_lifecycle import (
+from psychoanalyst_app.orchestration.response_jobs import run_assessment_job
+from psychoanalyst_app.orchestration.session_lifecycle import (
     SessionLifecycleManager,
 )
 from psychoanalyst_app.orchestration.models import (

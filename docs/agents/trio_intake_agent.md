@@ -10,7 +10,7 @@ Tier 1 profile, and determines when intake is complete.
 
 References:
 - `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
-- `src/psychoanalyst_app/agents/trio_intake_agent.py`
+- `src/psychoanalyst_app/agents/intake/agent.py`
 
 ## Inputs
 - `message` and `ConversationContext` (session duration, topics covered, history).
@@ -65,8 +65,9 @@ StructuredTherapyPlanOutput (not emitted by intake; shown for downstream referen
 - `finalize_agent_response` persists `metadata.user_profile` when present.
 
 ## Dependencies
-- Prompts: `psychoanalyst_app/prompts/intake_prompts.py`.
-- Structured output model: `PatientProfileExtract`.
+- Co-located prompts: `psychoanalyst_app/agents/intake/prompts.py`.
+- Slot tracking: `psychoanalyst_app/agents/intake/slots.py`.
+- Tier 1 extraction: `psychoanalyst_app/agents/intake/extraction.py`.
 - Validator: `build_user_profile_output`.
 
 ## Failure Modes and Fallbacks

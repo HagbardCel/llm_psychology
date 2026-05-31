@@ -7,7 +7,7 @@ This React frontend is designed to work alongside the existing terminal interfac
 The application now supports two interfaces:
 
 ### 1. Terminal Interface (Existing)
-- **Path**: `python -m psychoanalyst_app`
+- **Path**: `make ui-console`
 - **Features**: Full terminal-based interaction
 - **Use Case**: CLI users, server environments, debugging
 
@@ -40,21 +40,16 @@ Both interfaces use the same:
 
 ### Terminal Only
 ```bash
-cd /app
-python -m psychoanalyst_app
+make ui-console
 ```
 
 ### Web Interface
 ```bash
 # Terminal 1: Backend API
-cd /app
-# Note: Web server component needs to be implemented
-python -m uvicorn src.web_api:app --reload --port 8000
+make docker-up
 
 # Terminal 2: Frontend
-cd /app/frontend
-npm install
-npm run dev
+make ui-web
 ```
 
 ### Both Interfaces

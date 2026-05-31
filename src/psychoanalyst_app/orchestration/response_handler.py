@@ -19,7 +19,7 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.profile_persistence import (
+from psychoanalyst_app.orchestration.profile_helpers import (
     persist_structured_user_profile_output,
 )
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
