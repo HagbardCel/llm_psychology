@@ -51,6 +51,11 @@ created_rows.json
 
 `logs/workflow-probes/latest` points at the most recent run even when it fails.
 
+The probe allows up to 900 seconds for the interactive workflow, 300 seconds for
+backend reflection, and 360 seconds for the client-side post-session wait.
+Reflection performs several sequential local LLM analyses before it can persist
+the next versioned therapy plan.
+
 ## Commands
 
 ```bash

@@ -24,10 +24,10 @@ The orchestrator uses this mapping to pick the agent on each user message.
 | INTAKE_IN_PROGRESS | INTAKE | `TrioIntakeAgent` |
 | INTAKE_COMPLETE | ASSESSMENT | `TrioAssessmentAgent` |
 | ASSESSMENT_IN_PROGRESS | ASSESSMENT | `TrioAssessmentAgent` |
-| ASSESSMENT_COMPLETE | PSYCHOANALYST | `TrioPsychoanalystAgent` |
-| THERAPY_IN_PROGRESS | PSYCHOANALYST | `TrioPsychoanalystAgent` |
+| ASSESSMENT_COMPLETE | THERAPIST | `TrioTherapistAgent` |
+| THERAPY_IN_PROGRESS | THERAPIST | `TrioTherapistAgent` |
 | REFLECTION_IN_PROGRESS | REFLECTION | `TrioReflectionAgent` |
-| PLAN_UPDATE_COMPLETE | PSYCHOANALYST | `TrioPsychoanalystAgent` |
+| PLAN_UPDATE_COMPLETE | THERAPIST | `TrioTherapistAgent` |
 
 ## Execution Pipeline (High Level)
 
@@ -50,7 +50,7 @@ References:
 sequenceDiagram
     participant User
     participant Orchestrator as TrioAgentOrchestrator
-    participant Agent as Agent (INTAKE/ASSESSMENT/PSYCHOANALYST/REFLECTION)
+    participant Agent as Agent (INTAKE/ASSESSMENT/THERAPIST/REFLECTION)
     participant Conv as TrioConversationManager
     participant Handler as AgentResponseHandler
     participant WF as TrioWorkflowEngine
@@ -106,7 +106,7 @@ References:
 
 - [TrioIntakeAgent](trio_intake_agent.md)
 - [TrioAssessmentAgent](trio_assessment_agent.md)
-- [TrioPsychoanalystAgent](trio_psychoanalyst_agent.md)
+- [TrioTherapistAgent](trio_therapist_agent.md)
 - [TrioReflectionAgent](trio_reflection_agent.md)
 - [TrioPlanningAgent](trio_planning_agent.md)
 - [TrioMemoryAgent](trio_memory_agent.md)

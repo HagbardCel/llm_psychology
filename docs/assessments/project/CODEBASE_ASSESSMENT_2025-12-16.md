@@ -126,7 +126,7 @@ Lean fix direction:
 You have a DI container (`src/container/service_container.py`), but you also have:
 
 - A module-level singleton `style_service = StyleService()` in `src/services/style_service.py`.
-- Agents importing `style_service` directly (`trio_assessment_agent.py`, `trio_planning_agent.py`, `trio_psychoanalyst_agent.py`), while `TrioServer` uses `container.get("style_service")`.
+- Agents importing `style_service` directly (`trio_assessment_agent.py`, `trio_planning_agent.py`, `trio_therapist_agent.py`), while `TrioServer` uses `container.get("style_service")`.
 - `TrioAgentOrchestrator` contains its own internal agent factory methods (`_create_*_agent`) while `ServiceContainer` also has `create_*_agent` methods.
 
 Impact:
@@ -393,7 +393,7 @@ These are specific places where reusable functions/classes will reduce duplicati
    - Transcript parsing is repeated in multiple `TrioDatabaseService` methods.
    - Introduce `serialize_message()`, `deserialize_message()`, `serialize_session()`, `deserialize_session_row()`.
 2. **Prompt composition**
-   - Session resumption prompt assembly in `TrioPsychoanalystAgent` is long and formatting-heavy.
+   - Session resumption prompt assembly in `TrioTherapistAgent` is long and formatting-heavy.
    - Extract a `BriefingPromptBuilder` that takes `UserProfile`, `TherapyPlan`, `SessionBriefing` and returns a system prompt.
 3. **WebSocket message envelopes**
    - Both server and clients build `{"type": ..., "data": ...}` repeatedly.

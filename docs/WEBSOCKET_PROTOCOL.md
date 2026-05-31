@@ -168,6 +168,8 @@ Request to end the active session.
 **Behavior**:
 - Server updates workflow state as needed (e.g., `therapy_in_progress` → `plan_update_in_progress`).
 - Server emits `session_ended` to confirm shutdown and client should exit.
+- Post-session reflection continues in the background. Clients can poll
+  `GET /api/user/status?user_id=...` after closure to observe completion.
 
 **Example**:
 ```json
@@ -241,9 +243,11 @@ Sent after successful session creation or resume.
   "data": {
     "session_id": string,           // Unique session identifier (UUID)
     "user_id": string,              // User identifier
-    "agent_type": string,           // Current agent (INTAKE, ASSESSMENT, PSYCHOANALYST, etc.)
+    "agent_type": string,           // Current agent (INTAKE, ASSESSMENT, THERAPIST, etc.)
     "workflow_state": string,       // Current workflow state
-    "created_at": string            // ISO 8601 timestamp
+    "created_at": string,           // ISO 8601 timestamp
+    "session_type": "intake" | "therapy",
+    "selected_therapy_style": "cbt" | "freud" | "jung" | null
   }
 }
 ```
@@ -262,13 +266,17 @@ Sent after successful session creation or resume.
     "user_id": "user-123",
     "agent_type": "INTAKE",
     "workflow_state": "INTAKE_IN_PROGRESS",
-    "created_at": "2025-12-02T10:30:00.000Z"
+    "created_at": "2025-12-02T10:30:00.000Z",
+    "session_type": "intake",
+    "selected_therapy_style": null
   }
 }
 ```
 
 **Client Handling**:
 - Store `session_id` for subsequent HTTP requests, replacing any stale locally
+- Treat `agent_type="THERAPIST"` as the generic therapy runtime role.
+- Use `selected_therapy_style` for the modality. Intake sessions emit `null`.
   cached session id
 - Display agent type to user (optional)
 - Wait for the initial `chat_response_chunk` before accepting user input in chat flows
@@ -302,8 +310,8 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 ```
 
 **Behavior**:
-- Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, continue therapy, or wait).
-- `initial_plan_complete` and `plan_update_complete` both use `required_action="continue_therapy"`; the prompt distinguishes first therapy start from post-reflection resumption.
+- Informs clients what backend step should happen next (complete profile, select a therapy style, start intake, start therapy, continue therapy, retry a failed plan update, or wait).
+- `initial_plan_complete` uses `required_action="start_therapy"` so the client can offer immediate continuation or stop after assessment. Starting therapy emits a new plan-linked `session_started` without reconnecting the WebSocket.
 - Always includes the latest workflow state and recommended fields to collect.
 - Includes a stable `state_signature` for equivalent workflow instructions. Unlike
   `timestamp`, it remains unchanged when the backend reevaluates the same state.
@@ -313,7 +321,7 @@ Sent on WebSocket connect and whenever the backend reevaluates the required work
 - Sent after `session_started` so clients can render the appropriate onboarding form.
 
 **Client Handling**:
-- Render forms based on `required_action` (`complete_profile` → show profile form, `select_therapy_style` → show style picker, `start_intake`/`continue_therapy` → show the session UI, `wait` → show progress state).
+- Render forms based on `required_action` (`complete_profile` → show profile form, `select_therapy_style` → show style picker, `start_therapy` → offer seamless continuation, `start_intake`/`continue_therapy` → show the session UI, `retry_plan_update` → offer retry for the ended session, `wait` → show progress state).
 - Use `required_fields` to dynamically drive data collection and `defaults` to prefill fields.
 - Display the `prompt` as the wait/status notice when `required_action` is `wait`.
 - Ignore duplicate displays that do not change `state_signature`.

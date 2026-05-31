@@ -79,6 +79,16 @@ current target database, replaces `data/psychoanalyst.db`, and removes stale
 SQLite `-wal`/`-shm` sidecar files. Keep backups on local encrypted storage if
 the database contains real sensitive data.
 
+## Foundation Database Reset
+
+Therapy-plan lineage is a clean-baseline schema change. Existing databases are
+not migrated or backfilled. Stop app containers and remove production and
+usertest SQLite files, including WAL/SHM artifacts, with:
+
+```bash
+make reset-foundation-db
+```
+
 ## Testing
 
 ### Test Structure

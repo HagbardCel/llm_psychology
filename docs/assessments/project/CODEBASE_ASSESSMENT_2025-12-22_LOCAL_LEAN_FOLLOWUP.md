@@ -72,7 +72,7 @@ This review re-evaluates the improvement list from `docs/assessments/project/COD
 
 ### 4) Agent TODO cleanups
 - `trio_assessment_agent` still uses placeholder scoring/key topic extraction. See `src/psychoanalyst_app/agents/trio_assessment_agent.py`.
-- `trio_psychoanalyst_agent` still references TODO topic detection. See `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`.
+- `trio_therapist_agent` still references TODO topic detection. See `src/psychoanalyst_app/agents/trio_therapist_agent.py`.
 - Still desirable to either implement or remove placeholders to keep the codebase lean and decisive.
 
 ### 5) Docker-only vs local workflow alignment

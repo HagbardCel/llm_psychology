@@ -1,4 +1,4 @@
-# TrioPsychoanalystAgent
+# TrioTherapistAgent
 
 ## Purpose and Workflow Role
 Conducts the primary therapy conversation, using the current therapy plan
@@ -10,7 +10,7 @@ and session context to generate prompts and drive workflow transitions.
 - Entry point: `process_message`.
 
 References:
-- `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`
+- `src/psychoanalyst_app/agents/trio_therapist_agent.py`
 - `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
 
 ## Inputs
@@ -69,8 +69,8 @@ StructuredTherapyPlanOutput (not emitted by this agent; shown for reference):
 - Session completion triggers reflection via the orchestrator.
 
 ## Dependencies
-- Prompt builders: `psychoanalyst_app/prompts/psychoanalyst_prompt_builder.py`.
-- Prompts: `psychoanalyst_app/prompts/psychoanalyst_prompts.py`.
+- Prompt builders: `psychoanalyst_app/prompts/therapist_prompt_builder.py`.
+- Prompts: `psychoanalyst_app/prompts/therapist_prompts.py`.
 - Briefing evaluation with `BriefingStatus`.
 
 ## Failure Modes and Fallbacks

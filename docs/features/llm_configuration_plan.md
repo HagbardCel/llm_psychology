@@ -13,7 +13,7 @@ This plan outlines the changes required to allow configuring different LLM model
 - **TrioMemoryAgent**: Uses `LLMService` for analyzing session context and health checks.
 - **TrioPlanningAgent**: Uses `LLMService` for generating plans.
 - **TrioReflectionAgent**: Uses `LLMService` for generating summaries and briefings.
-- **TrioPsychoanalystAgent**: Uses `LLMService` for closing sessions and legacy features.
+- **TrioTherapistAgent**: Uses `LLMService` for closing sessions and legacy features.
 
 > "Add a default model that is used for each relevant agent for which no custom model has been set."
 
@@ -37,7 +37,7 @@ This plan outlines the changes required to allow configuring different LLM model
 - Add new fields to `Settings` class for agent-specific models.
   - `INTAKE_MODEL`: Defaults to `MODEL_NAME` if not set.
   - `ASSESSMENT_MODEL`: Defaults to `MODEL_NAME` if not set.
-  - `PSYCHOANALYST_MODEL`: Defaults to `MODEL_NAME` if not set.
+  - `THERAPIST_MODEL`: Defaults to `MODEL_NAME` if not set.
   - `REFLECTION_MODEL`: Defaults to `MODEL_NAME` if not set.
   - `MEMORY_MODEL`: Defaults to `MODEL_NAME` if not set.
   - `PLANNING_MODEL`: Defaults to `MODEL_NAME` if not set.
@@ -55,7 +55,7 @@ This plan outlines the changes required to allow configuring different LLM model
 llm_service_key_map = {
     "INTAKE": "llm_service_intake",
     "ASSESSMENT": "llm_service_assessment",
-    "PSYCHOANALYST": "llm_service_psychoanalyst",
+    "THERAPIST": "llm_service_therapist",
     "REFLECTION": "llm_service_reflection",
     "MEMORY": "llm_service_memory",
     "PLANNING": "llm_service_planning",
@@ -84,12 +84,12 @@ async for chunk in self.conversation_manager.stream_response(
 
 #### [MODIFY] [service_container.py](file:///app/src/container/service_container.py)
 
-- Update `_setup_factories` to register specific LLM services for each agent (e.g., `llm_service_intake`, `llm_service_psychoanalyst`).
+- Update `_setup_factories` to register specific LLM services for each agent (e.g., `llm_service_intake`, `llm_service_therapist`).
 - Create a helper method `_create_agent_llm_service(agent_config_name: str)` to reduce duplication.
 - Update `create_intake_agent` to **REMOVE** `llm_service` injection (it doesn't use it).
 - Update other `create_*_agent` methods to inject the specific LLM service:
   - `create_assessment_agent` -> uses `llm_service_assessment`
-  - `create_psychoanalyst_agent` -> uses `llm_service_psychoanalyst`
+  - `create_psychoanalyst_agent` -> uses `llm_service_therapist`
   - `create_reflection_agent` -> uses `llm_service_reflection`
   - `create_memory_agent` -> uses `llm_service_memory`
   - `create_planning_agent` -> uses `llm_service_planning`
@@ -118,7 +118,7 @@ def test_agent_specific_models_from_config(monkeypatch):
     """Test that agents get correct model configurations from env vars."""
     monkeypatch.setenv("MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setenv("INTAKE_MODEL", "gemini-pro")
-    monkeypatch.setenv("PSYCHOANALYST_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("THERAPIST_MODEL", "gemini-2.5-pro")
 
     container = ServiceContainer()
 
@@ -127,7 +127,7 @@ def test_agent_specific_models_from_config(monkeypatch):
     assert intake_service.model_name == "gemini-pro"
 
     # Test psychoanalyst agent gets specific model
-    psychoanalyst_service = container.get("llm_service_psychoanalyst")
+    psychoanalyst_service = container.get("llm_service_therapist")
     assert psychoanalyst_service.model_name == "gemini-2.5-pro"
 
 
@@ -146,7 +146,7 @@ def test_all_agent_models_configurable(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "assessment-model")
-    monkeypatch.setenv("PSYCHOANALYST_MODEL", "psychoanalyst-model")
+    monkeypatch.setenv("THERAPIST_MODEL", "psychoanalyst-model")
     monkeypatch.setenv("REFLECTION_MODEL", "reflection-model")
     monkeypatch.setenv("MEMORY_MODEL", "memory-model")
     monkeypatch.setenv("PLANNING_MODEL", "planning-model")
@@ -155,7 +155,7 @@ def test_all_agent_models_configurable(monkeypatch):
 
     assert container.get("llm_service_intake").model_name == "intake-model"
     assert container.get("llm_service_assessment").model_name == "assessment-model"
-    assert container.get("llm_service_psychoanalyst").model_name == "psychoanalyst-model"
+    assert container.get("llm_service_therapist").model_name == "psychoanalyst-model"
     assert container.get("llm_service_reflection").model_name == "reflection-model"
     assert container.get("llm_service_memory").model_name == "memory-model"
     assert container.get("llm_service_planning").model_name == "planning-model"
@@ -225,7 +225,7 @@ Add the following section to `.env.example`:
 #
 # INTAKE_MODEL=gemini-2.5-flash
 # ASSESSMENT_MODEL=gemini-2.5-pro
-# PSYCHOANALYST_MODEL=gemini-2.5-pro
+# THERAPIST_MODEL=gemini-2.5-pro
 # REFLECTION_MODEL=gemini-2.5-flash
 # MEMORY_MODEL=gemini-2.5-flash
 # PLANNING_MODEL=gemini-2.5-flash
@@ -243,7 +243,7 @@ The application supports configuring different LLM models for different agents, 
 **Environment Variables**:
 - `INTAKE_MODEL` - Model for intake conversations (default: MODEL_NAME)
 - `ASSESSMENT_MODEL` - Model for session analysis (default: MODEL_NAME)
-- `PSYCHOANALYST_MODEL` - Model for main therapy sessions (default: MODEL_NAME)
+- `THERAPIST_MODEL` - Model for main therapy sessions (default: MODEL_NAME)
 - `REFLECTION_MODEL` - Model for session summaries (default: MODEL_NAME)
 - `MEMORY_MODEL` - Model for memory extraction (default: MODEL_NAME)
 - `PLANNING_MODEL` - Model for therapy plan generation (default: MODEL_NAME)
@@ -251,7 +251,7 @@ The application supports configuring different LLM models for different agents, 
 **Example** - Using Flash for simple tasks, Pro for complex therapy:
 ```bash
 INTAKE_MODEL=gemini-2.5-flash
-PSYCHOANALYST_MODEL=gemini-2.5-pro
+THERAPIST_MODEL=gemini-2.5-pro
 REFLECTION_MODEL=gemini-2.5-flash
 ```
 ```

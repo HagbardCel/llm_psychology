@@ -53,7 +53,7 @@ The session timer functionality was already properly implemented:
   - `can_extend`: Checks if extensions are still available
   - Extensions add 5 minutes each, maximum 2 extensions
 
-- **PsychoanalystAgent** ([src/agents/trio_psychoanalyst_agent.py](../../src/agents/trio_psychoanalyst_agent.py)):
+- **TherapistAgent** ([src/agents/trio_therapist_agent.py](../../src/agents/trio_therapist_agent.py)):
   - Checks `context.is_time_up` to transition to reflection when time expires
   - Offers extensions when ≤5 minutes remaining via `_should_offer_extension`
   - Tracks time in metadata for client-side display

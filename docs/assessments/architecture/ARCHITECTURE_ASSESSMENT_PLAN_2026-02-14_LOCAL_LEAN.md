@@ -85,7 +85,7 @@ Completed on 2026-02-14.
 | `src/psychoanalyst_app/orchestration/orchestrator_helpers.py` | 1,188 |
 | `src/psychoanalyst_app/agents/trio_reflection_agent.py` | 1,129 |
 | `src/psychoanalyst_app/container/service_container.py` | 737 |
-| `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` | 631 |
+| `src/psychoanalyst_app/agents/trio_therapist_agent.py` | 631 |
 | `src/psychoanalyst_app/agents/trio_assessment_agent.py` | 612 |
 
 ### Useful Existing Strengths
@@ -173,11 +173,11 @@ Evidence:
   - `src/psychoanalyst_app/agents/trio_reflection_agent.py` (1,129 lines)
   - `src/psychoanalyst_app/container/service_container.py` (737 lines)
 - Agent path performing DB side effects while building prompt context:
-  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py:448`
+  - `src/psychoanalyst_app/agents/trio_therapist_agent.py:448`
 - TODO placeholders in core decision logic:
   - `src/psychoanalyst_app/agents/trio_assessment_agent.py:209`
   - `src/psychoanalyst_app/agents/trio_assessment_agent.py:211`
-  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py:350`
+  - `src/psychoanalyst_app/agents/trio_therapist_agent.py:350`
 
 Impact:
 - Harder reviews, higher regression risk, slower onboarding.
@@ -283,7 +283,7 @@ Evidence:
 - Post-P3 hotspot concentration remained high in core runtime files:
   - `src/psychoanalyst_app/agents/trio_reflection_agent.py` (887 lines pre-P4)
   - `src/psychoanalyst_app/agents/trio_assessment_agent.py` (650 lines pre-P4)
-  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` (639 lines pre-P4)
+  - `src/psychoanalyst_app/agents/trio_therapist_agent.py` (639 lines pre-P4)
   - `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py` (552 lines pre-P4)
   - `src/psychoanalyst_app/orchestration/trio_conversation_manager.py` (584 lines pre-P4)
 - Architecture guardrails only enforced file line budgets for 4 files and had no method-level checks:
@@ -447,7 +447,7 @@ P4 implementation plan (proposed 2026-02-14):
   - Add `src/psychoanalyst_app/agents/psychoanalyst/time_policy.py`.
   - Add `src/psychoanalyst_app/agents/psychoanalyst/prompt_context.py`.
   - Add `src/psychoanalyst_app/agents/psychoanalyst/response_mode.py`.
-  - Delegate `TrioPsychoanalystAgent` prompt/context and response-mode internals.
+  - Delegate `TrioTherapistAgent` prompt/context and response-mode internals.
 - Step 4: Split orchestration runtime helper responsibilities.
   - Add `src/psychoanalyst_app/orchestration/runtime/agent_resolution.py`.
   - Add `src/psychoanalyst_app/orchestration/runtime/stream_dispatch.py`.
@@ -478,7 +478,7 @@ P4 execution status (2026-02-14):
   - Added `src/psychoanalyst_app/agents/psychoanalyst/prompt_context.py`.
   - Added `src/psychoanalyst_app/agents/psychoanalyst/response_mode.py`.
   - Added `src/psychoanalyst_app/agents/psychoanalyst/__init__.py`.
-  - Updated `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` to delegate prompt-context assembly and response-mode decisions.
+  - Updated `src/psychoanalyst_app/agents/trio_therapist_agent.py` to delegate prompt-context assembly and response-mode decisions.
 - Completed Step 4 (orchestration runtime decomposition):
   - Added `src/psychoanalyst_app/orchestration/runtime/agent_resolution.py`.
   - Added `src/psychoanalyst_app/orchestration/runtime/stream_dispatch.py`.
@@ -501,7 +501,7 @@ P4 execution status (2026-02-14):
 - Post-P4 hotspot line counts:
   - `src/psychoanalyst_app/agents/trio_reflection_agent.py` -> 656 lines.
   - `src/psychoanalyst_app/agents/trio_assessment_agent.py` -> 574 lines.
-  - `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` -> 389 lines.
+  - `src/psychoanalyst_app/agents/trio_therapist_agent.py` -> 389 lines.
   - `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py` -> 511 lines.
   - `src/psychoanalyst_app/orchestration/trio_conversation_manager.py` -> 513 lines.
 
@@ -529,7 +529,7 @@ P4 acceptance criteria:
 | F-006 | Workflow policy drift | `Makefile:44`, `docs/README.md:521` | Onboarding and support friction | P1 | Unify Docker/local policy and docs |
 | F-007 | Docs sprawl | `docs/README.md`, `docs/design-principles.md`, `docs/ARCHITECTURE.md` | Discoverability and consistency risk | P2 | Curate active docs and archive boundaries |
 | F-008 | Hotspot concentration | `src/psychoanalyst_app/orchestration/orchestrator_helpers.py`, `src/psychoanalyst_app/agents/trio_reflection_agent.py`, `src/psychoanalyst_app/container/service_container.py` | High change risk and maintainability drag in core flows | P3 | Decompose modules + enforce architecture budgets in CI |
-| F-009 | Second-pass hotspot decomposition | `src/psychoanalyst_app/agents/trio_assessment_agent.py`, `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`, `src/psychoanalyst_app/orchestration/trio_conversation_manager.py`, `scripts/check_architecture_budgets.py` | Residual hotspot concentration and missing method-level growth guardrails | P4 | Extract focused helpers and enforce method/file budgets |
+| F-009 | Second-pass hotspot decomposition | `src/psychoanalyst_app/agents/trio_assessment_agent.py`, `src/psychoanalyst_app/agents/trio_therapist_agent.py`, `src/psychoanalyst_app/orchestration/trio_conversation_manager.py`, `scripts/check_architecture_budgets.py` | Residual hotspot concentration and missing method-level growth guardrails | P4 | Extract focused helpers and enforce method/file budgets |
 
 ## Validation Log
 - Static inventory and hotspot scan:
@@ -561,7 +561,7 @@ P4 acceptance criteria:
   - `docker compose run --rm api pytest tests/integration/test_trio_agents.py -k "full_agent_workflow or assessment_agent_creates_tier3_and_tier4 or reflection_agent_tier3_versioning or reflection_agent_tier3_no_update_when_stable"` -> pass (`4 passed`).
   - `make validate-architecture` -> pass (`Architecture checks passed. Validated budgets: 4`).
   - `docker compose run --rm api python -m compileall src/psychoanalyst_app tests/unit/test_assessment_scoring_helpers.py tests/unit/test_assessment_selection_handling.py tests/unit/test_psychoanalyst_time_policy.py tests/unit/test_psychoanalyst_topic_detection.py tests/unit/test_orchestration_runtime_helpers.py tests/unit/test_reflection_plan_snapshot.py` -> pass.
-  - `docker compose run --rm api pytest tests/unit/test_trio_assessment_agent.py tests/unit/test_trio_psychoanalyst_agent.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py tests/unit/test_assessment_scoring_helpers.py tests/unit/test_assessment_selection_handling.py tests/unit/test_psychoanalyst_time_policy.py tests/unit/test_psychoanalyst_topic_detection.py tests/unit/test_orchestration_runtime_helpers.py tests/unit/test_reflection_plan_snapshot.py -q` -> pass (`58 passed`).
+  - `docker compose run --rm api pytest tests/unit/test_trio_assessment_agent.py tests/unit/test_trio_therapist_agent.py tests/unit/test_trio_reflection_agent.py tests/unit/test_trio_agent_orchestrator.py tests/unit/test_orchestration_helper_modules.py tests/unit/test_reflection_pipelines.py tests/unit/test_assessment_scoring_helpers.py tests/unit/test_assessment_selection_handling.py tests/unit/test_psychoanalyst_time_policy.py tests/unit/test_psychoanalyst_topic_detection.py tests/unit/test_orchestration_runtime_helpers.py tests/unit/test_reflection_plan_snapshot.py -q` -> pass (`58 passed`).
   - `make validate-architecture` -> pass (`Architecture checks passed. Validated budgets: 10; method budgets: 7`).
 
 ## Decision Log

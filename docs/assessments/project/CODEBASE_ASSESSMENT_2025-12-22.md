@@ -94,7 +94,7 @@ A lean improvement path is to (1) **stabilize contracts and the schema/type pipe
 
 **What’s working**:
 - Styles are packaged and loaded via `StyleService` using `importlib.resources`.
-- Prompt builders exist (`psychoanalyst_prompt_builder.py`) and are already isolated from the agent logic.
+- Prompt builders exist (`therapist_prompt_builder.py`) and are already isolated from the agent logic.
 
 **Drift / friction**:
 - Prompt construction is spread across several modules with overlapping patterns.

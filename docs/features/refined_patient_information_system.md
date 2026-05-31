@@ -451,7 +451,7 @@ async def mark_analysis_superseded(self, old_analysis_id: str, new_analysis_id: 
     """Mark previous version as superseded by new version."""
 
 # Tier 4 Methods
-async def get_latest_therapy_plan(self, user_id: str) -> TherapyPlan | None:
+async def get_current_therapy_plan(self, user_id: str) -> TherapyPlan | None:
     """Get the latest unified therapy plan (includes Tier 4 fields)."""
 
 async def save_therapy_plan(self, plan: TherapyPlan) -> None:
@@ -538,7 +538,7 @@ Add `_extract_tier1_data()` method that uses LLM structured output to extract pa
 
 ### 5.4 Psychoanalyst Agent
 
-**File**: [src/agents/trio_psychoanalyst_agent.py](../src/agents/trio_psychoanalyst_agent.py)
+**File**: [src/agents/trio_therapist_agent.py](../src/agents/trio_therapist_agent.py)
 
 #### Data Access Pattern
 
@@ -608,7 +608,7 @@ get_latest_patient_analysis(), get_patient_analysis_version(),
 get_analysis_history(), save_patient_analysis_version(), mark_analysis_superseded()
 
 # Tier 4: 3 methods
-get_latest_therapy_plan(), save_therapy_plan()
+get_current_therapy_plan(), save_therapy_plan()
 ```
 
 Total: **14 new database methods**
@@ -759,7 +759,7 @@ Reflection complete. Updates: Tier1=False, Tier2=True, Tier3=True, Tier4=False
 
 ### Phase 6: Psychoanalyst Context Loading (Week 4-5)
 **Tasks**: Implement context loading, update prompts with patient file
-**Deliverables**: Modified trio_psychoanalyst_agent.py, 5 integration tests
+**Deliverables**: Modified trio_therapist_agent.py, 5 integration tests
 
 ### Phase 7: Tier 4 & Tier 1 Updates (Week 5)
 **Tasks**: Periodic progress updates, rare background corrections

@@ -88,10 +88,10 @@ STATE_AGENT_MAP = {
     WorkflowState.INTAKE_IN_PROGRESS: "INTAKE",
     WorkflowState.INTAKE_COMPLETE: "ASSESSMENT",
     WorkflowState.ASSESSMENT_IN_PROGRESS: "ASSESSMENT",
-    WorkflowState.ASSESSMENT_COMPLETE: "PSYCHOANALYST",
-    WorkflowState.THERAPY_IN_PROGRESS: "PSYCHOANALYST",
+    WorkflowState.ASSESSMENT_COMPLETE: "THERAPIST",
+    WorkflowState.THERAPY_IN_PROGRESS: "THERAPIST",
     WorkflowState.REFLECTION_IN_PROGRESS: "REFLECTION",
-    WorkflowState.PLAN_COMPLETE: "PSYCHOANALYST",
+    WorkflowState.PLAN_COMPLETE: "THERAPIST",
 }
 ```
 
@@ -310,9 +310,9 @@ AgentResponse(
 
 ---
 
-### 3. TrioPsychoanalystAgent
+### 3. TrioTherapistAgent
 
-**File:** `src/agents/trio_psychoanalyst_agent.py`
+**File:** `src/agents/trio_therapist_agent.py`
 
 **States Handled:**
 - ASSESSMENT_COMPLETE (first session)
@@ -378,7 +378,7 @@ AgentResponse(
 #### Prompts Used
 
 **Style-Specific Therapist Prompts:**
-- `src/psychoanalyst_app/styles/{style_id}/psychoanalyst_prompt.txt`
+- `src/psychoanalyst_app/styles/{style_id}/therapist_prompt.txt`
 
 **Freud Example:**
 ```
@@ -1090,7 +1090,7 @@ async def get_context(session_id):
         # Load from database
         session = await db_service.get_session(session_id)
         user_profile = await db_service.get_user_profile(session.user_id)
-        therapy_plan = await db_service.get_latest_therapy_plan(session.user_id)
+        therapy_plan = await db_service.get_current_therapy_plan(session.user_id)
 
         # Build context
         context_cache[session_id] = ConversationContext(
@@ -1315,7 +1315,7 @@ await update_session_transcript(session_id: str, transcript: list[Message])
 ```python
 await save_therapy_plan(plan: TherapyPlan)
 await get_therapy_plan(plan_id: str) -> TherapyPlan | None
-await get_latest_therapy_plan(user_id: str) -> TherapyPlan | None
+await get_current_therapy_plan(user_id: str) -> TherapyPlan | None
 ```
 
 **Migration Operations:**
@@ -1344,7 +1344,7 @@ await run_migrations()
 
 #### 1. Agent System Prompts
 
-**Location:** `src/psychoanalyst_app/styles/{style_id}/psychoanalyst_prompt.txt`
+**Location:** `src/psychoanalyst_app/styles/{style_id}/therapist_prompt.txt`
 
 **Purpose:** Define therapist personality and approach
 
@@ -1586,7 +1586,7 @@ def retrieve_relevant_knowledge(query, top_k, source_filter=None):
 
 #### Integration Points
 
-**1. During Therapy Sessions (TrioPsychoanalystAgent):**
+**1. During Therapy Sessions (TrioTherapistAgent):**
 ```python
 # Retrieve knowledge based on recent conversation
 recent_context = " ".join([msg.content for msg in context.message_history[-3:]])
@@ -1702,7 +1702,7 @@ def can_extend(self) -> bool:
 
 **Extension Handling:**
 ```python
-# In TrioPsychoanalystAgent
+# In TrioTherapistAgent
 if self._should_offer_extension(context):
     return AgentResponse(
         content="<extension_offer_prompt>",
@@ -1743,7 +1743,7 @@ if agent_response.next_state == WorkflowState.REFLECTION_IN_PROGRESS:
 **Briefing-Aware Resumption:**
 
 ```python
-# In TrioPsychoanalystAgent._build_initial_session_prompt()
+# In TrioTherapistAgent._build_initial_session_prompt()
 
 # Check if therapy plan has briefing
 if context.therapy_plan and context.therapy_plan.session_briefing:
@@ -1801,7 +1801,7 @@ else:
 18. PlanningAgent creates initial TherapyPlan
 19. Plan saved to database (version=1)
 20. Status updated to ASSESSMENT_COMPLETE
-21. PsychoanalystAgent ready for first session
+21. TherapistAgent ready for first session
 ```
 
 **Database Operations:**
@@ -1819,7 +1819,7 @@ else:
 ```
 1. User starts new session
 2. Orchestrator checks status: ASSESSMENT_COMPLETE or PLAN_COMPLETE
-3. PsychoanalystAgent takes over
+3. TherapistAgent takes over
 4. If PLAN_COMPLETE with fresh briefing:
    - Load session_briefing from therapy_plan
    - Build resumption prompt with rich context
@@ -1828,7 +1828,7 @@ else:
    - Build initial greeting with therapy plan
    - Include RAG context (style-specific knowledge)
 6. User shares thoughts/feelings
-7. PsychoanalystAgent:
+7. TherapistAgent:
    - Gets recent conversation context
    - Retrieves RAG knowledge (top 1 chunk)
    - Builds continuation prompt
@@ -1837,7 +1837,7 @@ else:
 9. When ≤5 minutes remaining and can_extend:
    - Offer extension
 10. When time expires:
-    - PsychoanalystAgent transitions to REFLECTION_IN_PROGRESS
+    - TherapistAgent transitions to REFLECTION_IN_PROGRESS
 11. ReflectionAgent takes over:
     - Calls MemoryAgent → analyze session
     - Calls PlanningAgent → assess plan effectiveness
@@ -1849,7 +1849,7 @@ else:
 ```
 
 **Database Operations:**
-- `get_latest_therapy_plan(user_id)` → Load briefing
+- `get_current_therapy_plan(user_id)` → Load briefing
 - `save_session(session_id, transcript=[...])`
 - `update_session_transcript(session_id, transcript)` (after each message)
 - `get_user_sessions(user_id, limit=10)` → For memory analysis
@@ -1860,7 +1860,7 @@ else:
 
 ```
 1. User sends message in therapy session
-2. PsychoanalystAgent extracts recent context (last 3 messages)
+2. TherapistAgent extracts recent context (last 3 messages)
 3. ConversationManager checks if therapy_plan exists
 4. If therapy_plan:
    - Extract selected_therapy_style (e.g., "freud")

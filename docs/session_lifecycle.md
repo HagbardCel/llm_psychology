@@ -12,6 +12,12 @@ This document describes the chronological flow of a user session within the appl
 
 ## 1. Session Initialization
 
+A persisted session is a conversation block and lifecycle boundary, not a
+WebSocket connection. Intake and assessment/style-selection context remain in
+one `session_type="intake"` block. A `session_type="therapy"` block is created
+only when the user chooses to continue after assessment, and it is linked to the
+selected plan from creation.
+
 ### 1.1. WebSocket Connection
 
 The session begins when a client connects to the WebSocket endpoint (`/ws?user_id=<user_id>`).
@@ -52,6 +58,9 @@ server revalidates the user, ensures the workflow-appropriate session, emits
 - At style selection, `workflow_next_action=select_therapy_style` re-emits
   persisted `assessment_recommendations`, so losing the in-memory recommendation
   cache does not strand the user.
+- After style selection, `workflow_next_action=start_therapy` lets the client
+  continue immediately. `POST /api/workflow/start_therapy` swaps the active
+  session id and emits `session_started` on the existing WebSocket.
 - This recovery model is intentionally local/single-instance. It does not add
   message replay, sequence ids, or shared active-session state for multi-instance
   deployments.
@@ -100,7 +109,7 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
   - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` when the job finishes.
   - **Style Selection Update:** After a successful style selection, transitions user to `INITIAL_PLAN_COMPLETE`.
 
-### 2.4. Phase 3: Therapy (`TrioPsychoanalystAgent` - _implied_)
+### 2.4. Phase 3: Therapy (`TrioTherapistAgent`)
 
 **Active when State = `INITIAL_PLAN_COMPLETE`, `THERAPY_IN_PROGRESS`, or `PLAN_UPDATE_COMPLETE`**
 
@@ -110,20 +119,28 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
   - Updates session topics and transcript.
 - **Data Persistence:**
   - Continually updates `Session` transcript in `sessions` table.
+  - `Session.plan_id` remains linked to the immutable plan revision effective
+    when this session started.
 
 ### 2.5. Phase 4: Plan Update (`TrioReflectionAgent`)
 
 **Active when State = `PLAN_UPDATE_IN_PROGRESS`**
 
-- **Trigger:** Automatically activated when the `PsychoanalystAgent` detects the session time is up (`context.is_time_up`).
+- **Trigger:** Automatically activated when the `TherapistAgent` detects the session time is up (`context.is_time_up`).
 - **Role:** Analyzes the completed session, generates insights, and prepares for the next session.
 - **Key Activities:**
   - **Session Analysis:** Uses `TrioMemoryAgent` to extract key themes and emotional states.
   - **Plan Update:** Uses `TrioPlanningAgent` to assess plan effectiveness and recommend adjustments.
   - **Briefing Generation:** Creates a comprehensive `SessionBriefing` for the next session (critical for continuity).
 - **Data Persistence:**
-  - **Therapy Plan:** Updates `TherapyPlan` with new version, plan details, and `session_briefing`.
+  - **Therapy Plan:** Inserts a new immutable `TherapyPlan` revision with
+    lineage, separate `revision_recommendations`, and `session_briefing`.
+  - **Profile Pointer:** Relinks `UserProfile.plan_id` to the new current
+    revision atomically. Completed sessions keep their historical `plan_id`.
   - **State Update:** Transitions user to `PLAN_UPDATE_COMPLETE` (ready for next session).
+  - **Failure State:** If the new plan or briefing cannot be persisted, transitions to
+    `PLAN_UPDATE_FAILED`. The client must call `POST /api/workflow/retry_plan_update`
+    with the ended therapy session before therapy can resume.
 
 ### 2.6. Session Continuity (The Loop)
 
@@ -131,7 +148,7 @@ The system ensures continuity between sessions using the `SessionBriefing` objec
 
 - **Generation:** Created by `ReflectionAgent` at the end of Session N.
 - **Storage:** Saved within the `TherapyPlan`.
-- **Consumption:** Used by `PsychoanalystAgent` at the start of Session N+1.
+- **Consumption:** Used by `TherapistAgent` at the start of Session N+1.
 - **Mechanism:**
   - When starting a new session, the agent checks for a valid `session_briefing`.
   - If found, it generates a **Resumption Prompt** instead of a generic greeting.
@@ -149,8 +166,11 @@ The session can be closed in two ways:
 ### 3.1. Explicit Closure
 
 - **Trigger:** An agent returns an `end_session` action (e.g., user says "I'm done for now").
-- **Action:** The Orchestrator transitions workflow state, runs any follow-up jobs
-  (assessment/reflection), then emits `session_ended` and expects the client to terminate.
+- **Action:** The Orchestrator transitions workflow state, emits `session_ended`, and
+  expects the client to terminate. Therapy reflection and plan updates continue as
+  background work after the active session is cleared.
+- **Observation:** Clients can poll `GET /api/user/status?user_id=...` after closure
+  to observe `plan_update_in_progress` advance to `plan_update_complete`.
 - **Persistence:** The final state of the session transcript is saved.
 
 ### 3.2. WebSocket Disconnection

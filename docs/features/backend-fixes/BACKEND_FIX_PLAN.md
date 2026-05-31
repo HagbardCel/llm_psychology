@@ -79,7 +79,7 @@ async def create_therapy_plan(
             raise ValueError(f"User profile not found: {user_id}")
 
         # Check if plan already exists
-        existing_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+        existing_plan = await trio_db_service.get_current_therapy_plan(user_id)
         if existing_plan and existing_plan.version == 1:
             logger.info(f"Therapy plan already exists for {user_id}, returning existing")
             return existing_plan
@@ -259,7 +259,7 @@ POST /api/therapy/plan
 
 The orchestrator method checks for existing version-1 plans:
 ```python
-existing_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+existing_plan = await trio_db_service.get_current_therapy_plan(user_id)
 if existing_plan and existing_plan.version == 1:
     return existing_plan  # Don't create duplicate
 ```

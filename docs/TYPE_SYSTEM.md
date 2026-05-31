@@ -124,7 +124,7 @@ UI-specific types remain manually defined:
 // These are NOT in the backend
 export enum AgentType {
   INTAKE = 'INTAKE',
-  PSYCHOANALYST = 'PSYCHOANALYST',
+  THERAPIST = 'THERAPIST',
   // ...
 }
 

@@ -32,6 +32,11 @@ During foundation stabilization, maintenance priority is backend-first:
 - Tier 2 is the React frontend, frozen except for compatibility, build/dependency maintenance, contract regression fixes, and one browser smoke path.
 - Tier 3 is the standalone terminal UI, kept only for legacy or local-debug value.
 
+The runtime therapy agent role is `THERAPIST`. The modality is stored and
+transported separately as `selected_therapy_style` (`cbt`, `freud`, or `jung`).
+Therapy plans are immutable revisions: profiles point to the current revision,
+while sessions retain the historical revision effective at session start.
+
 ## System Architecture
 
 ```
@@ -222,7 +227,7 @@ async def process_message(
 - TherapyStyleRecommendation objects
 - Initial TherapyPlan with selected style
 
-#### TrioPsychoanalystAgent (`src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`)
+#### TrioTherapistAgent (`src/psychoanalyst_app/agents/trio_therapist_agent.py`)
 
 **Purpose**: Conduct main therapy sessions
 
@@ -381,7 +386,7 @@ class AgentResponse:
 ```
 GET  /health                        - Health check
 POST /api/user/register             - Register profile + start session
-GET  /api/user/status               - Get user workflow state (requires session_id)
+GET  /api/user/status               - Get user workflow state (user-scoped)
 GET  /api/sessions                  - List user sessions (requires session_id)
 GET  /api/sessions/{id}             - Get session with transcript (requires session_id)
 POST /api/sessions                  - Create new session
@@ -391,6 +396,7 @@ GET  /api/therapy/plan              - Get therapy plan (requires session_id)
 GET  /api/workflow/next             - Get next workflow action (requires session_id)
 POST /api/workflow/complete_profile - Complete profile step
 POST /api/workflow/select_therapy_style - Select therapy style
+POST /api/workflow/start_therapy    - Start first plan-linked therapy session
 ```
 
 ### WebSocket Events

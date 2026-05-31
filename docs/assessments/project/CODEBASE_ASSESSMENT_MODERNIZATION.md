@@ -55,7 +55,7 @@ rather than structural rewrites.
 - `src/psychoanalyst_app/agents/trio_assessment_agent.py` has TODOs for scoring
   and key topic extraction. Either implement or remove these fields from the
   recommendation payload to avoid misleading data.
-- `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` has TODOs for topic
+- `src/psychoanalyst_app/agents/trio_therapist_agent.py` has TODOs for topic
   detection that gate session extension logic. Implement or simplify the rule.
 - `src/psychoanalyst_app/api/session_routes.py` `extend_session` is a stub.
   Implement or remove the endpoint and its client calls.

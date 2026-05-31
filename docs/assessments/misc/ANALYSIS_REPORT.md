@@ -168,7 +168,7 @@ TrioAgentOrchestrator.process_message()
     ├──▶ Agent Execution (Trio task group)
     │       ├── IntakeAgent.run_intake()
     │       ├── AssessmentAgent.run_assessment()
-    │       ├── PsychoanalystAgent.run_therapy()
+    │       ├── TherapistAgent.run_therapy()
     │       └── ReflectionAgent.run_reflection()
     │
     ├──▶ AgentResponseHandler.handle_response()
@@ -327,7 +327,7 @@ When a user resumes a therapy session:
 #### Issue 10: Topic Detection Uses Keyword Matching (LOW)
 
 **Evidence:**
-- `trio_intake_agent.py` and `trio_psychoanalyst_agent.py` use keyword-based topic detection.
+- `trio_intake_agent.py` and `trio_therapist_agent.py` use keyword-based topic detection.
 - No sophisticated NLP or LLM-based topic extraction.
 
 **Impact:** Topic detection is brittle and misses nuanced patient expressions.
@@ -475,7 +475,7 @@ When a user resumes a therapy session:
 | API Retry | `frontend/src/services/apiClient.ts` |
 | Session Tracking | `src/psychoanalyst_app/orchestration/helpers.py` |
 | Database | `src/psychoanalyst_app/services/trio_db_service.py`, `src/psychoanalyst_app/services/db/executor.py` |
-| Topic Detection | `src/psychoanalyst_app/agents/trio_intake_agent.py`, `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` |
+| Topic Detection | `src/psychoanalyst_app/agents/trio_intake_agent.py`, `src/psychoanalyst_app/agents/trio_therapist_agent.py` |
 | RAG | `src/psychoanalyst_app/services/rag_service.py`, `src/psychoanalyst_app/agents/trio_memory_agent.py` |
 | Style Descriptions | `frontend/src/pages/AssessmentPage.tsx`, `src/psychoanalyst_app/services/style_service.py` |
 | Optimistic UI | `frontend/src/contexts/AppContext.tsx`, `frontend/src/contexts/WebSocketContext.tsx` |

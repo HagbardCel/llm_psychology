@@ -60,7 +60,7 @@ updated_plan = TherapyPlan(
 
 ### 3. **Plan Retrieval**
 
-The system uses `get_latest_therapy_plan(user_id)` which:
+The system uses `get_current_therapy_plan(user_id)` which:
 ```sql
 SELECT * FROM therapy_plans
 WHERE user_id = ?
@@ -152,7 +152,7 @@ plan = TherapyPlan(
 - ✅ **No duplicate error** (different plan_ids, no UNIQUE constraint violation)
 - ⚠️ **But LOGICAL duplication** - two version=1 plans for same user
 - ⚠️ **Incorrect behavior** - HTTP plan becomes orphaned
-- ❌ **`get_latest_therapy_plan()` returns wrong plan** (whichever has latest `updated_at`)
+- ❌ **`get_current_therapy_plan()` returns wrong plan** (whichever has latest `updated_at`)
 
 ## Solution: HTTP Endpoint Should NOT Create Full Plan
 

@@ -199,10 +199,19 @@ Datetimes are serialized as ISO 8601 strings in JSON. Clients may parse into `Da
 ### Immutability where it matters
 Sessions become effectively immutable after Tier 2 enrichment:
 - `save_session()` refuses to overwrite already-enriched sessions (`WHERE sessions.enriched = 0`).
+- `Session.plan_id` is fixed when a therapy session starts. It remains a
+  historical link even after reflection creates a newer plan revision.
+- Therapy plans are immutable revisions. `UserProfile.plan_id` points to the
+  single current revision; prior revisions are linked through
+  `supersedes_plan_id` and `superseded_by_plan_id`.
 
 Rationale:
 - Keep raw transcripts stable once “published” into enriched/derived analysis.
 - Make enrichment jobs idempotent and safe to retry.
+- Preserve the exact plan context used by each completed therapy session.
+
+Existing databases from before immutable plan revisions are intentionally
+incompatible. Reset them with `make reset-foundation-db`.
 
 ### Tier 2 enrichment is off the request path
 Tier 2 enrichment is intentionally run by a background worker so normal reads/writes remain fast and deterministic:
@@ -274,7 +283,7 @@ The intent is: the same agent-specific LLM service should be used for both:
 - structured calls inside that agent.
 
 Container keys:
-- `llm_service_intake`, `llm_service_assessment`, `llm_service_psychoanalyst`, `llm_service_reflection`, `llm_service_memory`, `llm_service_planning` in `src/psychoanalyst_app/container/service_container.py`
+- `llm_service_intake`, `llm_service_assessment`, `llm_service_therapist`, `llm_service_reflection`, `llm_service_memory`, `llm_service_planning` in `src/psychoanalyst_app/container/service_container.py`
 
 ---
 
@@ -283,7 +292,7 @@ Container keys:
 ### Prompts live close to the domain
 Prompts are versioned as code assets:
 - shared prompt templates: `src/psychoanalyst_app/prompts/*`
-- psychoanalyst prompt composition: `src/psychoanalyst_app/prompts/psychoanalyst_prompt_builder.py`
+- psychoanalyst prompt composition: `src/psychoanalyst_app/prompts/therapist_prompt_builder.py`
 
 Design rule:
 - Prefer small prompt composition helpers that receive typed inputs and produce a single string prompt.
@@ -297,7 +306,7 @@ Agents (`src/psychoanalyst_app/agents/trio_reflection_agent.py`, `src/psychoanal
 Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app/styles/<style_id>/` (e.g., `freud`, `jung`, `cbt`), typically including:
 - `knowledge.md` (RAG source)
 - `description.txt` (patient-facing)
-- `psychoanalyst_prompt.txt`, `reflection_prompt.txt`, `assessment_prompt.txt` (style-specific instructions)
+- `therapist_prompt.txt`, `reflection_prompt.txt`, `assessment_prompt.txt` (style-specific instructions)
 
 Loader/service:
 - `src/psychoanalyst_app/services/style_service.py` loads those prompts via `importlib.resources` for packaged/container runtime resolution (override with `settings.STYLES_DIR` when you explicitly need alternate style assets).

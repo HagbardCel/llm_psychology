@@ -19,7 +19,7 @@ Reference: `docs/assessments/project/CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.m
 - `src/psychoanalyst_app/agents/trio_intake_agent.py`
 - `src/psychoanalyst_app/agents/trio_assessment_agent.py`
 - `src/psychoanalyst_app/agents/trio_planning_agent.py`
-- `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`
+- `src/psychoanalyst_app/agents/trio_therapist_agent.py`
 - `src/psychoanalyst_app/models/structured_output_models.py` (new/extended)
 - Supporting tests under `tests/`
 
@@ -139,7 +139,7 @@ Tests:
 Goal: eliminate unused compatibility code.
 
 Targets:
-- `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py`
+- `src/psychoanalyst_app/agents/trio_therapist_agent.py`
   - Remove `get_initial_prompt_legacy` and any references.
   - Remove legacy-mode wording in docstrings/comments.
   - Drop unused constructor args (e.g., `conversation_manager`) if not used.

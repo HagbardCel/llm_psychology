@@ -12,7 +12,7 @@ This document outlines a comprehensive testing strategy for the session resumpti
 - **Data Models** (src/models/briefing_models.py): Pydantic validation models
 - **Database** (src/services/trio_db_service.py): Session briefing persistence
 - **Reflection Agent** (src/agents/trio_reflection_agent.py): Briefing generation
-- **Psychoanalyst Agent** (src/agents/trio_psychoanalyst_agent.py): Resumption prompts
+- **Psychoanalyst Agent** (src/agents/trio_therapist_agent.py): Resumption prompts
 - **Server** (src/trio_server.py): WebSocket streaming of greetings
 
 ## Testing Strategy
@@ -92,13 +92,13 @@ End-to-end validation with real LLM responses.
 
 **Test: Retrieve TherapyPlan with invalid JSON in session_briefing**
 - Manually insert row with malformed JSON in session_briefing column
-- Call get_latest_therapy_plan()
+- Call get_current_therapy_plan()
 - Assert returns TherapyPlan with session_briefing=None
 - Verify warning logged
 
 **Test: Retrieve TherapyPlan with valid JSON session_briefing**
 - Insert valid SessionBriefing JSON
-- Retrieve via get_latest_therapy_plan()
+- Retrieve via get_current_therapy_plan()
 - Assert deserialization successful
 - Verify all nested fields present
 
@@ -148,7 +148,7 @@ End-to-end validation with real LLM responses.
 ---
 
 ### 1.4 Psychoanalyst Agent Tests
-**File**: `tests/unit/test_trio_psychoanalyst_agent_resumption.py`
+**File**: `tests/unit/test_trio_therapist_agent_resumption.py`
 
 #### Test Cases:
 
@@ -283,7 +283,7 @@ End-to-end validation with real LLM responses.
 5. Retrieve TherapyPlan from database
 6. Assert session_briefing deserialized correctly
 7. Create new session for same user
-8. Call PsychoanalystAgent._build_initial_session_prompt()
+8. Call TherapistAgent._build_initial_session_prompt()
 9. Assert resumption prompt generated (not standard prompt)
 10. Verify prompt references previous session content
 
@@ -457,7 +457,7 @@ End-to-end validation with real LLM responses.
 
 **Test: Database returns corrupted JSON**
 - Insert row with invalid JSON in session_briefing
-- Call get_latest_therapy_plan()
+- Call get_current_therapy_plan()
 - Assert returns plan with session_briefing=None
 - Verify warning logged (not error)
 
@@ -655,7 +655,7 @@ End-to-end validation with real LLM responses.
    - Run: `pytest tests/unit/test_briefing_models.py -v`
    - Run: `pytest tests/unit/test_trio_db_service_briefing.py -v`
    - Run: `pytest tests/unit/test_trio_reflection_agent_briefing.py -v`
-   - Run: `pytest tests/unit/test_trio_psychoanalyst_agent_resumption.py -v`
+   - Run: `pytest tests/unit/test_trio_therapist_agent_resumption.py -v`
    - Run: `pytest tests/unit/test_trio_server_resumption.py -v`
    - Run: `pytest tests/unit/test_resumption_error_handling.py -v`
 

@@ -37,6 +37,16 @@ Related docs:
 
 Defined in `src/psychoanalyst_app/models/data_models.py`.
 
+`TherapyPlan` is an immutable revision. `supersedes_plan_id` and
+`superseded_by_plan_id` form its lineage, and exactly one revision per user has
+no successor. `revision_recommendations` stores reflection recommendations
+separately from actionable `planned_interventions`.
+
+`UserProfile.plan_id` points to the current revision. `Session.plan_id` is a
+historical pointer to the revision effective when the therapy session started.
+Databases created before this model must be reset with
+`make reset-foundation-db`.
+
 - `UserStatus`
   - Workflow state persisted in the database.
 - `UserProfile`
@@ -158,7 +168,8 @@ Defined in `src/psychoanalyst_app/orchestration/models.py`.
 - `ConversationContext`
   - Per-session context (profile, plan, history, time budgeting).
 - `SessionInfo`
-  - Lightweight session metadata for WebSocket responses.
+  - Lightweight session metadata for WebSocket responses, including persisted
+    `session_type` (`intake` or `therapy`).
 - `TherapyStyleRecommendation`
   - Structured recommendation list produced during assessment.
 
@@ -173,7 +184,7 @@ Key DTOs:
 - `MessageDTO`, `TopicDTO`
 - `HealthCheckResponseDTO`
 - `CreateUserProfileRequestDTO`, `UpdateUserProfileRequestDTO`, `PatchUserProfileRequestDTO`
-- `CreateSessionRequestDTO`, `WorkflowCompleteProfileRequestDTO`, `WorkflowSelectTherapyStyleRequestDTO`
+- `CreateSessionRequestDTO`, `WorkflowCompleteProfileRequestDTO`, `WorkflowSelectTherapyStyleRequestDTO`, `WorkflowStartTherapyRequestDTO`, `WorkflowRetryPlanUpdateRequestDTO`
 
 Workflow UI guidance:
 - `WorkflowNextActionDTO` and `RequiredWorkflowAction` in `src/psychoanalyst_app/models/api_models.py`

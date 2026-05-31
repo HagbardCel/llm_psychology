@@ -522,7 +522,7 @@ MIN_CLIENT_VERSION = Version(1, 0, 0)
 - `test_style_service.py` - Therapy style management
 
 **7. Agent Tests** (25+ tests):
-- `test_trio_psychoanalyst_agent.py`
+- `test_trio_therapist_agent.py`
 - `test_trio_reflection_agent.py`
 - `test_trio_agents.py` - All 6 agents
 

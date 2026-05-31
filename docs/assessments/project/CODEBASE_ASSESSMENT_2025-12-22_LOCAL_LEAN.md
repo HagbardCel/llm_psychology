@@ -106,7 +106,7 @@ Impact: Orchestration is functional but not yet as lean or modular as it could b
 
 Examples:
 - `src/psychoanalyst_app/agents/trio_assessment_agent.py` has TODOs for scoring and key topic extraction.
-- `src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py` has TODOs for topic detection and a `get_initial_prompt_legacy()` method.
+- `src/psychoanalyst_app/agents/trio_therapist_agent.py` has TODOs for topic detection and a `get_initial_prompt_legacy()` method.
 - Agent code includes explicit mentions of "legacy mode" even though the orchestration layer is now standard.
 
 Impact: The codebase contains unused or incomplete logic, increasing maintenance burden. Legacy paths should be removed completely.

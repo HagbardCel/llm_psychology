@@ -44,7 +44,7 @@ def mock_google_api_key(monkeypatch):
 - `tests/unit/test_service_container.py`
 - `tests/unit/test_trio_db_service.py`
 - `tests/unit/test_trio_reflection_agent.py`
-- `tests/unit/test_trio_psychoanalyst_agent.py`
+- `tests/unit/test_trio_therapist_agent.py`
 
 **Changes:**
 - Updated all `db_service` references to `trio_db_service`
@@ -65,7 +65,7 @@ def mock_google_api_key(monkeypatch):
 - Updated all agent imports:
   - `agents.intake_agent.IntakeAgent` → `agents.trio_intake_agent.TrioIntakeAgent`
   - `agents.assessment_agent.AssessmentAgent` → `agents.trio_assessment_agent.TrioAssessmentAgent`
-  - `agents.psychoanalyst_agent.PsychoanalystAgent` → `agents.trio_psychoanalyst_agent.TrioPsychoanalystAgent`
+  - `agents.therapist_agent.TherapistAgent` → `agents.trio_therapist_agent.TrioTherapistAgent`
   - `agents.reflection_agent.ReflectionAgent` → `agents.trio_reflection_agent.TrioReflectionAgent`
   - `agents.memory_agent.MemoryAgent` → `agents.trio_memory_agent.TrioMemoryAgent`
   - `agents.planning_agent.PlanningAgent` → `agents.trio_planning_agent.TrioPlanningAgent`
@@ -120,7 +120,7 @@ UserContext(user_id="test_user_123")
 **Files Modified:**
 - `tests/unit/test_trio_db_service.py`
 - `tests/unit/test_trio_reflection_agent.py`
-- `tests/unit/test_trio_psychoanalyst_agent.py`
+- `tests/unit/test_trio_therapist_agent.py`
 
 **Changes:**
 - Removed duplicate `service_container` fixtures
@@ -258,7 +258,7 @@ def test_trio_import():  # Removed marker for sync test
 - `tests/unit/test_service_container.py` - Updated to Trio agents
 - `tests/unit/test_trio_db_service.py` - Fixed fixture names
 - `tests/unit/test_trio_reflection_agent.py` - Fixed UserContext API
-- `tests/unit/test_trio_psychoanalyst_agent.py` - Fixed fixtures
+- `tests/unit/test_trio_therapist_agent.py` - Fixed fixtures
 - `tests/test_trio_validation.py` - Fixed test marker
 
 ### Integration Tests

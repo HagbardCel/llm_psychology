@@ -76,7 +76,7 @@ The interaction flow is driven by the **Orchestrator**, which routes user messag
     `POST /api/workflow/select_therapy_style`.
   - **State Update:** Transitions user to `ASSESSMENT_COMPLETE` when the job finishes.
 
-### 2.4. Phase 3: Therapy (`TrioPsychoanalystAgent` - _implied_)
+### 2.4. Phase 3: Therapy (`TrioTherapistAgent` - _implied_)
 
 **Active when State = `THERAPY_IN_PROGRESS`**
 
@@ -91,7 +91,7 @@ The interaction flow is driven by the **Orchestrator**, which routes user messag
 
 **Active when State = `REFLECTION_IN_PROGRESS`**
 
-- **Trigger:** Automatically activated when the `PsychoanalystAgent` detects the session time is up (`context.is_time_up`).
+- **Trigger:** Automatically activated when the `TherapistAgent` detects the session time is up (`context.is_time_up`).
 - **Role:** Analyzes the completed session, generates insights, and prepares for the next session.
 - **Key Activities:**
   - **Session Analysis:** Uses `TrioMemoryAgent` to extract key themes and emotional states.
@@ -107,7 +107,7 @@ The system ensures continuity between sessions using the `SessionBriefing` objec
 
 - **Generation:** Created by `ReflectionAgent` at the end of Session N.
 - **Storage:** Saved within the `TherapyPlan`.
-- **Consumption:** Used by `PsychoanalystAgent` at the start of Session N+1.
+- **Consumption:** Used by `TherapistAgent` at the start of Session N+1.
 - **Mechanism:**
   - When starting a new session, the agent checks for a valid `session_briefing`.
   - If found, it generates a **Resumption Prompt** instead of a generic greeting.

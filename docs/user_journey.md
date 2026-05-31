@@ -12,6 +12,9 @@ This document provides a detailed overview of the journey a new user takes throu
 
 ## Workflow State and Agent Map
 
+`THERAPIST` is the generic runtime agent role. The selected modality remains
+separate as `selected_therapy_style` (`cbt`, `freud`, or `jung`).
+
 ```mermaid
 stateDiagram-v2
     [*] --> NEW
@@ -20,10 +23,10 @@ stateDiagram-v2
     INTAKE_COMPLETE --> ASSESSMENT_IN_PROGRESS: Backend assessment job
     ASSESSMENT_IN_PROGRESS --> ASSESSMENT_COMPLETE: Backend assessment job
     ASSESSMENT_COMPLETE --> INITIAL_PLAN_COMPLETE: Workflow step (select therapy style)
-    INITIAL_PLAN_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nfirst therapy session
+    INITIAL_PLAN_COMPLETE --> THERAPY_IN_PROGRESS: TrioTherapistAgent\nfirst therapy session
     THERAPY_IN_PROGRESS --> PLAN_UPDATE_IN_PROGRESS: session ends
     PLAN_UPDATE_IN_PROGRESS --> PLAN_UPDATE_COMPLETE: TrioReflectionAgent
-    PLAN_UPDATE_COMPLETE --> THERAPY_IN_PROGRESS: TrioPsychoanalystAgent\nnext session
+    PLAN_UPDATE_COMPLETE --> THERAPY_IN_PROGRESS: TrioTherapistAgent\nnext session
     PLAN_UPDATE_COMPLETE --> [*]
 ```
 
@@ -93,7 +96,7 @@ Notes:
 | --- | --- | --- | --- |
 | `GET /api/version` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
 | `POST /api/version/check` | Yes | Yes | Used by version checks. Source: `src/psychoanalyst_app/api/version_routes.py`. |
-| `GET /api/user/status?user_id=...&session_id=...` | Yes | Yes | Workflow state polling (requires `session_id`). Source: `src/psychoanalyst_app/api/user_routes.py`. |
+| `GET /api/user/status?user_id=...` | Yes | Yes | User-level workflow polling, including after session close. Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `GET /api/user/profiles` | No | Yes | Console profile picker (no session required). Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `POST /api/user/register` | Yes | Yes | Explicit profile creation/login step; returns session + workflow action. Source: `src/psychoanalyst_app/api/user_routes.py`. |
 | `POST /api/user/login` | No | Yes | Login existing profile; returns session + workflow action. Source: `src/psychoanalyst_app/api/user_routes.py`. |
@@ -102,6 +105,7 @@ Notes:
 | `GET /api/workflow/next?user_id=...&session_id=...` | Yes | Yes | Provides the latest `WorkflowNextActionDTO` (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
 | `POST /api/workflow/complete_profile` | Yes | Yes | Completes the profile step and returns a new action (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
 | `POST /api/workflow/select_therapy_style` | Yes | Yes | Stores the selected style and advances the workflow (requires `session_id`). Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
+| `POST /api/workflow/start_therapy` | Deferred | Yes | Creates the first plan-linked therapy session after the user chooses to continue now. Source: `src/psychoanalyst_app/api/workflow_routes.py`. |
 | `GET /api/sessions?user_id=...&session_id=...` | Yes | No | Web session history (requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
 | `GET /api/sessions/{id}?user_id=...&session_id=...` | Yes | No | Web transcript views (requires `session_id`). Source: `src/psychoanalyst_app/api/session_routes.py`. |
 | `POST /api/sessions` | Yes | No | Backend derives session type from workflow state. Source: `src/psychoanalyst_app/api/session_routes.py`. |
@@ -119,7 +123,7 @@ Notes:
 ## Client Responsibilities
 
 - Include `user_id` on HTTP requests (query param for GETs, JSON body for POST/PUT/PATCH).
-- Include `session_id` on all post user_id HTTP requests after the first `session_started`.
+- Include `session_id` on session-scoped HTTP requests after the first `session_started`. `GET /api/user/status` is user-scoped.
  - Create or login via `POST /api/user/register` or `POST /api/user/login` before opening a WebSocket connection.
 - Handle `WorkflowNextActionDTO` (and its `required_action`) to decide whether to show onboarding forms or start/resume sessions.
 - For WebSocket sessions, wait for `session_started` before sending `chat_message`.
@@ -174,7 +178,7 @@ The user journey is defined by a series of `WorkflowState` transitions.
 
 - **Purpose**: Conduct therapeutic conversations based on the selected style and established therapy plan.
 - **Workflow State**: `INITIAL_PLAN_COMPLETE` -> `THERAPY_IN_PROGRESS`, then recurring `PLAN_UPDATE_COMPLETE` -> `THERAPY_IN_PROGRESS`
-- **Responsible Agent**: `TrioPsychoanalystAgent`
+- **Responsible Agent**: `TrioTherapistAgent`
 - **Key Activities**:
   - Engages in dialogue using style-specific prompts and knowledge.
   - Uses RAG (Retrieval Augmented Generation) to access domain knowledge (e.g., Freud's writings).
@@ -186,16 +190,20 @@ The user journey is defined by a series of `WorkflowState` transitions.
 ### 5. Reflection & Planning
 
 - **Purpose**: Review the completed session, update the therapy plan, and prepare for the next session.
-- **Workflow State**: `PLAN_UPDATE_IN_PROGRESS` -> `PLAN_UPDATE_COMPLETE`
+- **Workflow State**: `PLAN_UPDATE_IN_PROGRESS` -> `PLAN_UPDATE_COMPLETE`, or
+  `PLAN_UPDATE_FAILED` until the ended session is retried
 - **Responsible Agent**: `TrioReflectionAgent` (coordinates `TrioMemoryAgent` and `TrioPlanningAgent`)
 - **Key Activities**:
   - Analyzes session for key themes, emotional state, and insights.
   - Updates `TherapyPlan` based on progress.
   - Generates a `SessionBriefing` for the next session (to support continuity).
 - **Outputs**:
-  - `TherapyPlan`: Updated version with new insights and `session_briefing`.
+  - `TherapyPlan`: New immutable revision with lineage, actionable
+    interventions, separate `revision_recommendations`, and `session_briefing`.
   - `SessionBriefing`: JSON object stored within the plan for the next session.
-  - **Storage**: Database (`db_service.save_therapy_plan`).
+  - **Storage**: Database (`db_service.save_therapy_plan`). `UserProfile.plan_id`
+    points to the current revision while completed `Session.plan_id` values
+    remain historical.
 
 ## Available Therapy Styles
 
@@ -206,21 +214,21 @@ The system supports multiple therapy styles, managed by the `StyleService`. Each
 - **Characterization**: Focuses on identifying and challenging negative thought patterns and behaviors. Structured and goal-oriented.
 - **Components**:
   - `knowledge.md`: CBT principles and techniques.
-  - `psychoanalyst_prompt.txt`: Instructions for the agent to act as a CBT therapist.
+  - `therapist_prompt.txt`: Instructions for the agent to act as a CBT therapist.
 
 ### 2. Freud (Psychoanalysis)
 
 - **Characterization**: Focuses on unconscious conflicts, childhood experiences, and dream analysis. Exploratory and interpretive.
 - **Components**:
   - `knowledge.md`: Freudian concepts (id, ego, superego, etc.).
-  - `psychoanalyst_prompt.txt`: Instructions to adopt a Freudian persona.
+  - `therapist_prompt.txt`: Instructions to adopt a Freudian persona.
 
 ### 3. Jung (Analytical Psychology)
 
 - **Characterization**: Focuses on the collective unconscious, archetypes, and individuation. Symbolic and depth-oriented.
 - **Components**:
   - `knowledge.md`: Jungian concepts (shadow, anima/animus, self).
-  - `psychoanalyst_prompt.txt`: Instructions to adopt a Jungian persona.
+  - `therapist_prompt.txt`: Instructions to adopt a Jungian persona.
 
 ## Data Storage & Formats
 

@@ -78,6 +78,7 @@ These shapes are what all clients should assume on the wire.
 
 - `session_id`: `string`
 - `user_id`: `string`
+- `session_type`: `"intake" | "therapy"`
 - `plan_id`: `string | null`
 - `timestamp`: `string` (ISO 8601)
 - `transcript`: `MessageDTO[]`
@@ -99,19 +100,22 @@ These shapes are what all clients should assume on the wire.
 - `created_at`: `string` (ISO 8601)
 - `updated_at`: `string` (ISO 8601)
 - `version`: `number`
+- `supersedes_plan_id`: `string | null`
+- `superseded_by_plan_id`: `string | null`
 - `selected_therapy_style`: `string | null`
 - `plan_details`: `object`
 - `initial_goals`: `string[]`
 - `current_progress`: `string`
 - `planned_interventions`: `string[]`
-- `status`: `"active" | "paused" | "completed"` (string)
+- `revision_recommendations`: `string[]`
+- `status`: `"active" | "paused" | "completed" | "superseded"` (string)
 - `session_briefing`: `object | null`
 
 ### `WorkflowNextActionDTO`
 
 - `user_id`: `string`
-- `workflow_state`: `string` (enum value matching `WorkflowState`: `new`, `intake_in_progress`, `intake_complete`, `assessment_in_progress`, `assessment_complete`, `initial_plan_complete`, `therapy_in_progress`, `plan_update_in_progress`, `reflection_in_progress`, `plan_update_complete`)
-- `required_action`: `"complete_profile" | "select_therapy_style" | "start_intake" | "continue_therapy" | "wait"`
+- `workflow_state`: `string` (enum value matching `WorkflowState`: `new`, `intake_in_progress`, `intake_complete`, `assessment_in_progress`, `assessment_complete`, `initial_plan_complete`, `therapy_in_progress`, `plan_update_in_progress`, `reflection_in_progress`, `plan_update_failed`, `plan_update_complete`)
+- `required_action`: `"complete_profile" | "select_therapy_style" | "start_intake" | "start_therapy" | "continue_therapy" | "retry_plan_update" | "wait"`
 - `required_fields`: `string[]`
 - `defaults`: `{ [k: string]: string } | null`
 - `prompt`: `string | null`
@@ -266,8 +270,9 @@ These shapes are what all clients should assume on the wire.
 - **400**: `{ "error": "<validation message>" }`
 - **404**: `{ "error": "User profile not found" }`
 
-### `GET /api/user/status?user_id=...&session_id=...`
+### `GET /api/user/status?user_id=...`
 
+- This user-level endpoint remains available after the active session closes.
 - **200**: `UserStatusResponse`
 - **400**: `{ "error": "User ID is required" }`
 - **404**: `{ "error": "User not found: <id>" }` (or equivalent)
@@ -319,6 +324,14 @@ These shapes are what all clients should assume on the wire.
 - **200**: `SessionTimerResponse`
 - **404**: `{ "error": "<not found message>" }` (or equivalent)
 
+### `POST /api/sessions/<session_id>/end`
+
+- Request: `EndSessionRequestDTO`
+- **200**: `EndSessionResponseDTO`
+- Therapy closure returns `workflow_state = "plan_update_in_progress"` while
+  reflection continues in the background. Poll `GET /api/user/status?user_id=...`
+  to observe completion.
+
 ### `GET /api/version`
 
 - **200**: `VersionInfoDTO`
@@ -346,7 +359,18 @@ These shapes are what all clients should assume on the wire.
 
 - Request: `WorkflowSelectTherapyStyleRequestDTO` (requires `session_id`)
 - Session must be active for the user; WebSocket presence is optional.
-- On success, the workflow moves from `assessment_complete` to `initial_plan_complete` and returns `required_action="continue_therapy"`.
+- On success, the workflow moves from `assessment_complete` to `initial_plan_complete` and returns `required_action="start_therapy"`.
 - **200**: `WorkflowNextActionDTO`
 - **400**: `{ "error": "<validation message>" }`
 - **404**: `{ "error": "User profile not found" }`
+
+### `POST /api/workflow/start_therapy`
+
+- Request: `{ "user_id": "...", "session_id": "..." }`
+- Creates a new `session_type="therapy"` session linked to the selected plan while preserving the current WebSocket conversation flow.
+- **201**: `{ "session": SessionDTO, "workflow_next_action": WorkflowNextActionDTO }`
+
+### `POST /api/workflow/retry_plan_update`
+- Body: `{ "user_id": string, "session_id": string }`
+- Retries reflection persistence for the ended therapy session when the workflow is `plan_update_failed`.
+- **202**: `WorkflowNextActionDTO`
