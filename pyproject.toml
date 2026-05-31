@@ -28,9 +28,7 @@ dependencies = [
 ]
 
 [project.scripts]
-psychoanalyst-app = "psychoanalyst_app.__main__:cli"
 psychoanalyst-server = "psychoanalyst_app.server:cli"
-psychoanalyst-e2e-server = "psychoanalyst_app.e2e_server:cli"
 psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"
 
 [tool.setuptools]

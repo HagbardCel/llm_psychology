@@ -173,6 +173,3 @@ data/vector_db_usertest/faiss_index.bin
 
 # Codegraph workspace database / daemon artifacts
 .codegraph/
-
-# Playwright run metadata
-frontend/test-results/

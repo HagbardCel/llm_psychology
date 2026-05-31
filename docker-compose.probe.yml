@@ -29,7 +29,7 @@ services:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://api-probe:8000
       - WEBSOCKET_URL=http://api-probe:8000
-      - WEBSOCKET_ORIGIN=http://localhost:5173
+      - WEBSOCKET_ORIGIN=http://localhost
       - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
     env_file:
       - .env

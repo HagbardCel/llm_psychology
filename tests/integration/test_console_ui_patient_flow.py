@@ -722,7 +722,7 @@ async def test_complete_patient_journey_intake_to_therapy(
 
     ws_url = f"{test_server_websocket['ws_url']}/ws?user_id={user_id}"
     async with open_websocket_url(
-        ws_url, extra_headers=[("Origin", "http://localhost:5173")]
+        ws_url, extra_headers=[("Origin", "http://localhost")]
     ) as ws:
         # Start receiver in background
         async with trio.open_nursery() as nursery:
@@ -1218,7 +1218,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
 
     ws_url = f"{test_server_websocket['ws_url']}/ws?user_id={user_id}"
     async with open_websocket_url(
-        ws_url, extra_headers=[("Origin", "http://localhost:5173")]
+        ws_url, extra_headers=[("Origin", "http://localhost")]
     ) as ws:
         # Start receiver in background
         async with trio.open_nursery() as nursery:

@@ -1,9 +1,9 @@
-.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
-.PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean docker-usertest
-.PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
+.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
+.PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean
+.PHONY: ui-console ui-console-test
 .PHONY: probe probe-console-deterministic probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-generated-contracts validate-docs validate-architecture finalization-check
+.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check
 
 export PYTHONPATH := src
 CONSOLE_UI_LOG ?= logs/console-ui.log
@@ -16,19 +16,14 @@ help:
 	@echo "Default (Docker) Development:"
 	@echo "  install-uv        - Deprecated local installer target (no-op)"
 	@echo "  install           - Build API container (installs backend deps inside Docker)"
-	@echo "  dev-install       - Build dev containers (api + console-ui + frontend)"
+	@echo "  dev-install       - Build dev containers (api + console-ui)"
 	@echo "  format            - Format code with black (Docker)"
 	@echo "  lint              - Lint code with ruff (Docker)"
 	@echo "  test              - Run backend tests (Docker)"
-	@echo "  test-all          - Run backend + frontend + E2E (Docker)"
 	@echo "  test-dev          - Quick backend tests (Docker)"
 	@echo "  test-validate     - Full isolated Docker tests (pre-commit validation)"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests only"
-	@echo "  test-frontend     - Run frontend Vitest unit tests"
-	@echo "  test-e2e          - Run deterministic Playwright E2E"
-	@echo "  frontend-sync-deps - Refresh frontend dev node_modules Docker volume"
-	@echo "  validate-frontend - Run frontend type-check + Vite build (Docker)"
 	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
 	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
@@ -36,9 +31,7 @@ help:
 	@echo "  clean-testdb      - Clean test databases only"
 	@echo "  requirements      - Generate locked requirements from .in files"
 	@echo "  sync              - Rebuild containers from locked requirements"
-	@echo "  run               - Run terminal UI via Docker"
 	@echo "  run-server        - Run HTTP/WebSocket server via Docker"
-	@echo "  run-e2e           - Run deterministic e2e server via Docker"
 	@echo "  generate-schemas  - Generate JSON schemas from Pydantic models (Docker)"
 	@echo "  validate-schemas  - Validate generated JSON schemas (Docker)"
 	@echo "  validate-generated-contracts - Validate committed generated protocol/types (Docker)"
@@ -47,26 +40,19 @@ help:
 	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
 	@echo ""
 	@echo "UI Mode Selection:"
-	@echo "  ui-standalone     - Run standalone terminal UI (Docker)"
-	@echo "  ui-standalone-test - Run standalone terminal in usertest mode"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
 	@echo "  probe             - Run local-LLM full-stack console workflow probe"
 	@echo "  probe-console-deterministic - Run deterministic full-stack console workflow probe"
 	@echo "  probe-logs        - Print latest workflow probe summary"
 	@echo "  probe-db          - Print rows created by latest workflow probe"
-	@echo "  ui-web            - Run web UI (Docker, browser interface)"
-	@echo "  ui-web-test       - Run web UI in usertest mode"
-	@echo "  ui-all            - Run all UI modes simultaneously"
-	@echo "  ui-all-test       - Run all UI modes in usertest mode"
 	@echo ""
 	@echo "Docker Development:"
-	@echo "  docker-up         - Start all development services (api, frontend, console-ui)"
+	@echo "  docker-up         - Start backend API service"
 	@echo "  docker-down       - Stop all Docker containers"
 	@echo "  docker-shell      - Shell into API container"
 	@echo "  docker-logs       - View logs (usage: make docker-logs SERVICE=api)"
 	@echo "  docker-logs-api   - View API logs only (useful when running console-ui)"
-	@echo "  docker-usertest   - Run app in user-test mode (shorter sessions, test DB)"
 	@echo "  reset-usertest    - Stop usertest containers and clear usertest database"
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
@@ -96,7 +82,7 @@ install:
 
 # Build dev containers (installs Python deps inside Docker images)
 dev-install:
-	docker compose build api console-ui frontend
+	docker compose build api console-ui
 
 # Format code with black (Docker)
 format:
@@ -118,48 +104,19 @@ test-unit:
 test-integration:
 	docker compose --profile test run --rm test pytest -m integration
 
-# Run full suite (deterministic CI-grade, Docker)
-test-all:
-	$(MAKE) test
-	$(MAKE) validate-frontend
-	$(MAKE) test-frontend
-	$(MAKE) test-e2e
-
-# Refresh frontend dev dependencies in the named Docker volume from package-lock.json
-frontend-sync-deps:
-	docker compose run --rm --build frontend npm ci
-
-# Frontend validation in an isolated test container.
-# npm ci prevents stale image-layer node_modules from masking package-lock changes.
-# Use Vite directly here so validation does not rewrite generated type files.
-validate-frontend:
-	docker compose --profile test run --rm --build frontend-test sh -c "npm ci && npm run type-check && npx vite build"
-
-# Frontend unit tests (Vitest, Docker)
-test-frontend:
-	docker compose --profile test run --rm --build frontend-test npm test
-
-# Deterministic full-stack E2E (Playwright, Docker)
-test-e2e:
-	docker compose --profile test run --rm --build frontend-e2e npx playwright install chromium
-	docker compose --profile test run --rm --build frontend-e2e npm run test:e2e
-
-# Full release-candidate validation path. Keep this order aligned with
-# docs/schema/architecture gates before runtime and browser validation.
+# Full release-candidate validation path.
 finalization-check:
 	$(MAKE) validate-docs
 	$(MAKE) validate-schemas
 	$(MAKE) validate-generated-contracts
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
-	$(MAKE) validate-frontend
-	$(MAKE) test-frontend
-	$(MAKE) test-e2e
+	$(MAKE) probe-console-deterministic
 
 # Real LLM/RAG smoke tests (Docker, requires secrets / external services)
 test-real-llm:
 	$(MAKE) check-usertest-key
-	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
+	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 
 # Run devcontainer setup tests (Docker)
@@ -186,7 +143,7 @@ test-validate-no-mocks:
 	@echo "⚠️  Requires valid API keys in .env.test and .env.usertest"
 	@echo ""
 	$(MAKE) check-usertest-key
-	docker compose --profile usertest-all up -d --wait --remove-orphans api-usertest
+	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
 
 # Install git hooks for automated testing
@@ -239,7 +196,7 @@ reset-foundation-db:
 # Reset usertest DB and containers
 reset-usertest:
 	@echo "Resetting usertest environment..."
-	@docker compose --profile usertest --profile usertest-console --profile usertest-web --profile usertest-all down --remove-orphans
+	@docker compose --profile usertest-console down --remove-orphans
 	@rm -rf data/psychoanalyst_usertest.db 2>/dev/null || true
 	@# Use Docker to remove files created by Docker containers (no sudo needed)
 	@if [ -d "data/vector_db_usertest" ]; then \
@@ -257,15 +214,8 @@ requirements:
 sync: dev-install
 	@echo "Docker images rebuilt using locked requirements."
 
-# Run the application via Docker
-run:
-	docker compose run --rm api python -m psychoanalyst_app
-
 run-server:
 	docker compose run --rm api python -m psychoanalyst_app.server
-
-run-e2e:
-	docker compose run --rm api python -m psychoanalyst_app.e2e_server
 
 # Generate JSON Schemas from Pydantic models (Docker)
 generate-schemas:
@@ -275,15 +225,19 @@ generate-schemas:
 		--output-dir /app/schemas
 
 # Validate generated schemas (comprehensive validation, Docker)
-validate-schemas:
+validate-schemas: generate-schemas
 	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/validate_schemas.py
 
-# Validate generated WebSocket constants and frontend API types without rewriting files.
+# Generate committed WebSocket protocol constants.
+generate-ws-protocol:
+	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" api \
+		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py
+
+# Validate generated backend and console WebSocket constants without rewriting files.
 validate-generated-contracts:
-	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" -v "$(PWD)/frontend/src:/app/frontend/src" api \
+	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" api \
 		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py --check
-	docker compose --profile test run --rm -v "$(PWD)/schemas:/app/schemas" --build frontend-test sh -c "npm ci && npm run check:generated-types"
 
 # Validate docs metadata and canonical docs index (Docker)
 validate-docs:
@@ -299,13 +253,9 @@ validate-architecture:
 # Docker Development Commands
 # ============================================
 
-# Start all development services (api, frontend, console-ui)
+# Start the backend API service.
 docker-up:
-	docker compose up --build --remove-orphans
-
-# Start all services including optional ones
-docker-up-all:
-	docker compose up --build --remove-orphans api frontend console-ui
+	docker compose up --build --remove-orphans api
 
 # Stop all Docker containers
 docker-down:
@@ -319,13 +269,6 @@ docker-test: test
 # Run specific test file
 docker-test-one:
 	docker compose --profile test run --rm test pytest $(TEST)
-
-# Run frontend tests in Docker
-docker-test-frontend: test-frontend
-
-# Run all tests in Docker (Backend + Frontend)
-# Note: E2E tests are skipped as they require a browser environment
-docker-test-all: test-all
 
 # Shell into API container
 docker-shell:
@@ -346,16 +289,6 @@ docker-logs-api:
 	else \
 		docker compose logs -f api; \
 	fi
-
-# Run app in user-test mode (manual testing with test settings)
-docker-usertest:
-	$(MAKE) check-usertest-key
-	@echo "Starting app in user-test mode..."
-	@echo "- Using test database: data/psychoanalyst_usertest.db"
-	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
-	@echo ""
-	docker compose --profile usertest up --build --remove-orphans usertest
 
 # Start database viewer for debugging
 # Usage:
@@ -452,23 +385,6 @@ docker-prod-detach:
 # UI Mode Selection Commands
 # ============================================
 
-# Standalone Terminal UI (Docker)
-ui-standalone:
-	@echo "🖥️  Starting Standalone Terminal UI..."
-	@echo "Running in Docker container"
-	@echo ""
-	docker compose run --rm api python -m psychoanalyst_app
-
-# Standalone Terminal UI (usertest mode)
-ui-standalone-test:
-	$(MAKE) check-usertest-key
-	@echo "🖥️  Starting Standalone Terminal UI (Usertest Mode)..."
-	@echo "- Using test database: data/psychoanalyst_usertest.db"
-	@echo "- Session duration: 10 minutes"
-	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
-	@echo ""
-	ENV_FILE=.env.usertest docker compose run --rm api python -m psychoanalyst_app
-
 # Console UI Service (WebSocket client)
 ui-console:
 	@mkdir -p logs
@@ -506,41 +422,6 @@ probe-db:
 		echo "No workflow probe database artifact found at logs/workflow-probes/latest/created_rows.json"; \
 		exit 1; \
 	fi
-
-# Web UI (browser interface)
-ui-web:
-	@echo "🌐 Starting Web UI..."
-	@echo "- API Server: http://localhost:8000"
-	@echo "- Frontend: http://localhost:5173"
-	@echo ""
-	docker compose up --build --remove-orphans api frontend
-
-# Web UI (usertest mode)
-ui-web-test:
-	$(MAKE) check-usertest-key
-	@echo "🌐 Starting Web UI (Usertest Mode)..."
-	@echo "- Using test database: data/psychoanalyst_usertest.db"
-	@echo "- Session duration: 10 minutes"
-	@echo "- API Server: http://localhost:8001"
-	@echo "- Frontend: http://localhost:5174"
-	@echo "- Make sure to set your GOOGLE_API_KEY in .env.usertest"
-	@echo ""
-	docker compose --profile usertest-web up --build --remove-orphans api-usertest frontend-usertest
-
-# All UI modes simultaneously
-ui-all:
-	@mkdir -p logs
-	@printf "\n[%s] make ui-all\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG)
-	@docker compose up --build --remove-orphans -d api frontend >> $(CONSOLE_UI_LOG) 2>&1
-	@docker compose run --rm -it console-ui 2>> $(CONSOLE_UI_LOG)
-
-# All UI modes (usertest mode)
-ui-all-test:
-	$(MAKE) check-usertest-key
-	@mkdir -p logs
-	@printf "\n[%s] make ui-all-test\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG_TEST)
-	@docker compose --profile usertest-all up --build --remove-orphans -d api-usertest frontend-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
-	@docker compose --profile usertest-all run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
 # ============================================
 # DevContainer Commands

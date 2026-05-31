@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Deterministic E2E server entry point.
+Deterministic workflow-probe server entry point.
 
 Runs the Trio backend with deterministic, no-network fakes for LLM and RAG so
-frontend Playwright E2E can run without API keys or external dependencies.
+console workflow probes can run without API keys or external dependencies.
 """
 
 import logging
@@ -15,7 +15,10 @@ import trio
 
 from psychoanalyst_app.config import Settings, setup_logging
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.testing.fakes import DeterministicLLMService, DeterministicRAGService
+from psychoanalyst_app.testing.fakes import (
+    DeterministicLLMService,
+    DeterministicRAGService,
+)
 from psychoanalyst_app.trio_server import TrioServer
 
 logger = logging.getLogger(__name__)
@@ -53,8 +56,8 @@ async def main() -> int:
 
     _configure_e2e_settings(settings, db_path=db_path, vector_db_path=vector_db_path)
 
-    logger.info("Starting deterministic E2E server on %s:%s", host, port)
-    logger.info("E2E DB: %s", db_path)
+    logger.info("Starting deterministic workflow-probe server on %s:%s", host, port)
+    logger.info("Deterministic probe DB: %s", db_path)
 
     container = ServiceContainer(settings)
     container.register("llm_service", DeterministicLLMService())

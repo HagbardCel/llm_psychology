@@ -559,7 +559,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
 
     async with open_websocket_url(
         f"{test_server['ws_url']}/ws?user_id={user_id}",
-        extra_headers=[("Origin", "http://localhost:5173")],
+        extra_headers=[("Origin", "http://localhost")],
     ) as ws:
         async with trio.open_nursery() as nursery:
             nursery.start_soon(websocket_receiver, ws)
@@ -741,7 +741,7 @@ async def test_natural_patient_flow(test_server, use_real_llm):
 
     async with open_websocket_url(
         f"{test_server['ws_url']}/ws?user_id={user_id}",
-        extra_headers=[("Origin", "http://localhost:5173")],
+        extra_headers=[("Origin", "http://localhost")],
     ) as ws:
         async with trio.open_nursery() as nursery:
             nursery.start_soon(websocket_receiver, ws)

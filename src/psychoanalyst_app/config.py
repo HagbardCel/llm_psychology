@@ -211,7 +211,7 @@ class Settings(BaseSettings):
     ]
 
     CORS_ALLOWED_ORIGINS: list[str] = Field(
-        default=["http://localhost:5173"],
+        default=["http://localhost"],
         description="List of allowed CORS origins",
     )
 

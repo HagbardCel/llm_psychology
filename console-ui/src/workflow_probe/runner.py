@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from functools import partial
 import logging
 import os
-from pathlib import Path
 import sys
 import uuid
+from functools import partial
+from pathlib import Path
 
 import httpx
 import trio
@@ -76,7 +76,12 @@ async def run_probe(args: argparse.Namespace) -> int:
         status = "PASS" if await run_assertions(recorder, scenario) else "FAIL"
         exit_code = 0 if status == "PASS" else 1
     except LocalLLMUserSimulatorError as exc:
-        await recorder.record("error", message="Local user simulator failed", reason=exc.reason, data=exc.metadata)
+        await recorder.record(
+            "error",
+            message="Local user simulator failed",
+            reason=exc.reason,
+            data=exc.metadata,
+        )
         exit_code = 3
     except trio.TooSlowError:
         await recorder.record("error", message="Workflow probe watchdog timeout")
@@ -121,7 +126,9 @@ async def check_local_llm() -> None:
         response.raise_for_status()
 
 
-async def wait_for_plan_update(base_url: str, user_id: str, scenario: dict, recorder: ProbeRecorder) -> None:
+async def wait_for_plan_update(
+    base_url: str, user_id: str, scenario: dict, recorder: ProbeRecorder
+) -> None:
     timeout = float(scenario.get("limits", {}).get("plan_update_timeout_seconds", 120))
     with trio.move_on_after(timeout) as scope:
         while True:
@@ -160,14 +167,27 @@ async def wait_for_session_enrichment(
     if scope.cancelled_caught:
         raise RuntimeError("Timed out waiting for post-session enrichment")
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", default="/app/scenarios/workflow-probes/first_session_smoke.json")
+    parser.add_argument(
+        "--scenario",
+        default="/app/scenarios/workflow-probes/first_session_smoke.json",
+    )
     parser.add_argument("--output-dir", default="/app/logs/workflow-probes/manual")
-    parser.add_argument("--db-path", default=os.getenv("DATABASE_PATH", "/app/data/runtime.sqlite"))
-    parser.add_argument("--backend-url", default=os.getenv("BACKEND_URL", "http://api-probe:8000"))
-    parser.add_argument("--websocket-url", default=os.getenv("WEBSOCKET_URL", "http://api-probe:8000"))
-    parser.add_argument("--websocket-origin", default=os.getenv("WEBSOCKET_ORIGIN", "http://localhost:5173"))
+    parser.add_argument(
+        "--db-path",
+        default=os.getenv("DATABASE_PATH", "/app/data/runtime.sqlite"),
+    )
+    parser.add_argument(
+        "--backend-url", default=os.getenv("BACKEND_URL", "http://api-probe:8000")
+    )
+    parser.add_argument(
+        "--websocket-url", default=os.getenv("WEBSOCKET_URL", "http://api-probe:8000")
+    )
+    parser.add_argument(
+        "--websocket-origin", default=os.getenv("WEBSOCKET_ORIGIN", "http://localhost")
+    )
     parser.add_argument("--check-local-llm", action="store_true")
     return parser
 

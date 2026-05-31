@@ -168,11 +168,6 @@ Dockerfile*
 .env*
 !.env.example
 
-# Frontend build artifacts (if building backend only)
-frontend/node_modules
-frontend/dist
-frontend/.vite
-
 # Console UI cache
 console-ui/__pycache__
 

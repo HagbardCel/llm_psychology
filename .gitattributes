@@ -3,9 +3,6 @@
 # Mark generated schema files as generated
 schemas/*.json linguist-generated=true
 
-# Mark generated TypeScript types as generated
-frontend/src/types/generated/* linguist-generated=true
-
 # Mark documentation files
 *.md text
 

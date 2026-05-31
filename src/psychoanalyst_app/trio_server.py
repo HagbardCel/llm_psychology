@@ -42,7 +42,7 @@ class TrioServer:
         # 1. Initialize QuartTrio app
         self.app = QuartTrio(__name__)
 
-        # 1b. Configure CORS for frontend access
+        # 1b. Configure CORS for HTTP and WebSocket clients.
         self.app = cors(
             self.app,
             allow_origin=self.container.config.CORS_ALLOWED_ORIGINS,  # Use configured origins

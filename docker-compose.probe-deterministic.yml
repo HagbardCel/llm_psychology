@@ -1,6 +1,6 @@
 services:
   api-probe:
-    command: python -m psychoanalyst_app.e2e_server
+    command: python -m psychoanalyst_app.deterministic_server
     environment:
       - APP_ENV=e2e
       - E2E_DB_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite

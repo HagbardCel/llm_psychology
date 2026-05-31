@@ -26,22 +26,3 @@ def test_server_entry_point_importable():
     )
 
     assert result.returncode == 0, f"Failed to import src/server.py: {result.stderr}"
-
-
-def test_main_entry_point_importable():
-    """
-    Smoke test to verify that src/main.py can be imported.
-    """
-    env = os.environ.copy()
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    src_path = os.path.join(project_root, "src")
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), project_root, src_path]))
-
-    result = subprocess.run(
-        [sys.executable, "-c", "import psychoanalyst_app.main"],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, f"Failed to import src/main.py: {result.stderr}"

@@ -187,13 +187,13 @@ async def test_console_websocket_connection_uses_configured_origin(
     client = console_client_cls(
         backend_url="http://api:8000",
         websocket_url="http://api:8000",
-        websocket_origin="http://localhost:5173",
+        websocket_origin="http://localhost",
         user_id="console_user",
         output=output,
     )
 
     assert client._build_websocket_url() == "ws://api:8000/ws?user_id=console_user"
-    assert client._websocket_headers() == [("Origin", "http://localhost:5173")]
+    assert client._websocket_headers() == [("Origin", "http://localhost")]
 
 
 async def test_console_websocket_origin_defaults_to_backend_url(

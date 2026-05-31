@@ -117,7 +117,7 @@ async def test_full_patient_journey_with_real_llm():
         async with open_websocket_url(
             f"{WEBSOCKET_URL}?user_id={user_id}",
             extra_headers=[
-                ("Origin", "http://localhost:5173"),
+                ("Origin", "http://localhost"),
             ],
         ) as ws:
             async with trio.open_nursery() as nursery:

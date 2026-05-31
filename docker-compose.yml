@@ -1,30 +1,15 @@
-# ============================================
-# YAML Anchors - Shared Service Configurations
-# ============================================
-# This file uses YAML anchors to eliminate redundancy between regular and
-# usertest services. Each anchor (x-api-base, x-console-base, x-frontend-base)
-# defines shared configuration that is inherited by service pairs.
-#
-# DYNAMIC ENV FILE SWITCHING (Optional):
-# You can override the env file at runtime using the ENV_FILE variable:
-#   ENV_FILE=.env.usertest docker compose up api console-ui
-#
-# This allows using a single set of services with different configurations,
-# though the default profile-based approach is still recommended for clarity.
-# ============================================
+# Shared backend configuration for local development and user testing.
 x-api-base: &api-base
   build:
     context: .
     dockerfile: Dockerfile
     target: development
   volumes:
-    # Mount source code for hot reload (delegated for better performance on macOS)
     - ./src:/app/src:delegated
     - ./tests:/app/tests:delegated
     - ./data:/app/data
     - ./logs:/app/logs
     - ./deployment_validation.py:/app/deployment_validation.py:delegated
-    # Volume for pip cache to speed up rebuilds
     - pip-cache:/root/.cache/pip
   environment:
     - APP_ENV=development
@@ -63,138 +48,22 @@ x-console-base: &console-base
   stdin_open: true
   tty: true
 
-x-frontend-base: &frontend-base
-  build:
-    context: ./frontend
-    dockerfile: Dockerfile.dev
-  volumes:
-    # Mount source code for hot reload
-    - ./frontend/src:/app/src:delegated
-    - ./frontend/public:/app/public:delegated
-    - ./frontend/index.html:/app/index.html:delegated
-    - ./frontend/vite.config.ts:/app/vite.config.ts:delegated
-    - ./frontend/eslint.config.js:/app/eslint.config.js:delegated
-    - ./frontend/tsconfig.json:/app/tsconfig.json:delegated
-    - ./frontend/scripts:/app/scripts:delegated
-    - ./frontend/e2e:/app/e2e:delegated
-    - ./frontend/package.json:/app/package.json:delegated
-    - ./frontend/package-lock.json:/app/package-lock.json:delegated
-    - ./frontend/test-results:/app/test-results:delegated
-    - ./schemas:/app/schemas:delegated
-    # Named volume for node_modules to avoid platform issues
-    - node-modules:/app/node_modules
-  ports:
-    - "5173:5173"
-  environment:
-    - NODE_ENV=development
-    - VITE_API_URL=http://localhost:8000
-    - VITE_WS_URL=ws://localhost:8000
-  networks:
-    - app-network
-  healthcheck:
-    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173/"]
-    interval: 30s
-    timeout: 3s
-    retries: 3
-    start_period: 10s
-
-# Frontend test runner: same image, but without the persistent node_modules volume.
-# This avoids stale/partial node_modules in the shared volume causing Vitest
-# failures after package-lock changes.
-x-frontend-test-base: &frontend-test-base
-  build:
-    context: ./frontend
-    dockerfile: Dockerfile.dev
-  volumes:
-    - ./frontend/src:/app/src:delegated
-    - ./frontend/public:/app/public:delegated
-    - ./frontend/index.html:/app/index.html:delegated
-    - ./frontend/vite.config.ts:/app/vite.config.ts:delegated
-    - ./frontend/eslint.config.js:/app/eslint.config.js:delegated
-    - ./frontend/tsconfig.json:/app/tsconfig.json:delegated
-    - ./frontend/scripts:/app/scripts:delegated
-    - ./frontend/e2e:/app/e2e:delegated
-    - ./frontend/playwright.config.ts:/app/playwright.config.ts:delegated
-    - ./frontend/package.json:/app/package.json:delegated
-    - ./frontend/package-lock.json:/app/package-lock.json:delegated
-    - ./frontend/test-results:/app/test-results:delegated
-    - ./schemas:/app/schemas:delegated
-    - playwright-browsers:/root/.cache/ms-playwright
-  environment:
-    - NODE_ENV=test
-    - VITE_API_URL=http://localhost:8000
-    - VITE_WS_URL=ws://localhost:8000
-  networks:
-    - app-network
-
 services:
-  # ============================================
-  # Backend API Server (HTTP + WebSocket)
-  # ============================================
   api:
     <<: *api-base
     container_name: psychoanalyst_api
     env_file:
       - ${ENV_FILE:-.env}
 
-  # ============================================
-  # Deterministic E2E API (no external dependencies)
-  # ============================================
-  api-e2e:
-    <<: *api-base
-    container_name: psychoanalyst_api_e2e
-    profiles: ["test"]
-    environment:
-      - APP_ENV=e2e
-      - PYTHONUNBUFFERED=1
-      - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=8000
-    command: python -m psychoanalyst_app.e2e_server
-    ports:
-      - "8000:8000"
-
-  # ============================================
-  # Frontend React App
-  # ============================================
-  frontend:
-    <<: *frontend-base
-    container_name: psychoanalyst_frontend
-    depends_on:
-      - api
-
-  frontend-test:
-    <<: *frontend-test-base
-    container_name: psychoanalyst_frontend_test
-    profiles: ["test"]
-
-  # ============================================
-  # Frontend E2E runner (Playwright)
-  # ============================================
-  frontend-e2e:
-    <<: *frontend-test-base
-    container_name: psychoanalyst_frontend_e2e
-    profiles: ["test"]
-    environment:
-      - NODE_ENV=test
-      - VITE_API_URL=http://api-e2e:8000
-      - VITE_WS_URL=ws://api-e2e:8000
-    depends_on:
-      api-e2e:
-        condition: service_healthy
-
-  # ============================================
-  # Console UI (Terminal Interface via WebSocket)
-  # WebSocket-based terminal client for networked sessions
-  # Usage: make ui-console or docker compose up api console-ui
-  # ============================================
   console-ui:
     <<: *console-base
     container_name: psychoanalyst_console
+    profiles: ["console"]
     environment:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://api:8000
       - WEBSOCKET_URL=http://api:8000
-      - WEBSOCKET_ORIGIN=http://localhost:5173
+      - WEBSOCKET_ORIGIN=http://localhost
       - USER_ID=console_user
       - AUTH_TOKEN=console_token
       - CONSOLE_LOG_PATH=/app/logs/console-ui.log
@@ -204,97 +73,24 @@ services:
       api:
         condition: service_healthy
 
-  # ============================================
-  # Production App (minimal profile)
-  # ============================================
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    container_name: psychoanalyst_app_prod
-    profiles: ["production"]
-    volumes:
-      # Mount only data for production
-      - ./data:/app/data
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    networks:
-      - app-network
-    stdin_open: true
-    tty: true
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "print('healthy')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # ============================================
-  # User Testing Mode - Standalone Terminal
-  # For manual testing with standalone terminal UI
-  # Usage: make ui-standalone-test
-  # ============================================
-  usertest:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: development
-    container_name: psychoanalyst_usertest
-    profiles: ["usertest"]
-    volumes:
-      # Mount source code (read-write for potential debugging)
-      - ./src:/app/src:delegated
-      - ./data:/app/data
-      - pip-cache:/root/.cache/pip
-    environment:
-      - APP_ENV=development
-      - PYTHONUNBUFFERED=1
-    env_file:
-      - .env.usertest
-    ports:
-      - "8002:8000"
-    networks:
-      - app-network
-    stdin_open: true
-    tty: true
-    healthcheck:
-      test: ["CMD", "python", "-c", "print('healthy')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # ============================================
-  # User Testing Mode - API Server for UI Services
-  # Shared API server for console-ui and frontend usertest modes
-  # Usage: make ui-console-test or make ui-web-test
-  # ============================================
   api-usertest:
     <<: *api-base
     container_name: psychoanalyst_api_usertest
-    profiles: ["usertest-console", "usertest-web", "usertest-all"]
+    profiles: ["usertest-console"]
     env_file:
       - .env.usertest
     ports:
       - "8001:8000"
 
-  # ============================================
-  # User Testing Mode - Console UI Service
-  # WebSocket-based terminal client in usertest mode
-  # Usage: make ui-console-test
-  # ============================================
   console-ui-usertest:
     <<: *console-base
     container_name: psychoanalyst_console_usertest
-    profiles: ["usertest-console", "usertest-all"]
+    profiles: ["usertest-console"]
     environment:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://api-usertest:8000
       - WEBSOCKET_URL=http://api-usertest:8000
-      - WEBSOCKET_ORIGIN=http://localhost:5173
+      - WEBSOCKET_ORIGIN=http://localhost
       - USER_ID=console_user_test
       - AUTH_TOKEN=console_token_test
       - CONSOLE_LOG_PATH=/app/logs/console-ui-usertest.log
@@ -304,45 +100,6 @@ services:
       api-usertest:
         condition: service_healthy
 
-  # ============================================
-  # User Testing Mode - Frontend Service
-  # React web interface in usertest mode
-  # Usage: make ui-web-test
-  # ============================================
-  frontend-usertest:
-    <<: *frontend-base
-    container_name: psychoanalyst_frontend_usertest
-    profiles: ["usertest-web", "usertest-all"]
-    depends_on:
-      api-usertest:
-        condition: service_healthy
-    ports:
-      - "5174:5173"
-
-  # ============================================
-  # Test Runner (isolated environment)
-  #
-  # PURPOSE: Pre-commit validation and CI/CD pipelines
-  # - Provides complete isolation from development environment
-  # - Read-only source mounts prevent accidental changes
-  # - Separate test data volume ensures clean state
-  #
-  # WHEN TO USE:
-  # - Pre-commit validation: make docker-test (via git hook)
-  # - CI/CD pipelines: Automated testing in GitHub Actions, etc.
-  # - Clean-room testing: When you need guaranteed isolation
-  #
-  # WHEN NOT TO USE:
-  # - Active development: Use pytest in devContainer (much faster)
-  # - Debugging tests: Use devContainer with VSCode debugger
-  # - TDD workflow: Run tests directly in devContainer
-  #
-  # RECOMMENDED WORKFLOW:
-  # - Development: pytest in devContainer (instant feedback)
-  # - Pre-commit: make docker-test (isolated validation)
-  #
-  # See README Testing section for full workflow guide
-  # ============================================
   test:
     build:
       context: .
@@ -351,7 +108,6 @@ services:
     container_name: psychoanalyst_test
     profiles: ["test"]
     volumes:
-      # Read-only mounts for testing
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
@@ -359,7 +115,6 @@ services:
       - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./pytest.ini:/app/pytest.ini:ro
-      # Separate volume for test data (isolated from dev)
       - test-data:/app/data
     environment:
       - APP_ENV=testing
@@ -373,14 +128,6 @@ services:
     networks:
       - app-network
 
-  # ============================================
-  # Database Viewer (for debugging)
-  # Usage:
-  #   make docker-db-view              # View production DB (default)
-  #   make docker-db-view DB=usertest  # View usertest DB
-  # Access at http://localhost:8080
-  # Note: Test databases use in-memory SQLite, not persistent files
-  # ============================================
   db-viewer:
     image: coleifer/sqlite-web
     container_name: psychoanalyst_db_viewer
@@ -393,14 +140,12 @@ services:
       - app-network
     command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-psychoanalyst.db}"]
 
-  # ============================================
-  # Devcontainer (VSCode Remote Development)
-  # ============================================
   devcontainer:
     build:
       context: .
       dockerfile: Dockerfile.devcontainer
-    image: psychoanalyst_app-devcontainer:latest 
+    image: psychoanalyst_app-devcontainer:latest
+    profiles: ["devcontainer"]
     command:
       - tail
       - -f
@@ -417,26 +162,34 @@ services:
     volumes:
       - .:/app
 
-# ============================================
-# Named Volumes
-# ============================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: psychoanalyst_app_prod
+    profiles: ["production"]
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
-  # Cache for pip packages (speeds up rebuilds)
   pip-cache:
     driver: local
-  # Node modules (avoids platform-specific issues)
-  node-modules:
-    driver: local
-  # Playwright browser cache (persists between runs)
-  playwright-browsers:
-    driver: local
-  # Isolated test data (prevents pollution)
   test-data:
     driver: local
 
-# ============================================
-# Networks
-# ============================================
 networks:
   app-network:
     driver: bridge
