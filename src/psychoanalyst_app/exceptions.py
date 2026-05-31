@@ -67,7 +67,7 @@ class AssessmentError(AgentError):
     pass
 
 
-class PsychoanalystAgentError(AgentError):
+class TherapistAgentError(AgentError):
     """Raised when psychoanalyst agent operations fail."""
 
     pass

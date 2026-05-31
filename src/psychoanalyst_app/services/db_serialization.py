@@ -52,7 +52,7 @@ def load_json(payload: str | None, *, default: T) -> T:
 
 
 SESSION_COLUMNS = (
-    "session_id, user_id, plan_id, timestamp, transcript, topics, "
+    "session_id, user_id, session_type, plan_id, timestamp, transcript, topics, "
     "session_summary, session_briefing, psychological_summary, "
     "dominant_affects, key_themes, notable_interactions, "
     "interpretations, patient_reactions, enriched"
@@ -61,7 +61,8 @@ SESSION_COLUMNS = (
 THERAPY_PLAN_COLUMNS = (
     "plan_id, user_id, created_at, updated_at, plan_details, initial_goals, "
     "current_progress, planned_interventions, status, version, "
-    "selected_therapy_style, session_briefing"
+    "selected_therapy_style, session_briefing, supersedes_plan_id, "
+    "superseded_by_plan_id, revision_recommendations"
 )
 
 PATIENT_ANALYSIS_COLUMNS = (
@@ -81,6 +82,7 @@ def session_from_row(
     return model_cls(
         session_id=row["session_id"],
         user_id=row["user_id"],
+        session_type=row["session_type"],
         plan_id=row["plan_id"],
         timestamp=iso_to_datetime(row["timestamp"]),
         transcript=transcript,
@@ -118,8 +120,13 @@ def therapy_plan_from_row(row, iso_to_datetime) -> TherapyPlan:
         planned_interventions=planned_interventions,
         status=status,
         version=row["version"],
+        supersedes_plan_id=row["supersedes_plan_id"],
+        superseded_by_plan_id=row["superseded_by_plan_id"],
         selected_therapy_style=row["selected_therapy_style"],
         session_briefing=session_briefing,
+        revision_recommendations=load_json(
+            row["revision_recommendations"], default=[]
+        ),
     )
 
 

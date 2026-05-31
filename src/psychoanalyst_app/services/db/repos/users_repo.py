@@ -26,6 +26,11 @@ PROFILE_COLUMNS = (
     "boundary_notes, frame_notes, created_at, updated_at"
 )
 PROFILE_SUMMARY_COLUMNS = "user_id, name, status, primary_language, plan_id, updated_at"
+PROFILE_UPDATE_ASSIGNMENTS = ", ".join(
+    f"{column} = excluded.{column}"
+    for column in PROFILE_COLUMNS.replace(",", "").split()
+    if column != "user_id"
+)
 
 
 async def save_user_profile(
@@ -49,9 +54,11 @@ def _sync_save_user_profile(
         cursor = conn.cursor()
         cursor.execute(
             f"""
-            INSERT OR REPLACE INTO user_profiles
+            INSERT INTO user_profiles
             ({PROFILE_COLUMNS})
             VALUES ({', '.join(['?'] * 25)})
+            ON CONFLICT(user_id) DO UPDATE SET
+                {PROFILE_UPDATE_ASSIGNMENTS}
             """,
             _profile_values(profile, datetime_to_iso),
         )
@@ -143,9 +150,11 @@ def _sync_update_user_profile(
 
         cursor.execute(
             f"""
-            INSERT OR REPLACE INTO user_profiles
+            INSERT INTO user_profiles
             ({PROFILE_COLUMNS})
             VALUES ({', '.join(['?'] * 25)})
+            ON CONFLICT(user_id) DO UPDATE SET
+                {PROFILE_UPDATE_ASSIGNMENTS}
             """,
             _profile_values(profile, datetime_to_iso),
         )

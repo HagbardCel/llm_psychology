@@ -9,7 +9,7 @@ from typing import Any
 
 from psychoanalyst_app.models.briefing_models import BriefingStatus
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
-from psychoanalyst_app.prompts.psychoanalyst_prompts import (
+from psychoanalyst_app.prompts.therapist_prompts import (
     CONTINUE_SESSION_PROMPT,
     INITIAL_SESSION_PROMPT,
 )
@@ -32,12 +32,14 @@ def build_continuation_prompt(
     *,
     plan_context: str,
     additional_knowledge: str,
+    latest_message: str,
     style_instructions: str,
     time_prompt: str = "",
 ) -> str:
     return CONTINUE_SESSION_PROMPT.format(
         plan_context=plan_context,
         additional_knowledge=additional_knowledge,
+        latest_message=latest_message,
         time_prompt=time_prompt,
         style_instructions=style_instructions,
     )

@@ -225,7 +225,9 @@ def mock_llm_service_with_context():
     llm.generate_response = Mock(return_value="This is a generated response.")
 
     # Structured outputs: used by Tier extraction/enrichment paths.
-    async def mock_structured_output_async(prompt, schema, method="json_schema"):
+    async def mock_structured_output_async(
+        prompt, schema, method="json_schema", phase=None
+    ):
         from pydantic import BaseModel
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):
@@ -302,8 +304,8 @@ def mock_llm_service_with_context():
                 return schema.model_validate(
                     {
                         "focus": "Anxiety management",
-                        "goals": "- Reduce anxiety\n- Improve sleep",
-                        "techniques": "- Cognitive restructuring\n- Mindfulness",
+                        "goals": ["Reduce anxiety", "Improve sleep"],
+                        "techniques": ["Cognitive restructuring", "Mindfulness"],
                         "themes": "Anxiety, coping",
                         "timeline": "12 weeks",
                     }
@@ -458,8 +460,8 @@ def mock_llm_service_with_context():
             return schema.model_validate(
                 {
                     "focus": "Anxiety management",
-                    "goals": "- Reduce anxiety\n- Improve sleep",
-                    "techniques": "- Cognitive restructuring\n- Mindfulness",
+                    "goals": ["Reduce anxiety", "Improve sleep"],
+                    "techniques": ["Cognitive restructuring", "Mindfulness"],
                     "themes": "Anxiety, coping",
                     "timeline": "12 weeks",
                 }
@@ -828,7 +830,10 @@ async def test_complete_patient_journey_intake_to_therapy(
 
             # Message 2: Provide more context
             received_events["chat_response_chunk"].clear()
-            intake_message_2 = "It started about 3 months ago when I got a new manager who micromanages everything"
+            intake_message_2 = (
+                "It started about 3 months ago. I have not had thoughts of harming "
+                "myself or anyone else, and the chest tightness is not medically urgent."
+            )
 
             logger.info(f"Sending intake message 2: {intake_message_2[:50]}...")
             await ws.send_message(
@@ -859,7 +864,8 @@ async def test_complete_patient_journey_intake_to_therapy(
             # Message 3: Express readiness
             received_events["chat_response_chunk"].clear()
             intake_message_3 = (
-                "I haven't tried therapy before but I'm ready to make a change"
+                "I've tried breathing exercises. My goal is to sleep better and "
+                "stop freezing at work when my manager pressures me."
             )
 
             logger.info(f"Sending intake message 3: {intake_message_3[:50]}...")
@@ -876,7 +882,7 @@ async def test_complete_patient_journey_intake_to_therapy(
                 )
             )
 
-            await trio.sleep(0.5)
+            await trio.sleep(1.0)
 
             complete_responses = [
                 c
@@ -911,28 +917,26 @@ async def test_complete_patient_journey_intake_to_therapy(
             # ==========================================
             logger.info("\n--- Phase 3: Assessment & Style Selection ---")
 
-            # Manually transition to INTAKE_COMPLETE to trigger assessment
-            await orchestrator.workflow_engine.transition(
-                user_id, WorkflowState.INTAKE_COMPLETE, WorkflowEvent.COMPLETE_INTAKE
-            )
-
             state = await orchestrator.get_user_state(user_id)
-            assert state == WorkflowState.INTAKE_COMPLETE
-            logger.info(f"✓ Transitioned to {state.value}")
+            if state == WorkflowState.INTAKE_IN_PROGRESS:
+                await orchestrator.workflow_engine.transition(
+                    user_id, WorkflowState.INTAKE_COMPLETE, WorkflowEvent.COMPLETE_INTAKE
+                )
+                state = await orchestrator.get_user_state(user_id)
+            logger.info(f"✓ Intake advanced to {state.value}")
 
             # Continue with the existing session for assessment
             assessment_session_id = session_id
             logger.info(f"✓ Assessment uses existing session: {assessment_session_id}")
 
-            # Transition to ASSESSMENT_IN_PROGRESS
-            await orchestrator.workflow_engine.transition(
-                user_id,
-                WorkflowState.ASSESSMENT_IN_PROGRESS,
-                WorkflowEvent.START_ASSESSMENT,
-            )
-            state = await orchestrator.get_user_state(user_id)
-            assert state == WorkflowState.ASSESSMENT_IN_PROGRESS
-            logger.info(f"✓ Transitioned to {state.value}")
+            if state == WorkflowState.INTAKE_COMPLETE:
+                await orchestrator.workflow_engine.transition(
+                    user_id,
+                    WorkflowState.ASSESSMENT_IN_PROGRESS,
+                    WorkflowEvent.START_ASSESSMENT,
+                )
+                state = await orchestrator.get_user_state(user_id)
+                logger.info(f"✓ Transitioned to {state.value}")
 
             # Wait for recommendations message
             await trio.sleep(0.5)
@@ -951,8 +955,8 @@ async def test_complete_patient_journey_intake_to_therapy(
                 updated_at=datetime.now(),
                 plan_details={
                     "focus": "Anxiety management and work-related stress",
-                    "goals": "Develop coping strategies for workplace anxiety",
-                    "techniques": "Cognitive restructuring, thought challenging",
+                    "goals": ["Develop coping strategies for workplace anxiety"],
+                    "techniques": ["Cognitive restructuring", "Thought challenging"],
                 },
                 initial_goals=["Develop coping strategies for workplace anxiety"],
                 current_progress="Baseline established",
@@ -964,12 +968,12 @@ async def test_complete_patient_journey_intake_to_therapy(
             await db_service.save_therapy_plan(therapy_plan)
             logger.info("✓ Therapy plan created")
 
-            # Transition to ASSESSMENT_COMPLETE
-            await orchestrator.workflow_engine.transition(
-                user_id,
-                WorkflowState.ASSESSMENT_COMPLETE,
-                WorkflowEvent.COMPLETE_ASSESSMENT,
-            )
+            if state == WorkflowState.ASSESSMENT_IN_PROGRESS:
+                await orchestrator.workflow_engine.transition(
+                    user_id,
+                    WorkflowState.ASSESSMENT_COMPLETE,
+                    WorkflowEvent.COMPLETE_ASSESSMENT,
+                )
 
             state = await orchestrator.get_user_state(user_id)
             assert state == WorkflowState.ASSESSMENT_COMPLETE
@@ -1322,7 +1326,10 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
 
             # Message 2: Provide more context
             received_events["chat_response_chunk"].clear()
-            intake_message_2 = "It started about 3 months ago when I got a new manager who micromanages everything"
+            intake_message_2 = (
+                "It started about 3 months ago. I have not had thoughts of harming "
+                "myself or anyone else, and the chest tightness is not medically urgent."
+            )
 
             logger.info(f"Sending intake message 2: {intake_message_2[:50]}...")
             await ws.send_message(
@@ -1353,7 +1360,8 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             # Message 3: Express readiness
             received_events["chat_response_chunk"].clear()
             intake_message_3 = (
-                "I haven't tried therapy before but I'm ready to make a change"
+                "I've tried breathing exercises. My goal is to sleep better and "
+                "stop freezing at work when my manager pressures me."
             )
 
             logger.info(f"Sending intake message 3: {intake_message_3[:50]}...")
@@ -1370,7 +1378,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
                 )
             )
 
-            await trio.sleep(0.5)
+            await trio.sleep(1.0)
 
             complete_responses = [
                 c

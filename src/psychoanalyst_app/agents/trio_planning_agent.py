@@ -30,7 +30,7 @@ from psychoanalyst_app.agents.planning.analysis import (
     recommend_theme_adjustments,
     recommend_therapy_style,
 )
-from psychoanalyst_app.agents.planning.formatting import extract_session_text, split_bullets
+from psychoanalyst_app.agents.planning.formatting import extract_session_text
 from psychoanalyst_app.agents.planning.models import PlanEvolution, PlanningStrategy
 from psychoanalyst_app.agents.planning.extractors import (
     generate_initial_plan_details,
@@ -177,7 +177,7 @@ class TrioPlanningAgent:
 
         # Generate plan using LLM (run in thread)
         logger.debug("TrioPlanningAgent generating plan details via LLM")
-        plan_details = await generate_initial_plan_details(
+        plan_update, plan_details = await generate_initial_plan_details(
             self.llm_service,
             self.style_service,
             intake_session,
@@ -187,20 +187,14 @@ class TrioPlanningAgent:
         )
         logger.debug("TrioPlanningAgent generated plan details")
 
-        initial_goals = split_bullets(plan_details.get("goals", ""))
-        if not initial_goals:
-            raise PlanningError("Failed to derive initial goals for TherapyPlan")
-        planned_interventions = split_bullets(plan_details.get("techniques", ""))
-        if not planned_interventions:
-            planned_interventions = ["Supportive listening"]
-
         return build_therapy_plan_output(
             {
                 "selected_therapy_style": selected_style,
                 "plan_details": plan_details,
-                "initial_goals": initial_goals,
+                "initial_goals": plan_update.goals,
                 "current_progress": "Baseline established",
-                "planned_interventions": planned_interventions,
+                "planned_interventions": plan_update.techniques,
+                "revision_recommendations": [],
                 "status": "active",
             }
         )
@@ -245,6 +239,7 @@ class TrioPlanningAgent:
                         "initial_goals": current_plan.initial_goals,
                         "current_progress": current_plan.current_progress,
                         "planned_interventions": current_plan.planned_interventions,
+                        "revision_recommendations": current_plan.revision_recommendations,
                         "status": current_plan.status,
                     }
                 )
@@ -259,7 +254,7 @@ class TrioPlanningAgent:
             )
 
             # Generate updated plan details (run in thread)
-            updated_details = await generate_updated_plan_details(
+            plan_update, updated_details = await generate_updated_plan_details(
                 self.llm_service,
                 self.style_service,
                 self.memory_agent,
@@ -274,14 +269,14 @@ class TrioPlanningAgent:
             changes = identify_plan_changes(
                 current_plan.plan_details, updated_details
             )
-
             updated_plan_output = build_therapy_plan_output(
                 {
                     "selected_therapy_style": current_plan.selected_therapy_style,
                     "plan_details": updated_details,
-                    "initial_goals": current_plan.initial_goals,
+                    "initial_goals": plan_update.goals,
                     "current_progress": current_plan.current_progress,
-                    "planned_interventions": current_plan.planned_interventions,
+                    "planned_interventions": plan_update.techniques,
+                    "revision_recommendations": current_plan.revision_recommendations,
                     "status": current_plan.status,
                 }
             )
@@ -485,7 +480,7 @@ class TrioPlanningAgent:
                 return False
 
             # Test database connectivity
-            plans = await self.db_service.get_latest_therapy_plan(
+            plans = await self.db_service.get_current_therapy_plan(
                 self.user_context.user_id
             )
 

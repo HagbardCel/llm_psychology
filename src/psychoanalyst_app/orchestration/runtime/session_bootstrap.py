@@ -21,7 +21,7 @@ async def load_conversation_context(*, db_service, config, session_id: str):
 
     therapy_plan = None
     try:
-        therapy_plan = await db_service.get_latest_therapy_plan(session.user_id)
+        therapy_plan = await db_service.get_current_therapy_plan(session.user_id)
     except Exception as exc:
         logger.warning("No therapy plan found for user %s: %s", session.user_id, exc)
 

@@ -194,31 +194,6 @@ class TrioReflectionAgent:
             # Update therapy plan with the new briefing
             updated_plan.session_briefing = session_briefing
 
-            # Optional: Apply Tier 4 updates from the same structured LLM output
-            tier4_update = (
-                session_briefing.get("tier4_update")
-                if isinstance(session_briefing, dict)
-                else None
-            )
-            if isinstance(tier4_update, dict) and updated_plan:
-                should_update = bool(tier4_update.get("should_update", False))
-                if should_update:
-                    if "current_progress" in tier4_update and isinstance(
-                        tier4_update["current_progress"], str
-                    ):
-                        updated_plan.current_progress = tier4_update["current_progress"]
-                    if "planned_interventions" in tier4_update and isinstance(
-                        tier4_update["planned_interventions"], list
-                    ):
-                        updated_plan.planned_interventions = tier4_update[
-                            "planned_interventions"
-                        ]
-                    if "status" in tier4_update and isinstance(
-                        tier4_update["status"], str
-                    ):
-                        updated_plan.status = tier4_update["status"]
-                    updated_plan.updated_at = datetime.now()
-
             logger.info(
                 "Successfully generated session briefing for session %s",
                 session.session_id,
@@ -235,6 +210,7 @@ class TrioReflectionAgent:
                 "initial_goals": updated_plan.initial_goals,
                 "current_progress": updated_plan.current_progress,
                 "planned_interventions": updated_plan.planned_interventions,
+                "revision_recommendations": updated_plan.revision_recommendations,
                 "status": updated_plan.status,
             }
         )
@@ -374,7 +350,7 @@ class TrioReflectionAgent:
         try:
             # Get current plan if not provided
             if current_plan is None:
-                current_plan = await self.db_service.get_latest_therapy_plan(
+                current_plan = await self.db_service.get_current_therapy_plan(
                     self.user_context.user_id
                 )
 
@@ -487,7 +463,7 @@ class TrioReflectionAgent:
         Generate a comprehensive session briefing for the next therapy session.
 
         This performs a deep analysis of the completed session and generates a rich
-        briefing object that will be used by the Psychoanalyst Agent when starting
+        briefing object that will be used by the Therapist Agent when starting
         the next session.
 
         Args:

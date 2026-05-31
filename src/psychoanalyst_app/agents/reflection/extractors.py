@@ -28,6 +28,7 @@ async def extract_tier2_enrichment(
             prompt,
             Tier2Enrichment,
             method="json_schema",
+            phase="post_session_update",
         )
         if not isinstance(tier2, Tier2Enrichment):
             logger.error("Tier 2 enrichment returned unexpected type %s", type(tier2))
@@ -46,6 +47,7 @@ async def extract_session_briefing(
         prompt,
         SessionBriefing,
         method="json_schema",
+            phase="post_session_update",
     )
     if not isinstance(briefing, SessionBriefing):
         raise TypeError("Unexpected SessionBriefing type")
@@ -70,6 +72,7 @@ async def extract_tier3_change_decision(
         prompt,
         ChangeDetectionDecision,
         method="json_schema",
+            phase="post_session_update",
     )
     if not isinstance(decision, ChangeDetectionDecision):
         logger.error("Tier 3 change detection returned unexpected type %s", type(decision))
@@ -85,6 +88,7 @@ async def extract_updated_tier3_analysis(
         prompt,
         PatientAnalysis,
         method="json_schema",
+            phase="post_session_update",
     )
     if not isinstance(analysis, PatientAnalysis):
         logger.error("Tier 3 update returned unexpected type %s", type(analysis))

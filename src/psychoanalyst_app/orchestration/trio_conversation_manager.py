@@ -1,16 +1,11 @@
-"""
-Trio-native conversation manager for streaming responses and context management.
-
-This module manages conversation context, streams LLM responses using Trio,
-and integrates RAG retrieval for enhanced responses.
-"""
-
+"""Trio-native conversation context, streaming, and RAG integration."""
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
 import trio
+from werkzeug.local import LocalProxy
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.data_models import Message, TherapyPlan
@@ -83,7 +78,7 @@ class TrioConversationManager:
 
     def register_websocket(self, session_id: str, ws: Any):
         """Registers a websocket for a given session."""
-        self.websockets[session_id] = ws
+        self.websockets[session_id] = ws._get_current_object() if isinstance(ws, LocalProxy) else ws
         event = self._websocket_ready_events.get(session_id)
         if event is None:
             event = trio.Event()
@@ -110,8 +105,13 @@ class TrioConversationManager:
         """Check whether the initial greeting was already scheduled."""
         return session_id in self._initial_greeting_sent
 
+    def claim_initial_greeting(self, session_id: str) -> bool:
+        if session_id in self._initial_greeting_sent:
+            return False
+        self.mark_initial_greeting_pending(session_id)
+        return True
+
     def mark_initial_greeting_pending(self, session_id: str) -> None:
-        """Prevent chat input while the initial greeting is being delivered."""
         self._initial_greeting_sent.add(session_id)
         self._initial_greeting_pending.add(session_id)
 
@@ -259,7 +259,15 @@ class TrioConversationManager:
             chunk_count = 0
 
             async for chunk in self._stream_llm_response(
-                augmented_prompt, conversation_history, service
+                augmented_prompt,
+                conversation_history,
+                service,
+                phase=(
+                    "therapy_opening"
+                    if agent == "THERAPIST"
+                    and not any(message.role == "user" for message in context.message_history)
+                    else "therapy_response" if agent == "THERAPIST" else None
+                ),
             ):
                 full_response += chunk
                 chunk_count += 1
@@ -370,7 +378,12 @@ class TrioConversationManager:
             yield f"Error: {str(e)}"
 
     async def _stream_llm_response(
-        self, prompt: str, conversation_history: list, llm_service: LLMService
+        self,
+        prompt: str,
+        conversation_history: list,
+        llm_service: LLMService,
+        *,
+        phase: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream response from LLM service using Trio.
@@ -387,7 +400,14 @@ class TrioConversationManager:
             Response chunks from LLM
         """
         try:
-            async for chunk in llm_service.stream_response(prompt, conversation_history):
+            stream = (
+                llm_service.stream_response(prompt, conversation_history)
+                if phase is None
+                else llm_service.stream_response(
+                    prompt, conversation_history, phase=phase
+                )
+            )
+            async for chunk in stream:
                 yield chunk
 
         except Exception as e:

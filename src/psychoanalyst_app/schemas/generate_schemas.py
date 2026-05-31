@@ -22,6 +22,8 @@ from psychoanalyst_app.models.data_models import UserStatus
 from psychoanalyst_app.models.http_models import (
     CreateSessionRequestDTO,
     CreateUserProfileRequestDTO,
+    EndSessionRequestDTO,
+    EndSessionResponseDTO,
     HealthCheckResponseDTO,
     MessageDTO,
     PatchUserProfileRequestDTO,
@@ -36,7 +38,10 @@ from psychoanalyst_app.models.http_models import (
     UserProfileDTO,
     UserStatusResponseDTO,
     WorkflowCompleteProfileRequestDTO,
+    WorkflowRetryPlanUpdateRequestDTO,
     WorkflowSelectTherapyStyleRequestDTO,
+    WorkflowStartTherapyRequestDTO,
+    WorkflowStartTherapyResponseDTO,
 )
 from psychoanalyst_app.models.api_models import (
     RequiredWorkflowAction,
@@ -199,8 +204,13 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
         (UpdateUserProfileRequestDTO, "UpdateUserProfileRequest"),
         (PatchUserProfileRequestDTO, "PatchUserProfileRequest"),
         (CreateSessionRequestDTO, "CreateSessionRequest"),
+        (EndSessionRequestDTO, "EndSessionRequest"),
+        (EndSessionResponseDTO, "EndSessionResponse"),
         (WorkflowCompleteProfileRequestDTO, "WorkflowCompleteProfileRequest"),
+        (WorkflowRetryPlanUpdateRequestDTO, "RetryPlanUpdateRequest"),
         (WorkflowSelectTherapyStyleRequestDTO, "SelectTherapyStyleRequest"),
+        (WorkflowStartTherapyRequestDTO, "StartTherapyRequest"),
+        (WorkflowStartTherapyResponseDTO, "StartTherapyResponse"),
         (UserStatusResponseDTO, "UserStatusResponse"),
         (TherapyStyleDTO, None),
         (StatusMessageResponseDTO, "StatusMessageResponse"),

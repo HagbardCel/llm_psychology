@@ -317,6 +317,39 @@ async def test_get_sessions_returns_dtos(trio_server, test_user):
 
 @pytest.mark.trio
 @pytest.mark.integration
+async def test_end_session_endpoint_acknowledges_closure(trio_server, test_user):
+    """POST /api/sessions/<id>/end should close the active session."""
+    app = trio_server.app
+    session_info = await trio_server.orchestrator.start_session(
+        test_user.user_id,
+        session_type="intake",
+        send_initial_message=False,
+    )
+
+    async with app.test_client() as client:
+        response = await client.post(
+            f"/api/sessions/{session_info.session_id}/end",
+            json={
+                "user_id": test_user.user_id,
+                "session_id": session_info.session_id,
+                "reason": "User ended session",
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data == {
+        "session_id": session_info.session_id,
+        "workflow_state": "intake_in_progress",
+        "reason": "User ended session",
+    }
+    assert not trio_server.orchestrator.is_session_active(
+        test_user.user_id, session_info.session_id
+    )
+
+
+@pytest.mark.trio
+@pytest.mark.integration
 async def test_get_therapy_plan_returns_null_when_missing(trio_server, test_user):
     """GET /api/therapy/plan should return null when no plan exists."""
     app = trio_server.app
@@ -382,7 +415,7 @@ async def test_select_therapy_style_creates_plan(trio_server, test_user):
 
     session_info = await trio_server.orchestrator.start_session(
         test_user.user_id,
-        session_type="therapy",
+        session_type="intake",
         send_initial_message=False,
     )
     trio_server.conversation_manager.register_websocket(
@@ -401,9 +434,9 @@ async def test_select_therapy_style_creates_plan(trio_server, test_user):
 
         assert create_response.status_code == 200
         action = await create_response.get_json()
-        assert action["required_action"] == "continue_therapy"
+        assert action["required_action"] == "start_therapy"
 
-    plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    plan = await trio_db_service.get_current_therapy_plan(test_user.user_id)
     assert plan is not None
     assert plan.selected_therapy_style == "freud"
 @pytest.mark.trio

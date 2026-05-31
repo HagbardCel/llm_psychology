@@ -132,7 +132,7 @@ class TrioDatabaseService:
             self.executor, plan, datetime_to_iso
         )
 
-    async def get_latest_therapy_plan(
+    async def get_current_therapy_plan(
         self, user_id: str = "default_user"
     ) -> TherapyPlan | None:
         """
@@ -144,7 +144,7 @@ class TrioDatabaseService:
         Returns:
             Optional[TherapyPlan]: The latest therapy plan if found, None otherwise.
         """
-        return await therapy_plans_repo.get_latest_therapy_plan(
+        return await therapy_plans_repo.get_current_therapy_plan(
             self.executor, user_id, iso_to_datetime
         )
 

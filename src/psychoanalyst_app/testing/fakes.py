@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
+import json
+import logging
+import time
 from typing import Any
 
 import trio
@@ -15,13 +18,41 @@ class DeterministicLLMService:
     and orchestration so the backend can run in CI/E2E without API keys.
     """
 
+    def _record_metric(self, *, phase: str | None, call_type: str, started_at: float) -> None:
+        logging.getLogger("llm_metrics").info(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "call_type": call_type,
+                    "provider": "deterministic",
+                    "model": "deterministic",
+                    "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    "status": "finish",
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                }
+            )
+        )
+
     def generate_response(self, prompt: str, context: list[dict[str, str]] | None = None) -> str:
+        prompt_lower = (prompt or "").lower()
+        if "therapy session" in prompt_lower:
+            return (
+                "When the Monday deadline pressure hits and your chest tightens, "
+                "let us slow down and identify the thought that is disrupting your sleep."
+            )
+        if "intake" in prompt_lower:
+            return (
+                "Have you had thoughts of harming yourself or someone else? "
+                "What would you most want to be different?"
+            )
         prompt_preview = (prompt or "").strip().replace("\n", " ")[:80]
         return f"[deterministic-llm] {prompt_preview}"
 
     async def stream_response(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self, prompt: str, context: list[dict[str, str]] | None = None, *, phase: str | None = None
     ) -> AsyncIterator[str]:
+        started_at = time.perf_counter()
         text = self.generate_response(prompt, context)
         chunks = [text[:20], text[20:40], text[40:]]
         for chunk in chunks:
@@ -29,6 +60,7 @@ class DeterministicLLMService:
                 continue
             await trio.sleep(0)
             yield chunk
+        self._record_metric(phase=phase, call_type="stream_response", started_at=started_at)
 
     async def generate_response_stream(
         self, prompt: str, context: list[dict[str, str]] | None = None
@@ -49,7 +81,9 @@ class DeterministicLLMService:
         schema: dict | type["BaseModel"],
         *,
         method: str = "json_schema",
+        phase: str | None = None,
     ) -> Any:
+        started_at = time.perf_counter()
         # Imported lazily to keep this module lightweight.
         from pydantic import BaseModel
 
@@ -57,7 +91,13 @@ class DeterministicLLMService:
             return {}
 
         payload = self._structured_payload(prompt, schema)
-        return schema.model_validate(payload)
+        result = schema.model_validate(payload)
+        self._record_metric(
+            phase=phase,
+            call_type="generate_structured_output",
+            started_at=started_at,
+        )
+        return result
 
     async def generate_structured_output_async(
         self,
@@ -65,8 +105,9 @@ class DeterministicLLMService:
         schema: dict | type["BaseModel"],
         *,
         method: str = "json_schema",
+        phase: str | None = None,
     ) -> Any:
-        return self.generate_structured_output(prompt, schema, method=method)
+        return self.generate_structured_output(prompt, schema, method=method, phase=phase)
 
     def _structured_payload(self, prompt: str, schema: type["BaseModel"]) -> dict[str, Any]:
         schema_name = getattr(schema, "__name__", "")
@@ -78,6 +119,13 @@ class DeterministicLLMService:
                 "emotional_state": "anxious",
                 "insights": ["pattern recognition"],
                 "progress_indicators": ["engagement"],
+            }
+
+        if schema_name == "StyleAssessmentOutput":
+            return {
+                "assessment": "Deterministic style fit assessment",
+                "score": 0.8,
+                "key_topics": ["work stress", "sleep disruption"],
             }
 
         if schema_name == "Tier2Enrichment":
@@ -93,8 +141,8 @@ class DeterministicLLMService:
         if schema_name == "PlanUpdate":
             return {
                 "focus": "Anxiety management",
-                "goals": "- Reduce anxiety\n- Improve sleep",
-                "techniques": "- Cognitive restructuring\n- Mindfulness",
+                "goals": ["Reduce anxiety", "Improve sleep"],
+                "techniques": ["Cognitive restructuring", "Mindfulness"],
                 "themes": "Anxiety, coping, work stress",
                 "timeline": "12 weeks",
             }
@@ -218,6 +266,7 @@ class DeterministicLLMService:
                     "suggested_questions": ["What stood out from last time?"],
                     "therapeutic_goals_for_session": ["Build on prior insights"],
                 },
+                "intervention_evidence": [],
             }
 
         # Default: return an empty object and let validation reveal missing fields if any.

@@ -7,6 +7,7 @@ using Trio's structured concurrency.
 """
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
@@ -104,8 +105,8 @@ class TrioAgentOrchestrator:
             emit_next_action=self.emit_workflow_next_action,
         )
         self.response_handler.attach_session_callbacks(
-            create_session=self.session_lifecycle.create_session,
             end_session=self.session_lifecycle.end_session,
+            start_therapy_session=self.session_lifecycle.start_therapy_session,
         )
 
     async def process_message(
@@ -246,6 +247,14 @@ class TrioAgentOrchestrator:
         """Schedule the initial greeting for a session."""
         self.session_lifecycle.send_initial_greeting(user_id, session_id)
 
+    async def start_therapy_session(
+        self, user_id: str, current_session_id: str
+    ) -> SessionInfo:
+        """Start the first plan-linked therapy conversation without a UI break."""
+        return await self.session_lifecycle.start_therapy_session(
+            user_id, current_session_id
+        )
+
     async def get_user_state(self, user_id: str) -> WorkflowState:
         """
         Get current workflow state for a user.
@@ -343,6 +352,27 @@ class TrioAgentOrchestrator:
         """Ensure assessment jobs are running when required."""
         await self.response_handler.ensure_assessment_job(user_id, session_id)
 
+    async def retry_plan_update(self, user_id: str, session_id: str) -> None:
+        """Retry reflection for the ended therapy session that failed persistence."""
+        state = await self.workflow_engine.get_user_state(user_id)
+        if state != WorkflowState.PLAN_UPDATE_FAILED:
+            raise ValueError("Plan update retry is only allowed after reflection failure")
+        trio_db_service = self.service_container.get("trio_db_service")
+        session = await trio_db_service.get_session(session_id)
+        if (
+            not session
+            or session.user_id != user_id
+            or session.session_type != "therapy"
+        ):
+            raise ValueError("Retry requires the failed therapy session")
+        self.session_lifecycle.bind_session(user_id, session_id)
+        await self.workflow_engine.transition(
+            user_id,
+            WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+            event=WorkflowEvent.RETRY_PLAN_UPDATE,
+        )
+        await self.response_handler.ensure_reflection_job(user_id, session_id)
+
     async def create_user_profile(
         self, profile_data: dict[str, Any]
     ) -> UserProfile:
@@ -428,7 +458,7 @@ class TrioAgentOrchestrator:
                 raise ValueError(f"User profile not found: {user_id}")
 
             # Check if plan already exists
-            existing_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+            existing_plan = await trio_db_service.get_current_therapy_plan(user_id)
             if existing_plan:
                 if (
                     existing_plan.selected_therapy_style
@@ -438,13 +468,20 @@ class TrioAgentOrchestrator:
                         "Therapy plan already exists with a different style"
                     )
                 if not existing_plan.selected_therapy_style:
-                    existing_plan.selected_therapy_style = therapy_style
-                    existing_plan.updated_at = datetime.now()
-                    success = await trio_db_service.save_therapy_plan(existing_plan)
+                    revised_plan = existing_plan.model_copy(
+                        update={
+                            "plan_id": f"plan_{uuid.uuid4().hex[:12]}",
+                            "selected_therapy_style": therapy_style,
+                            "created_at": datetime.now(),
+                            "updated_at": datetime.now(),
+                        }
+                    )
+                    success = await trio_db_service.save_therapy_plan(revised_plan)
                     if not success:
                         raise RuntimeError(
                             "Failed to update therapy plan with selected style"
                         )
+                    return revised_plan
                 logger.info(
                     "Therapy plan already exists for %s, returning existing",
                     user_id,

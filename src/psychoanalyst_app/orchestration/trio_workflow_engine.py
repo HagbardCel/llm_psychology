@@ -29,12 +29,13 @@ class TrioWorkflowEngine:
         WorkflowState.INTAKE_IN_PROGRESS: "INTAKE",
         WorkflowState.INTAKE_COMPLETE: "ASSESSMENT",
         WorkflowState.ASSESSMENT_IN_PROGRESS: "ASSESSMENT",
-        WorkflowState.ASSESSMENT_COMPLETE: "PSYCHOANALYST",
-        WorkflowState.INITIAL_PLAN_COMPLETE: "PSYCHOANALYST",
-        WorkflowState.THERAPY_IN_PROGRESS: "PSYCHOANALYST",
+        WorkflowState.ASSESSMENT_COMPLETE: "THERAPIST",
+        WorkflowState.INITIAL_PLAN_COMPLETE: "THERAPIST",
+        WorkflowState.THERAPY_IN_PROGRESS: "THERAPIST",
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: "REFLECTION",
         WorkflowState.REFLECTION_IN_PROGRESS: "REFLECTION",
-        WorkflowState.PLAN_UPDATE_COMPLETE: "PSYCHOANALYST",
+        WorkflowState.PLAN_UPDATE_FAILED: "REFLECTION",
+        WorkflowState.PLAN_UPDATE_COMPLETE: "THERAPIST",
     }
 
     # Valid state transitions
@@ -62,11 +63,17 @@ class TrioWorkflowEngine:
         ],
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: [
             WorkflowState.PLAN_UPDATE_COMPLETE,
+            WorkflowState.PLAN_UPDATE_FAILED,
             WorkflowState.PLAN_UPDATE_IN_PROGRESS,  # Allow staying in progress
         ],
         WorkflowState.REFLECTION_IN_PROGRESS: [
             WorkflowState.PLAN_UPDATE_COMPLETE,
+            WorkflowState.PLAN_UPDATE_FAILED,
             WorkflowState.REFLECTION_IN_PROGRESS,  # Allow staying in progress
+        ],
+        WorkflowState.PLAN_UPDATE_FAILED: [
+            WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+            WorkflowState.PLAN_UPDATE_FAILED,
         ],
         WorkflowState.PLAN_UPDATE_COMPLETE: [
             WorkflowState.THERAPY_IN_PROGRESS,  # Can resume therapy
@@ -85,6 +92,7 @@ class TrioWorkflowEngine:
         UserStatus.THERAPY_IN_PROGRESS: WorkflowState.THERAPY_IN_PROGRESS,
         UserStatus.PLAN_UPDATE_IN_PROGRESS: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
         UserStatus.REFLECTION_IN_PROGRESS: WorkflowState.REFLECTION_IN_PROGRESS,
+        UserStatus.PLAN_UPDATE_FAILED: WorkflowState.PLAN_UPDATE_FAILED,
         UserStatus.PLAN_UPDATE_COMPLETE: WorkflowState.PLAN_UPDATE_COMPLETE,
     }
 
@@ -99,6 +107,7 @@ class TrioWorkflowEngine:
         WorkflowState.THERAPY_IN_PROGRESS: UserStatus.THERAPY_IN_PROGRESS,
         WorkflowState.PLAN_UPDATE_IN_PROGRESS: UserStatus.PLAN_UPDATE_IN_PROGRESS,
         WorkflowState.REFLECTION_IN_PROGRESS: UserStatus.REFLECTION_IN_PROGRESS,
+        WorkflowState.PLAN_UPDATE_FAILED: UserStatus.PLAN_UPDATE_FAILED,
         WorkflowState.PLAN_UPDATE_COMPLETE: UserStatus.PLAN_UPDATE_COMPLETE,
     }
 
@@ -193,7 +202,8 @@ class TrioWorkflowEngine:
             raise ValueError(f"Cannot map workflow state {new_state} to user status")
 
         # Update database
-        await self.db_service.update_user_status(user_id, user_status.value)
+        if not await self.db_service.update_user_status(user_id, user_status.value):
+            raise RuntimeError(f"Failed to persist workflow state for user {user_id}")
 
         logger.info(
             f"User {user_id} transitioned to {new_state} (status: {user_status})"
@@ -248,6 +258,8 @@ class TrioWorkflowEngine:
             WorkflowEvent.COMPLETE_SESSION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowEvent.START_REFLECTION: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowEvent.COMPLETE_REFLECTION: WorkflowState.PLAN_UPDATE_COMPLETE,
+            WorkflowEvent.FAIL_REFLECTION: WorkflowState.PLAN_UPDATE_FAILED,
+            WorkflowEvent.RETRY_PLAN_UPDATE: WorkflowState.PLAN_UPDATE_IN_PROGRESS,
             WorkflowEvent.RESUME_THERAPY: WorkflowState.THERAPY_IN_PROGRESS,
         }
 

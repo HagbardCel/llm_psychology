@@ -26,6 +26,12 @@ def test_workflow_engine_accepts_new_plan_state_path() -> None:
         WorkflowState.PLAN_UPDATE_IN_PROGRESS, WorkflowState.PLAN_UPDATE_COMPLETE
     )
     assert engine.can_transition(
+        WorkflowState.PLAN_UPDATE_IN_PROGRESS, WorkflowState.PLAN_UPDATE_FAILED
+    )
+    assert engine.can_transition(
+        WorkflowState.PLAN_UPDATE_FAILED, WorkflowState.PLAN_UPDATE_IN_PROGRESS
+    )
+    assert engine.can_transition(
         WorkflowState.PLAN_UPDATE_COMPLETE, WorkflowState.THERAPY_IN_PROGRESS
     )
 

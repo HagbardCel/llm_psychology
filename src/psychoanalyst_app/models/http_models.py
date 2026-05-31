@@ -84,6 +84,7 @@ class UserProfileListResponseDTO(BaseHTTPModel):
 class SessionDTO(BaseHTTPModel):
     session_id: str
     user_id: str
+    session_type: str
     plan_id: str | None = None
     timestamp: datetime
     transcript: list[MessageDTO] = Field(default_factory=list)
@@ -106,11 +107,14 @@ class TherapyPlanDTO(BaseHTTPModel):
     created_at: datetime
     updated_at: datetime
     version: int
+    supersedes_plan_id: str | None = None
+    superseded_by_plan_id: str | None = None
     selected_therapy_style: str | None = None
     plan_details: dict[str, Any]
     initial_goals: list[str]
     current_progress: str
     planned_interventions: list[str]
+    revision_recommendations: list[str] = Field(default_factory=list)
     status: str = "active"
     session_briefing: dict[str, Any] | None = None
 
@@ -244,10 +248,37 @@ class CreateSessionRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
 
 
+class EndSessionRequestDTO(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
+    reason: str | None = None
+
+
+class EndSessionResponseDTO(BaseHTTPModel):
+    session_id: str
+    workflow_state: str
+    reason: str
+
+
 class WorkflowSelectTherapyStyleRequestDTO(BaseModel):
     user_id: str = Field(..., min_length=1)
     session_id: str = Field(..., min_length=1)
     selected_therapy_style: str = Field(..., min_length=1)
+
+
+class WorkflowStartTherapyRequestDTO(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
+
+
+class WorkflowRetryPlanUpdateRequestDTO(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
+
+
+class WorkflowStartTherapyResponseDTO(BaseHTTPModel):
+    session: SessionDTO
+    workflow_next_action: WorkflowNextActionDTO
 
 
 def user_profile_to_dto(profile: UserProfile) -> UserProfileDTO:

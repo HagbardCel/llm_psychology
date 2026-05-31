@@ -11,10 +11,14 @@ import pytest
 import trio
 
 from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
-from psychoanalyst_app.agents.trio_intake_agent import TrioIntakeAgent
+from psychoanalyst_app.agents.trio_intake_agent import (
+    GOAL_PREFERENCE_PROMPT,
+    RISK_SCREEN_PROMPT,
+    TrioIntakeAgent,
+)
 from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
 from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
-from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
 from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
@@ -160,6 +164,32 @@ async def test_memory_agent_analyze_session(
     assert context.session_id == test_session.session_id
     assert len(context.key_themes) > 0
     assert context.emotional_state is not None
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_memory_agent_reuses_context_until_transcript_changes(
+    service_container, user_context, test_session
+):
+    """Avoid repeated LLM analysis for an unchanged ended-session transcript."""
+    llm_service = service_container.get("llm_service")
+    trio_db_service = service_container.get("trio_db_service")
+    rag_service = service_container.get("rag_service")
+    memory_agent = TrioMemoryAgent(
+        llm_service, trio_db_service, rag_service, user_context
+    )
+
+    first = await memory_agent.analyze_session_context(test_session)
+    second = await memory_agent.analyze_session_context(test_session)
+    assert second is first
+    assert rag_service.retrieve_relevant_knowledge.call_count == 1
+
+    test_session.transcript.append(
+        Message(role="user", content="A new disclosure", timestamp=datetime.now())
+    )
+    third = await memory_agent.analyze_session_context(test_session)
+    assert third is not first
+    assert rag_service.retrieve_relevant_knowledge.call_count == 2
 
 
 @pytest.mark.trio
@@ -451,7 +481,8 @@ async def test_intake_agent_tier1_extraction(service_container):
             role="user",
             content=(
                 "I've been feeling very anxious lately, especially at work. "
-                "I'm a software engineer and the pressure has been overwhelming."
+                "For several months the pressure has been overwhelming my sleep. "
+                "I have tried breathing exercises to cope."
             ),
             timestamp=datetime.now(),
         ),
@@ -499,6 +530,13 @@ async def test_intake_agent_tier1_extraction(service_container):
             ),
             timestamp=datetime.now(),
         ),
+        Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
+        Message(
+            role="user",
+            content="I have not had thoughts of harming myself or anyone else, and I feel safe.",
+            timestamp=datetime.now(),
+        ),
+        Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
     ]
 
     # Create session with conversation
@@ -536,7 +574,7 @@ async def test_intake_agent_tier1_extraction(service_container):
     # Process message that triggers completion
     response = await intake_agent.process_message(
         (
-            "I hope therapy can help me manage my anxiety "
+            "My goal is to manage my anxiety "
             "and find better work-life balance."
         ),
         context,
@@ -676,7 +714,7 @@ async def test_reflection_agent_session_enrichment(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def _structured_side_effect(prompt, schema, method="json_schema"):
+    async def _structured_side_effect(prompt, schema, method="json_schema", phase=None):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_enrichment_data)
         return await original_structured(prompt, schema, method=method)
@@ -837,20 +875,20 @@ async def test_assessment_agent_process_assessment(
     assert len(response.metadata["recommendations"]) > 0
 
 
-# ===== TrioPsychoanalystAgent Tests =====
+# ===== TrioTherapistAgent Tests =====
 
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_psychoanalyst_agent_initialization(
+async def test_therapist_agent_initialization(
     service_container, user_context, style_service
 ):
-    """Test TrioPsychoanalystAgent initialization."""
+    """Test TrioTherapistAgent initialization."""
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
     rag_service = service_container.get("rag_service")
 
-    psychoanalyst_agent = TrioPsychoanalystAgent(
+    therapist_agent = TrioTherapistAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -858,8 +896,8 @@ async def test_psychoanalyst_agent_initialization(
         config=service_container.config,
     )
 
-    assert psychoanalyst_agent is not None
-    assert psychoanalyst_agent._get_agent_display_name() == "therapist"
+    assert therapist_agent is not None
+    assert therapist_agent._get_agent_display_name() == "therapist"
 
 
 # ===== Integration Tests =====
@@ -922,14 +960,14 @@ async def test_full_agent_workflow(
     assert "session_context" in comprehensive_reflection
 
     # Step 4: Psychoanalyst agent is ready to conduct therapy
-    psychoanalyst_agent = TrioPsychoanalystAgent(
+    therapist_agent = TrioTherapistAgent(
         llm_service,
         trio_db_service,
         rag_service,
         style_service=style_service,
         config=service_container.config,
     )
-    assert psychoanalyst_agent is not None
+    assert therapist_agent is not None
 
 
 @pytest.mark.trio
@@ -1188,7 +1226,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_tier34(prompt, schema, method="json_schema"):
+    async def mock_structured_tier34(prompt, schema, method="json_schema", phase=None):
         if schema is PatientAnalysis:
             return PatientAnalysis.model_validate(tier3_data)
         if schema is Tier4Extract:
@@ -1257,7 +1295,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
     )
     assert tier3_analysis is None
 
-    tier4_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    tier4_plan = await trio_db_service.get_current_therapy_plan(test_user.user_id)
     assert tier4_plan is None
 
 
@@ -1532,7 +1570,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_versioning(prompt, schema, method="json_schema"):
+    async def mock_structured_versioning(prompt, schema, method="json_schema", phase=None):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_data)
         if schema is ChangeDetectionDecision:
@@ -1579,7 +1617,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     )
 
     # Run reflection (should create Tier 3 v2)
-    current_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    current_plan = await trio_db_service.get_current_therapy_plan(test_user.user_id)
     (
         reflection,
         _profile_output,
@@ -1625,7 +1663,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     )
     assert "Improving" in tier3_v2.analysis_data.defenses.flexibility
 
-    latest_plan = await trio_db_service.get_latest_therapy_plan(test_user.user_id)
+    latest_plan = await trio_db_service.get_current_therapy_plan(test_user.user_id)
     assert latest_plan is not None
 
     # Verify old version was marked as superseded
@@ -1827,7 +1865,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_stable(prompt, schema, method="json_schema"):
+    async def mock_structured_stable(prompt, schema, method="json_schema", phase=None):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_data)
         if schema is ChangeDetectionDecision:

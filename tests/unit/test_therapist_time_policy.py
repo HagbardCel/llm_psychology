@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from psychoanalyst_app.agents.psychoanalyst.response_mode import resolve_response_mode
-from psychoanalyst_app.agents.psychoanalyst.time_policy import should_offer_extension
+from psychoanalyst_app.agents.therapist.response_mode import resolve_response_mode
+from psychoanalyst_app.agents.therapist.time_policy import should_offer_extension
 from psychoanalyst_app.models.data_models import UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowEvent
 

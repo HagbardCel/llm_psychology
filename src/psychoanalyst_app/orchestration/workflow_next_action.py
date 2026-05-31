@@ -90,8 +90,10 @@ def resolve_next_action(
             session_id=session_id,
         )
 
+    if workflow_state == WorkflowState.INITIAL_PLAN_COMPLETE:
+        return _start_therapy_action(user_id, workflow_state, session_id=session_id)
+
     if workflow_state in (
-        WorkflowState.INITIAL_PLAN_COMPLETE,
         WorkflowState.THERAPY_IN_PROGRESS,
         WorkflowState.PLAN_UPDATE_COMPLETE,
     ):
@@ -105,6 +107,22 @@ def resolve_next_action(
             user_id,
             workflow_state,
             prompt="Session reflection in progress. We'll notify you when it's ready.",
+            session_id=session_id,
+        )
+
+    if workflow_state == WorkflowState.PLAN_UPDATE_FAILED:
+        return WorkflowNextActionDTO(
+            user_id=user_id,
+            workflow_state=workflow_state,
+            required_action=RequiredWorkflowAction.RETRY_PLAN_UPDATE,
+            required_fields=[],
+            defaults=None,
+            prompt=(
+                "The session reflection could not be saved. Retry the plan update "
+                "before starting another therapy session."
+            ),
+            blocking=True,
+            timestamp=datetime.utcnow(),
             session_id=session_id,
         )
 
@@ -183,9 +201,7 @@ def _continue_therapy_action(
     user_id: str, state: WorkflowState, *, session_id: str | None
 ) -> WorkflowNextActionDTO:
     """Helper for therapy continuation prompts."""
-    if state == WorkflowState.INITIAL_PLAN_COMPLETE:
-        prompt = "Your selected therapy style is ready. Start therapy whenever you're ready."
-    elif state == WorkflowState.PLAN_UPDATE_COMPLETE:
+    if state == WorkflowState.PLAN_UPDATE_COMPLETE:
         prompt = "Your session reflection is complete. Resume therapy whenever you're ready."
     else:
         prompt = "Resume your therapy session or start a new one whenever you're ready."
@@ -196,6 +212,23 @@ def _continue_therapy_action(
         required_fields=[],
         defaults=None,
         prompt=prompt,
+        blocking=False,
+        timestamp=datetime.utcnow(),
+        session_id=session_id,
+    )
+
+
+def _start_therapy_action(
+    user_id: str, state: WorkflowState, *, session_id: str | None
+) -> WorkflowNextActionDTO:
+    """Prompt the client to explicitly begin the first therapy session."""
+    return WorkflowNextActionDTO(
+        user_id=user_id,
+        workflow_state=state,
+        required_action=RequiredWorkflowAction.START_THERAPY,
+        required_fields=[],
+        defaults=None,
+        prompt="Your selected therapy style is ready. Start therapy now?",
         blocking=False,
         timestamp=datetime.utcnow(),
         session_id=session_id,

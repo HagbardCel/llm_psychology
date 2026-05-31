@@ -22,7 +22,9 @@ class RequiredWorkflowAction(str, Enum):
     COMPLETE_PROFILE = "complete_profile"
     SELECT_THERAPY_STYLE = "select_therapy_style"
     START_INTAKE = "start_intake"
+    START_THERAPY = "start_therapy"
     CONTINUE_THERAPY = "continue_therapy"
+    RETRY_PLAN_UPDATE = "retry_plan_update"
     WAIT = "wait"
 
 

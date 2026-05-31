@@ -150,8 +150,8 @@ def test_selects_style_after_assessment_complete():
     assert action.required_fields == ["selected_therapy_style"]
 
 
-def test_continues_therapy_after_plan_created():
-    """Initial and recurring planning states should return continue actions."""
+def test_starts_initial_therapy_and_continues_after_plan_update():
+    """Initial therapy requires a deliberate start; recurring therapy resumes."""
     profile = _complete_profile()
     plan = _therapy_plan()
     initial_action = resolve_next_action(
@@ -167,8 +167,8 @@ def test_continues_therapy_after_plan_created():
         plan=plan,
     )
 
-    assert initial_action.required_action == RequiredWorkflowAction.CONTINUE_THERAPY
-    assert "selected therapy style is ready" in (initial_action.prompt or "")
+    assert initial_action.required_action == RequiredWorkflowAction.START_THERAPY
+    assert "selected therapy style is ready" in (initial_action.prompt or "").lower()
     assert not initial_action.blocking
     assert recurring_action.required_action == RequiredWorkflowAction.CONTINUE_THERAPY
     assert "session reflection is complete" in (recurring_action.prompt or "")
@@ -188,6 +188,21 @@ def test_waits_during_plan_update_in_progress():
     assert action.required_action == RequiredWorkflowAction.WAIT
     assert action.blocking
     assert "Session reflection in progress" in (action.prompt or "")
+
+
+def test_requires_explicit_retry_after_plan_update_failure():
+    """Failed reflection must block therapy until the user retries it."""
+    profile = _complete_profile()
+    action = resolve_next_action(
+        user_id=profile.user_id,
+        workflow_state=WorkflowState.PLAN_UPDATE_FAILED,
+        profile=profile,
+        plan=_therapy_plan(),
+    )
+
+    assert action.required_action == RequiredWorkflowAction.RETRY_PLAN_UPDATE
+    assert action.blocking
+    assert "could not be saved" in (action.prompt or "")
 
 
 def test_session_info_influences_prompt():

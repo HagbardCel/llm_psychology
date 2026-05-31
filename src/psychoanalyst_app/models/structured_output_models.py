@@ -88,7 +88,8 @@ class Tier4Extract(BaseModel):
     initial_goals: list[str] = Field(..., min_length=1)
     current_progress: str = Field(..., min_length=1, max_length=2000)
     planned_interventions: list[str] = Field(..., min_length=1)
-    status: Literal["active", "paused", "completed"] = "active"
+    revision_recommendations: list[str] = Field(default_factory=list)
+    status: Literal["active", "paused", "completed", "superseded"] = "active"
 
 
 class PatientProfileExtract(BaseModel):
@@ -105,8 +106,8 @@ class PlanUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     focus: str
-    goals: str
-    techniques: str
+    goals: list[str] = Field(..., min_length=1)
+    techniques: list[str] = Field(..., min_length=1)
     themes: str
     timeline: str
 
@@ -157,7 +158,8 @@ class StructuredTherapyPlanOutput(BaseModel):
     initial_goals: list[str] = Field(..., min_length=1)
     current_progress: str = Field(..., min_length=1, max_length=2000)
     planned_interventions: list[str] = Field(..., min_length=1)
-    status: Literal["active", "paused", "completed"] = "active"
+    revision_recommendations: list[str] = Field(default_factory=list)
+    status: Literal["active", "paused", "completed", "superseded"] = "active"
 
 
 class StyleAssessmentOutput(BaseModel):

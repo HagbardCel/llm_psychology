@@ -78,8 +78,8 @@ def update_tier4_fields(
             break
 
     if rec_descriptions:
-        if plan.planned_interventions[: len(rec_descriptions)] != rec_descriptions:
-            plan.planned_interventions = rec_descriptions
+        if plan.revision_recommendations != rec_descriptions:
+            plan.revision_recommendations = rec_descriptions
             updated = True
 
     return updated
@@ -156,6 +156,7 @@ async def maybe_update_tier1_profile(
             detection_prompt,
             ChangeDetectionDecision,
             method="json_schema",
+            phase="post_session_update",
         )
         if not isinstance(decision, ChangeDetectionDecision):
             return None
@@ -172,6 +173,7 @@ async def maybe_update_tier1_profile(
             update_prompt,
             Tier1ProfilePatch,
             method="json_schema",
+            phase="post_session_update",
         )
         if not isinstance(patch, Tier1ProfilePatch):
             return None

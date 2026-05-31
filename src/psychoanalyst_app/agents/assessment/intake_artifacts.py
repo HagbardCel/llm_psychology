@@ -93,6 +93,7 @@ async def extract_tier3_initial_formulation(
             extraction_prompt,
             PatientAnalysis,
             method="json_schema",
+            phase="assessment_generation",
         )
         if not isinstance(analysis, PatientAnalysis):
             logger.error("Tier 3 extraction returned unexpected type")
@@ -148,6 +149,7 @@ async def extract_tier4_initial_plan(
             extraction_prompt,
             Tier4Extract,
             method="json_schema",
+            phase="initial_plan_generation",
         )
         if not isinstance(tier4, Tier4Extract):
             logger.error("Tier 4 extraction returned unexpected type")

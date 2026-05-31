@@ -96,13 +96,14 @@ class MigrationService:
                         logger.error(f"Migration {version} failed: {e}")
                         raise
 
+            self._validate_foundation_schema(conn)
             self._ensure_current_schema(conn)
 
         finally:
             conn.close()
 
     def _ensure_current_schema(self, conn: sqlite3.Connection) -> None:
-        """Repair legacy databases so they match the current app schema."""
+        """Ensure indexes and additive non-foundation columns are present."""
         cursor = conn.cursor()
 
         self._ensure_columns(
@@ -165,6 +166,22 @@ class MigrationService:
         self._ensure_current_indexes(cursor)
         conn.commit()
 
+    def _validate_foundation_schema(self, conn: sqlite3.Connection) -> None:
+        """Fail closed for databases created before immutable plan revisions."""
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(therapy_plans)")
+        columns = {row[1] for row in cursor.fetchall()}
+        required = {
+            "supersedes_plan_id",
+            "superseded_by_plan_id",
+            "revision_recommendations",
+        }
+        if not required.issubset(columns):
+            raise RuntimeError(
+                "Database schema is incompatible with immutable therapy plan "
+                "revisions. Run `make reset-foundation-db` before startup."
+            )
+
     def _ensure_columns(
         self,
         cursor: sqlite3.Cursor,
@@ -222,6 +239,13 @@ class MigrationService:
         )
         cursor.execute(
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_therapy_plans_current_user
+            ON therapy_plans(user_id)
+            WHERE superseded_by_plan_id IS NULL
+            """
+        )
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_user_profiles_plan_id
             ON user_profiles(plan_id)
             """
@@ -266,6 +290,7 @@ class MigrationService:
             (1, self._migration_001_initial_schema),
             (2, self._migration_002_add_llm_cache),
             (3, self._migration_003_add_assessment_recommendations),
+            (4, self._migration_004_add_session_type),
         ]
 
     def _migration_001_initial_schema(self, conn: sqlite3.Connection):
@@ -311,6 +336,8 @@ class MigrationService:
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
+                session_type TEXT NOT NULL DEFAULT 'intake'
+                    CHECK(session_type IN ('intake', 'therapy')),
                 plan_id TEXT,
                 timestamp TEXT NOT NULL,
                 transcript TEXT NOT NULL,
@@ -340,10 +367,19 @@ class MigrationService:
                 initial_goals TEXT,
                 current_progress TEXT,
                 planned_interventions TEXT,
-                status TEXT DEFAULT 'active',
+                revision_recommendations TEXT NOT NULL DEFAULT '[]',
+                status TEXT DEFAULT 'active'
+                    CHECK(status IN ('active', 'paused', 'completed', 'superseded')),
                 version INTEGER NOT NULL,
                 selected_therapy_style TEXT,
-                session_briefing TEXT
+                session_briefing TEXT,
+                supersedes_plan_id TEXT,
+                superseded_by_plan_id TEXT,
+                FOREIGN KEY (supersedes_plan_id)
+                    REFERENCES therapy_plans(plan_id) ON DELETE SET NULL,
+                FOREIGN KEY (superseded_by_plan_id)
+                    REFERENCES therapy_plans(plan_id) ON DELETE SET NULL,
+                UNIQUE(user_id, version)
             )
         """
         )
@@ -453,6 +489,13 @@ class MigrationService:
         )
         cursor.execute(
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_therapy_plans_current_user
+            ON therapy_plans(user_id)
+            WHERE superseded_by_plan_id IS NULL
+        """
+        )
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_user_profiles_plan_id
             ON user_profiles(plan_id)
         """
@@ -497,6 +540,14 @@ class MigrationService:
         cursor.execute("PRAGMA foreign_keys=ON")
 
         logger.info("Removed session_mode from user_profiles")
+
+    def _migration_004_add_session_type(self, conn: sqlite3.Connection):
+        """Persist whether a conversation block is intake or therapy."""
+        self._ensure_columns(
+            conn.cursor(),
+            "sessions",
+            {"session_type": "TEXT NOT NULL DEFAULT 'intake'"},
+        )
 
     def _migration_002_add_llm_cache(self, conn: sqlite3.Connection):
         """Add LLM response cache table and maintenance indexes."""

@@ -335,6 +335,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
                 evaluation_prompt,
                 StyleAssessmentOutput,
                 method="json_schema",
+                phase="assessment_generation",
             )
             if not isinstance(assessment_output, StyleAssessmentOutput):
                 assessment_output = StyleAssessmentOutput.model_validate(

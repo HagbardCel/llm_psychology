@@ -93,6 +93,9 @@ def register_ws_handler(app, server) -> None:
                 raw_message = await websocket.receive()
                 message = json.loads(raw_message)
                 msg_type = message.get("type")
+                session_id = (
+                    server.orchestrator.get_active_session_id(user_id) or session_id
+                )
 
                 if msg_type == ClientMessageTypes.CHAT_MESSAGE:
                     if not session_id:

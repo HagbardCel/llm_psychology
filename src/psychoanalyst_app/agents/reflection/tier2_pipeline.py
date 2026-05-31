@@ -67,33 +67,29 @@ async def load_or_enrich_session_record(
 ) -> tuple[Session, dict[str, Any] | None]:
     """Load enriched record when available, otherwise enrich in-memory."""
     tier2_enrichment = None
-    session_record = session
+    session_record = await db_service.get_session(session.session_id) or session
 
-    if not getattr(session, "enriched", False):
+    if not getattr(session_record, "enriched", False):
         logger.info(
             "Session %s not yet enriched - extracting Tier 2 data...",
-            session.session_id,
+            session_record.session_id,
         )
-        tier2_enrichment = await enrich_session_tier2(llm_service, session)
+        tier2_enrichment = await enrich_session_tier2(llm_service, session_record)
         if tier2_enrichment:
-            session_record = apply_tier2_enrichment(session, tier2_enrichment)
+            session_record = apply_tier2_enrichment(session_record, tier2_enrichment)
             logger.info(
                 "Successfully enriched session %s with Tier 2 data",
-                session.session_id,
+                session_record.session_id,
             )
         else:
             logger.warning(
                 "Failed to enrich session %s - continuing without enrichment",
-                session.session_id,
+                session_record.session_id,
             )
         return session_record, tier2_enrichment
 
-    logger.info("Session %s already enriched - skipping", session.session_id)
-    loaded = await db_service.get_session(session.session_id)
-    if loaded:
-        logger.debug("Loaded enriched session record for %s", session.session_id)
-        return loaded, tier2_enrichment
-    return session, tier2_enrichment
+    logger.info("Session %s already enriched - skipping", session_record.session_id)
+    return session_record, tier2_enrichment
 
 
 async def ensure_recent_sessions_enriched(

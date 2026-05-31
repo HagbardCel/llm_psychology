@@ -177,7 +177,7 @@ async def test_load_conversation_context_builds_expected_payload() -> None:
     db_service = SimpleNamespace(
         get_session=AsyncMock(return_value=session),
         get_user_profile=AsyncMock(return_value=user_profile),
-        get_latest_therapy_plan=AsyncMock(return_value=None),
+        get_current_therapy_plan=AsyncMock(return_value=None),
     )
     config = SimpleNamespace(SESSION_DURATION_MINUTES=45)
 

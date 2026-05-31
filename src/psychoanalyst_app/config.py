@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     ASSESSMENT_MODEL: str = Field(
         default="", description="Model for assessment agent (defaults to MODEL_NAME)"
     )
-    PSYCHOANALYST_MODEL: str = Field(
+    THERAPIST_MODEL: str = Field(
         default="",
         description="Model for psychoanalyst agent (defaults to MODEL_NAME)",
     )
@@ -107,6 +107,10 @@ class Settings(BaseSettings):
         default=False,
         description="Include stream chunk payloads in detailed LLM logs",
     )
+    LLM_METRICS_LOG_PATH: str = Field(
+        default="",
+        description="Optional JSONL path for prompt-free LLM timing metrics",
+    )
 
     def model_post_init(self, __context) -> None:
         """Apply compatibility shims after settings load."""
@@ -133,7 +137,7 @@ class Settings(BaseSettings):
         overrides = {
             "INTAKE": self.INTAKE_MODEL,
             "ASSESSMENT": self.ASSESSMENT_MODEL,
-            "PSYCHOANALYST": self.PSYCHOANALYST_MODEL,
+            "THERAPIST": self.THERAPIST_MODEL,
             "REFLECTION": self.REFLECTION_MODEL,
             "MEMORY": self.MEMORY_MODEL,
             "PLANNING": self.PLANNING_MODEL,
@@ -325,6 +329,21 @@ def setup_logging(
         llm_logger.addHandler(logging.NullHandler())
         llm_logger.setLevel(logging.CRITICAL)
     llm_logger.propagate = False
+
+    metrics_logger = logging.getLogger("llm_metrics")
+    metrics_logger.handlers.clear()
+    if settings.LLM_METRICS_LOG_PATH:
+        metrics_path = Path(settings.LLM_METRICS_LOG_PATH)
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_handler = logging.FileHandler(metrics_path, mode="a")
+        metrics_handler.setLevel(logging.INFO)
+        metrics_handler.setFormatter(logging.Formatter("%(message)s"))
+        metrics_logger.addHandler(metrics_handler)
+        metrics_logger.setLevel(logging.INFO)
+    else:
+        metrics_logger.addHandler(logging.NullHandler())
+        metrics_logger.setLevel(logging.CRITICAL)
+    metrics_logger.propagate = False
 
     # Set specific loggers to appropriate levels
     logging.getLogger("urllib3").setLevel(logging.WARNING)

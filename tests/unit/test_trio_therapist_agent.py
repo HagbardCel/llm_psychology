@@ -1,5 +1,5 @@
 """
-Unit tests for TrioPsychoanalystAgent.
+Unit tests for TrioTherapistAgent.
 
 Tests the psychoanalyst agent's session resumption functionality.
 """
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
 from psychoanalyst_app.models.briefing_models import BriefingStatus
 from psychoanalyst_app.models.data_models import (
     TherapyPlan,
@@ -22,7 +22,7 @@ from psychoanalyst_app.orchestration.models import ConversationContext
 
 
 @pytest.fixture
-def psychoanalyst_agent(app_config):
+def therapist_agent(app_config):
     """Create a psychoanalyst agent for testing."""
     # Create simple mocks
     mock_llm = Mock()
@@ -30,7 +30,7 @@ def psychoanalyst_agent(app_config):
     mock_rag = Mock()
     mock_style = Mock()
 
-    return TrioPsychoanalystAgent(
+    return TrioTherapistAgent(
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,
@@ -152,36 +152,36 @@ def create_briefing(days_ago: int = 0) -> dict:
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_fresh(psychoanalyst_agent):
+async def test_get_briefing_status_fresh(therapist_agent):
     """Test that a recent briefing is marked as FRESH."""
     # Create a briefing from today
     briefing = create_briefing(days_ago=0)
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.FRESH
 
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_fresh_within_validity(psychoanalyst_agent):
+async def test_get_briefing_status_fresh_within_validity(therapist_agent):
     """Test that a briefing within validity period is FRESH."""
     # Create a briefing from 3 days ago (should be within default 30-day validity)
     briefing = create_briefing(days_ago=3)
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.FRESH
 
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_stale(psychoanalyst_agent):
+async def test_get_briefing_status_stale(therapist_agent):
     """Test that an old briefing is marked as STALE."""
     # Create a briefing from 45 days ago (beyond BRIEFING_VALIDITY_DAYS but within STALE_BRIEFING_DAYS)
     briefing = create_briefing(days_ago=45)
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     # Should be STALE (older than 30 days but less than 90 days)
     assert status == BriefingStatus.STALE
@@ -189,19 +189,19 @@ async def test_get_briefing_status_stale(psychoanalyst_agent):
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_very_stale(psychoanalyst_agent):
+async def test_get_briefing_status_very_stale(therapist_agent):
     """Test that a very old briefing is marked as VERY_STALE."""
     # Create a briefing from 100 days ago (beyond STALE_BRIEFING_DAYS)
     briefing = create_briefing(days_ago=100)
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.VERY_STALE
 
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_invalid_no_timestamp(psychoanalyst_agent):
+async def test_get_briefing_status_invalid_no_timestamp(therapist_agent):
     """Test that a briefing without timestamp is marked as INVALID."""
     briefing = {
         "session_summary": "Test summary",
@@ -209,7 +209,7 @@ async def test_get_briefing_status_invalid_no_timestamp(psychoanalyst_agent):
         # Missing generated_at
     }
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.INVALID
 
@@ -234,7 +234,7 @@ async def test_load_patient_context_includes_tiers(app_config):
     )
     mock_db.get_recent_sessions = AsyncMock(return_value=[])
     mock_db.get_latest_patient_analysis = AsyncMock(return_value=None)
-    mock_db.get_latest_therapy_plan = AsyncMock(
+    mock_db.get_current_therapy_plan = AsyncMock(
         return_value=TherapyPlan(
             plan_id="plan123",
             user_id="test_user_123",
@@ -249,7 +249,7 @@ async def test_load_patient_context_includes_tiers(app_config):
             selected_therapy_style="cbt",
         )
     )
-    agent = TrioPsychoanalystAgent(
+    agent = TrioTherapistAgent(
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,
@@ -266,21 +266,21 @@ async def test_load_patient_context_includes_tiers(app_config):
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_process_message_recovers_plan_from_db(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """A stale context without a plan should reload the latest plan before fallback."""
-    psychoanalyst_agent.db_service.get_latest_therapy_plan = AsyncMock(
+    therapist_agent.db_service.get_current_therapy_plan = AsyncMock(
         return_value=sample_therapy_plan
     )
-    psychoanalyst_agent.db_service.get_user_profile = AsyncMock(
+    therapist_agent.db_service.get_user_profile = AsyncMock(
         return_value=sample_user_profile
     )
-    psychoanalyst_agent.db_service.get_recent_sessions = AsyncMock(return_value=[])
-    psychoanalyst_agent.db_service.get_latest_patient_analysis = AsyncMock(
+    therapist_agent.db_service.get_recent_sessions = AsyncMock(return_value=[])
+    therapist_agent.db_service.get_latest_patient_analysis = AsyncMock(
         return_value=None
     )
-    psychoanalyst_agent.style_service.get_style_pack.return_value = None
-    psychoanalyst_agent.rag_service.retrieve_relevant_knowledge.return_value = []
+    therapist_agent.style_service.get_style_pack.return_value = None
+    therapist_agent.rag_service.retrieve_relevant_knowledge.return_value = []
     context = ConversationContext(
         session_id="session-1",
         user_profile=sample_user_profile,
@@ -291,7 +291,7 @@ async def test_process_message_recovers_plan_from_db(
         duration_minutes=45,
     )
 
-    response = await psychoanalyst_agent.process_message("hello", context)
+    response = await therapist_agent.process_message("hello", context)
 
     assert response.metadata["therapy_style"] == sample_therapy_plan.selected_therapy_style
     assert context.therapy_plan == sample_therapy_plan
@@ -301,10 +301,10 @@ async def test_process_message_recovers_plan_from_db(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_process_message_missing_plan_uses_therapeutic_recovery(
-    psychoanalyst_agent, sample_user_profile
+    therapist_agent, sample_user_profile
 ):
     """The no-plan fallback must not expose platform language to the patient."""
-    psychoanalyst_agent.db_service.get_latest_therapy_plan = AsyncMock(return_value=None)
+    therapist_agent.db_service.get_current_therapy_plan = AsyncMock(return_value=None)
     context = ConversationContext(
         session_id="session-1",
         user_profile=sample_user_profile,
@@ -315,7 +315,7 @@ async def test_process_message_missing_plan_uses_therapeutic_recovery(
         duration_minutes=45,
     )
 
-    response = await psychoanalyst_agent.process_message("hello", context)
+    response = await therapist_agent.process_message("hello", context)
 
     lowered = response.content.lower()
     assert "contact support" not in lowered
@@ -326,7 +326,7 @@ async def test_process_message_missing_plan_uses_therapeutic_recovery(
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_briefing_status_invalid_bad_timestamp(psychoanalyst_agent):
+async def test_get_briefing_status_invalid_bad_timestamp(therapist_agent):
     """Test that a briefing with invalid timestamp is marked as INVALID."""
     briefing = {
         "session_summary": "Test summary",
@@ -334,7 +334,7 @@ async def test_get_briefing_status_invalid_bad_timestamp(psychoanalyst_agent):
         "generated_at": "not-a-valid-timestamp",
     }
 
-    status = psychoanalyst_agent.get_briefing_status(briefing)
+    status = therapist_agent.get_briefing_status(briefing)
 
     assert status == BriefingStatus.INVALID
 
@@ -342,7 +342,7 @@ async def test_get_briefing_status_invalid_bad_timestamp(psychoanalyst_agent):
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_build_resumption_prompt_fresh_briefing(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """
     Test that resumption prompt is built correctly from a fresh briefing.
@@ -354,7 +354,7 @@ async def test_build_resumption_prompt_fresh_briefing(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await psychoanalyst_agent._build_resumption_prompt(
+    prompt = await therapist_agent._build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -379,7 +379,7 @@ async def test_build_resumption_prompt_fresh_briefing(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_build_resumption_prompt_stale_briefing(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """
     Test that resumption prompt acknowledges stale briefing.
@@ -391,7 +391,7 @@ async def test_build_resumption_prompt_stale_briefing(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await psychoanalyst_agent._build_resumption_prompt(
+    prompt = await therapist_agent._build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -410,7 +410,7 @@ async def test_build_resumption_prompt_stale_briefing(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_build_resumption_prompt_includes_therapy_style(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """
     Test that resumption prompt incorporates therapy style.
@@ -423,7 +423,7 @@ async def test_build_resumption_prompt_includes_therapy_style(
     sample_therapy_plan.selected_therapy_style = "CBT"
 
     # Build resumption prompt
-    prompt = await psychoanalyst_agent._build_resumption_prompt(
+    prompt = await therapist_agent._build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -442,7 +442,7 @@ async def test_build_resumption_prompt_includes_therapy_style(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_build_resumption_prompt_includes_key_themes(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """
     Test that resumption prompt incorporates key themes from briefing.
@@ -482,7 +482,7 @@ async def test_build_resumption_prompt_includes_key_themes(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await psychoanalyst_agent._build_resumption_prompt(
+    prompt = await therapist_agent._build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -501,7 +501,7 @@ async def test_build_resumption_prompt_includes_key_themes(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_build_resumption_prompt_includes_emotional_state(
-    psychoanalyst_agent, sample_user_profile, sample_therapy_plan
+    therapist_agent, sample_user_profile, sample_therapy_plan
 ):
     """
     Test that resumption prompt acknowledges previous emotional state.
@@ -535,7 +535,7 @@ async def test_build_resumption_prompt_includes_emotional_state(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await psychoanalyst_agent._build_resumption_prompt(
+    prompt = await therapist_agent._build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -554,9 +554,9 @@ async def test_build_resumption_prompt_includes_emotional_state(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_should_offer_extension_blocks_when_llm_flags_deep_topic(
-    psychoanalyst_agent,
+    therapist_agent,
 ):
-    psychoanalyst_agent.llm_service.generate_structured_output_async = AsyncMock(
+    therapist_agent.llm_service.generate_structured_output_async = AsyncMock(
         return_value=DeepTopicSignalOutput(
             in_deep_topic=True,
             confidence="high",
@@ -579,15 +579,15 @@ async def test_should_offer_extension_blocks_when_llm_flags_deep_topic(
         },
     )()
 
-    assert await psychoanalyst_agent._should_offer_extension(context) is False
+    assert await therapist_agent._should_offer_extension(context) is False
 
 
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_should_offer_extension_uses_fallback_when_llm_signal_fails(
-    psychoanalyst_agent,
+    therapist_agent,
 ):
-    psychoanalyst_agent.llm_service.generate_structured_output_async = AsyncMock(
+    therapist_agent.llm_service.generate_structured_output_async = AsyncMock(
         side_effect=RuntimeError("llm unavailable")
     )
     context = type(
@@ -606,4 +606,4 @@ async def test_should_offer_extension_uses_fallback_when_llm_signal_fails(
         },
     )()
 
-    assert await psychoanalyst_agent._should_offer_extension(context) is True
+    assert await therapist_agent._should_offer_extension(context) is True

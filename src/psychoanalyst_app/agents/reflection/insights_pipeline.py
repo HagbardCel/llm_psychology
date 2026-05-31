@@ -166,7 +166,7 @@ async def gather_therapeutic_insights(
         patterns = await memory_agent.identify_patterns()
         recent_context = await memory_agent.get_recent_context(num_sessions=5)
 
-        current_plan = await db_service.get_latest_therapy_plan(user_id)
+        current_plan = await db_service.get_current_therapy_plan(user_id)
         plan_evolution = planning_agent.get_plan_evolution_summary()
 
         plan_assessment = None

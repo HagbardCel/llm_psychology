@@ -73,7 +73,7 @@ Your summary should be structured as follows:
 """
 
 # Session briefing prompt (for resuming sessions)
-SESSION_BRIEFING_PROMPT = """You are a supervising psychoanalyst conducting a comprehensive review of a completed therapy session. Your role is to create a detailed "Session Briefing" that will be used by the therapist who conducts the next session with this patient.
+SESSION_BRIEFING_PROMPT = """You are a supervising therapist conducting a comprehensive review of a completed therapy session. Your role is to create a detailed "Session Briefing" that will be used by the therapist who conducts the next session with this patient.
 
 PATIENT CONTEXT:
 - Total Sessions Completed: {total_sessions}
@@ -171,16 +171,14 @@ Generate a complete SessionBriefing JSON object with the following structure. Ea
       "<Third goal - maximum {max_session_goals} total>"
     ]
   }},
-
-  "tier4_update": {{
-    "should_update": <true|false>,
-    "current_progress": "<If should_update=true: updated qualitative progress summary. If false: repeat current progress verbatim.>",
-    "planned_interventions": [
-      "<If should_update=true: updated list of planned interventions. If false: repeat the current list.>"
-    ],
-    "status": "<One of: 'active', 'paused', 'completed'>",
-    "rationale": "<1-2 sentences explaining why an update is or isn't needed>"
-  }}
+  "intervention_evidence": [
+    {{
+      "intervention": "<Intervention proposed, accepted, or completed>",
+      "evidence_level": "<One of: 'proposed', 'accepted', 'completed'>",
+      "patient_turn_index": <Patient transcript turn index or null>,
+      "patient_evidence": "<Exact supporting patient text or null>"
+    }}
+  ]
 }}
 
 CRITICAL REQUIREMENTS:
@@ -193,6 +191,9 @@ CRITICAL REQUIREMENTS:
 7. Use specific, concrete language - avoid vague therapeutic jargon
 8. Base all analysis strictly on the provided session data
 9. Ensure all enum values match exactly (case-sensitive)
+10. Use "proposed" unless a later patient turn explicitly supports acceptance
+11. Use "completed" only for explicit patient-reported completion
+12. Avoid agreement or completion language in narrative fields unless supported
 
 Generate the complete JSON object now:
 """

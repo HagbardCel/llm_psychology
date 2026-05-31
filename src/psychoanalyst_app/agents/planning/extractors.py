@@ -25,6 +25,19 @@ from .models import PlanningStrategy
 logger = logging.getLogger(__name__)
 
 
+def _plan_update_details(plan_update: PlanUpdate) -> dict[str, Any]:
+    """Keep legacy display strings while exposing structured plan lists."""
+    details = plan_update.model_dump()
+    details["goals"] = "\n".join(
+        f"{index}. {goal}" for index, goal in enumerate(plan_update.goals, start=1)
+    )
+    details["techniques"] = "\n".join(
+        f"{index}. {technique}"
+        for index, technique in enumerate(plan_update.techniques, start=1)
+    )
+    return details
+
+
 async def get_relevant_knowledge(
     rag_service: RAGService,
     style_service: StyleService,
@@ -66,7 +79,7 @@ async def generate_initial_plan_details(
     session_context,
     strategy: PlanningStrategy,
     relevant_knowledge: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> tuple[PlanUpdate, dict[str, Any]]:
     """Generate detailed plan using LLM."""
     session_text = extract_session_text(intake_session)
 
@@ -107,11 +120,12 @@ async def generate_initial_plan_details(
         plan_prompt,
         PlanUpdate,
         method="json_schema",
+        phase="initial_plan_generation",
     )
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Initial plan generation returned unexpected type")
 
-    plan_details = plan_update.model_dump()
+    plan_details = _plan_update_details(plan_update)
     plan_details.update(
         {
             "created_from_session": intake_session.session_id,
@@ -121,7 +135,7 @@ async def generate_initial_plan_details(
             "initial_emotional_state": session_context.emotional_state,
         }
     )
-    return plan_details
+    return plan_update, plan_details
 
 
 async def generate_updated_plan_details(
@@ -133,7 +147,7 @@ async def generate_updated_plan_details(
     memory,
     current_plan: TherapyPlan,
     relevant_knowledge: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> tuple[PlanUpdate, dict[str, Any]]:
     """Generate updated plan details using LLM."""
     session_text = extract_session_text(session)
     recent_context = await memory_agent.get_recent_context(num_sessions=3)
@@ -180,12 +194,13 @@ async def generate_updated_plan_details(
         update_prompt,
         PlanUpdate,
         method="json_schema",
+        phase="post_session_update",
     )
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Plan update generation returned unexpected type")
 
     updated_details = current_plan.plan_details.copy()
-    for key, value in plan_update.model_dump().items():
+    for key, value in _plan_update_details(plan_update).items():
         if isinstance(value, str) and value.strip():
             updated_details[key] = value
 
@@ -198,4 +213,4 @@ async def generate_updated_plan_details(
         }
     )
 
-    return updated_details
+    return plan_update, updated_details

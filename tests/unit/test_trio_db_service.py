@@ -72,6 +72,13 @@ def sample_session_briefing():
     }
 
 
+async def _save_profile(db, user_id: str) -> None:
+    now = datetime.now()
+    assert await db.save_user_profile(
+        UserProfile(user_id=user_id, name="Test User", created_at=now, updated_at=now)
+    )
+
+
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_save_and_load_therapy_plan_with_briefing(
@@ -83,6 +90,7 @@ async def test_save_and_load_therapy_plan_with_briefing(
     This test verifies the critical bug fix for the missing session_briefing column.
     """
     # Add session briefing to the therapy plan
+    await _save_profile(test_db_service, sample_therapy_plan.user_id)
     sample_therapy_plan.session_briefing = sample_session_briefing
 
     # Save the therapy plan with briefing
@@ -131,6 +139,7 @@ async def test_save_therapy_plan_without_briefing(test_db_service, sample_therap
     This ensures backward compatibility with plans that don't have briefings yet.
     """
     # Ensure session_briefing is None
+    await _save_profile(test_db_service, sample_therapy_plan.user_id)
     sample_therapy_plan.session_briefing = None
 
     # Save the therapy plan
@@ -159,6 +168,7 @@ async def test_update_therapy_plan_with_briefing(
     This simulates the reflection agent adding a briefing after a session.
     """
     # First save plan without briefing
+    await _save_profile(test_db_service, sample_therapy_plan.user_id)
     sample_therapy_plan.session_briefing = None
     success = await test_db_service.save_therapy_plan(sample_therapy_plan)
     assert success is True
@@ -168,13 +178,18 @@ async def test_update_therapy_plan_with_briefing(
     assert retrieved_plan.session_briefing is None
 
     # Update the plan with a briefing
-    sample_therapy_plan.session_briefing = sample_session_briefing
-    sample_therapy_plan.updated_at = datetime.now()
-    success = await test_db_service.save_therapy_plan(sample_therapy_plan)
+    revised_plan = sample_therapy_plan.model_copy(
+        update={
+            "plan_id": "test_plan_124",
+            "session_briefing": sample_session_briefing,
+            "updated_at": datetime.now(),
+        }
+    )
+    success = await test_db_service.save_therapy_plan(revised_plan)
     assert success is True
 
     # Retrieve the updated plan
-    updated_plan = await test_db_service.get_therapy_plan(sample_therapy_plan.plan_id)
+    updated_plan = await test_db_service.get_therapy_plan(revised_plan.plan_id)
 
     # Verify briefing was added
     assert updated_plan.session_briefing is not None
@@ -186,15 +201,16 @@ async def test_update_therapy_plan_with_briefing(
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_get_latest_therapy_plan_with_briefing(
+async def test_get_current_therapy_plan_with_briefing(
     test_db_service, sample_session_briefing
 ):
     """
-    Test that get_latest_therapy_plan correctly retrieves the plan with briefing.
+    Test that get_current_therapy_plan correctly retrieves the plan with briefing.
 
     This is the method used by the server when generating resumption greetings.
     """
     user_id = "test_user_456"
+    await _save_profile(test_db_service, user_id)
 
     # Create and save first plan (no briefing)
     plan_v1 = TherapyPlan(
@@ -212,6 +228,15 @@ async def test_get_latest_therapy_plan_with_briefing(
         session_briefing=None,
     )
     await test_db_service.save_therapy_plan(plan_v1)
+    historical_session = Session(
+        session_id="therapy-session-v1",
+        user_id=user_id,
+        session_type="therapy",
+        plan_id=plan_v1.plan_id,
+        timestamp=datetime.now(),
+        transcript=[],
+    )
+    assert await test_db_service.save_session(historical_session)
 
     # Create and save second plan (with briefing)
     plan_v2 = TherapyPlan(
@@ -231,7 +256,7 @@ async def test_get_latest_therapy_plan_with_briefing(
     await test_db_service.save_therapy_plan(plan_v2)
 
     # Get latest plan
-    latest_plan = await test_db_service.get_latest_therapy_plan(user_id)
+    latest_plan = await test_db_service.get_current_therapy_plan(user_id)
 
     # Verify we got the latest plan with briefing
     assert latest_plan is not None
@@ -242,6 +267,14 @@ async def test_get_latest_therapy_plan_with_briefing(
         latest_plan.session_briefing["session_summary"]
         == sample_session_briefing["session_summary"]
     )
+    previous_plan = await test_db_service.get_therapy_plan("plan_v1")
+    profile = await test_db_service.get_user_profile(user_id)
+    persisted_session = await test_db_service.get_session(historical_session.session_id)
+    assert previous_plan.status == "superseded"
+    assert previous_plan.superseded_by_plan_id == "plan_v2"
+    assert latest_plan.supersedes_plan_id == "plan_v1"
+    assert profile.plan_id == "plan_v2"
+    assert persisted_session.plan_id == "plan_v1"
 
 
 @pytest.mark.trio
@@ -270,8 +303,17 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
                 profile_columns = {col[1] for col in cursor.fetchall()}
                 cursor.execute("PRAGMA table_info(assessment_recommendations)")
                 recommendation_columns = {col[1] for col in cursor.fetchall()}
+                plan_indexes = {
+                    row[1] for row in cursor.execute("PRAGMA index_list(therapy_plans)")
+                }
                 return (
-                    "session_briefing" in plan_columns
+                    {
+                        "session_briefing",
+                        "supersedes_plan_id",
+                        "superseded_by_plan_id",
+                        "revision_recommendations",
+                    }.issubset(plan_columns)
+                    and "idx_therapy_plans_current_user" in plan_indexes
                     and "plan_id" in session_columns
                     and "session_summary" in session_columns
                     and "session_briefing" in session_columns
@@ -296,8 +338,40 @@ async def test_database_migration_adds_session_briefing_column(test_db_service):
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_migration_repairs_legacy_profile_schema_with_high_version(tmp_path):
-    """Legacy DBs with newer historical versions should still get current columns."""
+async def test_plan_revision_rolls_back_when_profile_history_write_fails(
+    test_db_service, sample_therapy_plan
+):
+    """A failed revision write must leave the previous row current."""
+    await _save_profile(test_db_service, sample_therapy_plan.user_id)
+    assert await test_db_service.save_therapy_plan(sample_therapy_plan)
+    conn = test_db_service._create_connection()
+    try:
+        conn.execute(
+            """
+            CREATE TRIGGER reject_plan_history
+            BEFORE INSERT ON user_profile_history
+            WHEN NEW.change_summary LIKE 'Linked therapy plan revision%'
+            BEGIN
+                SELECT RAISE(ABORT, 'reject history');
+            END
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    revised = sample_therapy_plan.model_copy(update={"plan_id": "test_plan_rollback"})
+    assert not await test_db_service.save_therapy_plan(revised)
+    current = await test_db_service.get_current_therapy_plan(sample_therapy_plan.user_id)
+    assert current.plan_id == sample_therapy_plan.plan_id
+    assert current.status == "active"
+    assert current.superseded_by_plan_id is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
+    """Legacy DBs fail closed because foundation rows are intentionally incompatible."""
     import sqlite3
 
     from psychoanalyst_app.models.data_models import UserProfile
@@ -438,26 +512,8 @@ async def test_migration_repairs_legacy_profile_schema_with_high_version(tmp_pat
 
     migration_service = MigrationService(db_path)
     db = TrioDatabaseService(db_path, migration_service=migration_service)
-    await db.initialize()
-    try:
-        assert await db.save_user_profile(
-            UserProfile(
-                user_id="legacy_user",
-                name="Legacy User",
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            )
-        )
-    finally:
-        db.close()
-
-    conn = sqlite3.connect(db_path)
-    try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profiles)")}
-    finally:
-        conn.close()
-
-    assert "plan_id" in columns
+    with pytest.raises(RuntimeError, match="make reset-foundation-db"):
+        await db.initialize()
 
 
 @pytest.mark.trio
@@ -554,4 +610,30 @@ async def test_assessment_recommendations_round_trip(test_db_service):
     loaded = await test_db_service.get_latest_assessment_recommendations(
         profile.user_id
     )
+    assert loaded == recommendations
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_profile_update_preserves_assessment_recommendations(test_db_service):
+    """Profile UPSERT must not cascade-delete durable assessment handoff rows."""
+    profile = UserProfile(
+        user_id="recommendation_upsert_user",
+        name="Before Update",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    assert await test_db_service.save_user_profile(profile)
+    recommendations = [{"style_id": "cbt", "score": 0.9, "explanation": "Structured"}]
+    assert await test_db_service.save_assessment_recommendations(
+        user_id=profile.user_id,
+        intake_session_block_id="intake_1",
+        recommendations=recommendations,
+    )
+
+    profile.name = "After Update"
+    profile.updated_at = datetime.now()
+    assert await test_db_service.update_user_profile(profile)
+
+    loaded = await test_db_service.get_latest_assessment_recommendations(profile.user_id)
     assert loaded == recommendations

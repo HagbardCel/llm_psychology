@@ -21,7 +21,7 @@ def create_agent(
     builders = {
         "INTAKE": build_intake_agent,
         "ASSESSMENT": build_assessment_agent,
-        "PSYCHOANALYST": build_psychoanalyst_agent,
+        "THERAPIST": build_therapist_agent,
         "REFLECTION": build_reflection_agent,
         "MEMORY": build_memory_agent,
         "PLANNING": build_planning_agent,
@@ -64,21 +64,21 @@ def build_assessment_agent(container: ServiceContainer, user_context: UserContex
     return agent
 
 
-def build_psychoanalyst_agent(container: ServiceContainer, user_context: UserContext):
+def build_therapist_agent(container: ServiceContainer, user_context: UserContext):
     """Build psychoanalyst agent."""
-    from psychoanalyst_app.agents.trio_psychoanalyst_agent import TrioPsychoanalystAgent
+    from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
 
-    logger.debug("Creating TrioPsychoanalystAgent for user %s", user_context.user_id)
+    logger.debug("Creating TrioTherapistAgent for user %s", user_context.user_id)
     reflection_agent = container.create_reflection_agent(user_context)
-    agent = TrioPsychoanalystAgent(
-        llm_service=container._get_llm_service_for_agent("PSYCHOANALYST"),
+    agent = TrioTherapistAgent(
+        llm_service=container._get_llm_service_for_agent("THERAPIST"),
         db_service=container.get("trio_db_service"),
         rag_service=container.get("rag_service"),
         reflection_agent=reflection_agent,
         style_service=container.get("style_service"),
         config=container.config,
     )
-    logger.info("Created TrioPsychoanalystAgent for user %s", user_context.user_id)
+    logger.info("Created TrioTherapistAgent for user %s", user_context.user_id)
     return agent
 
 

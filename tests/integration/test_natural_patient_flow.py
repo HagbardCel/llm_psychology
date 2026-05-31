@@ -162,7 +162,9 @@ def mock_llm_service_natural_flow():
 
     llm.generate_response = mock_generate_sync
 
-    async def mock_structured_output_async(prompt, schema, method="json_schema"):
+    async def mock_structured_output_async(
+        prompt, schema, method="json_schema", phase=None
+    ):
         from pydantic import BaseModel
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):
@@ -171,8 +173,8 @@ def mock_llm_service_natural_flow():
                 return schema.model_validate(
                     {
                         "focus": "CBT for anxiety",
-                        "goals": "- Reduce anxiety symptoms\n- Improve sleep",
-                        "techniques": "- Cognitive restructuring\n- Mindfulness",
+                        "goals": ["Reduce anxiety symptoms", "Improve sleep"],
+                        "techniques": ["Cognitive restructuring", "Mindfulness"],
                         "themes": "Anxiety, coping",
                         "timeline": "12 weeks",
                     }
@@ -322,8 +324,8 @@ def mock_llm_service_natural_flow():
             return schema.model_validate(
                 {
                     "focus": "CBT for anxiety",
-                    "goals": "- Reduce anxiety symptoms\n- Improve sleep",
-                    "techniques": "- Cognitive restructuring\n- Mindfulness",
+                    "goals": ["Reduce anxiety symptoms", "Improve sleep"],
+                    "techniques": ["Cognitive restructuring", "Mindfulness"],
                     "themes": "Anxiety, coping",
                     "timeline": "12 weeks",
                 }
@@ -595,7 +597,8 @@ async def test_natural_patient_flow(test_server, use_real_llm):
 
             intake_inputs = [
                 "I'm having a problem with anxiety.",  # Presenting Problem (problem)
-                "I am experiencing symptoms of sleeplessness.",  # Current Symptoms (symptoms)
+                "I have not had thoughts of harming myself or anyone else, and I feel safe.",  # Risk screen
+                "For several months I have had symptoms of sleeplessness.",  # Duration + sleep
                 "My history includes childhood anxiety.",  # Personal History (history)
                 "My family background is complicated.",  # Family Background (family)
                 "My relationship with my partner is strained.",  # Relationships (relationship)
@@ -699,7 +702,14 @@ async def test_natural_patient_flow(test_server, use_real_llm):
                     },
                 )
                 assert response.status_code == 200, response.text
-                therapy_session_id = session_id
+                action = response.json()
+                assert action["required_action"] == "start_therapy"
+                response = await client.post(
+                    f"{test_server['url']}/api/workflow/start_therapy",
+                    json={"user_id": user_id, "session_id": session_id},
+                )
+                assert response.status_code == 201, response.text
+                therapy_session_id = response.json()["session"]["session_id"]
 
             nursery.cancel_scope.cancel()
 
@@ -750,8 +760,6 @@ async def test_natural_patient_flow(test_server, use_real_llm):
             await wait_for_response_complete(timeout=60 if use_real_llm else 10)
 
             # 7. Therapy Phase
-            # We need to send a message to trigger the transition from ASSESSMENT_COMPLETE to THERAPY_IN_PROGRESS
-            # The orchestrator should route this to the PsychoanalystAgent
 
             logger.info("Starting Therapy phase...")
             therapy_inputs = [

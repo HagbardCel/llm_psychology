@@ -33,6 +33,14 @@ def split_bullets(value: Any) -> list[str]:
     if not text:
         return []
 
+    inline_numbered = [
+        part.strip()
+        for part in re.split(r"(?:^|\s+)\d+\s*[\).\:-]\s*", text)
+        if part.strip()
+    ]
+    if len(inline_numbered) > 1:
+        return inline_numbered[:5]
+
     items: list[str] = []
     for raw in text.split("\n"):
         raw = raw.strip()
@@ -47,4 +55,3 @@ def split_bullets(value: Any) -> list[str]:
         parts = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
         return parts[:5]
     return items[:5]
-

@@ -1,5 +1,5 @@
 """
-TrioPsychoanalystAgent: Trio-native agent for conducting therapy sessions.
+TrioTherapistAgent: Trio-native agent for conducting therapy sessions.
 
 This agent conducts the main therapeutic conversations based on the
 established therapy plan and selected therapy style.
@@ -13,17 +13,17 @@ from typing import Any
 
 import trio
 
-from psychoanalyst_app.agents.psychoanalyst.prompt_context import (
+from psychoanalyst_app.agents.therapist.prompt_context import (
     build_continuation_prompt_with_context,
     build_plan_context,
     default_style_instructions,
     load_patient_context,
 )
-from psychoanalyst_app.agents.psychoanalyst.response_mode import (
+from psychoanalyst_app.agents.therapist.response_mode import (
     resolve_response_mode,
 )
-from psychoanalyst_app.agents.psychoanalyst.time_policy import should_offer_extension
-from psychoanalyst_app.agents.psychoanalyst.topic_detection import is_in_deep_topic
+from psychoanalyst_app.agents.therapist.time_policy import should_offer_extension
+from psychoanalyst_app.agents.therapist.topic_detection import is_in_deep_topic
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.models.briefing_models import BriefingStatus
 from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
@@ -32,11 +32,11 @@ from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
 )
-from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
+from psychoanalyst_app.prompts.therapist_prompt_builder import (
     build_initial_prompt,
     build_resumption_prompt,
 )
-from psychoanalyst_app.prompts.psychoanalyst_prompts import CLOSING_SESSION_PROMPT
+from psychoanalyst_app.prompts.therapist_prompts import CLOSING_SESSION_PROMPT
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag_service import RAGService
 from psychoanalyst_app.services.style_service import StyleService
@@ -45,7 +45,7 @@ from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 logger = logging.getLogger(__name__)
 
 
-class TrioPsychoanalystAgent:
+class TrioTherapistAgent:
     """
     Trio-native agent responsible for conducting therapy sessions.
 
@@ -156,7 +156,7 @@ class TrioPsychoanalystAgent:
             # Get therapy plan
             therapy_plan = context.therapy_plan
             if not therapy_plan:
-                therapy_plan = await self.db_service.get_latest_therapy_plan(
+                therapy_plan = await self.db_service.get_current_therapy_plan(
                     context.user_profile.user_id
                 )
                 context.therapy_plan = therapy_plan
@@ -181,10 +181,12 @@ class TrioPsychoanalystAgent:
 
             selected_style = therapy_plan.selected_therapy_style
 
-            # Check if this is the first message (initial greeting)
-            # This path is now less likely to be used for initial greetings
-            # due to the proactive prompt in start_session.
-            if not context.message_history or len(context.message_history) <= 1:
+            # Only an explicit empty turn can produce a session opening. A
+            # patient disclosure must never be treated as an initial greeting.
+            has_patient_history = any(
+                item.role == "user" for item in context.message_history
+            )
+            if not message.strip() and not has_patient_history:
                 prompt = await self._build_initial_session_prompt(
                     context.user_profile,
                     therapy_plan,

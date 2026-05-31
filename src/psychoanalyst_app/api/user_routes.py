@@ -43,12 +43,6 @@ def create_user_routes(server) -> Blueprint:
         user_id, error = require_user_id()
         if error:
             return error
-        session_id, error = require_session_id()
-        if error:
-            return error
-        session_error = await validate_session_for_user(server, user_id, session_id)
-        if session_error:
-            return session_error
         state = await server.orchestrator.get_user_state(user_id)
         dto = UserStatusResponseDTO(
             user_id=user_id,

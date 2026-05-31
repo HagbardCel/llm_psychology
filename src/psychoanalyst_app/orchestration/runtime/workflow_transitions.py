@@ -23,7 +23,7 @@ async def get_workflow_next_action(
     """Build the next action instruction for a user using the resolver."""
     trio_db_service = service_container.get("trio_db_service")
     profile = await trio_db_service.get_user_profile(user_id)
-    plan = await trio_db_service.get_latest_therapy_plan(user_id)
+    plan = await trio_db_service.get_current_therapy_plan(user_id)
     workflow_state = await workflow_engine.get_user_state(user_id)
     if session is None and session_id:
         session = await session_lifecycle.get_session_info(user_id, session_id)

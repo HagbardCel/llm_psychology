@@ -25,7 +25,7 @@ async def send_stream_chunk(
 ) -> None:
     """Send a streaming chunk payload to session websocket if available."""
     ws = websockets.get(session_id)
-    if ws:
+    if ws is not None:
         try:
             await ws.send(json.dumps(chat_chunk_message(chunk, is_complete=is_complete)))
         except Exception as exc:
@@ -48,7 +48,7 @@ async def send_typing_indicator(
 ) -> None:
     """Send typing indicator payload to websocket when available."""
     ws = websockets.get(session_id)
-    if ws:
+    if ws is not None:
         try:
             await ws.send(json.dumps(typing_message(is_typing)))
         except Exception as exc:
@@ -76,7 +76,7 @@ async def send_json_message(
 ) -> None:
     """Send an arbitrary websocket JSON envelope."""
     ws = websockets.get(session_id)
-    if not ws:
+    if ws is None:
         logger.warning(
             "No WebSocket registered for session %s when sending %s (active sessions: %s)",
             session_id,
@@ -105,7 +105,7 @@ async def run_background_streamer(
 ) -> None:
     """Run background response stream with websocket typing/chunk events."""
     ws = websockets.get(session_id)
-    if not ws:
+    if ws is None:
         logger.error(
             "No websocket registered for session %s. Cannot stream background response.",
             session_id,

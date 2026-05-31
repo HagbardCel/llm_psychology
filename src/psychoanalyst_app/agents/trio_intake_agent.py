@@ -37,6 +37,26 @@ from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_INTAKE_SLOTS = {
+    "presenting_problem",
+    "duration",
+    "sleep_impact",
+    "coping_attempts",
+    "functional_impairment",
+    "risk_screen",
+    "goal_preference",
+}
+MIN_INTAKE_PATIENT_TURNS = 3
+RISK_SCREEN_PROMPT = (
+    "Before we continue, I want to check your safety directly. Have you had any "
+    "thoughts of harming yourself or someone else? Also, when physical symptoms "
+    "such as chest tightness occur, do they ever feel medically urgent?"
+)
+GOAL_PREFERENCE_PROMPT = (
+    "What would you most want to be different as a result of therapy, and what "
+    "would feel like the most useful place for us to start?"
+)
+
 
 class TrioIntakeAgent:
     """
@@ -91,6 +111,9 @@ class TrioIntakeAgent:
             covered_topics = self._identify_covered_topics(
                 message, context.message_history
             )
+            intake_slot_coverage = self._identify_required_slots(
+                message, context.message_history
+            )
 
             # Update topics covered in context
             for topic in covered_topics:
@@ -102,7 +125,7 @@ class TrioIntakeAgent:
             )
 
             # Check if intake is complete
-            is_complete = self._is_intake_complete(context)
+            is_complete = self._is_intake_complete(context, intake_slot_coverage)
 
             # Determine next action and state
             next_action = "continue"
@@ -131,6 +154,7 @@ class TrioIntakeAgent:
                         workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
+                            "intake_slot_coverage": sorted(intake_slot_coverage),
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -152,6 +176,7 @@ class TrioIntakeAgent:
                         workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
+                            "intake_slot_coverage": sorted(intake_slot_coverage),
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -168,6 +193,9 @@ class TrioIntakeAgent:
             else:
                 # Continue conversation
                 prompt = self._build_continuation_prompt(message, context)
+                required_follow_up = self._next_required_follow_up(
+                    intake_slot_coverage
+                )
 
                 # Determine next action and state
                 if is_complete:
@@ -201,6 +229,7 @@ class TrioIntakeAgent:
                         workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
+                            "intake_slot_coverage": sorted(intake_slot_coverage),
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -232,6 +261,18 @@ class TrioIntakeAgent:
                             "intake_complete": is_complete,
                         },
                     )
+                elif required_follow_up:
+                    return direct_agent_response(
+                        content=required_follow_up,
+                        metadata={
+                            "topics_covered": context.topics_covered,
+                            "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "time_remaining_minutes": context.time_remaining_minutes,
+                            "can_extend": context.can_extend,
+                            "is_time_up": context.is_time_up,
+                            "intake_complete": is_complete,
+                        },
+                    )
                 else:
                     next_action = "continue"
                     workflow_event = None
@@ -246,6 +287,7 @@ class TrioIntakeAgent:
                 workflow_event=workflow_event,
                 metadata={
                     "topics_covered": context.topics_covered,
+                    "intake_slot_coverage": sorted(intake_slot_coverage),
                     "time_remaining_minutes": context.time_remaining_minutes,
                     "can_extend": context.can_extend,
                     "is_time_up": context.is_time_up,
@@ -312,7 +354,9 @@ class TrioIntakeAgent:
 
         return prompt
 
-    def _is_intake_complete(self, context: ConversationContext) -> bool:
+    def _is_intake_complete(
+        self, context: ConversationContext, intake_slot_coverage: set[str]
+    ) -> bool:
         """
         Check if intake session should end.
 
@@ -326,14 +370,13 @@ class TrioIntakeAgent:
         # we don't transition to COMPLETE just because time is up.
         # We only return True here if the intake objectives (topics) are met.
 
-        # Topic-based completion (covered at least 80% of topics)
-        topics_threshold = int(len(self.intake_topics) * 0.8)
-        topics_covered = len(context.topics_covered) >= topics_threshold
-
-        if topics_covered:
+        patient_turn_count = len(self._patient_messages("", context.message_history))
+        slots_complete = REQUIRED_INTAKE_SLOTS <= intake_slot_coverage
+        if slots_complete and patient_turn_count >= MIN_INTAKE_PATIENT_TURNS:
             logger.info(
-                f"Intake complete: {len(context.topics_covered)}/"
-                f"{len(self.intake_topics)} topics covered"
+                "Intake complete: %s slots covered across %s patient turns",
+                len(intake_slot_coverage),
+                patient_turn_count,
             )
             return True
 
@@ -343,6 +386,89 @@ class TrioIntakeAgent:
             return False  # Too early to end
 
         return False
+
+    def _next_required_follow_up(self, intake_slot_coverage: set[str]) -> str | None:
+        """Return direct follow-ups for critical slots that must not be skipped."""
+        if "risk_screen" not in intake_slot_coverage:
+            return RISK_SCREEN_PROMPT
+        if "goal_preference" not in intake_slot_coverage:
+            return GOAL_PREFERENCE_PROMPT
+        return None
+
+    def _patient_messages(
+        self, message: str, message_history: list[Message]
+    ) -> list[Message]:
+        """Return patient-authored evidence without duplicating the current turn."""
+        patient_messages = [item for item in message_history if item.role == "user"]
+        if message.strip() and (
+            not patient_messages or patient_messages[-1].content != message
+        ):
+            patient_messages.append(
+                Message(role="user", content=message, timestamp=datetime.now())
+            )
+        return patient_messages
+
+    def _identify_required_slots(
+        self, message: str, message_history: list[Message]
+    ) -> set[str]:
+        """Derive completion slots from patient answers and explicit follow-ups."""
+        patient_messages = self._patient_messages(message, message_history)
+        combined_text = " ".join(item.content.lower() for item in patient_messages)
+        slots: set[str] = set()
+        slot_keywords = {
+            "presenting_problem": [
+                "anxiety", "anxious", "worry", "worried", "stress", "dreading",
+                "struggling", "problem", "panic",
+            ],
+            "duration": [
+                "week", "month", "year", "lately", "recently", "since", "for ",
+            ],
+            "sleep_impact": [
+                "sleep", "insomnia", "awake", "ceiling", "bed", "tired",
+            ],
+            "coping_attempts": [
+                "cope", "coping", "try", "tried", "exercise", "breathing",
+                "meditation", "avoid", "alcohol", "wine", "caffeine", "substance",
+            ],
+            "functional_impairment": [
+                "work", "deadline", "project", "school", "focus", "concentrate",
+                "relationship", "function",
+            ],
+        }
+        for slot, keywords in slot_keywords.items():
+            if any(keyword in combined_text for keyword in keywords):
+                slots.add(slot)
+
+        evidence_history = list(message_history)
+        if message.strip() and (
+            not evidence_history
+            or evidence_history[-1].role != "user"
+            or evidence_history[-1].content != message
+        ):
+            evidence_history.append(
+                Message(role="user", content=message, timestamp=datetime.now())
+            )
+        for index, item in enumerate(evidence_history):
+            if item.role != "assistant" or index + 1 >= len(evidence_history):
+                continue
+            answer = evidence_history[index + 1]
+            if answer.role != "user" or not answer.content.strip():
+                continue
+            answer_text = answer.content.lower()
+            if item.content == RISK_SCREEN_PROMPT and any(
+                keyword in answer_text
+                for keyword in (
+                    "harm", "suicid", "hurt myself", "hurt anyone", "safe",
+                    "urgent", "medical", "chest",
+                )
+            ):
+                slots.add("risk_screen")
+            if item.content == GOAL_PREFERENCE_PROMPT and any(
+                keyword in answer_text
+                for keyword in ("goal", "want", "hope", "start", "different", "better")
+            ):
+                slots.add("goal_preference")
+        return slots
 
     def _identify_covered_topics(
         self, message: str, message_history: list[Message]
@@ -360,11 +486,9 @@ class TrioIntakeAgent:
         Returns:
             List of topic names that were covered
         """
-        # Combine recent messages for analysis
-        recent_messages = message_history[-3:] + [
-            Message(role="user", content=message, timestamp=datetime.now())
-        ]
-        combined_text = " ".join([msg.content.lower() for msg in recent_messages])
+        # Only patient-authored text can satisfy intake topic coverage.
+        patient_messages = self._patient_messages(message, message_history)
+        combined_text = " ".join(msg.content.lower() for msg in patient_messages)
         logger.info(f"Combined text for topic analysis: {combined_text}")
 
         covered = []

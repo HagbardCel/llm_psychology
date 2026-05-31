@@ -118,6 +118,7 @@ class TrioMemoryAgent:
         # Cache for therapeutic memory
         self._memory_cache: TherapeuticMemory | None = None
         self._cache_timestamp: datetime | None = None
+        self._session_context_cache: dict[str, tuple[str, SessionContext]] = {}
 
         logger.info(f"TrioMemoryAgent initialized for user {user_context.user_id}")
 
@@ -141,6 +142,13 @@ class TrioMemoryAgent:
             session_text = "\n".join(
                 [f"{msg.role}: {msg.content}" for msg in session.transcript]
             )
+
+            cached = self._session_context_cache.get(session.session_id)
+            if cached and cached[0] == session_text:
+                logger.debug(
+                    "Returning cached session context for %s", session.session_id
+                )
+                return cached[1]
 
             # Get relevant psychological knowledge for context (run in thread)
             relevant_knowledge = await trio.to_thread.run_sync(
@@ -172,6 +180,7 @@ class TrioMemoryAgent:
                 insights=analysis.insights,
                 progress_indicators=analysis.progress_indicators,
             )
+            self._session_context_cache[session.session_id] = (session_text, context)
 
             logger.info(f"Session context analyzed for {session.session_id}")
             return context

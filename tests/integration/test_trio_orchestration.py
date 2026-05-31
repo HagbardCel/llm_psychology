@@ -128,7 +128,7 @@ async def test_workflow_engine_get_current_agent(workflow_engine):
     )
     assert (
         workflow_engine.get_current_agent(WorkflowState.THERAPY_IN_PROGRESS)
-        == "PSYCHOANALYST"
+        == "THERAPIST"
     )
 
 
@@ -193,6 +193,17 @@ async def test_conversation_manager_preserves_pending_greeting_across_reconnect(
 
     assert conversation_manager.has_initial_greeting_sent(session_id) is False
     assert conversation_manager.is_initial_greeting_pending(session_id) is False
+
+
+@pytest.mark.trio
+@pytest.mark.integration
+async def test_conversation_manager_claims_initial_greeting_once(
+    conversation_manager,
+):
+    session_id = "single-greeting-session"
+
+    assert conversation_manager.claim_initial_greeting(session_id) is True
+    assert conversation_manager.claim_initial_greeting(session_id) is False
 
 
 @pytest.mark.trio
@@ -507,11 +518,11 @@ async def test_orchestrator_creates_agents(orchestrator):
     assert assessment_agent is not None
     assert "TrioAssessmentAgent" in str(type(assessment_agent))
 
-    psychoanalyst_agent = await orchestrator._get_or_create_agent(
-        "PSYCHOANALYST", user_id
+    therapist_agent = await orchestrator._get_or_create_agent(
+        "THERAPIST", user_id
     )
-    assert psychoanalyst_agent is not None
-    assert "TrioPsychoanalystAgent" in str(type(psychoanalyst_agent))
+    assert therapist_agent is not None
+    assert "TrioTherapistAgent" in str(type(therapist_agent))
 
     # Verify caching works
     intake_agent_cached = await orchestrator._get_or_create_agent("INTAKE", user_id)

@@ -16,6 +16,8 @@ from psychoanalyst_app.api.request_utils import (
 )
 from psychoanalyst_app.models.http_models import (
     CreateSessionRequestDTO,
+    EndSessionRequestDTO,
+    EndSessionResponseDTO,
     SessionTimerResponseDTO,
     StatusMessageResponseDTO,
     session_to_dto,
@@ -125,6 +127,34 @@ def create_session_routes(server) -> Blueprint:
         dto = StatusMessageResponseDTO(
             message="Session extended",
             session_id=session_id,
+        )
+        return jsonify(dto.model_dump(mode="json"))
+
+    @bp.route("/<session_id>/end", methods=["POST"])
+    async def end_session(session_id):
+        """End the active session and acknowledge its transitional workflow state."""
+        data = await request.get_json() or {}
+        try:
+            end_request = EndSessionRequestDTO(**data)
+        except ValidationError as error:
+            return validation_error_response(error)
+        if end_request.session_id != session_id:
+            return jsonify({"error": "Session ID does not match request path"}), 400
+        session_error = await validate_session_for_user(
+            server, end_request.user_id, end_request.session_id
+        )
+        if session_error:
+            return session_error
+        await server.orchestrator.end_session(
+            end_request.user_id,
+            end_request.session_id,
+            reason=end_request.reason,
+        )
+        state = await server.orchestrator.get_user_state(end_request.user_id)
+        dto = EndSessionResponseDTO(
+            session_id=end_request.session_id,
+            workflow_state=state.value,
+            reason=end_request.reason or "Session ended",
         )
         return jsonify(dto.model_dump(mode="json"))
 

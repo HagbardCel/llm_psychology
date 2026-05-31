@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -31,6 +30,8 @@ from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 from .persistence import persist_therapy_plan_from_output, persist_tier3_update
 from .response_jobs import (
+    emit_assessment_recommendations,
+    extract_error_code,
     persist_assessment_recommendations,
     queue_assessment_job,
     queue_reflection_job,
@@ -40,16 +41,14 @@ from .response_jobs import (
 )
 
 logger = logging.getLogger(__name__)
-
 GetAgentFn = Callable[[str, str], Awaitable[Any]]
-CreateSessionFn = Callable[[str], Awaitable[str]]
 EndSessionFn = Callable[[str, str, str | None], Awaitable[None]]
+StartTherapySessionFn = Callable[[str, str], Awaitable[Any]]
 EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
 
 
 class AgentResponseHandler:
     """Handle AgentResponse transitions and follow-up actions."""
-
     def __init__(
         self,
         service_container: ServiceContainer,
@@ -57,32 +56,30 @@ class AgentResponseHandler:
         conversation_manager: TrioConversationManager,
         nursery: trio.Nursery,
         get_agent: GetAgentFn,
-        create_session: CreateSessionFn | None = None,
         end_session: EndSessionFn | None = None,
         emit_next_action: EmitNextActionFn | None = None,
+        start_therapy_session: StartTherapySessionFn | None = None,
     ) -> None:
         self.service_container = service_container
         self.workflow_engine = workflow_engine
         self.conversation_manager = conversation_manager
         self.nursery = nursery
         self._get_agent = get_agent
-        self._create_session = create_session
         self._end_session = end_session
         self._emit_next_action = emit_next_action
+        self._start_therapy_session = start_therapy_session
         self._assessment_recommendations: dict[str, list[dict[str, Any]]] = {}
         self._assessment_jobs: set[str] = set()
         self._reflection_jobs: set[str] = set()
-
     def attach_session_callbacks(
         self,
         *,
-        create_session: CreateSessionFn,
         end_session: EndSessionFn,
+        start_therapy_session: StartTherapySessionFn,
     ) -> None:
         """Attach session lifecycle callbacks after initialization."""
-        self._create_session = create_session
         self._end_session = end_session
-
+        self._start_therapy_session = start_therapy_session
     async def handle(
         self, user_id: str, session_id: str, agent_response: AgentResponse
     ) -> None:
@@ -209,51 +206,18 @@ class AgentResponseHandler:
 
         if action == "start_therapy":
             logger.info("User %s chose to start therapy session immediately", user_id)
-            if not self._create_session:
-                logger.error("Create session callback not configured")
+            if not self._start_therapy_session:
+                logger.error("Start therapy session callback not configured")
                 return
-            try:
-                current_state = await self.workflow_engine.get_user_state(user_id)
-                next_state = self.workflow_engine.get_next_state(
-                    current_state, WorkflowEvent.START_THERAPY
-                )
-                trio_db_service = self.service_container.get("trio_db_service")
-                plan = await trio_db_service.get_latest_therapy_plan(user_id)
-                if not plan or not plan.selected_therapy_style:
-                    logger.info(
-                        "Skipping therapy transition for user %s; plan not selected",
-                        user_id,
-                    )
-                else:
-                    await self.workflow_engine.transition(
-                        user_id, next_state, event=WorkflowEvent.START_THERAPY
-                    )
-            except Exception:
-                logger.warning(
-                    "Could not transition user %s into therapy before session start",
-                    user_id,
-                    exc_info=True,
-                )
-            new_session_id = await self._create_session(user_id)
+            session_info = await self._start_therapy_session(user_id, session_id)
             logger.info(
                 "Created new therapy session %s for user %s",
-                new_session_id,
+                session_info.session_id,
                 user_id,
             )
-
-            ws = self.conversation_manager.websockets.get(session_id)
-            if ws:
-                self.conversation_manager.unregister_websocket(session_id)
-                self.conversation_manager.register_websocket(new_session_id, ws)
-                logger.info(
-                    "Switched websocket from session %s to %s",
-                    session_id,
-                    new_session_id,
-                )
             return
 
         logger.warning("Unknown agent action '%s' for user %s", action, user_id)
-
     async def run_reflection(self, user_id: str, session_id: str) -> None:
         """Run reflection automatically after a therapy session completes."""
         try:
@@ -278,10 +242,9 @@ class AgentResponseHandler:
             trio_db_service = self.service_container.get("trio_db_service")
             session = await trio_db_service.get_session(session_id)
             if not session:
-                logger.error(
-                    "Auto reflection skipped: session not found for %s", session_id
+                raise RuntimeError(
+                    f"Auto reflection failed: session not found for {session_id}"
                 )
-                return
 
             context = await self.conversation_manager.get_context(session_id)
             reflection_agent = await self._get_agent("REFLECTION", user_id)
@@ -297,23 +260,21 @@ class AgentResponseHandler:
                 plan_output = StructuredTherapyPlanOutput.model_validate(plan_output)
             session_briefing = metadata.get("session_briefing")
             plan_update_applied = metadata.get("plan_update_applied", True)
-            if (
-                isinstance(plan_output, StructuredTherapyPlanOutput)
-                and plan_update_applied
-            ):
-                try:
-                    await persist_therapy_plan_from_output(
-                        trio_db_service=trio_db_service,
-                        user_id=user_id,
-                        plan_output=plan_output,
-                        session_briefing=session_briefing,
-                    )
-                except Exception:
-                    logger.error(
-                        "Failed to persist therapy plan after reflection for user %s",
-                        user_id,
-                        exc_info=True,
-                    )
+            if not isinstance(plan_output, StructuredTherapyPlanOutput):
+                raise RuntimeError("Reflection did not produce a therapy plan update")
+            if not plan_update_applied:
+                raise RuntimeError("Reflection therapy plan update was not applied")
+            if not isinstance(session_briefing, dict):
+                raise RuntimeError("Reflection did not produce a session briefing")
+            previous_plan = await trio_db_service.get_current_therapy_plan(user_id)
+            persisted_plan = await persist_therapy_plan_from_output(
+                trio_db_service=trio_db_service,
+                user_id=user_id,
+                plan_output=plan_output,
+                session_briefing=session_briefing,
+            )
+            if previous_plan and persisted_plan.version <= previous_plan.version:
+                raise RuntimeError("Reflection did not increment therapy plan version")
 
             user_profile_output = metadata.get("user_profile")
             if isinstance(user_profile_output, (dict, StructuredUserProfileOutput)):
@@ -325,22 +286,14 @@ class AgentResponseHandler:
                     change_summary="Reflection profile update",
                 )
 
-            try:
-                success = await trio_db_service.update_session_reflection(
-                    session_id,
-                    session_summary,
-                    session_briefing,
-                )
-                if not success:
-                    logger.error(
-                        "Failed to persist reflection summary/briefing for session %s",
-                        session_id,
-                    )
-            except Exception:
-                logger.error(
-                    "Failed to persist reflection summary/briefing for session %s",
-                    session_id,
-                    exc_info=True,
+            success = await trio_db_service.update_session_reflection(
+                session_id,
+                session_summary,
+                session_briefing,
+            )
+            if not success:
+                raise RuntimeError(
+                    f"Failed to persist reflection summary/briefing for session {session_id}"
                 )
 
             tier2_enrichment = metadata.get("tier2_enrichment")
@@ -370,39 +323,17 @@ class AgentResponseHandler:
                     tier3_update=tier3_update,
                 )
 
-            transitioned = False
-            if agent_response.workflow_event:
-                next_state = self.workflow_engine.get_next_state(
-                    state, agent_response.workflow_event
-                )
-                await self.workflow_engine.transition(
-                    user_id,
-                    next_state,
-                    event=agent_response.workflow_event,
-                )
-                transitioned = True
-
-            latest_state = await self.workflow_engine.get_user_state(user_id)
-            if latest_state in (
-                WorkflowState.PLAN_UPDATE_IN_PROGRESS,
-                WorkflowState.REFLECTION_IN_PROGRESS,
-            ):
-                await self.workflow_engine.transition(
-                    user_id,
-                    WorkflowState.PLAN_UPDATE_COMPLETE,
-                    event=WorkflowEvent.COMPLETE_REFLECTION,
-                )
-                transitioned = True
-                logger.info(
-                    "reflection_recovered_to_plan_update_complete "
-                    "session_id=%s user_id=%s previous_state=%s",
-                    session_id,
-                    user_id,
-                    latest_state.value,
-                )
-
-            if transitioned:
-                self.conversation_manager.clear_context(session_id)
+            if agent_response.workflow_event != WorkflowEvent.COMPLETE_REFLECTION:
+                raise RuntimeError("Reflection did not signal completion")
+            next_state = self.workflow_engine.get_next_state(
+                state, agent_response.workflow_event
+            )
+            await self.workflow_engine.transition(
+                user_id,
+                next_state,
+                event=agent_response.workflow_event,
+            )
+            self.conversation_manager.clear_context(session_id)
 
             logger.info(
                 "reflection_completed session_id=%s user_id=%s final_state=%s",
@@ -421,7 +352,7 @@ class AgentResponseHandler:
     async def _surface_reflection_failure(
         self, user_id: str, session_id: str, exc: Exception
     ) -> None:
-        """Send a user-visible error and advance workflow after reflection failure."""
+        """Send a user-visible error and expose a retryable workflow state."""
         error_text = str(exc)
         error_code = _extract_error_code(error_text)
         if isinstance(exc, trio.TooSlowError):
@@ -435,9 +366,8 @@ class AgentResponseHandler:
             ServerMessageTypes.ERROR,
             {
                 "message": (
-                    "We can continue from what you shared last session. "
-                    "Let's take a moment to notice what feels most important "
-                    "to return to now."
+                    "Your session reflection could not be saved. Please retry "
+                    "the plan update before starting another therapy session."
                 )
             },
         )
@@ -447,14 +377,16 @@ class AgentResponseHandler:
             detail,
         )
         try:
-            await self.workflow_engine.transition(
-                user_id,
-                WorkflowState.PLAN_UPDATE_COMPLETE,
-                event=WorkflowEvent.COMPLETE_REFLECTION,
-            )
+            state = await self.workflow_engine.get_user_state(user_id)
+            if state != WorkflowState.PLAN_UPDATE_FAILED:
+                await self.workflow_engine.transition(
+                    user_id,
+                    WorkflowState.PLAN_UPDATE_FAILED,
+                    event=WorkflowEvent.FAIL_REFLECTION,
+                )
             self.conversation_manager.clear_context(session_id)
             logger.info(
-                "reflection_recovered_to_plan_update_complete "
+                "reflection_transitioned_to_plan_update_failed "
                 "session_id=%s user_id=%s reason=%s",
                 session_id,
                 user_id,
@@ -524,38 +456,13 @@ class AgentResponseHandler:
         self, session_id: str, user_id: str
     ) -> None:
         """Re-emit cached or persisted assessment recommendations if available."""
-        recommendations = self._assessment_recommendations.get(user_id)
-        if not recommendations:
-            try:
-                trio_db_service = self.service_container.get("trio_db_service")
-                recommendations = (
-                    await trio_db_service.get_latest_assessment_recommendations(user_id)
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to load assessment recommendations for user %s",
-                    user_id,
-                    exc_info=True,
-                )
-                recommendations = None
-            if not recommendations:
-                return
-            self._assessment_recommendations[user_id] = recommendations
-        await send_assessment_recommendations(
+        await emit_assessment_recommendations(
+            service_container=self.service_container,
             conversation_manager=self.conversation_manager,
             session_id=session_id,
             user_id=user_id,
-            recommendations=recommendations,
+            cache=self._assessment_recommendations,
         )
 
 
-def _extract_error_code(message: str) -> str | None:
-    """Extract an HTTP-like status code from an error message."""
-    for pattern in (
-        r"(?:HTTP|status)\D{0,10}(4\d{2}|5\d{2})",
-        r"\b(4\d{2}|5\d{2})\b",
-    ):
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
+_extract_error_code = extract_error_code

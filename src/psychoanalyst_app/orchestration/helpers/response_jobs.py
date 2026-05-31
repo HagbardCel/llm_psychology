@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -40,6 +41,38 @@ async def send_assessment_recommendations(
     )
 
 
+async def emit_assessment_recommendations(
+    *, service_container, conversation_manager, cache, session_id: str, user_id: str
+) -> None:
+    """Re-emit cached or persisted assessment recommendations if available."""
+    recommendations = cache.get(user_id)
+    if not recommendations:
+        try:
+            db_service = service_container.get("trio_db_service")
+            recommendations = await db_service.get_latest_assessment_recommendations(user_id)
+        except Exception:
+            logger.warning("Failed to load assessment recommendations for user %s", user_id, exc_info=True)
+            return
+        if not recommendations:
+            return
+        cache[user_id] = recommendations
+    await send_assessment_recommendations(
+        conversation_manager=conversation_manager,
+        session_id=session_id,
+        user_id=user_id,
+        recommendations=recommendations,
+    )
+
+
+def extract_error_code(message: str) -> str | None:
+    """Extract an HTTP-like status code from an error message."""
+    for pattern in (r"(?:HTTP|status)\D{0,10}(4\d{2}|5\d{2})", r"\b(4\d{2}|5\d{2})\b"):
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+
 async def send_assessment_failure(
     *,
     conversation_manager: TrioConversationManager,
@@ -67,19 +100,16 @@ async def persist_assessment_recommendations(
     intake_session_id: str,
     recommendations: list[dict[str, Any]],
 ) -> None:
-    """Persist recommendations without blocking live workflow on failures."""
-    try:
-        trio_db_service = service_container.get("trio_db_service")
-        await trio_db_service.save_assessment_recommendations(
-            user_id=user_id,
-            intake_session_block_id=intake_session_id,
-            recommendations=recommendations,
-        )
-    except Exception:
-        logger.warning(
-            "Failed to persist assessment recommendations for user %s",
-            user_id,
-            exc_info=True,
+    """Persist recommendations before exposing selection as a durable handoff."""
+    trio_db_service = service_container.get("trio_db_service")
+    saved = await trio_db_service.save_assessment_recommendations(
+        user_id=user_id,
+        intake_session_block_id=intake_session_id,
+        recommendations=recommendations,
+    )
+    if not saved:
+        raise RuntimeError(
+            f"Failed to persist assessment recommendations for user {user_id}"
         )
 
 

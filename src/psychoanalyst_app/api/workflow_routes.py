@@ -15,7 +15,11 @@ from psychoanalyst_app.api.request_utils import (
 )
 from psychoanalyst_app.models.http_models import (
     WorkflowCompleteProfileRequestDTO,
+    WorkflowRetryPlanUpdateRequestDTO,
     WorkflowSelectTherapyStyleRequestDTO,
+    WorkflowStartTherapyRequestDTO,
+    WorkflowStartTherapyResponseDTO,
+    session_to_dto,
 )
 from psychoanalyst_app.orchestration.models import WorkflowState
 
@@ -137,5 +141,68 @@ def create_workflow_routes(server) -> Blueprint:
             style_request.user_id, style_request.session_id
         )
         return jsonify(action.model_dump(mode="json")), 200
+
+    @bp.route("/start_therapy", methods=["POST"])
+    async def start_therapy():
+        """Create the first plan-linked therapy session and continue immediately."""
+        data = await request.get_json() or {}
+        try:
+            start_request = WorkflowStartTherapyRequestDTO(**data)
+        except ValidationError as error:
+            return validation_error_response(error)
+
+        session_error = await validate_session_for_user(
+            server, start_request.user_id, start_request.session_id
+        )
+        if session_error:
+            return session_error
+
+        try:
+            session_info = await server.orchestrator.start_therapy_session(
+                start_request.user_id, start_request.session_id
+            )
+        except ValueError as exc:
+            logger.error("Validation error starting therapy: %s", exc)
+            return jsonify({"error": str(exc)}), 400
+
+        session = await server.db_service.get_session(session_info.session_id)
+        if not session:
+            return jsonify({"error": "Failed to load created therapy session"}), 500
+        action = await server.orchestrator.get_workflow_next_action(
+            start_request.user_id, session_id=session.session_id
+        )
+        response = WorkflowStartTherapyResponseDTO(
+            session=session_to_dto(session),
+            workflow_next_action=action,
+        )
+        return jsonify(response.model_dump(mode="json")), 201
+
+    @bp.route("/retry_plan_update", methods=["POST"])
+    async def retry_plan_update():
+        """Retry reflection persistence for an ended therapy session."""
+        data = await request.get_json() or {}
+        try:
+            retry_request = WorkflowRetryPlanUpdateRequestDTO(**data)
+        except ValidationError as error:
+            return validation_error_response(error)
+
+        try:
+            await server.orchestrator.retry_plan_update(
+                retry_request.user_id,
+                retry_request.session_id,
+            )
+        except ValueError as exc:
+            logger.error("Validation error retrying plan update: %s", exc)
+            return jsonify({"error": str(exc)}), 400
+
+        action = await server.orchestrator.get_workflow_next_action(
+            retry_request.user_id,
+            session_id=retry_request.session_id,
+        )
+        await server.orchestrator.emit_workflow_next_action(
+            retry_request.user_id,
+            retry_request.session_id,
+        )
+        return jsonify(action.model_dump(mode="json")), 202
 
     return bp

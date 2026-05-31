@@ -58,7 +58,7 @@ class TestStyleService:
         style_service = StyleService()
 
         # Test psychoanalyst prompt
-        cbt_prompt = style_service.get_psychoanalyst_prompt("cbt")
+        cbt_prompt = style_service.get_therapist_prompt("cbt")
         assert isinstance(cbt_prompt, str)
 
         # Test reflection prompt
@@ -70,7 +70,7 @@ class TestStyleService:
         assert isinstance(assessment_prompt, str)
 
         # Test prompts for non-existent style
-        assert style_service.get_psychoanalyst_prompt("non_existent") == ""
+        assert style_service.get_therapist_prompt("non_existent") == ""
         assert style_service.get_reflection_prompt("non_existent") == ""
         assert style_service.get_assessment_prompt("non_existent") == ""
 
@@ -99,7 +99,7 @@ class TestStylePack:
             # Create test files
             (style_dir / "knowledge.md").write_text("# Test Knowledge\nTest content")
             (style_dir / "description.txt").write_text("Test description")
-            (style_dir / "psychoanalyst_prompt.txt").write_text(
+            (style_dir / "therapist_prompt.txt").write_text(
                 "Test psychoanalyst prompt"
             )
             (style_dir / "reflection_prompt.txt").write_text("Test reflection prompt")
@@ -112,7 +112,7 @@ class TestStylePack:
             assert style_pack.style_id == "test_style"
             assert "Test Knowledge" in style_pack.knowledge
             assert style_pack.description == "Test description"
-            assert style_pack.psychoanalyst_prompt == "Test psychoanalyst prompt"
+            assert style_pack.therapist_prompt == "Test psychoanalyst prompt"
             assert style_pack.reflection_prompt == "Test reflection prompt"
             assert style_pack.assessment_prompt == "Test assessment prompt"
 
@@ -151,7 +151,7 @@ class TestStylePack:
             # All components should be empty strings
             assert style_pack.knowledge == ""
             assert style_pack.description == ""
-            assert style_pack.psychoanalyst_prompt == ""
+            assert style_pack.therapist_prompt == ""
             assert style_pack.reflection_prompt == ""
             assert style_pack.assessment_prompt == ""
 
@@ -172,7 +172,7 @@ class TestStyleServiceIntegration:
 
             (test_style_dir / "knowledge.md").write_text("# Test Therapy Knowledge")
             (test_style_dir / "description.txt").write_text("Test therapy description")
-            (test_style_dir / "psychoanalyst_prompt.txt").write_text(
+            (test_style_dir / "therapist_prompt.txt").write_text(
                 "Test therapy prompt"
             )
             (test_style_dir / "reflection_prompt.txt").write_text(
@@ -223,7 +223,7 @@ class TestStyleServiceEdgeCases:
             # Create empty files
             (style_dir / "knowledge.md").touch()
             (style_dir / "description.txt").touch()
-            (style_dir / "psychoanalyst_prompt.txt").touch()
+            (style_dir / "therapist_prompt.txt").touch()
             (style_dir / "reflection_prompt.txt").touch()
             (style_dir / "assessment_prompt.txt").touch()
 
@@ -236,6 +236,6 @@ class TestStyleServiceEdgeCases:
             # All components should be empty strings
             assert style_pack.knowledge == ""
             assert style_pack.description == ""
-            assert style_pack.psychoanalyst_prompt == ""
+            assert style_pack.therapist_prompt == ""
             assert style_pack.reflection_prompt == ""
             assert style_pack.assessment_prompt == ""

@@ -23,7 +23,7 @@ async def persist_therapy_plan_from_output(
     session_briefing: dict[str, Any] | None = None,
 ) -> TherapyPlan:
     """Persist a therapy plan from structured output data."""
-    latest_plan = await trio_db_service.get_latest_therapy_plan(user_id)
+    latest_plan = await trio_db_service.get_current_therapy_plan(user_id)
     selected_style = plan_output.selected_therapy_style
     if not selected_style and latest_plan:
         selected_style = latest_plan.selected_therapy_style
@@ -39,6 +39,7 @@ async def persist_therapy_plan_from_output(
         initial_goals=plan_output.initial_goals,
         current_progress=plan_output.current_progress,
         planned_interventions=plan_output.planned_interventions,
+        revision_recommendations=plan_output.revision_recommendations,
         status=plan_output.status,
         session_briefing=session_briefing,
     )
@@ -47,16 +48,6 @@ async def persist_therapy_plan_from_output(
     if not success:
         raise ValueError("Failed to save therapy plan to database")
 
-    existing_profile = await trio_db_service.get_user_profile(user_id)
-    if existing_profile and existing_profile.plan_id != plan.plan_id:
-        updated_profile = existing_profile.model_copy(
-            update={"plan_id": plan.plan_id, "updated_at": datetime.now()}
-        )
-        await trio_db_service.update_user_profile(
-            updated_profile,
-            change_summary="Linked therapy plan",
-            created_by_session=None,
-        )
     return plan
 
 

@@ -324,26 +324,26 @@ class TestServiceContainerAgentCreation:
         )
 
     @patch.object(ServiceContainer, "create_reflection_agent")
-    @patch("psychoanalyst_app.agents.trio_psychoanalyst_agent.TrioPsychoanalystAgent")
-    def test_create_psychoanalyst_agent(
+    @patch("psychoanalyst_app.agents.trio_therapist_agent.TrioTherapistAgent")
+    def test_create_therapist_agent(
         self,
-        mock_psychoanalyst_agent,
+        mock_therapist_agent,
         mock_create_reflection_agent,
         container,
         user_context,
     ):
         """Test Trio psychoanalyst agent creation."""
         mock_agent = Mock()
-        mock_psychoanalyst_agent.return_value = mock_agent
+        mock_therapist_agent.return_value = mock_agent
         mock_reflection = Mock()
         mock_create_reflection_agent.return_value = mock_reflection
 
-        agent = container.create_psychoanalyst_agent(user_context)
+        agent = container.create_therapist_agent(user_context)
 
         assert agent is mock_agent
         mock_create_reflection_agent.assert_called_once_with(user_context)
-        mock_psychoanalyst_agent.assert_called_once_with(
-            llm_service=container.get("llm_service_psychoanalyst"),
+        mock_therapist_agent.assert_called_once_with(
+            llm_service=container.get("llm_service_therapist"),
             db_service=container.get("trio_db_service"),
             rag_service=container.get("rag_service"),
             reflection_agent=mock_reflection,

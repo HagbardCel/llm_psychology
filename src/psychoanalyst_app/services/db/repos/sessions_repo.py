@@ -46,12 +46,11 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
         cursor.execute(
             """
             INSERT INTO sessions
-            (session_id, user_id, plan_id, timestamp, transcript, topics,
+            (session_id, user_id, session_type, plan_id, timestamp, transcript, topics,
              session_summary, session_briefing)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 user_id = excluded.user_id,
-                plan_id = excluded.plan_id,
                 timestamp = excluded.timestamp,
                 transcript = excluded.transcript,
                 topics = excluded.topics,
@@ -62,6 +61,7 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
             (
                 session.session_id,
                 session.user_id,
+                session.session_type,
                 session.plan_id,
                 datetime_to_iso(session.timestamp),
                 transcript_json,

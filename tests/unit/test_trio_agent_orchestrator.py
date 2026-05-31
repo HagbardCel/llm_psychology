@@ -131,7 +131,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     # Setup mocks
     mock_db_service = MagicMock()
     mock_db_service.get_user_profile = AsyncMock()
-    mock_db_service.get_latest_therapy_plan = AsyncMock()
+    mock_db_service.get_current_therapy_plan = AsyncMock()
     mock_db_service.save_therapy_plan = AsyncMock()
     mock_db_service.update_user_profile = AsyncMock()
     mock_style_service = MagicMock()
@@ -160,7 +160,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
         updated_at=datetime.now(),
     )
     mock_db_service.get_user_profile.return_value = profile
-    mock_db_service.get_latest_therapy_plan.return_value = None
+    mock_db_service.get_current_therapy_plan.return_value = None
     intake_session = MagicMock()
     orchestrator.session_lifecycle.find_intake_sessions = AsyncMock(
         return_value=[intake_session]
@@ -220,7 +220,7 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
     # Setup mocks
     mock_db_service = MagicMock()
     mock_db_service.get_user_profile = AsyncMock()
-    mock_db_service.get_latest_therapy_plan = AsyncMock()
+    mock_db_service.get_current_therapy_plan = AsyncMock()
     mock_db_service.save_therapy_plan = AsyncMock()
     mock_style_service = MagicMock()
 
@@ -257,7 +257,7 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
         version=1,
         selected_therapy_style="freud",
     )
-    mock_db_service.get_latest_therapy_plan.return_value = existing_plan
+    mock_db_service.get_current_therapy_plan.return_value = existing_plan
 
     # Try to create plan - should return existing
     plan = await orchestrator.create_therapy_plan("test_user", "freud")

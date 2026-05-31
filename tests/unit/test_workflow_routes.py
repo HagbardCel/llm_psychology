@@ -104,7 +104,7 @@ async def test_select_therapy_style_accepts_assessment_complete(trio_server):
 
     session_info = await trio_server.orchestrator.start_session(
         user_profile.user_id,
-        session_type="therapy",
+        session_type="intake",
         send_initial_message=False,
     )
     trio_server.conversation_manager.register_websocket(
@@ -123,8 +123,45 @@ async def test_select_therapy_style_accepts_assessment_complete(trio_server):
 
         assert response.status_code == 200
         data = await response.get_json()
-        assert data["required_action"] == "continue_therapy"
+        assert data["required_action"] == "start_therapy"
 
-    plan = await trio_db_service.get_latest_therapy_plan(user_profile.user_id)
+        response = await client.post(
+            "/api/workflow/start_therapy",
+            json={
+                "user_id": user_profile.user_id,
+                "session_id": session_info.session_id,
+            },
+        )
+        assert response.status_code == 201
+        data = await response.get_json()
+        assert data["session"]["session_id"] != session_info.session_id
+        assert data["session"]["session_type"] == "therapy"
+        assert data["session"]["plan_id"]
+        assert data["workflow_next_action"]["required_action"] == "continue_therapy"
+
+    plan = await trio_db_service.get_current_therapy_plan(user_profile.user_id)
     assert plan is not None
     assert plan.selected_therapy_style == "jung"
+
+
+@pytest.mark.trio
+async def test_retry_plan_update_rejects_non_failed_state(trio_server):
+    """Retry endpoint is only available after a persisted reflection failure."""
+    profile = UserProfile(
+        user_id="workflow_retry_wrong_state",
+        name="Workflow User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await trio_server.db_service.save_user_profile(profile)
+
+    async with trio_server.app.test_client() as client:
+        response = await client.post(
+            "/api/workflow/retry_plan_update",
+            json={"user_id": profile.user_id, "session_id": "ended-session"},
+        )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert "only allowed after reflection failure" in data["error"]

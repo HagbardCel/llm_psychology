@@ -1,6 +1,7 @@
 """Pydantic models for session briefing validation and type safety."""
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -83,6 +84,15 @@ class RecommendedApproach(BaseModel):
     therapeutic_goals_for_session: list[str] = Field(max_length=3)
 
 
+class InterventionEvidence(BaseModel):
+    """Patient-grounded support for intervention claims."""
+
+    intervention: str
+    evidence_level: Literal["proposed", "accepted", "completed"]
+    patient_turn_index: int | None = None
+    patient_evidence: str | None = None
+
+
 class SessionBriefing(BaseModel):
     """Complete session briefing for therapy resumption."""
 
@@ -104,6 +114,7 @@ class SessionBriefing(BaseModel):
     progress_highlights: list[str] = Field(max_length=10)
     unresolved_issues: list[str] = Field(max_length=10)
     recommended_approach: RecommendedApproach
+    intervention_evidence: list[InterventionEvidence]
 
     @field_validator("continuity_points")
     @classmethod

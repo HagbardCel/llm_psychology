@@ -12,7 +12,7 @@ def _clear_agent_model_env(monkeypatch):
     for key in (
         "INTAKE_MODEL",
         "ASSESSMENT_MODEL",
-        "PSYCHOANALYST_MODEL",
+        "THERAPIST_MODEL",
         "REFLECTION_MODEL",
         "MEMORY_MODEL",
         "PLANNING_MODEL",
@@ -25,7 +25,7 @@ def test_agent_specific_models_from_config(monkeypatch):
     _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
-    monkeypatch.setenv("PSYCHOANALYST_MODEL", "psychoanalyst-model")
+    monkeypatch.setenv("THERAPIST_MODEL", "psychoanalyst-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
 
     container = ServiceContainer(Settings())
@@ -35,7 +35,7 @@ def test_agent_specific_models_from_config(monkeypatch):
     assert intake_service.model_name == "intake-model"
 
     # Test psychoanalyst agent gets specific model
-    psychoanalyst_service = container.get("llm_service_psychoanalyst")
+    psychoanalyst_service = container.get("llm_service_therapist")
     assert psychoanalyst_service.model_name == "psychoanalyst-model"
 
 
@@ -57,7 +57,7 @@ def test_all_agent_models_configurable(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "assessment-model")
-    monkeypatch.setenv("PSYCHOANALYST_MODEL", "psychoanalyst-model")
+    monkeypatch.setenv("THERAPIST_MODEL", "psychoanalyst-model")
     monkeypatch.setenv("REFLECTION_MODEL", "reflection-model")
     monkeypatch.setenv("MEMORY_MODEL", "memory-model")
     monkeypatch.setenv("PLANNING_MODEL", "planning-model")
@@ -68,7 +68,7 @@ def test_all_agent_models_configurable(monkeypatch):
     assert container.get("llm_service_intake").model_name == "intake-model"
     assert container.get("llm_service_assessment").model_name == "assessment-model"
     assert (
-        container.get("llm_service_psychoanalyst").model_name == "psychoanalyst-model"
+        container.get("llm_service_therapist").model_name == "psychoanalyst-model"
     )
     assert container.get("llm_service_reflection").model_name == "reflection-model"
     assert container.get("llm_service_memory").model_name == "memory-model"

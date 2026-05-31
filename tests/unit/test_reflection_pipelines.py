@@ -8,6 +8,7 @@ import pytest
 
 from psychoanalyst_app.agents.reflection.session_summary_pipeline import (
     generate_session_summary_payload,
+    validate_session_briefing_evidence,
 )
 from psychoanalyst_app.agents.reflection.tier2_pipeline import (
     apply_tier2_enrichment,
@@ -21,6 +22,7 @@ from psychoanalyst_app.agents.reflection.tier4_pipeline import (
     generate_combined_recommendations,
 )
 from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
+from psychoanalyst_app.models.briefing_models import SessionBriefing
 
 
 def _sample_session() -> Session:
@@ -52,6 +54,49 @@ def _sample_plan() -> TherapyPlan:
     )
 
 
+def _briefing(**updates) -> SessionBriefing:
+    payload = {
+        "generated_at": datetime.now().isoformat(),
+        "session_count": 1,
+        "last_session_id": "session_1",
+        "last_session_date": datetime.now().date().isoformat(),
+        "narrative_handoff": "The patient explored work stress and possible next steps. The discussion stayed exploratory and focused on current triggers.",
+        "patient_observations": "The patient was engaged.",
+        "plan_progression_notes": "The plan remains appropriate.",
+        "relationship_quality": "developing",
+        "continuity_points": ["Follow up on work stress"],
+        "emotional_summary": {"last_session": "anxious", "trend": "stable", "note": "Still engaged."},
+        "key_themes": [{"theme": "work stress", "status": "ongoing", "priority": "high", "frequency": 1, "first_appearance": "session_1", "last_discussed": "session_1"}],
+        "progress_highlights": [],
+        "unresolved_issues": ["work stress"],
+        "recommended_approach": {"opening_tone": "Warm", "opening_focus": "Check in", "things_to_avoid": "Pressure", "suggested_questions": [], "therapeutic_goals_for_session": []},
+        "intervention_evidence": [],
+    }
+    payload.update(updates)
+    return SessionBriefing.model_validate(payload)
+
+
+def test_briefing_allows_proposed_intervention_without_patient_reply() -> None:
+    validate_session_briefing_evidence(
+        _briefing(intervention_evidence=[{"intervention": "Track worry", "evidence_level": "proposed"}]),
+        _sample_session(),
+    )
+
+
+def test_briefing_acceptance_requires_cited_patient_text() -> None:
+    session = _sample_session()
+    session.transcript[0].content = "Yes, I can try tracking that this week."
+    validate_session_briefing_evidence(
+        _briefing(intervention_evidence=[{"intervention": "Track worry", "evidence_level": "accepted", "patient_turn_index": 0, "patient_evidence": "I can try tracking that"}]),
+        session,
+    )
+    with pytest.raises(ValueError, match="unsupported agreement"):
+        validate_session_briefing_evidence(
+            _briefing(narrative_handoff="The patient agreed to try tracking worry this week. This unsupported claim should be rejected before persistence."),
+            _sample_session(),
+        )
+
+
 def test_apply_tier2_enrichment_marks_session_enriched() -> None:
     session = _sample_session()
     enriched = apply_tier2_enrichment(
@@ -75,6 +120,7 @@ def test_apply_tier2_enrichment_marks_session_enriched() -> None:
 async def test_load_or_enrich_session_record_enriches_when_missing(monkeypatch) -> None:
     session = _sample_session()
     db_service = AsyncMock()
+    db_service.get_session.return_value = session
 
     async def _fake_enrich(*_args, **_kwargs):
         return {"psychological_summary": "tier2", "key_themes": ["theme"]}
@@ -93,6 +139,34 @@ async def test_load_or_enrich_session_record_enriches_when_missing(monkeypatch) 
     assert payload is not None
     assert loaded.enriched is True
     assert loaded.psychological_summary == "tier2"
+
+
+@pytest.mark.trio
+async def test_load_or_enrich_session_record_reuses_persisted_enrichment(
+    monkeypatch,
+) -> None:
+    session = _sample_session()
+    enriched_session = apply_tier2_enrichment(
+        session,
+        {"psychological_summary": "persisted", "key_themes": ["theme"]},
+    )
+    db_service = AsyncMock()
+    db_service.get_session.return_value = enriched_session
+    enrich = AsyncMock()
+    monkeypatch.setattr(
+        "psychoanalyst_app.agents.reflection.tier2_pipeline.enrich_session_tier2",
+        enrich,
+    )
+
+    loaded, payload = await load_or_enrich_session_record(
+        db_service,
+        MagicMock(),
+        session,
+    )
+
+    assert loaded is enriched_session
+    assert payload is None
+    enrich.assert_not_awaited()
 
 
 @pytest.mark.trio
@@ -195,6 +269,28 @@ async def test_apply_tier4_updates_updates_plan_state() -> None:
 
     assert updated is True
     assert "Progress indicators" in plan.current_progress
+
+
+@pytest.mark.trio
+async def test_apply_tier4_updates_keeps_recommendations_separate_from_interventions() -> None:
+    plan = _sample_plan()
+    db_service = AsyncMock()
+    db_service.get_session_count.return_value = 5
+    updated = await apply_tier4_updates(
+        db_service,
+        planning_agent=MagicMock(),
+        user_id="user_1",
+        current_plan=plan,
+        session_context=SimpleNamespace(progress_indicators=[]),
+        plan_assessment=None,
+        plan_recommendations=[{"description": "Consider a sleep log", "priority": "high"}],
+        session_summary="stable",
+        tier3_updated=False,
+    )
+
+    assert updated is True
+    assert plan.revision_recommendations == ["Consider a sleep log"]
+    assert plan.planned_interventions == ["supportive listening"]
 
 
 @pytest.mark.trio

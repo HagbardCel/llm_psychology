@@ -5,7 +5,7 @@ from .agents import (
     build_intake_agent,
     build_memory_agent,
     build_planning_agent,
-    build_psychoanalyst_agent,
+    build_therapist_agent,
     build_reflection_agent,
     create_agent,
 )
@@ -36,7 +36,7 @@ __all__ = [
     "create_agent",
     "build_intake_agent",
     "build_assessment_agent",
-    "build_psychoanalyst_agent",
+    "build_therapist_agent",
     "build_reflection_agent",
     "build_memory_agent",
     "build_planning_agent",

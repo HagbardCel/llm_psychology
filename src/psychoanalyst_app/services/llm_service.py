@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -17,6 +18,7 @@ from psychoanalyst_app.utils.trio_streaming import iter_in_thread
 
 logger = logging.getLogger(__name__)
 LLM_CALL_LOGGER_NAME = "llm_calls"
+LLM_METRICS_LOGGER_NAME = "llm_metrics"
 
 try:
     from google.api_core.exceptions import ResourceExhausted
@@ -172,6 +174,7 @@ class LLMService:
         self.llm_call_logging_include_chunks = llm_call_logging_include_chunks
         self.enable_thinking = enable_thinking
         self._llm_call_logger = _get_llm_call_logger()
+        self._llm_metrics_logger = logging.getLogger(LLM_METRICS_LOGGER_NAME)
         self.llm = self._build_llm_client(self.api_key)
 
         # Initialize rate limiter
@@ -355,13 +358,48 @@ class LLMService:
             json.dumps(record, ensure_ascii=True, sort_keys=True, default=str)
         )
 
+    def _log_metric(
+        self,
+        status: str,
+        call_type: str,
+        phase: str | None,
+        *,
+        started_at: float | None = None,
+        response: Any = None,
+    ) -> None:
+        usage = getattr(response, "usage_metadata", None) or {}
+        self._llm_metrics_logger.info(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "call_type": call_type,
+                    "provider": self.provider,
+                    "model": self.model_name,
+                    "latency_ms": (
+                        round((time.perf_counter() - started_at) * 1000, 3)
+                        if started_at is not None
+                        else None
+                    ),
+                    "status": status,
+                    "prompt_tokens": usage.get("input_tokens"),
+                    "completion_tokens": usage.get("output_tokens"),
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+        )
+
     async def _acquire_rate_limit(self) -> None:
         """Acquire rate limit token if rate limiting is enabled."""
         if self.rate_limit_enabled and self._rate_limiter is not None:
             await self._rate_limiter.acquire()
 
     def generate_response(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: str | None = None,
     ) -> str:
         """
         Generate a response from the LLM.
@@ -373,6 +411,8 @@ class LLMService:
         Returns:
             str: The LLM's response.
         """
+        started_at = time.perf_counter()
+        self._log_metric("start", "generate_response", phase)
         try:
             self._log_llm_call(
                 "request",
@@ -406,6 +446,9 @@ class LLMService:
                         "response": response.content,
                     },
                 )
+                self._log_metric(
+                    "finish", "generate_response", phase, started_at=started_at, response=response
+                )
                 return response.content
             else:
                 # Simple prompt without context
@@ -422,10 +465,15 @@ class LLMService:
                         "response": response.content,
                     },
                 )
+                self._log_metric(
+                    "finish", "generate_response", phase, started_at=started_at, response=response
+                )
                 return response.content
         except LLMQuotaExhaustedError:
+            self._log_metric("failure", "generate_response", phase, started_at=started_at)
             raise
         except Exception as e:
+            self._log_metric("failure", "generate_response", phase, started_at=started_at)
             import traceback
 
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -451,7 +499,11 @@ class LLMService:
         return chunks
 
     async def stream_response(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream response chunks from the LLM in real time.
@@ -461,6 +513,8 @@ class LLMService:
         """
         await self._acquire_rate_limit()
 
+        started_at = time.perf_counter()
+        self._log_metric("start", "stream_response", phase)
         try:
             self._log_llm_call(
                 "request",
@@ -487,8 +541,10 @@ class LLMService:
                     },
                 )
                 yield chunk
+            self._log_metric("finish", "stream_response", phase, started_at=started_at)
 
         except Exception as e:
+            self._log_metric("failure", "stream_response", phase, started_at=started_at)
             import traceback
 
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -504,14 +560,45 @@ class LLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
+        phase: str | None = None,
     ) -> Any:
         """Generate a structured output and normalize it to the requested schema."""
-        if self.provider != "gemini":
-            return self._generate_structured_output_from_json_prompt(prompt, schema)
+        started_at = time.perf_counter()
+        self._log_metric("start", "generate_structured_output", phase)
+        try:
+            if self.provider != "gemini":
+                response = self._generate_structured_output_from_json_prompt(prompt, schema)
+                self._log_metric(
+                    "finish", "generate_structured_output", phase, started_at=started_at
+                )
+                return response
 
-        schema_payload: dict[str, Any]
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
-            schema_payload = {"model": schema.__name__}
+            schema_payload: dict[str, Any]
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                schema_payload = {"model": schema.__name__}
+                self._log_llm_call(
+                    "request",
+                    {
+                        "call_type": "generate_structured_output",
+                        "prompt": prompt,
+                        "schema": schema_payload,
+                    },
+                )
+                runnable = self.llm.with_structured_output(schema, method=method)
+                response = runnable.invoke(prompt)
+                self._log_llm_call(
+                    "response",
+                    {
+                        "call_type": "generate_structured_output",
+                        "response": response,
+                    },
+                )
+                self._log_metric(
+                    "finish", "generate_structured_output", phase, started_at=started_at, response=response
+                )
+                return response
+
+            schema_payload = {"schema": schema}
             self._log_llm_call(
                 "request",
                 {
@@ -529,27 +616,15 @@ class LLMService:
                     "response": response,
                 },
             )
+            self._log_metric(
+                "finish", "generate_structured_output", phase, started_at=started_at, response=response
+            )
             return response
-
-        schema_payload = {"schema": schema}
-        self._log_llm_call(
-            "request",
-            {
-                "call_type": "generate_structured_output",
-                "prompt": prompt,
-                "schema": schema_payload,
-            },
-        )
-        runnable = self.llm.with_structured_output(schema, method=method)
-        response = runnable.invoke(prompt)
-        self._log_llm_call(
-            "response",
-            {
-                "call_type": "generate_structured_output",
-                "response": response,
-            },
-        )
-        return response
+        except Exception:
+            self._log_metric(
+                "failure", "generate_structured_output", phase, started_at=started_at
+            )
+            raise
 
     def _generate_structured_output_from_json_prompt(
         self,
@@ -676,7 +751,11 @@ class LLMService:
             ) from e
 
     async def generate_response_async(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: str | None = None,
     ) -> str:
         """Generate a response from the LLM asynchronously with rate limiting.
 
@@ -690,7 +769,11 @@ class LLMService:
         # Apply rate limiting before starting the request
         await self._acquire_rate_limit()
 
-        return await trio.to_thread.run_sync(self.generate_response, prompt, context)
+        if phase is None:
+            return await trio.to_thread.run_sync(self.generate_response, prompt, context)
+        return await trio.to_thread.run_sync(
+            lambda: self.generate_response(prompt, context, phase=phase)
+        )
 
     async def generate_structured_output_async(
         self,
@@ -698,11 +781,18 @@ class LLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
+        phase: str | None = None,
     ) -> Any:
         """Async wrapper for generate_structured_output with rate limiting."""
         await self._acquire_rate_limit()
         # trio.to_thread.run_sync doesn't forward arbitrary kwargs to the target
         # callable, so pass keyword-only args via a closure.
+        if phase is None:
+            return await trio.to_thread.run_sync(
+                lambda: self.generate_structured_output(prompt, schema, method=method)
+            )
         return await trio.to_thread.run_sync(
-            lambda: self.generate_structured_output(prompt, schema, method=method)
+            lambda: self.generate_structured_output(
+                prompt, schema, method=method, phase=phase
+            )
         )

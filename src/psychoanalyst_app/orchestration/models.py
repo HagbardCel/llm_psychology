@@ -22,6 +22,7 @@ class WorkflowState(Enum):
     NEW → INTAKE_IN_PROGRESS → INTAKE_COMPLETE → ASSESSMENT_IN_PROGRESS →
     ASSESSMENT_COMPLETE → INITIAL_PLAN_COMPLETE → THERAPY_IN_PROGRESS →
     PLAN_UPDATE_IN_PROGRESS → PLAN_UPDATE_COMPLETE → (loop back to THERAPY_IN_PROGRESS)
+                            ↘ PLAN_UPDATE_FAILED → PLAN_UPDATE_IN_PROGRESS
     """
 
     NEW = "new"
@@ -33,6 +34,7 @@ class WorkflowState(Enum):
     THERAPY_IN_PROGRESS = "therapy_in_progress"
     PLAN_UPDATE_IN_PROGRESS = "plan_update_in_progress"
     REFLECTION_IN_PROGRESS = "reflection_in_progress"
+    PLAN_UPDATE_FAILED = "plan_update_failed"
     PLAN_UPDATE_COMPLETE = "plan_update_complete"
 
 
@@ -47,6 +49,8 @@ class WorkflowEvent(Enum):
     COMPLETE_SESSION = "complete_session"
     START_REFLECTION = "start_reflection"
     COMPLETE_REFLECTION = "complete_reflection"
+    FAIL_REFLECTION = "fail_reflection"
+    RETRY_PLAN_UPDATE = "retry_plan_update"
     RESUME_THERAPY = "resume_therapy"
 
 
@@ -204,6 +208,7 @@ class SessionInfo:
         workflow_state: Current workflow state
         created_at: When session was created
         user_id: User this session belongs to
+        session_type: Persisted conversation block type
     """
 
     session_id: str
@@ -211,6 +216,8 @@ class SessionInfo:
     workflow_state: WorkflowState
     created_at: datetime
     user_id: str
+    session_type: str = "intake"
+    selected_therapy_style: str | None = None
 
     def to_dict(self):
         """Convert dataclass to dictionary for JSON serialization."""
@@ -220,6 +227,8 @@ class SessionInfo:
             "workflow_state": self.workflow_state.value,
             "created_at": self.created_at.isoformat(),
             "user_id": self.user_id,
+            "session_type": self.session_type,
+            "selected_therapy_style": self.selected_therapy_style,
         }
 
 

@@ -22,6 +22,8 @@ def is_noop_plan_update(
         and plan_output.initial_goals == current_plan.initial_goals
         and plan_output.current_progress == current_plan.current_progress
         and plan_output.planned_interventions == current_plan.planned_interventions
+        and plan_output.revision_recommendations
+        == current_plan.revision_recommendations
         and plan_output.status == current_plan.status
     )
 
@@ -35,8 +37,8 @@ def build_plan_snapshot(
     """Build an in-memory plan snapshot from structured output."""
     if current_plan:
         noop = is_noop_plan_update(current_plan, plan_output)
-        plan_id = current_plan.plan_id
-        created_at = current_plan.created_at
+        plan_id = f"plan_{uuid.uuid4().hex[:12]}"
+        created_at = datetime.now()
         version = current_plan.version if noop else current_plan.version + 1
         session_briefing = current_plan.session_briefing
         selected_style = plan_output.selected_therapy_style or current_plan.selected_therapy_style
@@ -58,6 +60,7 @@ def build_plan_snapshot(
         initial_goals=plan_output.initial_goals,
         current_progress=plan_output.current_progress,
         planned_interventions=plan_output.planned_interventions,
+        revision_recommendations=plan_output.revision_recommendations,
         status=plan_output.status,
         session_briefing=session_briefing,
     )

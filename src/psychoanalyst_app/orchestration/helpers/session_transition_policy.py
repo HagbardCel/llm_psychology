@@ -99,7 +99,7 @@ async def _resolve_desired_start_state(
             WorkflowState.PLAN_UPDATE_COMPLETE,
         )
     ):
-        plan = await trio_db_service.get_latest_therapy_plan(user_id)
+        plan = await trio_db_service.get_current_therapy_plan(user_id)
         if not plan or not plan.selected_therapy_style:
             logger.info(
                 "Skipping therapy transition for user %s until therapy style "
@@ -128,6 +128,13 @@ async def advance_workflow_on_session_end(
 
     try:
         if state == WorkflowState.THERAPY_IN_PROGRESS:
+            trio_db_service = service_container.get("trio_db_service")
+            session = await trio_db_service.get_session(session_id)
+            if not session or session.session_type != "therapy":
+                logger.warning(
+                    "Skipping reflection for non-therapy session %s", session_id
+                )
+                return final_state, follow_up, follow_up_args
             await workflow_engine.transition(
                 user_id,
                 WorkflowState.PLAN_UPDATE_IN_PROGRESS,
@@ -136,7 +143,6 @@ async def advance_workflow_on_session_end(
             final_state = WorkflowState.PLAN_UPDATE_IN_PROGRESS
             conversation_manager.clear_context(session_id)
             try:
-                trio_db_service = service_container.get("trio_db_service")
                 await trio_db_service.enqueue_session_enrichment_job(
                     session_id, user_id
                 )

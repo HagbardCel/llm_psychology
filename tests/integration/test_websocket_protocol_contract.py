@@ -396,7 +396,7 @@ async def test_ws_end_session_contract(test_server_websocket, test_user):
         data = session_ended.get("data", {})
         assert data.get("reason") == "User ended session"
         assert data.get("workflow_state") in {
-            "reflection_in_progress",
+            "plan_update_in_progress",
             "plan_update_complete",
         }
 

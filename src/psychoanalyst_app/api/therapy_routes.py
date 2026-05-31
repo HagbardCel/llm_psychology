@@ -66,7 +66,7 @@ def create_therapy_routes(server) -> Blueprint:
         session_error = await validate_session_for_user(server, user_id, session_id)
         if session_error:
             return session_error
-        plan = await server.db_service.get_latest_therapy_plan(user_id)
+        plan = await server.db_service.get_current_therapy_plan(user_id)
         if not plan:
             return jsonify(None)
         dto = therapy_plan_to_dto(plan)

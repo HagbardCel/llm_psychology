@@ -1,4 +1,4 @@
-"""Prompt/context assembly helpers for psychoanalyst agent."""
+"""Prompt/context assembly helpers for therapist agent."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import trio
 
 from psychoanalyst_app.models.data_models import TherapyPlan
 from psychoanalyst_app.orchestration.models import ConversationContext
-from psychoanalyst_app.prompts.psychoanalyst_prompt_builder import (
+from psychoanalyst_app.prompts.therapist_prompt_builder import (
     build_continuation_prompt,
 )
 
@@ -22,7 +22,7 @@ def _default_style_instructions(
 ) -> str:
     style_instructions = "Conduct a general psychoanalytic session."
     if selected_style and style_service.get_style_pack(selected_style):
-        style_instructions = style_service.get_psychoanalyst_prompt(selected_style)
+        style_instructions = style_service.get_therapist_prompt(selected_style)
     return style_instructions
 
 
@@ -130,7 +130,7 @@ async def load_patient_context(
                 )
 
             async def load_tier4() -> None:
-                tier4_result["data"] = await db_service.get_latest_therapy_plan(user_id)
+                tier4_result["data"] = await db_service.get_current_therapy_plan(user_id)
 
             nursery.start_soon(load_tier1)
             nursery.start_soon(load_tier2)
@@ -272,6 +272,7 @@ async def build_continuation_prompt_with_context(
     return build_continuation_prompt(
         plan_context=plan_context,
         additional_knowledge=knowledge_text,
+        latest_message=message,
         time_prompt="",
         style_instructions=style_instructions,
     )

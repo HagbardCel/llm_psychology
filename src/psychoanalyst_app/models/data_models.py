@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ class UserStatus(str, Enum):
     THERAPY_IN_PROGRESS = "THERAPY_IN_PROGRESS"
     PLAN_UPDATE_IN_PROGRESS = "PLAN_UPDATE_IN_PROGRESS"
     REFLECTION_IN_PROGRESS = "REFLECTION_IN_PROGRESS"
+    PLAN_UPDATE_FAILED = "PLAN_UPDATE_FAILED"
     PLAN_UPDATE_COMPLETE = "PLAN_UPDATE_COMPLETE"
 
 
@@ -73,7 +74,7 @@ class Message(BaseModel):
     role: str  # "user" or "assistant"
     content: str
     timestamp: datetime
-    agent: str | None = None  # e.g., "IntakeAgent", "AssessmentAgent", "PsychoanalystAgent"
+    agent: str | None = None  # e.g., "IntakeAgent", "AssessmentAgent", "TherapistAgent"
 
 
 class Topic(BaseModel):
@@ -88,6 +89,7 @@ class Session(BaseModel):
 
     session_id: str
     user_id: str
+    session_type: Literal["intake", "therapy"] = "intake"
     plan_id: str | None = None
     timestamp: datetime
     transcript: list[Message]
@@ -142,6 +144,8 @@ class TherapyPlan(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     version: int = 1
+    supersedes_plan_id: str | None = None
+    superseded_by_plan_id: str | None = None
     selected_therapy_style: str | None = None  # e.g., "freud", "jung", "cbt"
     plan_details: dict[str, Any] = Field(
         ...,
@@ -163,9 +167,10 @@ class TherapyPlan(BaseModel):
         min_length=1,
         description="Planned therapeutic interventions or directions",
     )
+    revision_recommendations: list[str] = Field(default_factory=list)
     status: str = Field(
         default="active",
-        pattern="^(active|paused|completed)$",
+        pattern="^(active|paused|completed|superseded)$",
         description="Treatment status",
     )
     session_briefing: dict[str, Any] | None = None  # Session briefing for resumption

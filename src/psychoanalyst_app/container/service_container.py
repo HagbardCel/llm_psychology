@@ -18,7 +18,7 @@ from psychoanalyst_app.container.factories import (
     build_intake_agent,
     build_memory_agent,
     build_planning_agent,
-    build_psychoanalyst_agent,
+    build_therapist_agent,
     build_reflection_agent,
     create_agent,
     create_agent_llm_service,
@@ -64,7 +64,7 @@ class ServiceContainer:
         "llm_service",
         "llm_service_intake",
         "llm_service_assessment",
-        "llm_service_psychoanalyst",
+        "llm_service_therapist",
         "llm_service_reflection",
         "llm_service_memory",
         "llm_service_planning",
@@ -72,7 +72,7 @@ class ServiceContainer:
     AGENT_LLM_SERVICE_MAP = {
         "INTAKE": "llm_service_intake",
         "ASSESSMENT": "llm_service_assessment",
-        "PSYCHOANALYST": "llm_service_psychoanalyst",
+        "THERAPIST": "llm_service_therapist",
         "REFLECTION": "llm_service_reflection",
         "MEMORY": "llm_service_memory",
         "PLANNING": "llm_service_planning",
@@ -108,8 +108,8 @@ class ServiceContainer:
                 "llm_service_assessment": lambda: self._create_agent_llm_service(
                     "ASSESSMENT"
                 ),
-                "llm_service_psychoanalyst": lambda: self._create_agent_llm_service(
-                    "PSYCHOANALYST"
+                "llm_service_therapist": lambda: self._create_agent_llm_service(
+                    "THERAPIST"
                 ),
                 "llm_service_reflection": lambda: self._create_agent_llm_service(
                     "REFLECTION"
@@ -344,17 +344,17 @@ class ServiceContainer:
         """
         return self.create_agent("ASSESSMENT", user_context)
 
-    def create_psychoanalyst_agent(self, user_context: UserContext):
+    def create_therapist_agent(self, user_context: UserContext):
         """
-        Create psychoanalyst agent with injected dependencies.
+        Create therapist agent with injected dependencies.
 
         Args:
             user_context: User context for this therapy session
 
         Returns:
-            PsychoanalystAgent: Configured psychoanalyst agent instance
+            TherapistAgent: Configured therapist agent instance
         """
-        return self.create_agent("PSYCHOANALYST", user_context)
+        return self.create_agent("THERAPIST", user_context)
 
     def create_reflection_agent(self, user_context: UserContext):
         """
@@ -398,8 +398,8 @@ class ServiceContainer:
     def _build_assessment_agent(self, user_context: UserContext):
         return build_assessment_agent(self, user_context)
 
-    def _build_psychoanalyst_agent(self, user_context: UserContext):
-        return build_psychoanalyst_agent(self, user_context)
+    def _build_therapist_agent(self, user_context: UserContext):
+        return build_therapist_agent(self, user_context)
 
     def _build_reflection_agent(self, user_context: UserContext):
         return build_reflection_agent(self, user_context)

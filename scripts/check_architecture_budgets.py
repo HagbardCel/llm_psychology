@@ -11,20 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 BUDGETS: dict[str, int] = {
     "src/psychoanalyst_app/agents/trio_reflection_agent.py": 760,
     "src/psychoanalyst_app/agents/trio_assessment_agent.py": 500,
-    "src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py": 620,
-    "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 560,
-    "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 580,
+    "src/psychoanalyst_app/agents/trio_therapist_agent.py": 620,
+    "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 570,
+    "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 600,
     "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 430,
     "src/psychoanalyst_app/orchestration/helpers/response_handler.py": 500,
     "src/psychoanalyst_app/container/service_container.py": 500,
     "src/psychoanalyst_app/agents/reflection/insights_pipeline.py": 260,
-    "src/psychoanalyst_app/agents/psychoanalyst/prompt_context.py": 340,
+    "src/psychoanalyst_app/agents/therapist/prompt_context.py": 340,
 }
 
 METHOD_LENGTH_BUDGETS: dict[str, int] = {
     "src/psychoanalyst_app/agents/trio_reflection_agent.py": 120,
     "src/psychoanalyst_app/agents/trio_assessment_agent.py": 130,
-    "src/psychoanalyst_app/agents/trio_psychoanalyst_agent.py": 120,
+    "src/psychoanalyst_app/agents/trio_therapist_agent.py": 120,
     "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 120,
     "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 120,
     "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 180,

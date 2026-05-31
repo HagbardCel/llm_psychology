@@ -75,8 +75,8 @@ def mock_llm_service():
         if schema_name == "PlanUpdate":
             return {
                 "focus": "Anxiety management",
-                "goals": "- Reduce anxiety\n- Improve sleep",
-                "techniques": "- Cognitive restructuring\n- Mindfulness",
+                "goals": ["Reduce anxiety", "Improve sleep"],
+                "techniques": ["Cognitive restructuring", "Mindfulness"],
                 "themes": "Anxiety, coping, work stress",
                 "timeline": "12 weeks",
             }
@@ -208,6 +208,7 @@ def mock_llm_service():
                     "suggested_questions": ["What stood out from last time?"],
                     "therapeutic_goals_for_session": ["Build on prior insights"],
                 },
+                "intervention_evidence": [],
             }
 
         # Default: minimal safe payload for schemas we don't explicitly handle.
@@ -229,12 +230,14 @@ def mock_llm_service():
     llm_service.generate_response_stream = mock_stream_response
 
     # Add async versions that wrap the sync mocks
-    async def mock_generate_response_async(prompt, context=None):
+    async def mock_generate_response_async(prompt, context=None, phase=None):
         return llm_service.generate_response(prompt, context)
 
     llm_service.generate_response_async = mock_generate_response_async
 
-    async def mock_generate_structured_output_async(prompt, schema, method="json_schema"):
+    async def mock_generate_structured_output_async(
+        prompt, schema, method="json_schema", phase=None
+    ):
         return llm_service.generate_structured_output(prompt, schema, method=method)
 
     llm_service.generate_structured_output_async = mock_generate_structured_output_async

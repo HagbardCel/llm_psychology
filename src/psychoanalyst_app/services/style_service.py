@@ -32,10 +32,10 @@ class StylePack:
         )
 
         # Load agent prompts
-        psychoanalyst_prompt_file = self.path / "psychoanalyst_prompt.txt"
-        self.psychoanalyst_prompt = (
-            psychoanalyst_prompt_file.read_text(encoding="utf-8")
-            if psychoanalyst_prompt_file.exists()
+        therapist_prompt_file = self.path / "therapist_prompt.txt"
+        self.therapist_prompt = (
+            therapist_prompt_file.read_text(encoding="utf-8")
+            if therapist_prompt_file.exists()
             else ""
         )
 
@@ -59,7 +59,7 @@ class StylePack:
         required_files = [
             self.path / "knowledge.md",
             self.path / "description.txt",
-            self.path / "psychoanalyst_prompt.txt",
+            self.path / "therapist_prompt.txt",
         ]
         return all(file_path.exists() for file_path in required_files)
 
@@ -113,10 +113,10 @@ class StyleService:
         style_pack = self.style_packs.get(style_id)
         return style_pack.description if style_pack else ""
 
-    def get_psychoanalyst_prompt(self, style_id: str) -> str:
-        """Get the psychoanalyst agent prompt for a style."""
+    def get_therapist_prompt(self, style_id: str) -> str:
+        """Get the therapist agent prompt for a style."""
         style_pack = self.style_packs.get(style_id)
-        return style_pack.psychoanalyst_prompt if style_pack else ""
+        return style_pack.therapist_prompt if style_pack else ""
 
     def get_reflection_prompt(self, style_id: str) -> str:
         """Get the reflection agent prompt for a style."""
