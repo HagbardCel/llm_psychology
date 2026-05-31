@@ -44,8 +44,6 @@ High-level project health, code quality, and improvement opportunities.
 
 **Documents:**
 - [PROJECT_ASSESSMENT.md](project/PROJECT_ASSESSMENT.md) - Overall project evaluation
-- [IMPROVEMENT_RECOMMENDATIONS.md](project/IMPROVEMENT_RECOMMENDATIONS.md) - Prioritized improvement suggestions
-- [DELETABLE_FILES.md](project/DELETABLE_FILES.md) - Legacy code and cleanup opportunities
 
 Historical codebase snapshots live in
 [docs/archive/assessments/project/](../archive/assessments/project/).

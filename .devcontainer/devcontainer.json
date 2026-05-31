@@ -23,8 +23,7 @@
       "version": "3.11",
       "installTools": true,
       "installJupyterlab": false
-    },
-    "ghcr.io/devcontainers/features/node:1": {}
+    }
   },
   "customizations": {
     "vscode": {

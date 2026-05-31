@@ -54,7 +54,6 @@
   "search.exclude": {
     "**/__pycache__": true,
     "**/*.pyc": true,
-    "**/node_modules": true,
     "**/data/vector_db": true,
     "**/data/vector_db_usertest": true,
     "**/.venv": true,
