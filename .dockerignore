@@ -213,7 +213,6 @@ temp/
 Thumbs.db
 
 # Project management
-todos/
 PHASE_*.md
 IMPROVEMENT_*.md
 FUTURE_*.md

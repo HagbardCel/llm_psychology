@@ -26,13 +26,7 @@ Evaluations of system architecture, design patterns, and structural decisions.
 
 **Location:** [architecture/](architecture/)
 
-**Documents:**
-- [ARCHITECTURE_ASSESSMENT.md](architecture/ARCHITECTURE_ASSESSMENT.md) - Overall architecture evaluation
-- [ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md](architecture/ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md) - Implementation quality review
-- [ARCHITECTURE_IMPLEMENTATION_REPORT.md](architecture/ARCHITECTURE_IMPLEMENTATION_REPORT.md) - Detailed implementation findings
-- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md) - Current in-depth, laptop-first architecture assessment for local AI virtual therapist sessions
-
-Older / superseded architecture assessment plans live in
+Superseded architecture assessments live in
 [docs/archive/assessments/architecture/](../archive/assessments/architecture/).
 
 **Key Findings:**
@@ -88,7 +82,9 @@ Evaluation of test coverage, quality, and testing infrastructure.
 **Documents:**
 - [REAL_LLM_TEST_DEBUG_ASSESSMENT.md](testing/REAL_LLM_TEST_DEBUG_ASSESSMENT.md) - LLM integration test analysis
 - [TEST_FIXES_SUMMARY.md](testing/TEST_FIXES_SUMMARY.md) - Testing infrastructure improvements
-- [INTENDED_VS_ACTUAL_ALIGNMENT_ASSESSMENT_2026-02-02.md](testing/INTENDED_VS_ACTUAL_ALIGNMENT_ASSESSMENT_2026-02-02.md) - Workflow alignment gaps (intake completion, style selection) and test/design recommendations
+
+Superseded testing assessments live in
+[docs/archive/assessments/testing/](../archive/assessments/testing/).
 
 **Key Findings:**
 - Test coverage gaps
@@ -138,7 +134,7 @@ Based on recent assessments, these are the highest-priority issues:
 
 ### High Priority
 - [ ] **API Documentation**: REST endpoints lack comprehensive documentation
-- [ ] **Frontend Type Safety**: Some TypeScript type coverage gaps
+- [ ] **Console Contract Stability**: Keep HTTP/WebSocket reference-client coverage reliable
 - [ ] **Test Coverage**: Integration test coverage needs improvement
 
 ### Medium Priority

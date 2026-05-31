@@ -7,10 +7,7 @@ This directory contains documentation for features that are currently being impl
 | Feature | Status | Priority | Location |
 |---------|--------|----------|----------|
 | **Rate Limiting** | ✅ Complete | High | [rate-limiting/](rate-limiting/) |
-| **Schema Versioning** | ✅ Complete | High | [schema-versioning/](schema-versioning/) |
 | **Style Detection** | 🟡 In Progress | Medium | [style-detection/](style-detection/) |
-| **Frontend Improvements** | 🟡 In Progress | Medium | [frontend-improvements/](frontend-improvements/) |
-| **Backend Fixes** | 🟡 In Progress | High | [backend-fixes/](backend-fixes/) |
 | **Authentication** | 📋 Planned | High | [authentication/](authentication/) |
 
 ### Status Legend
@@ -27,33 +24,12 @@ API rate limiting implementation to prevent abuse and ensure fair usage.
 **Documentation:**
 - [RATE_LIMIT_IMPLEMENTATION.md](rate-limiting/RATE_LIMIT_IMPLEMENTATION.md)
 
-### Schema Versioning
-Database schema versioning system for managing migrations and ensuring data integrity.
-
-**Documentation:**
-- [SCHEMA_VERSIONING_IMPLEMENTATION.md](schema-versioning/SCHEMA_VERSIONING_IMPLEMENTATION.md)
-
 ### Style Detection
 Therapeutic style detection and recommendation system improvements.
 
 **Documentation:**
 - [STYLE_DETECTION_ASSESSMENT.md](style-detection/STYLE_DETECTION_ASSESSMENT.md)
 - [STYLE_DETECTION_FIX_PLAN.md](style-detection/STYLE_DETECTION_FIX_PLAN.md)
-
-### Frontend Improvements
-React frontend enhancements, including TypeScript improvements and UI/UX refinements.
-
-**Documentation:**
-- [FRONTEND_ASSESSMENT_PLAN.md](frontend-improvements/FRONTEND_ASSESSMENT_PLAN.md)
-- [TYPESCRIPT_FIXES_SUMMARY.md](frontend-improvements/TYPESCRIPT_FIXES_SUMMARY.md)
-
-### Backend Fixes
-Backend API improvements, bug fixes, and architectural enhancements.
-
-**Documentation:**
-- [BACKEND_FIX_PLAN.md](backend-fixes/BACKEND_FIX_PLAN.md)
-- [BACKEND_API_VERIFICATION_RESULTS.md](backend-fixes/BACKEND_API_VERIFICATION_RESULTS.md)
-- [THERAPY_PLAN_TABLE_ANALYSIS.md](backend-fixes/THERAPY_PLAN_TABLE_ANALYSIS.md)
 
 ### Authentication
 User authentication and authorization system (planned).

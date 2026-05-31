@@ -34,16 +34,17 @@ The current active canonical set is:
 
 1. `docs/README.md`
 2. `docs/design-principles.md`
-3. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`
-4. `docs/ARCHITECTURE.md`
-5. `docs/user_journey.md`
-6. `docs/session_lifecycle.md`
-7. `docs/contracts/HTTP_API_CONTRACT.md`
-8. `docs/WEBSOCKET_PROTOCOL.md`
-9. `docs/TYPE_SYSTEM.md`
-10. `docs/data-models.md`
-11. `docs/agents/README.md`
-12. `docs/assessments/README.md`
+3. `docs/ui-scope.md`
+4. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`
+5. `docs/ARCHITECTURE.md`
+6. `docs/user_journey.md`
+7. `docs/session_lifecycle.md`
+8. `docs/contracts/HTTP_API_CONTRACT.md`
+9. `docs/WEBSOCKET_PROTOCOL.md`
+10. `docs/TYPE_SYSTEM.md`
+11. `docs/data-models.md`
+12. `docs/agents/README.md`
+13. `docs/assessments/README.md`
 
 ## Required Front Matter for Active Docs
 All active docs must include this metadata block at the top:
