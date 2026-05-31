@@ -8,7 +8,6 @@ This guide will get you up and running with the Virtual LLM-Driven Psychoanalyst
 
 - Docker and Docker Compose
 - A local llama.cpp OpenAI-compatible server on `localhost:8080`
-- Modern web browser (for frontend)
 
 ## Installation
 
@@ -57,7 +56,7 @@ Run:
 make dev-install
 ```
 
-This builds the API/console/frontend Docker images and installs all Python dependencies *inside* those containers (packages are not installed globally on your host). The project workflow is Docker-only; avoid running Python/Node directly on the host for regular development.
+This builds the API and console Docker images and installs Python dependencies *inside* those containers. The project workflow is Docker-only; avoid running Python directly on the host for regular development.
 
 ### 4. Start the Server
 
@@ -73,20 +72,15 @@ The server listens on `http://localhost:8000`.
 
 ## Using the Platform
 
-### Option 1: Web Frontend (Recommended)
+### Option 1: Console Frontend
 
-1. Start the web UI with Docker:
+Start the maintained console UI with Docker:
 ```bash
-make ui-web
+make ui-console
 ```
 
-2. Open `http://localhost:5173` in your browser
-
-3. Features:
-   - Real-time streaming responses
-   - Visual typing indicators
-   - Session management
-   - Progress tracking
+It connects to the backend over HTTP and WebSocket and renders streaming
+responses in the terminal.
 
 ### Option 2: API Integration
 
@@ -516,7 +510,7 @@ For production load:
 
 - **Issues**: [GitHub Issues](https://github.com/yourusername/psychoanalyst/issues)
 - **Documentation**: See `docs/` directory
-- **Examples**: See `frontend/src/` for React implementation
+- **Supported frontend**: See `console-ui/`
 
 ---
 

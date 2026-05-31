@@ -31,7 +31,6 @@ If you need deeper detail on a specific area, this document links to the canonic
 - Prompts, Styles, and RAG
 - WebSocket Protocol (Realtime Chat)
 - HTTP API Design
-- Frontend Design Principles (React + TypeScript)
 - Console UI Design Principles (Trio client)
 - Testing & Determinism
 - Configuration, Logging, and Operational Defaults
@@ -53,7 +52,7 @@ Canonical examples:
 - `src/psychoanalyst_app/trio_server.py` (server composition + nursery ownership)
 
 ### 2) Clean boundaries: business logic is independent of I/O
-The codebase is organized to keep business logic testable and reusable across multiple clients (web UI, console UI, standalone terminal UI):
+The codebase is organized to keep business logic testable and reusable behind the supported console client and future contract consumers:
 - **Gateway layer**: HTTP routes + WebSocket handler (I/O only)
 - **Orchestration layer**: state machine + routing + streaming coordination
 - **Agent layer**: domain logic (decide what to do next and what prompt/content to produce)
@@ -76,12 +75,12 @@ Canonical examples:
 Cross-process boundaries use explicit models and stable serialization rules:
 - **Backend Pydantic models are the source of truth** for API/WS payloads and schema generation.
 - **HTTP DTOs exist to avoid leaking persistence models** directly over the wire.
-- The frontend consumes **generated TypeScript types** from backend JSON schemas.
+- Generated JSON schemas validate HTTP DTO contract shape.
 
 Canonical examples:
 - HTTP DTOs: `src/psychoanalyst_app/models/http_models.py`
 - Schema pipeline overview: `docs/TYPE_SYSTEM.md`
-- Frontend DTO usage: `frontend/src/types/index.ts`
+- Schema pipeline overview: `docs/TYPE_SYSTEM.md`
 
 ### 5) Streaming-first UX
 Therapy chat is designed around incremental streaming rather than “single blob” responses:
@@ -101,15 +100,14 @@ Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisf
 
 Support tiers:
 - **Tier 0:** backend workflow engine, persistence, HTTP DTOs, WebSocket protocol, schema/type generation, generated protocol constants, LLM abstraction, deterministic fake-provider behavior, backend tests, and architecture/documentation validation.
-- **Tier 1:** WebSocket-based console UI as the canonical integration and manual-test client.
-- **Tier 2:** React web frontend as a frozen compatibility/demo client, maintained only for generated type compatibility, build/dependency fixes, contract regression fixes, and one golden smoke path.
-- **Tier 3:** standalone terminal UI as legacy or local-debug mode; avoid new features.
+- **Tier 1:** WebSocket-based console UI as the only maintained frontend and canonical integration client.
+- Archived UI surfaces are documented in `docs/ui-scope.md`.
 
 Design rules during stabilization:
 - Backend owns workflow progression. Clients may render workflow state and submit explicit user actions, but must not mutate workflow state directly.
 - Contract changes must update specs, DTOs, schemas/generated artifacts, and deterministic tests before expanding client UX.
-- Prefer backend, protocol, and reference-client tests for foundational behavior; keep React tests focused on compatibility and the minimal browser smoke path.
-- Defer optional RAG, advanced UI flows, dashboard polish, multi-client feature parity, and frontend redesign until the foundation exit review.
+- Prefer backend, protocol, workflow-probe, and reference-client tests for foundational behavior.
+- Defer optional RAG, advanced UI flows, multi-client support, and frontend redesign until the foundation exit review.
 
 ---
 
@@ -132,9 +130,9 @@ Start here in code: `src/psychoanalyst_app/trio_server.py` → HTTP blueprints i
 
 ### Canonical Entry Points
 
-- `make run` → standalone terminal UI (Docker)
 - `make run-server` → HTTP + WebSocket server (Docker)
-- `make run-e2e` → deterministic server for Playwright (Docker)
+- `make ui-console` → maintained HTTP/WebSocket console frontend (Docker)
+- `make probe-console-deterministic` → no-network full-stack console probe (Docker)
 
 Packages are intentionally installed *inside* the Docker images (`docker compose build api` / `make dev-install`). The `test` profile exports `PYTHONPATH=/app/src` so `pytest` imports `psychoanalyst_app` from mounted sources in containers.
 
@@ -339,7 +337,7 @@ Design rules:
 - Add a new WS message type by:
   1) updating the spec (`docs/WEBSOCKET_PROTOCOL.md`)
   2) adding an envelope helper in `src/psychoanalyst_app/utils/ws_messages.py` if appropriate
-  3) updating both clients (`frontend/src/types/websocket.ts`, `console-ui/src/websocket_protocol.py`)
+  3) updating `console-ui/src/websocket_protocol.py`
 
 ---
 
@@ -364,34 +362,9 @@ Design rules:
 
 ---
 
-## Frontend Design Principles (React + TypeScript)
-
-During foundation stabilization, the React frontend is a compatibility/demo client rather than the product development driver. Do not add React product features, UI redesigns, frontend-only workflow semantics, or state transitions that bypass backend workflow authority. Allowed frontend work is limited to contract compatibility, build/dependency maintenance, smoke-path repair, and explicitly deferred product work documented as such.
-
-### The backend schema is the source of truth
-- Generated types: `frontend/src/types/generated/api.ts`
-- Re-export + UI-only extensions live in: `frontend/src/types/index.ts`
-
-Design rule:
-- API DTOs remain `snake_case` (mirror backend wire contract). UI state can be `camelCase`, but avoid conversion layers unless unavoidable.
-
-### Data fetching and mutations
-Frontend uses React Query (`@tanstack/react-query`) for:
-- caching, invalidation, retries
-- query hooks that correspond to backend endpoints
-
-Canonical entry:
-- `frontend/src/providers/QueryProvider.tsx`
-
-### WebSocket client uses native WebSocket (not Socket.IO)
-The web client implements the WS protocol defined in `docs/WEBSOCKET_PROTOCOL.md`:
-- `frontend/src/psychoanalyst_app/services/websocketService.ts`
-
----
-
 ## Console UI Design Principles (Trio client)
 
-During foundation stabilization, the console client is the Tier 1 reference client. It should stay intentionally close to the backend protocol for debugging and “lowest common denominator” UX:
+During foundation stabilization, the console client is the only maintained frontend. It should stay intentionally close to the backend protocol for debugging and “lowest common denominator” UX:
 - Trio runtime + structured concurrency
 - WS streaming chunk rendering
 - minimal UI state machine around “session started” and “waiting for initial greeting”
@@ -410,7 +383,7 @@ Canonical code:
 
 Infrastructure:
 - deterministic fakes: `src/psychoanalyst_app/testing/fakes.py`
-- dedicated deterministic server for browser tests: `src/psychoanalyst_app/e2e_server.py`
+- dedicated deterministic server for workflow probes: `src/psychoanalyst_app/deterministic_server.py`
 - backend tests live under: `tests/`
 
 Design rule:
@@ -458,10 +431,6 @@ Design rule:
 - Linting: Ruff (`make lint`)
 - Type checking: mypy is configured in `pyproject.toml` (strictness is part of the design intent; keep new code typed).
 
-### Frontend (TypeScript)
-- Type-check: `docker compose run --rm frontend npm run type-check`
-- Lint: `docker compose run --rm frontend npm run lint`
-
 Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` sets `requires-python = ">=3.11"` and formats/linters use `py311`). Use 3.11 features freely; no need to keep compatibility with older versions.
 
 ---
@@ -474,22 +443,20 @@ Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` set
 3. If you introduced a brand-new blueprint, register it inside `TrioServer._setup_http_routes()`; existing domain files are already wired up.
 4. Return DTOs (not persistence models) and ensure datetimes serialize as ISO 8601 strings.
 5. Update schema generation if the model is API-facing: `scripts/generate_schemas.py`.
-6. Regenerate TS types: `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:types`.
+6. Regenerate and validate schemas: `make validate-schemas`.
 
 ### Add a new WS message type
 1. Update the spec: `docs/WEBSOCKET_PROTOCOL.md`.
 2. Add helpers (optional but preferred): `src/psychoanalyst_app/utils/ws_messages.py`.
 3. Emit from the WebSocket stack (`src/psychoanalyst_app/api/ws_handler.py` + orchestration helpers such as `src/psychoanalyst_app/orchestration/trio_conversation_manager.py`) so the new type flows through the same envelope helpers.
-4. Update clients:
-   - Web: `frontend/src/types/websocket.ts` and handler usage in `frontend/src/psychoanalyst_app/services/websocketService.ts`
-   - Console: `console-ui/src/websocket_protocol.py` and `console-ui/src/console_client.py`
+4. Run `make generate-ws-protocol`.
+5. Update `console-ui/src/console_client.py` handling if needed.
 
 ### Add or change an API-facing model (type pipeline)
 1. Prefer adding/updating DTOs (wire models) rather than internal persistence models.
 2. Add the DTO to the `pydantic_models` list in `scripts/generate_schemas.py`.
-3. Run `make generate-schemas` and then:
-   - `docker compose run --rm -v "$PWD/schemas:/schemas" frontend npm run generate:ts`
-4. Commit the updated JSON schemas under `schemas/` and the generated TS file under `frontend/src/types/generated/api.ts`.
+3. Run `make validate-schemas`.
+4. Keep generated DTO schemas transient; commit only source changes and tests.
 
 ### Add a new agent (or change workflow routing)
 1. Add the agent implementation under `src/psychoanalyst_app/agents/` as a Trio-native class with:
@@ -597,6 +564,6 @@ Detailed coding examples and anti-pattern references moved to:
 - `docs/reference/CODING_STANDARDS_AND_ANTI_PATTERNS.md`
 
 Keep this active doc focused on architecture and runtime invariants. For code style:
-- Follow typed Python + TypeScript conventions used in existing modules.
+- Follow typed Python conventions used in existing modules.
 - Keep tests deterministic with clear arrange/act/assert structure.
 - Avoid god objects, leaky abstractions, and callback-style async flows.

@@ -70,26 +70,6 @@ except UserNotFoundError:
     profile = await db.create_user_profile(user_id)
 ```
 
-### TypeScript Standards
-
-#### Naming Conventions
-```typescript
-// Interfaces: PascalCase
-interface UserProfile { }
-
-// Functions: camelCase
-function processMessage(msg: string): void { }
-
-// Constants: UPPER_SNAKE_CASE
-const MAX_RETRIES = 3;
-
-// React components: PascalCase
-function TherapySession() { }
-```
-
-#### React Patterns
-Use functional components and hooks. Avoid class components.
-
 ### Testing Standards
 
 #### Arrange-Act-Assert Pattern

@@ -21,16 +21,15 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 ## Architecture Principles
 
 1. **Separation of Concerns**: Agents contain pure business logic; gateways handle I/O
-2. **Unified API**: All client interfaces (local, console, web) use the same backend
+2. **Unified API**: The supported console client uses the public backend contract
 3. **Streaming First**: Real-time streaming of LLM responses for better UX
 4. **State Machine**: Workflow driven by explicit state transitions
 5. **Scalability**: Designed to support multiple concurrent users
 
 During foundation stabilization, maintenance priority is backend-first:
 - Tier 0 is the backend, workflow/session lifecycle, persistence, HTTP DTOs, WebSocket protocol, schema/type pipeline, LLM abstraction, and deterministic tests.
-- Tier 1 is the WebSocket console UI, used as the canonical integration and manual-test client.
-- Tier 2 is the React frontend, frozen except for compatibility, build/dependency maintenance, contract regression fixes, and one browser smoke path.
-- Tier 3 is the standalone terminal UI, kept only for legacy or local-debug value.
+- Tier 1 is the WebSocket console UI, the only maintained frontend and the canonical integration client.
+- Archived UI surfaces are documented in `docs/ui-scope.md`.
 
 The runtime therapy agent role is `THERAPIST`. The modality is stored and
 transported separately as `selected_therapy_style` (`cbt`, `freud`, or `jung`).
@@ -41,14 +40,14 @@ while sessions retain the historical revision effective at session start.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Client Interfaces                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐     │
-│  │  Local   │  │ Console  │  │  Web Frontend        │     │
-│  │   CLI    │  │    UI    │  │  (React + WebSocket) │     │
-│  └──────────┘  └──────────┘  └──────────────────────┘     │
-└──────────┬──────────┬─────────────────┬───────────────────┘
-           │          │                 │
-           ▼          ▼                 ▼
+│                  Supported Client Interface                  │
+│                  ┌──────────────────────┐                    │
+│                  │      Console UI      │                    │
+│                  │  (HTTP + WebSocket)  │                    │
+│                  └──────────────────────┘                    │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
      ┌────────────────────────────────────────┐
      │      Unified Server (Port 8000)        │
      │  ┌──────────────────────────────────┐  │
@@ -258,9 +257,9 @@ async def process_message(
 Gateways connect client interfaces to the orchestration layer.
 
 Client support during foundation stabilization:
-- The console UI is the reference client for validating registration, WebSocket connection, workflow-next-action emission, streaming, session ending, and style selection.
-- The React frontend remains buildable and minimally usable, but it must not introduce frontend-owned workflow semantics or drive product behavior while contracts are unstable.
-- The standalone terminal UI should not receive new product features; migrate useful debugging behavior into the console UI or backend tests when practical.
+- The console UI is the only maintained frontend and validates registration, WebSocket connection, workflow-next-action emission, streaming, session ending, and style selection.
+- Workflow probes use the same public HTTP/WebSocket boundary.
+- Archived UI surfaces must not be recreated unless explicitly approved.
 
 #### WebSocket Handler (`src/psychoanalyst_app/api/ws_handler.py`)
 

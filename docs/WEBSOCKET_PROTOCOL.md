@@ -22,12 +22,11 @@ source_of_truth_for: WebSocket message envelope, event semantics, and versioned 
 - Generated constants:
   - `src/psychoanalyst_app/utils/ws_protocol.py`
   - `console-ui/src/websocket_protocol.py`
-  - `frontend/src/types/ws_protocol.generated.ts`
 - Regeneration command (Docker): `docker compose run --rm -v "$PWD:/app" api python scripts/generate_ws_protocol.py`
 
 ## Overview
 
-This document defines the WebSocket message protocol between therapy clients (console UI, web frontend) and the backend server. All messages are JSON-encoded and follow a consistent structure.
+This document defines the WebSocket message protocol between the supported console UI and the backend server. All messages are JSON-encoded and follow a consistent structure.
 
 **Endpoint**: `ws://<host>:<port>/ws?user_id=<user_id>`
 
@@ -722,7 +721,6 @@ console.log('[WS]', message.type, message.data);
 - **Backend Handler**: [src/psychoanalyst_app/api/ws_handler.py](../src/psychoanalyst_app/api/ws_handler.py)
 - **Message Helpers**: [src/psychoanalyst_app/utils/ws_messages.py](../src/psychoanalyst_app/utils/ws_messages.py)
 - **Console UI Client**: [console-ui/src/console_client.py](../console-ui/src/console_client.py)
-- **Web Frontend Service**: [frontend/src/services/websocketService.ts](../frontend/src/services/websocketService.ts)
 - **Backend Models**: [src/psychoanalyst_app/orchestration/models.py](../src/psychoanalyst_app/orchestration/models.py)
 
 ### Related Documentation

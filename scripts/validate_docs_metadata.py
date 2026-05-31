@@ -11,6 +11,7 @@ from pathlib import Path
 ACTIVE_DOCS = [
     "docs/README.md",
     "docs/design-principles.md",
+    "docs/ui-scope.md",
     "docs/reference/FOUNDATION_STABILIZATION_PLAN.md",
     "docs/ARCHITECTURE.md",
     "docs/user_journey.md",

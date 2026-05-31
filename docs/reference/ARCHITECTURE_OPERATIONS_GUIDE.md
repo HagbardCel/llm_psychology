@@ -180,8 +180,8 @@ Future enhancements:
 2. Extract and validate data
 3. Use orchestrator for processing
 4. Emit response events
-5. Add to frontend WebSocket service
-6. Update TypeScript types
+5. Update `console-ui` protocol handling
+6. Run `make generate-ws-protocol`
 
 ## Troubleshooting
 
@@ -193,7 +193,7 @@ WebSocket won't connect:
 - Verify the `user_id` query parameter is provided
 
 Streaming not working:
-- Verify `chat_response_chunk` handler in frontend
+- Verify the `console-ui` `chat_response_chunk` handler
 - Check LLM service streaming implementation
 - Verify network allows SSE/WebSocket
 

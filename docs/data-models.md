@@ -268,9 +268,8 @@ erDiagram
 JSON serialization helpers live in
 `src/psychoanalyst_app/services/db_serialization.py`.
 
-## Schema and Type Generation
+## Schema Generation
 
 Pydantic models are the source of truth for schema generation:
 - JSON schemas: `make generate-schemas` -> `schemas/`
-- Frontend types: `frontend/scripts/generate-types.js`
 - See `docs/TYPE_SYSTEM.md` for the full pipeline

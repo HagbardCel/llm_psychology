@@ -2,8 +2,7 @@
 
 ## Project Structure
 - `src/`: Core Python app (agents, orchestration, services, models, styles, server).
-- `frontend/`: React + TypeScript UI (Vite, MUI).
-- `console-ui/`: Terminal WebSocket client.
+- `console-ui/`: Supported terminal HTTP/WebSocket client and workflow probes.
 - `tests/`: Pytest unit/integration suites.
 - `data/`: SQLite DBs, vector DBs, domain knowledge.
 - `schemas/` and `migrations/`: JSON schema outputs and DB migrations.
@@ -11,78 +10,74 @@
 
 ## Documentation Map (Read First)
 - `docs/README.md`: Doc index and pointers to deeper references.
+- `docs/ui-scope.md`: Active frontend policy and archived UI references.
 - `docs/design-principles.md`: Non-negotiable architecture rules, layering, and workflow invariants.
-- `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`: Current stabilization priorities, client support tiers, and frontend maintenance policy.
+- `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`: Current stabilization priorities.
 - `docs/ARCHITECTURE.md`: System overview, orchestration flow, and component responsibilities.
-- `docs/user_journey.md`: Expected user flow and endpoint usage by client.
+- `docs/user_journey.md`: Expected user flow and endpoint usage.
 - `docs/session_lifecycle.md`: Session orchestration details and state transitions.
 
 ## Contracts and Data Models (Source of Truth)
 - `docs/contracts/HTTP_API_CONTRACT.md`: HTTP endpoints, DTO shapes, and error format.
 - `docs/WEBSOCKET_PROTOCOL.md`: WebSocket message envelope and event contract.
 - `docs/data-models.md`: Domain model inventory and DTO mappings.
-- `docs/TYPE_SYSTEM.md`: Schema and frontend type generation pipeline.
+- `docs/TYPE_SYSTEM.md`: Backend schema and protocol-generation pipeline.
 
 ## Key Entry Points (Code)
 - `src/psychoanalyst_app/trio_server.py`: Server composition, HTTP routing, WS registration.
 - `src/psychoanalyst_app/api/*_routes.py`: HTTP endpoints by domain.
 - `src/psychoanalyst_app/api/ws_handler.py`: WebSocket handler and message routing.
 - `src/psychoanalyst_app/orchestration/`: Workflow engine, orchestrator, conversation manager.
-- `frontend/src/services/apiClient.ts`: Web HTTP client.
-- `frontend/src/services/websocketService.ts`: Web WS client.
-- `console-ui/src/console_client.py`: Console UI client behavior.
+- `console-ui/src/console_client.py`: Supported frontend behavior.
+- `console-ui/src/workflow_probe/`: Full-stack workflow probes.
 
 ## Docker-Only Command Execution
 Run all commands inside containers. Do not run Python or Node on the host.
 
 - Build images: `make dev-install`
-- Start services: `make docker-up` (or `make ui-web` / `make ui-console`)
+- Start backend: `make docker-up`
 - Backend shell: `make docker-shell`
 - One-off backend command: `docker compose run --rm api <command>`
-- One-off frontend command: `docker compose run --rm frontend <command>`
-- Usertest config: `ENV_FILE=.env.usertest docker compose up api frontend`
-
-### Common Runtime Commands (Containerized)
-- Server: `docker compose up --build api`
-- Standalone CLI: `docker compose run --rm api python -m psychoanalyst_app`
-- Console UI: `make ui-console`
-- Web UI: `make ui-web`
+- Supported frontend: `make ui-console`
+- Manual cloud usertest: `make ui-console-test`
 
 ## Tests (Docker-Only)
 - Backend full suite: `make test-validate` or `make docker-test`
 - Backend single test: `make docker-test-one TEST=tests/unit/test_file.py`
-- Frontend unit tests: `make docker-test-frontend`
-- Frontend lint: `docker compose run --rm frontend npm run lint`
-- E2E tests: `docker compose run --rm frontend npx playwright install --with-deps` (once),
-  then `docker compose run --rm frontend npm run test:e2e`
+- Deterministic full-stack probe: `make probe-console-deterministic`
+- Release-candidate validation: `make finalization-check`
 
 ## Core Developer Guidance
 - Trio is the async runtime; do not introduce asyncio.
 - Keep agents as pure business logic; orchestration owns workflow transitions.
-- Prefer existing utilities and services before adding new ones (see `docs/design-principles.md`).
+- Prefer existing utilities and services before adding new ones.
 - If docs conflict with this guide, follow this guide and update the docs you touched.
-- If you change HTTP/WS contracts or API-facing models, update the contract docs and regenerate schemas/types.
-- When models change, regenerate schemas and frontend types.
-- Add tests for new behavior; keep deterministic tests in the default suite.
+- If HTTP/WS contracts or API-facing models change, update contract docs and regenerate schemas/protocol constants.
+- Add deterministic tests for new behavior.
 
-## Foundation Stabilization Mode
-Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisfied, treat the backend, workflow engine, persistence model, API DTOs, WebSocket protocol, schema/type generation, LLM abstraction, and deterministic tests as the main product.
+## Active Scope
+Until foundation stabilization is complete, treat the backend, workflow engine, persistence model, API DTOs, WebSocket protocol, schema generation, LLM abstraction, deterministic tests, and workflow probes as the main product.
 
-- Maintain the WebSocket console UI as the reference client.
-- Keep the React frontend frozen except for contract compatibility, build/dependency maintenance, smoke-path repair, and explicit deferred product work.
-- Do not add React product features, UI redesigns, frontend-only workflow semantics, or frontend state transitions that bypass backend workflow authority.
-- Keep the standalone terminal UI in legacy/local-debug mode; do not add new features unless it uniquely supports foundation stabilization.
-- Prefer backend, protocol, and reference-client tests over expanding frontend tests for foundational behavior.
-- Any frontend change must state whether it is contract compatibility, build/dependency maintenance, smoke-path repair, or deferred product work.
+- Maintain `console-ui` as the only supported frontend.
+- Do not recreate, repair, test, or optimize the archived React/Vite frontend.
+- Do not recreate the archived standalone in-process terminal UI.
+- Do not add multi-frontend orchestration modes.
+- Prefer backend, protocol, workflow-probe, and console-client tests.
 
-## Schema and Type Generation (Containerized)
-- Generate JSON schemas: `docker compose run --rm api python scripts/generate_schemas.py`
-- Validate schemas: `docker compose run --rm api python scripts/validate_schemas.py`
-- Generate frontend types: `docker compose run --rm frontend npm run generate:types`
+Archived UI state is preserved at:
+
+- branch: `archive/ui-state-2026-05-31`
+- tag: `archive-ui-state-2026-05-31`
+- commit: `0e6ddd9efd7b89c5c9852d093dd94967bc68723b`
+
+## Schema and Protocol Generation (Containerized)
+- Generate JSON schemas: `make generate-schemas`
+- Validate generated schemas: `make validate-schemas`
+- Generate WS constants: `make generate-ws-protocol`
+- Validate committed WS constants: `make validate-generated-contracts`
 
 ## Version Control Guidelines
 - Branch from `main` using `feat/<topic>` or `fix/<topic>`.
 - Keep commits small and scoped; use conventional prefixes (`feat:`, `fix:`, `docs:`).
 - Run Docker-based tests before committing.
 - Avoid force pushes to shared branches; rebase only on local branches.
-- PRs should include a clear description, testing notes, and screenshots for UI changes.

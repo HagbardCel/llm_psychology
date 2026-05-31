@@ -34,13 +34,12 @@ make docker-test-one TEST=tests/unit/test_foo.py
 docker compose run --rm api pytest tests/unit/test_foo.py::test_bar
 ```
 
-For the frontend:
+For the supported console frontend and deterministic full-stack probe:
 
 ```bash
-make docker-test-frontend                                       # Vitest unit tests
-docker compose run --rm frontend npm run lint                   # ESLint
-docker compose run --rm frontend npx playwright install --with-deps  # one-time
-docker compose run --rm frontend npm run test:e2e               # Playwright E2E
+make docker-test-one TEST=tests/unit/test_console_client_workflow.py
+make docker-test-one TEST=tests/unit/test_console_workflow_probe.py
+make probe-console-deterministic
 ```
 
 ## Conventions

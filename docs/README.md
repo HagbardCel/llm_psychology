@@ -12,18 +12,20 @@ source_of_truth_for: Documentation entrypoint and canonical navigation
 Use this order if you are new to the codebase:
 
 1. `docs/design-principles.md` for architecture invariants and implementation rules.
-2. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` for current stabilization priorities and client support tiers.
-3. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
-4. `docs/user_journey.md` for end-to-end user and protocol flow.
-5. `docs/session_lifecycle.md` for workflow/session ownership details.
-6. `docs/contracts/HTTP_API_CONTRACT.md` and `docs/WEBSOCKET_PROTOCOL.md` for API contracts.
-7. `docs/TYPE_SYSTEM.md` for schema/type generation pipeline.
+2. `docs/ui-scope.md` for the supported frontend and archived UI policy.
+3. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` for current stabilization priorities.
+4. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
+5. `docs/user_journey.md` for end-to-end user and protocol flow.
+6. `docs/session_lifecycle.md` for workflow/session ownership details.
+7. `docs/contracts/HTTP_API_CONTRACT.md` and `docs/WEBSOCKET_PROTOCOL.md` for API contracts.
+8. `docs/TYPE_SYSTEM.md` for schema and protocol generation.
 
 ## Active Docs (Canonical)
 These docs are the only canonical, actively governed set.
 
 - [Documentation Index](README.md)
 - [Design Principles](design-principles.md)
+- [UI Scope](ui-scope.md)
 - [Foundation Stabilization Plan](reference/FOUNDATION_STABILIZATION_PLAN.md)
 - [Architecture](ARCHITECTURE.md)
 - [User Journey](user_journey.md)
