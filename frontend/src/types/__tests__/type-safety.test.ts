@@ -58,6 +58,7 @@ describe('Type Safety Integration', () => {
         'THERAPY_IN_PROGRESS',
         'PLAN_UPDATE_IN_PROGRESS',
         'REFLECTION_IN_PROGRESS',
+        'PLAN_UPDATE_FAILED',
         'PLAN_UPDATE_COMPLETE',
       ];
 
@@ -109,6 +110,7 @@ describe('Type Safety Integration', () => {
       const session: Session = {
         session_id: 'session-123',
         user_id: 'user-123',
+        session_type: 'therapy',
         timestamp: '2024-01-01T00:00:00Z',
         transcript: [
           {
@@ -145,6 +147,7 @@ describe('Type Safety Integration', () => {
       const session: Session = {
         session_id: 'session-456',
         user_id: 'user-456',
+        session_type: 'therapy',
         timestamp: '2024-01-02T00:00:00Z',
         transcript: [],
         topics: [],
@@ -155,7 +158,7 @@ describe('Type Safety Integration', () => {
         interpretations: null,
         patient_reactions: null,
         enriched: false,
-        agentType: 'PSYCHOANALYST' as AgentType,
+        agentType: 'THERAPIST' as AgentType,
         therapyStyle: 'freud' as TherapyStyle,
         status: 'ACTIVE' as SessionStatus,
         startTime: new Date(),
@@ -163,7 +166,7 @@ describe('Type Safety Integration', () => {
         metadata: { sessionNumber: 5 },
       };
 
-      expect(session.agentType).toBe('PSYCHOANALYST');
+      expect(session.agentType).toBe('THERAPIST');
       expect(session.therapyStyle).toBe('freud');
       expect(session.status).toBe('ACTIVE');
       expect(session.metadata).toEqual({ sessionNumber: 5 });
@@ -265,7 +268,7 @@ describe('Type Safety Integration', () => {
       const types: AgentType[] = [
         'INTAKE' as AgentType,
         'ASSESSMENT' as AgentType,
-        'PSYCHOANALYST' as AgentType,
+        'THERAPIST' as AgentType,
         'PLANNING' as AgentType,
         'REFLECTION' as AgentType,
       ];
@@ -322,6 +325,7 @@ describe('Type Safety Integration', () => {
       const session: Session = {
         session_id: 'nested-test',
         user_id: 'user-nested',
+        session_type: 'therapy',
         timestamp: '2024-01-01T00:00:00Z',
         transcript: [
           {
@@ -355,6 +359,7 @@ describe('Type Safety Integration', () => {
       const session: Session = {
         session_id: 'date-session',
         user_id: 'user-date',
+        session_type: 'therapy',
         timestamp: '2024-01-01T00:00:00Z',
         transcript: [],
         topics: [],

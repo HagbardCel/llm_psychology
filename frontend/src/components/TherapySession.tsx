@@ -13,7 +13,7 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { useAppContext, useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useWebSocketContext } from '../contexts/WebSocketContext';
 import { apiClient } from '../services/apiClient';
-import { Message, Session, AgentType, SessionStatus } from '../types';
+import { Message, Session, AgentType, SessionStatus, TherapyStyle } from '../types';
 import type {
   AssessmentRecommendationsEvent,
   SessionStartedEvent,
@@ -112,6 +112,7 @@ export function TherapySession({
     const startedSession: Session = {
       session_id: event.session_id,
       user_id: event.user_id,
+      session_type: event.session_type,
       timestamp: event.created_at,
       transcript: [],
       topics: [],
@@ -123,6 +124,7 @@ export function TherapySession({
       patient_reactions: null,
       enriched: false,
       agentType: event.agent_type as AgentType,
+      therapyStyle: event.selected_therapy_style as TherapyStyle | null || undefined,
       status: SessionStatus.ACTIVE,
       startTime: new Date(event.created_at),
     };
@@ -383,7 +385,7 @@ export function TherapySession({
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <SessionHeader
         session={session}
-        therapyStyle={undefined}
+        therapyStyle={session?.therapyStyle}
         onMenuClick={handleMenuClick}
         onSettingsClick={handleSettingsClick}
         onEndSession={handleEndSession}
@@ -457,7 +459,7 @@ function getInputPlaceholder(agentType?: AgentType): string {
       return 'Share some information about yourself...';
     case AgentType.ASSESSMENT:
       return 'Tell me about your goals and preferences...';
-    case AgentType.PSYCHOANALYST:
+    case AgentType.THERAPIST:
       return 'What would you like to explore today?';
     case AgentType.PLANNING:
       return 'Share your thoughts on the treatment plan...';

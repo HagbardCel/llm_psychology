@@ -11,6 +11,7 @@ describe('SessionHeader', () => {
   const createMockSession = (overrides?: Partial<Session>): Session => ({
     session_id: 'session-123',
     user_id: 'user-123',
+    session_type: 'therapy',
     timestamp: new Date('2024-01-15T14:30:00').toISOString(),
     transcript: [],
     topics: [],
@@ -21,7 +22,7 @@ describe('SessionHeader', () => {
     interpretations: null,
     patient_reactions: null,
     enriched: false,
-    agentType: AgentType.PSYCHOANALYST,
+    agentType: AgentType.THERAPIST,
     status: SessionStatus.ACTIVE,
     startTime: new Date('2024-01-15T14:30:00'),
     ...overrides,
@@ -123,8 +124,8 @@ describe('SessionHeader', () => {
       expect(screen.getByText('Assessment Session')).toBeInTheDocument();
     });
 
-    it('should display "Therapy Session" for PSYCHOANALYST agent type', () => {
-      const session = createMockSession({ agentType: AgentType.PSYCHOANALYST });
+    it('should display "Therapy Session" for THERAPIST agent type', () => {
+      const session = createMockSession({ agentType: AgentType.THERAPIST });
       render(<SessionHeader session={session} onMenuClick={mockOnMenuClick} />);
 
       expect(screen.getByText('Therapy Session')).toBeInTheDocument();

@@ -127,10 +127,12 @@ describe('TherapySession', () => {
   function emitSessionStarted(overrides?: Partial<SessionStartedEvent>) {
     const event: SessionStartedEvent = {
       session_id: 'server-session-id',
-      agent_type: 'PSYCHOANALYST',
+      agent_type: 'THERAPIST',
       workflow_state: 'therapy_in_progress',
       created_at: new Date().toISOString(),
       user_id: 'test-user-id',
+      session_type: 'therapy',
+      selected_therapy_style: 'cbt',
       ...overrides,
     };
 

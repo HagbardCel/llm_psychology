@@ -104,10 +104,10 @@ export class ApiClient {
       }
 
       if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new Error(`Request timeout after ${this.timeout}ms`);
+        throw new Error(`Request timeout after ${this.timeout}ms`, { cause: error });
       }
 
-      throw new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 

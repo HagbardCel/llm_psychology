@@ -18,7 +18,9 @@ import {
   UserRegisterResponse,
   UserStatusResponse,
   WorkflowNextAction,
-  WorkflowSelectTherapyStyleRequest
+  WorkflowSelectTherapyStyleRequest,
+  WorkflowStartTherapyRequest,
+  WorkflowStartTherapyResponse
 } from '../types';
 
 /**
@@ -29,9 +31,9 @@ export const userApi = {
     return apiClient.post('/api/user/register', data);
   },
 
-  async getStatus(userId: string, sessionId: string): Promise<UserStatusResponse> {
+  async getStatus(userId: string): Promise<UserStatusResponse> {
     return apiClient.get(
-      `/api/user/status?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+      `/api/user/status?user_id=${encodeURIComponent(userId)}`
     );
   },
 
@@ -104,6 +106,10 @@ export const workflowApi = {
     return apiClient.get(
       `/api/workflow/next?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
     );
+  },
+
+  async startTherapy(data: WorkflowStartTherapyRequest): Promise<WorkflowStartTherapyResponse> {
+    return apiClient.post('/api/workflow/start_therapy', data);
   }
 };
 

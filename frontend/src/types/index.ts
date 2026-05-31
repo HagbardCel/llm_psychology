@@ -12,6 +12,8 @@ import type {
   PatchUserProfileRequest as GeneratedPatchUserProfileRequest,
   RequiredWorkflowAction as GeneratedRequiredWorkflowAction,
   SelectTherapyStyleRequest as GeneratedSelectTherapyStyleRequest,
+  StartTherapyRequest as GeneratedStartTherapyRequest,
+  StartTherapyResponse as GeneratedStartTherapyResponse,
   UserProfile as GeneratedUserProfile,
   UserStatus as GeneratedUserStatus,
   Message as GeneratedMessage,
@@ -47,6 +49,7 @@ export const UserStatus = {
   THERAPY_IN_PROGRESS: 'THERAPY_IN_PROGRESS' as UserStatus,
   PLAN_UPDATE_IN_PROGRESS: 'PLAN_UPDATE_IN_PROGRESS' as UserStatus,
   REFLECTION_IN_PROGRESS: 'REFLECTION_IN_PROGRESS' as UserStatus,
+  PLAN_UPDATE_FAILED: 'PLAN_UPDATE_FAILED' as UserStatus,
   PLAN_UPDATE_COMPLETE: 'PLAN_UPDATE_COMPLETE' as UserStatus,
 } as const;
 
@@ -114,6 +117,8 @@ export type StatusMessageResponse = GeneratedStatusMessageResponse;
 
 /** Workflow therapy style selection request (backend workflow endpoint) */
 export type WorkflowSelectTherapyStyleRequest = GeneratedSelectTherapyStyleRequest;
+export type WorkflowStartTherapyRequest = GeneratedStartTherapyRequest;
+export type WorkflowStartTherapyResponse = GeneratedStartTherapyResponse;
 
 export interface UserRegisterResponse {
   session: Session;
@@ -143,7 +148,7 @@ export interface UserProfileListResponse {
 export enum AgentType {
   INTAKE = 'INTAKE',
   ASSESSMENT = 'ASSESSMENT',
-  PSYCHOANALYST = 'PSYCHOANALYST',
+  THERAPIST = 'THERAPIST',
   PLANNING = 'PLANNING',
   REFLECTION = 'REFLECTION'
 }

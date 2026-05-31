@@ -244,7 +244,7 @@ it('supports UI metadata without redefining DTO fields', () => {
     topics: [],
   };
 
-  session.agentType = AgentType.PSYCHOANALYST;
+  session.agentType = AgentType.THERAPIST;
   expect(session.user_id).toBe('user-1');
 });
 ```

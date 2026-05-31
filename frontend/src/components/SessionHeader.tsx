@@ -51,7 +51,7 @@ export function SessionHeader({
         return 'Intake Session';
       case AgentType.ASSESSMENT:
         return 'Assessment Session';
-      case AgentType.PSYCHOANALYST:
+      case AgentType.THERAPIST:
         return 'Therapy Session';
       case AgentType.REFLECTION:
         return 'Reflection Session';

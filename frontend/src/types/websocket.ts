@@ -88,10 +88,12 @@ export interface ChatResponseChunk {
  */
 export interface SessionStartedEvent {
   session_id: string;
-  agent_type: 'INTAKE' | 'ASSESSMENT' | 'PSYCHOANALYST' | 'PLANNING' | 'REFLECTION';
+  agent_type: 'INTAKE' | 'ASSESSMENT' | 'THERAPIST' | 'PLANNING' | 'REFLECTION';
   workflow_state: string;  // WorkflowState value
   created_at: string;      // ISO 8601 timestamp
   user_id: string;
+  session_type: 'intake' | 'therapy';
+  selected_therapy_style: 'cbt' | 'freud' | 'jung' | null;
 }
 
 /**

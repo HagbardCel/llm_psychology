@@ -8,8 +8,11 @@ export function routeForRequiredAction(action?: RequiredWorkflowAction | null): 
       return '/intake';
     case 'select_therapy_style':
       return '/assessment';
+    case 'start_therapy':
+      return '/assessment';
     case 'continue_therapy':
       return '/session/new';
+    case 'retry_plan_update':
     case 'wait':
     default:
       return null;
@@ -24,8 +27,12 @@ export function labelForRequiredAction(action?: RequiredWorkflowAction | null): 
       return 'Start Intake';
     case 'select_therapy_style':
       return 'Choose Therapy Style';
+    case 'start_therapy':
+      return 'Start Therapy';
     case 'continue_therapy':
       return 'Continue Therapy';
+    case 'retry_plan_update':
+      return 'Retry Plan Update';
     case 'wait':
       return 'Please Wait';
     default:

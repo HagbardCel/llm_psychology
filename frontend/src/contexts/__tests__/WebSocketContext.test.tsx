@@ -62,10 +62,12 @@ function renderProvider(
 function sessionStarted(overrides: Partial<SessionStartedEvent> = {}): SessionStartedEvent {
   return {
     session_id: 'server-session',
-    agent_type: 'PSYCHOANALYST',
+    agent_type: 'THERAPIST',
     workflow_state: 'therapy_in_progress',
     created_at: new Date().toISOString(),
     user_id: 'user-1',
+    session_type: 'therapy',
+    selected_therapy_style: 'cbt',
     ...overrides,
   };
 }

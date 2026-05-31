@@ -169,6 +169,8 @@ function getUserStatusLabel(status: UserStatus): string {
       return 'Ready';
     case UserStatus.PLAN_UPDATE_IN_PROGRESS:
       return 'Updating Plan';
+    case UserStatus.PLAN_UPDATE_FAILED:
+      return 'Plan Update Failed';
     case UserStatus.PLAN_UPDATE_COMPLETE:
       return 'Ready';
     case UserStatus.THERAPY_IN_PROGRESS:

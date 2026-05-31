@@ -43,7 +43,7 @@ export async function getBackendVersion(baseUrl: string = ''): Promise<VersionIn
     return await getClient(baseUrl).get<VersionInfo>('/api/version');
   } catch (error) {
     if (error instanceof ApiRequestError) {
-      throw new Error(`Failed to get version info: ${error.status} ${error.statusText}`);
+      throw new Error(`Failed to get version info: ${error.status} ${error.statusText}`, { cause: error });
     }
     throw error;
   }
@@ -62,7 +62,7 @@ export async function checkVersionCompatibility(
     });
   } catch (error) {
     if (error instanceof ApiRequestError) {
-      throw new Error(`Failed to check version: ${error.status} ${error.statusText}`);
+      throw new Error(`Failed to check version: ${error.status} ${error.statusText}`, { cause: error });
     }
     throw error;
   }
