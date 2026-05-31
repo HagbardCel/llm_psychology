@@ -85,3 +85,5 @@ The validator enforces:
 2. ISO date format for `last_reviewed`.
 3. `status: active` for active docs.
 4. Active docs are indexed in `docs/README.md` under `Active Docs (Canonical)`.
+5. Reviews are not overdue: a document remains valid through
+   `last_reviewed + review_cycle_days` and fails validation the following day.
