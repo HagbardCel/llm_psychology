@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 from quart import Blueprint, jsonify, request
 from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
-from psychoanalyst_app.api.http_errors import validation_error_response
-from psychoanalyst_app.api.request_utils import (
+from psychoanalyst_app.api._helpers import (
     require_session_id,
     require_user_id,
     validate_session_for_user,
+    validation_error_response,
 )
-from psychoanalyst_app.models.http_models import (
+from psychoanalyst_app.models.http import (
     TherapyStyleDTO,
     therapy_plan_to_dto,
 )

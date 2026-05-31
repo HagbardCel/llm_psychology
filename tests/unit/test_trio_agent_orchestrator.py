@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     WorkflowEvent,

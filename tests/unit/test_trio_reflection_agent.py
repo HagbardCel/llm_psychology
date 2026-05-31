@@ -9,9 +9,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
+from psychoanalyst_app.agents.reflection import TrioReflectionAgent
+from psychoanalyst_app.agents.reflection.session_summary import (
+    generate_session_briefing,
+)
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan, Topic, UserProfile
+from psychoanalyst_app.models.domain import Message, Session, TherapyPlan, Topic, UserProfile
 from psychoanalyst_app.orchestration.models import (
     ConversationContext,
     WorkflowEvent,
@@ -164,12 +167,14 @@ async def test_generate_session_briefing_structure(
     )
 
     # Generate briefing
-    briefing = await agent._generate_session_briefing(
-        session_context=session_context,
-        therapeutic_memory=therapeutic_memory,
-        plan_assessment=plan_assessment,
-        session=sample_session,
-        therapy_plan=sample_plan,
+    briefing = await generate_session_briefing(
+        agent.llm_service,
+        agent.config,
+        session_context,
+        therapeutic_memory,
+        plan_assessment,
+        sample_session,
+        sample_plan,
     )
 
     # Verify briefing structure

@@ -9,9 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 BUDGETS: dict[str, int] = {
-    "src/psychoanalyst_app/agents/trio_reflection_agent.py": 760,
-    "src/psychoanalyst_app/agents/trio_assessment_agent.py": 500,
-    "src/psychoanalyst_app/agents/trio_therapist_agent.py": 620,
+    "src/psychoanalyst_app/agents/intake/agent.py": 300,
+    "src/psychoanalyst_app/agents/assessment/agent.py": 300,
+    "src/psychoanalyst_app/agents/therapist/agent.py": 300,
+    "src/psychoanalyst_app/agents/memory/agent.py": 340,
+    "src/psychoanalyst_app/agents/planning/agent.py": 420,
+    "src/psychoanalyst_app/agents/reflection/agent.py": 360,
     "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 570,
     "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 600,
     "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 430,
@@ -22,9 +25,10 @@ BUDGETS: dict[str, int] = {
 }
 
 METHOD_LENGTH_BUDGETS: dict[str, int] = {
-    "src/psychoanalyst_app/agents/trio_reflection_agent.py": 120,
-    "src/psychoanalyst_app/agents/trio_assessment_agent.py": 130,
-    "src/psychoanalyst_app/agents/trio_therapist_agent.py": 120,
+    "src/psychoanalyst_app/agents/intake/agent.py": 200,
+    "src/psychoanalyst_app/agents/assessment/agent.py": 130,
+    "src/psychoanalyst_app/agents/therapist/agent.py": 120,
+    "src/psychoanalyst_app/agents/reflection/agent.py": 120,
     "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 120,
     "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 120,
     "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 180,

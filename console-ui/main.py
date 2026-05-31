@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Console UI client for the Virtual LLM-Driven Psychoanalyst application.
+Console UI client for the Virtual LLM-Driven Therapist application.
 This service connects to the backend via API and WebSocket for therapy sessions.
 Trio-based implementation for structured concurrency.
 """
@@ -34,7 +34,7 @@ async def main():
     setup_logging(log_path)
     output = ConsoleOutput(logging.getLogger("console_ui.output"))
 
-    output.system("Starting Console UI Client for Virtual LLM-Driven Psychoanalyst")
+    output.system("Starting Console UI Client for Virtual LLM-Driven Therapist")
     output.system(f"Log file: {log_path}")
 
     # Configuration
@@ -45,7 +45,7 @@ async def main():
     websocket_origin = os.getenv("WEBSOCKET_ORIGIN", backend_url)
 
     output.system("Console UI configuration:")
-    output.system("🧠 Virtual LLM-Driven Psychoanalyst - Console Interface")
+    output.system("🧠 Virtual LLM-Driven Therapist - Console Interface")
     output.system("=" * 60)
     output.system(f"Backend: {backend_url}")
     output.system(f"WebSocket: {websocket_url}")

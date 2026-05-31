@@ -10,7 +10,7 @@ import pytest
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.domain import UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowState
 from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
@@ -84,7 +84,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="orchestration_test_user",
         name="Orchestration Test User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -217,7 +217,7 @@ async def test_conversation_manager_add_message(
     # Create a session first
     import uuid
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
 
     session_id = str(uuid.uuid4())
     session = Session(
@@ -247,7 +247,7 @@ async def test_conversation_manager_stream_response(
     """Test streaming LLM response."""
     import uuid
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
     from psychoanalyst_app.orchestration.models import ConversationContext
 
     # Create session
@@ -297,7 +297,7 @@ async def test_conversation_manager_limits_repeated_llm_failures(
     """Repeated LLM failures stop returning the retry-loop fallback."""
     import uuid
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
     from psychoanalyst_app.orchestration.models import ConversationContext
 
     class FailingLLMService:
@@ -357,7 +357,7 @@ async def test_conversation_manager_limits_repeated_llm_failures(
 @pytest.mark.integration
 async def test_conversation_manager_rag_filter_source_and_content(conversation_manager):
     """Test that conversation-manager RAG uses correct source filter and content key."""
-    from psychoanalyst_app.models.data_models import TherapyPlan
+    from psychoanalyst_app.models.domain import TherapyPlan
 
     therapy_plan = TherapyPlan(
         user_id="rag_test_user",
@@ -393,7 +393,7 @@ async def test_orchestrator_create_user_profile(orchestrator):
         {
             "user_id": "new_test_user",
             "name": "New Test User",
-            "data_of_birth": "",
+            "date_of_birth": "",
             "profession": "Engineer",
         }
     )

@@ -7,7 +7,7 @@ import pytest
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.exceptions import ConfigurationError
-from psychoanalyst_app.services.rag_service import NoOpRAGService
+from psychoanalyst_app.services.rag import NoOpRAGService
 
 pytestmark = pytest.mark.unit
 

@@ -10,7 +10,7 @@ from datetime import datetime
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.data_models import Message, Session
+from psychoanalyst_app.models.domain import Message, Session
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
     WorkflowState,

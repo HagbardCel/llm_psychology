@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from psychoanalyst_app.models.data_models import UserProfile
+from psychoanalyst_app.models.domain import UserProfile
 from psychoanalyst_app.orchestration.agent_output_validators import (
     build_therapy_plan_output,
     build_user_profile_output,
@@ -16,9 +16,9 @@ def test_build_user_profile_output_defaults():
 
 
 def test_build_user_profile_output_parses_date():
-    output = build_user_profile_output({"data_of_birth": "1990-01-02"})
+    output = build_user_profile_output({"date_of_birth": "1990-01-02"})
 
-    assert isinstance(output.data_of_birth, datetime)
+    assert isinstance(output.date_of_birth, datetime)
 
 
 def test_is_profile_complete_requires_non_guest_name():

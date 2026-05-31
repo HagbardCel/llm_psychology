@@ -7,7 +7,7 @@ This is a pure Trio version of WorkflowEngine using TrioDatabaseService.
 import logging
 
 from psychoanalyst_app.exceptions import InvalidStateTransitionError
-from psychoanalyst_app.models.data_models import UserStatus
+from psychoanalyst_app.models.domain import UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 

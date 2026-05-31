@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from psychoanalyst_app.agents.reflection.message_formatting import (
-    format_reflection_summary,
-)
-from psychoanalyst_app.agents.reflection.plan_snapshot import (
+from psychoanalyst_app.agents.reflection.session_summary import (
     build_plan_snapshot,
+    format_reflection_summary,
     is_noop_plan_update,
 )
-from psychoanalyst_app.models.data_models import TherapyPlan
-from psychoanalyst_app.models.structured_output_models import StructuredTherapyPlanOutput
+from psychoanalyst_app.models.domain import TherapyPlan
+from psychoanalyst_app.models.llm_outputs import StructuredTherapyPlanOutput
 
 
 def _plan_output(style: str = "cbt", progress: str = "baseline") -> StructuredTherapyPlanOutput:

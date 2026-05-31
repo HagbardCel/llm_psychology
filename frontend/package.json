@@ -1,7 +1,7 @@
 {
-  "name": "psychoanalyst-frontend",
+  "name": "therapist-frontend",
   "version": "1.0.0",
-  "description": "React frontend for Virtual LLM-Driven Psychoanalyst application",
+  "description": "React frontend for Virtual LLM-Driven Therapist application",
   "type": "module",
   "engines": {
     "node": ">=26 <27",
@@ -9,8 +9,8 @@
   },
   "packageManager": "npm@11.14.1",
   "scripts": {
-    "dev": "npm run generate:types && vite",
-    "build": "npm run generate:types && tsc && vite build",
+    "dev": "vite",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint src --ext ts,tsx --fix",
@@ -23,9 +23,7 @@
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
-    "generate:types": "npm run generate:schemas && npm run generate:ts",
-    "generate:schemas": "node scripts/generate-schemas.js",
-    "generate:ts": "node scripts/generate-types.js",
+    "generate:types": "node scripts/generate-types.js",
     "check:generated-types": "node scripts/generate-types.js --check"
   },
   "dependencies": {
@@ -68,7 +66,7 @@
   "keywords": [
     "react",
     "typescript",
-    "psychoanalyst",
+    "therapist",
     "therapy",
     "mental-health"
   ],

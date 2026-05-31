@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.models.api_models import RequiredWorkflowAction
-from psychoanalyst_app.models.data_models import Message, Session, UserProfile
+from psychoanalyst_app.models.http import RequiredWorkflowAction
+from psychoanalyst_app.models.domain import Message, Session, UserProfile
 from psychoanalyst_app.orchestration.models import WorkflowState
 from psychoanalyst_app.orchestration.runtime.agent_resolution import (
     get_or_create_cached_agent,

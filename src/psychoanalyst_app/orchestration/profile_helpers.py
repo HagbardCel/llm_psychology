@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.domain import UserProfile, UserStatus
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 
@@ -36,17 +36,17 @@ def merge_user_profile(
             return updates[field]
         return getattr(existing_profile, field) if existing_profile else default
 
-    if "data_of_birth" in updates:
-        raw_data_of_birth = updates.get("data_of_birth")
-        data_of_birth = parse_date_of_birth(raw_data_of_birth)
+    if "date_of_birth" in updates:
+        raw_date_of_birth = updates.get("date_of_birth")
+        date_of_birth = parse_date_of_birth(raw_date_of_birth)
         if (
-            raw_data_of_birth not in (None, "")
-            and data_of_birth is None
+            raw_date_of_birth not in (None, "")
+            and date_of_birth is None
             and existing_profile
         ):
-            data_of_birth = existing_profile.data_of_birth
+            date_of_birth = existing_profile.date_of_birth
     else:
-        data_of_birth = existing_profile.data_of_birth if existing_profile else None
+        date_of_birth = existing_profile.date_of_birth if existing_profile else None
 
     name_value = updates.get("name") if "name" in updates else None
     if isinstance(name_value, str) and name_value.strip():
@@ -64,7 +64,7 @@ def merge_user_profile(
     return UserProfile(
         user_id=user_id,
         name=name,
-        data_of_birth=data_of_birth,
+        date_of_birth=date_of_birth,
         profession=profession,
         alias=pick_optional("alias"),
         gender=pick_optional("gender"),
@@ -98,9 +98,9 @@ async def ensure_user_profile(
     """Ensure a user profile exists, applying defaults without transitions."""
     existing_profile = await trio_db_service.get_user_profile(user_id)
     updates = dict(defaults or {})
-    data_of_birth = updates.get("data_of_birth")
-    if isinstance(data_of_birth, str) and data_of_birth:
-        updates["data_of_birth"] = parse_date_of_birth(data_of_birth)
+    date_of_birth = updates.get("date_of_birth")
+    if isinstance(date_of_birth, str) and date_of_birth:
+        updates["date_of_birth"] = parse_date_of_birth(date_of_birth)
 
     user_profile = merge_user_profile(
         existing_profile=existing_profile,

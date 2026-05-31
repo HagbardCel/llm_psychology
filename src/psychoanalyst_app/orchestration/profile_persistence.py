@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
+from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.profile_helpers import merge_user_profile
 
 logger = logging.getLogger(__name__)

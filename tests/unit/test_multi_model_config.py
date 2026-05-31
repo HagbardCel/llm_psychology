@@ -25,7 +25,7 @@ def test_agent_specific_models_from_config(monkeypatch):
     _clear_agent_model_env(monkeypatch)
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
-    monkeypatch.setenv("THERAPIST_MODEL", "psychoanalyst-model")
+    monkeypatch.setenv("THERAPIST_MODEL", "therapist-model")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
 
     container = ServiceContainer(Settings())
@@ -34,9 +34,9 @@ def test_agent_specific_models_from_config(monkeypatch):
     intake_service = container.get("llm_service_intake")
     assert intake_service.model_name == "intake-model"
 
-    # Test psychoanalyst agent gets specific model
-    psychoanalyst_service = container.get("llm_service_therapist")
-    assert psychoanalyst_service.model_name == "psychoanalyst-model"
+    # Test therapist agent gets specific model
+    therapist_service = container.get("llm_service_therapist")
+    assert therapist_service.model_name == "therapist-model"
 
 
 def test_fallback_to_default_model(monkeypatch):
@@ -57,7 +57,7 @@ def test_all_agent_models_configurable(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "default-model")
     monkeypatch.setenv("INTAKE_MODEL", "intake-model")
     monkeypatch.setenv("ASSESSMENT_MODEL", "assessment-model")
-    monkeypatch.setenv("THERAPIST_MODEL", "psychoanalyst-model")
+    monkeypatch.setenv("THERAPIST_MODEL", "therapist-model")
     monkeypatch.setenv("REFLECTION_MODEL", "reflection-model")
     monkeypatch.setenv("MEMORY_MODEL", "memory-model")
     monkeypatch.setenv("PLANNING_MODEL", "planning-model")
@@ -68,7 +68,7 @@ def test_all_agent_models_configurable(monkeypatch):
     assert container.get("llm_service_intake").model_name == "intake-model"
     assert container.get("llm_service_assessment").model_name == "assessment-model"
     assert (
-        container.get("llm_service_therapist").model_name == "psychoanalyst-model"
+        container.get("llm_service_therapist").model_name == "therapist-model"
     )
     assert container.get("llm_service_reflection").model_name == "reflection-model"
     assert container.get("llm_service_memory").model_name == "memory-model"

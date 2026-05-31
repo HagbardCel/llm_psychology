@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
-from psychoanalyst_app.models.data_models import TherapyPlan
+from psychoanalyst_app.models.domain import TherapyPlan
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (

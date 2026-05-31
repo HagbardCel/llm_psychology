@@ -6,9 +6,11 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.agents.reflection.helpers import maybe_update_tier1_profile
-from psychoanalyst_app.agents.reflection.session_summary_pipeline import (
+from psychoanalyst_app.agents.reflection.session_summary import (
     generate_session_summary_payload,
+)
+from psychoanalyst_app.agents.reflection.tier1_pipeline import (
+    maybe_update_tier1_profile,
 )
 from psychoanalyst_app.agents.reflection.tier2_pipeline import (
     load_or_enrich_session_record,
@@ -20,7 +22,7 @@ from psychoanalyst_app.agents.reflection.tier4_pipeline import (
     apply_tier4_updates,
     generate_combined_recommendations,
 )
-from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
+from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
 
 logger = logging.getLogger(__name__)
 

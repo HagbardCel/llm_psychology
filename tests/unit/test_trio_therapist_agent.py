@@ -1,7 +1,7 @@
 """
 Unit tests for TrioTherapistAgent.
 
-Tests the psychoanalyst agent's session resumption functionality.
+Tests the therapist agent's session resumption functionality.
 """
 
 from datetime import datetime, timedelta
@@ -9,13 +9,15 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
-from psychoanalyst_app.models.briefing_models import BriefingStatus
-from psychoanalyst_app.models.data_models import (
+from psychoanalyst_app.agents.therapist import TrioTherapistAgent
+from psychoanalyst_app.agents.therapist.prompt_context import load_patient_context
+from psychoanalyst_app.agents.therapist.prompts import build_resumption_prompt
+from psychoanalyst_app.models.domain import BriefingStatus
+from psychoanalyst_app.models.domain import (
     TherapyPlan,
     UserProfile,
 )
-from psychoanalyst_app.models.structured_output_models import DeepTopicSignalOutput
+from psychoanalyst_app.models.llm_outputs import DeepTopicSignalOutput
 from psychoanalyst_app.orchestration.models import ConversationContext
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
@@ -23,7 +25,7 @@ from psychoanalyst_app.orchestration.models import ConversationContext
 
 @pytest.fixture
 def therapist_agent(app_config):
-    """Create a psychoanalyst agent for testing."""
+    """Create a therapist agent for testing."""
     # Create simple mocks
     mock_llm = Mock()
     mock_db = Mock()
@@ -45,7 +47,7 @@ def sample_user_profile():
     return UserProfile(
         user_id="test_user_123",
         name="Test User",
-        data_of_birth=datetime(1990, 1, 1),
+        date_of_birth=datetime(1990, 1, 1),
         profession="Software Engineer",
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -217,7 +219,7 @@ async def test_get_briefing_status_invalid_no_timestamp(therapist_agent):
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_load_patient_context_includes_tiers(app_config):
-    """Ensure psychoanalyst can assemble patient context from tiers."""
+    """Ensure therapist can assemble patient context from tiers."""
     mock_llm = Mock()
     mock_rag = Mock()
     mock_db = Mock()
@@ -257,7 +259,7 @@ async def test_load_patient_context_includes_tiers(app_config):
         config=app_config,
     )
 
-    context_text = await agent._load_patient_context("test_user_123")
+    context_text = await load_patient_context(mock_db, "test_user_123")
     assert context_text is not None
     assert "=== PATIENT BACKGROUND ===" in context_text
     assert "=== TREATMENT GOALS ===" in context_text
@@ -354,7 +356,7 @@ async def test_build_resumption_prompt_fresh_briefing(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await therapist_agent._build_resumption_prompt(
+    prompt = build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -391,7 +393,7 @@ async def test_build_resumption_prompt_stale_briefing(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await therapist_agent._build_resumption_prompt(
+    prompt = build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -423,7 +425,7 @@ async def test_build_resumption_prompt_includes_therapy_style(
     sample_therapy_plan.selected_therapy_style = "CBT"
 
     # Build resumption prompt
-    prompt = await therapist_agent._build_resumption_prompt(
+    prompt = build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -482,7 +484,7 @@ async def test_build_resumption_prompt_includes_key_themes(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await therapist_agent._build_resumption_prompt(
+    prompt = build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,
@@ -535,7 +537,7 @@ async def test_build_resumption_prompt_includes_emotional_state(
     sample_therapy_plan.session_briefing = briefing
 
     # Build resumption prompt
-    prompt = await therapist_agent._build_resumption_prompt(
+    prompt = build_resumption_prompt(
         user_profile=sample_user_profile,
         therapy_plan=sample_therapy_plan,
         briefing=briefing,

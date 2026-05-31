@@ -10,13 +10,13 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from psychoanalyst_app.models.data_models import (
+from psychoanalyst_app.models.domain import (
     AnalyticFrame,
     AnalyticOrientation,
     BasicPatientBackground,
     CurrentFocus,
     DefensiveOrganization,
-    DetailedSession,
+    Session,
     EducationalWorkHistory,
     FamilyConstellation,
     Message,
@@ -43,7 +43,7 @@ class TestBasicPatientBackground:
         """Test creating valid basic patient background."""
         background = BasicPatientBackground(
             alias="TestPatient",
-            data_of_birth=datetime(1990, 5, 15),
+            date_of_birth=datetime(1990, 5, 15),
             gender="non-binary",
             cultural_background="Second-generation Chinese-American",
             primary_language="English",
@@ -82,11 +82,11 @@ class TestBasicPatientBackground:
         """Test that optional fields can be None."""
         background = BasicPatientBackground(
             alias="Test",
-            data_of_birth=None,
+            date_of_birth=None,
             gender=None,
             cultural_background=None,
         )
-        assert background.data_of_birth is None
+        assert background.date_of_birth is None
         assert background.gender is None
 
 
@@ -131,7 +131,7 @@ class TestUserProfile:
             user_id="user123",
             name="Alex",
             alias="Alex",
-            data_of_birth=datetime(1990, 5, 15),
+            date_of_birth=datetime(1990, 5, 15),
             profession="Engineer",
             created_at=datetime.now(),
             updated_at=datetime.now(),
@@ -164,12 +164,12 @@ class TestUserProfile:
 # ============================================================================
 
 
-class TestDetailedSession:
-    """Tests for DetailedSession model."""
+class TestEnrichedSession:
+    """Tests for enriched Session model fields."""
 
     def test_basic_session_fields(self):
         """Test standard session fields."""
-        session = DetailedSession(
+        session = Session(
             session_id="sess123",
             user_id="user123",
             timestamp=datetime.now(),
@@ -186,7 +186,7 @@ class TestDetailedSession:
 
     def test_tier2_enrichment_fields(self):
         """Test Tier 2 enrichment fields."""
-        session = DetailedSession(
+        session = Session(
             session_id="sess123",
             user_id="user123",
             timestamp=datetime.now(),
@@ -205,7 +205,7 @@ class TestDetailedSession:
 
     def test_default_enriched_false(self):
         """Test enriched defaults to False."""
-        session = DetailedSession(
+        session = Session(
             session_id="sess123",
             user_id="user123",
             timestamp=datetime.now(),
@@ -216,7 +216,7 @@ class TestDetailedSession:
     def test_psychological_summary_max_length(self):
         """Test psychological summary max length validation."""
         with pytest.raises(ValidationError):
-            DetailedSession(
+            Session(
                 session_id="sess123",
                 user_id="user123",
                 timestamp=datetime.now(),
@@ -445,8 +445,8 @@ class TestModelIntegration:
             updated_at=datetime.now(),
         )
 
-        # Tier 2: Detailed Session
-        session = DetailedSession(
+        # Tier 2: Enriched Session
+        session = Session(
             session_id="sess123",
             user_id="user123",
             timestamp=datetime.now(),

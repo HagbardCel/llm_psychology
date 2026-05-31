@@ -11,7 +11,6 @@ This directory contains documentation for features that are currently being impl
 | **Style Detection** | 🟡 In Progress | Medium | [style-detection/](style-detection/) |
 | **Frontend Improvements** | 🟡 In Progress | Medium | [frontend-improvements/](frontend-improvements/) |
 | **Backend Fixes** | 🟡 In Progress | High | [backend-fixes/](backend-fixes/) |
-| **Testing Improvements** | 🟡 In Progress | High | [testing-improvements/](testing-improvements/) |
 | **Authentication** | 📋 Planned | High | [authentication/](authentication/) |
 
 ### Status Legend
@@ -55,17 +54,6 @@ Backend API improvements, bug fixes, and architectural enhancements.
 - [BACKEND_FIX_PLAN.md](backend-fixes/BACKEND_FIX_PLAN.md)
 - [BACKEND_API_VERIFICATION_RESULTS.md](backend-fixes/BACKEND_API_VERIFICATION_RESULTS.md)
 - [THERAPY_PLAN_TABLE_ANALYSIS.md](backend-fixes/THERAPY_PLAN_TABLE_ANALYSIS.md)
-
-### Testing Improvements
-Comprehensive testing infrastructure enhancements and test coverage improvements.
-
-**Documentation:**
-- [INTEGRATION_TESTING_STRATEGY.md](testing-improvements/INTEGRATION_TESTING_STRATEGY.md)
-- [INTEGRATION_TESTING_IMPLEMENTATION.md](testing-improvements/INTEGRATION_TESTING_IMPLEMENTATION.md)
-- [TESTING_PLAN_SESSION_RESUMPTION.md](testing-improvements/TESTING_PLAN_SESSION_RESUMPTION.md)
-- [TEST_DEBUG_PLAN.md](testing-improvements/TEST_DEBUG_PLAN.md)
-- [REMAINING_TEST_ISSUES.md](testing-improvements/REMAINING_TEST_ISSUES.md)
-- [REAL_LLM_TEST_DEBUG_PLAN.md](testing-improvements/REAL_LLM_TEST_DEBUG_PLAN.md)
 
 ### Authentication
 User authentication and authorization system (planned).

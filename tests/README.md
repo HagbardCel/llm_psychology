@@ -1,177 +1,72 @@
-# Psychoanalyst Test Suite
+# Therapist Test Suite
 
-This directory contains a comprehensive test suite for the psychoanalyst application, designed to ensure reliability, maintainability, and proper functionality of all components.
+The backend test suite for the therapist app. Everything runs inside Docker
+(see [`AGENTS.md`](../AGENTS.md) for the canonical commands) and uses Trio as
+the async runtime.
 
-## Test Structure
+## Layout
 
 ```
 tests/
-├── conftest.py          # Pytest configuration and fixtures
-├── README.md            # This file
-├── run_tests.py         # Test runner script
-├── unit/                # Unit tests for individual components
-│   ├── test_db_service.py
-│   ├── test_llm_service.py
-│   ├── test_rag_service.py
-│   ├── test_style_service.py
-│   ├── test_intake_agent.py
-│   ├── test_assessment_agent.py
-│   ├── test_psychoanalyst_agent.py
-│   └── test_reflection_agent.py
-├── integration/         # Integration tests for component interactions
-│   └── test_complete_session_flow.py
-└── (legacy test files)  # Old script-style tests (to be removed)
+├── conftest.py            # Shared fixtures (settings, DB, mock services)
+├── test_entry_points.py   # Smoke tests for CLI entry points
+├── test_trio_validation.py# Cross-cutting Trio invariants
+├── unit/                  # Pure unit tests (default suite)
+├── integration/           # Cross-component tests against real services
+└── real_llm/              # Tests that hit a real LLM (opt-in only)
 ```
 
-## Test Types
+- `unit/`: Fast, deterministic, mock-driven tests for individual modules
+  (agents, repos, services, helpers, route handlers). This is the default
+  `make docker-test` suite.
+- `integration/`: Trio-based flows that exercise multiple layers (HTTP API,
+  WebSocket protocol, orchestration, persistence). They use a temp SQLite DB
+  and mocked LLMs.
+- `real_llm/`: Smoke tests that talk to a real model (Gemini, LM Studio, etc.).
+  Skipped by default. Use these only when validating LLM-side behavior.
 
-### Unit Tests
-- **Purpose**: Test individual components in isolation
-- **Location**: `tests/unit/`
-- **Coverage**: 
-  - DatabaseService: All CRUD operations and user status logic
-  - LLMService: API interactions and response handling
-  - RAGService: Knowledge retrieval and management
-  - StyleService: Therapy style pack loading and management
-  - Agents: Individual agent logic with mocked dependencies
+## Running tests (Docker-only)
 
-### Integration Tests
-- **Purpose**: Test interactions between multiple components
-- **Location**: `tests/integration/`
-- **Coverage**:
-  - Complete session flow (intake → assessment → therapy → reflection)
-  - Resume flow integration with database service
-  - Performance testing with multiple sessions
-  - Error handling across component boundaries
-
-## Key Features
-
-### Mock-Based Testing
-All external dependencies are properly mocked:
-- **LLM Service**: Mocked to avoid API calls and ensure deterministic tests
-- **Database**: Temporary in-memory databases for each test
-- **RAG Service**: Mocked knowledge retrieval
-- **UI**: Mock UI for simulating user interactions
-
-### Test Fixtures
-The `conftest.py` file provides reusable fixtures:
-- `temp_db_path`: Temporary database file
-- `db_service`: Database service with temporary database
-- `mock_llm_service`: Mocked LLM service
-- `mock_rag_service`: Mocked RAG service
-- Sample data fixtures for common test scenarios
-
-## Running Tests
-
-### Using Makefile (Recommended)
 ```bash
-# Run all tests
-make test
-
-# Run unit tests only
-make test-unit
-
-# Run integration tests only
-make test-integration
+make test-validate                          # Full backend suite (unit + integration)
+make docker-test                            # Same as above
+make docker-test-one TEST=tests/unit/test_foo.py
+docker compose run --rm api pytest tests/unit/test_foo.py::test_bar
 ```
 
-### Using Pytest Directly
+For the frontend:
+
 ```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest tests/unit/test_db_service.py
-
-# Run tests with specific markers
-pytest -m unit
-pytest -m integration
-
-# Run tests matching a keyword
-pytest -k "database"
+make docker-test-frontend                                       # Vitest unit tests
+docker compose run --rm frontend npm run lint                   # ESLint
+docker compose run --rm frontend npx playwright install --with-deps  # one-time
+docker compose run --rm frontend npm run test:e2e               # Playwright E2E
 ```
 
-### Using Test Runner Script
-```bash
-# Run all tests
-python tests/run_tests.py --all
+## Conventions
 
-# Run unit tests
-python tests/run_tests.py --unit
+- All async tests use `pytest-trio` (`@pytest.mark.trio`). Do not introduce
+  `asyncio` tests.
+- Each test creates an isolated SQLite database via `tmp_path` fixtures; never
+  mutate `data/*.db` from a test.
+- LLM calls are mocked. Add a `real_llm/` test only when the behavior under
+  test is intrinsic to the model.
+- Markers: `@pytest.mark.unit`, `@pytest.mark.integration`. CI runs unit and
+  integration by default.
+- Keep tests deterministic: avoid wall-clock dependencies, fix random seeds,
+  freeze time when needed.
 
-# Run tests for specific service
-python tests/run_tests.py --service db
+## Adding new tests
 
-# Run tests for specific agent
-python tests/run_tests.py --agent intake
-```
+1. Pick the closest existing module under `unit/` or `integration/`.
+2. Reuse fixtures from `conftest.py`; add new ones there if they are shared.
+3. Prefer asserting on observable behavior (DB state, HTTP responses, WS
+   messages) over internal implementation details.
+4. Run `make docker-test-one TEST=...` for fast feedback before
+   `make test-validate`.
 
-## Test Markers
+## Related documentation
 
-- `@pytest.mark.unit`: Unit tests
-- `@pytest.mark.integration`: Integration tests
-- `@pytest.mark.asyncio`: Async tests
-- `@pytest.mark.skip`: Skipped tests
-
-## Best Practices Implemented
-
-1. **Isolation**: Each test runs with its own temporary database
-2. **Deterministic**: No external API calls or network dependencies
-3. **Fast**: Tests complete quickly due to mocking
-4. **Comprehensive**: Covers happy paths, edge cases, and error conditions
-5. **Readable**: Clear test names and structured test classes
-6. **Maintainable**: Proper use of fixtures and mock objects
-
-## Coverage Areas
-
-### Database Service
-- User profile CRUD operations
-- Session management
-- Therapy plan handling
-- User status determination
-- Error handling
-
-### LLM Service
-- Response generation with and without context
-- Structured response handling
-- Error handling and fallback mechanisms
-
-### RAG Service
-- Knowledge retrieval with filtering
-- Source-based knowledge access
-- Error handling
-
-### Style Service
-- Style pack loading and validation
-- Component retrieval
-- Knowledge source management
-
-### Agents
-- **Intake Agent**: User profile collection, conversation management
-- **Assessment Agent**: Therapy style recommendations, plan creation
-- **Psychoanalyst Agent**: Session conduct, time management, style awareness
-- **Reflection Agent**: Plan creation and updates, session summarization
-
-## Legacy Test Files
-
-The following script-style test files are deprecated and will be removed:
-- `test_db_writing.py`
-- `test_user_profile_creation.py`
-- `test_short_session.py`
-
-These have been replaced with proper unit and integration tests that are:
-- Automated and deterministic
-- Part of the continuous testing pipeline
-- Faster and more reliable
-- Better structured for maintenance
-
-## Future Improvements
-
-1. **Test Coverage**: Add coverage reporting with `pytest-cov`
-2. **CI/CD Integration**: Set up automated testing on code changes
-3. **Performance Tests**: Add more comprehensive performance benchmarks
-4. **UI Tests**: Expand testing for the textual UI components
-5. **Edge Case Coverage**: Add more tests for boundary conditions
+- [Architecture overview](../docs/ARCHITECTURE.md)
+- [Foundation stabilization plan](../docs/reference/FOUNDATION_STABILIZATION_PLAN.md)
+- [HTTP / WebSocket contracts](../docs/contracts/)

@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.domain import UserProfile, UserStatus
 from psychoanalyst_app.trio_server import TrioServer
 
 
@@ -51,7 +51,7 @@ async def test_profile_patch_rejects_status_update(trio_server):
     user_profile = UserProfile(
         user_id="status_patch_user",
         name="Status Patch User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.INTAKE_IN_PROGRESS,
         primary_language="English",

@@ -36,7 +36,7 @@ from psychoanalyst_app.exceptions import ConfigurationError
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.migration_service import MigrationService
-from psychoanalyst_app.services.rag_service import NoOpRAGService
+from psychoanalyst_app.services.rag import NoOpRAGService, RAGServiceProtocol
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -184,22 +184,6 @@ class ServiceContainer:
             else:
                 self._instances[service_name] = instance
             logger.debug(f"Registered custom instance for {service_name}")
-
-    def register_llm_service_for(self, agent_type: str, instance: LLMService) -> None:
-        """
-        Register a specific LLM service implementation for an agent type.
-
-        Args:
-            agent_type: Agent identifier (e.g., "INTAKE")
-            instance: LLMService instance to use for that agent
-        """
-        normalized = agent_type.upper()
-        llm_key = self.AGENT_LLM_SERVICE_MAP.get(normalized)
-        if not llm_key:
-            raise ValueError(f"Unknown agent type for LLM override: {agent_type}")
-        with self._lock:
-            self._instances[llm_key] = instance
-            logger.debug("Registered custom LLM service for %s", agent_type)
 
     def register_factory(self, service_name: str, factory: Callable[[], Any]) -> None:
         """
@@ -391,24 +375,6 @@ class ServiceContainer:
             PlanningAgent: Configured planning agent instance
         """
         return self.create_agent("PLANNING", user_context)
-
-    def _build_intake_agent(self, user_context: UserContext):
-        return build_intake_agent(self, user_context)
-
-    def _build_assessment_agent(self, user_context: UserContext):
-        return build_assessment_agent(self, user_context)
-
-    def _build_therapist_agent(self, user_context: UserContext):
-        return build_therapist_agent(self, user_context)
-
-    def _build_reflection_agent(self, user_context: UserContext):
-        return build_reflection_agent(self, user_context)
-
-    def _build_memory_agent(self, user_context: UserContext):
-        return build_memory_agent(self, user_context)
-
-    def _build_planning_agent(self, user_context: UserContext):
-        return build_planning_agent(self, user_context)
 
     # Container Lifecycle Methods
 

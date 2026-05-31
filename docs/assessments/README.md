@@ -30,9 +30,10 @@ Evaluations of system architecture, design patterns, and structural decisions.
 - [ARCHITECTURE_ASSESSMENT.md](architecture/ARCHITECTURE_ASSESSMENT.md) - Overall architecture evaluation
 - [ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md](architecture/ARCHITECTURE_IMPLEMENTATION_ASSESSMENT.md) - Implementation quality review
 - [ARCHITECTURE_IMPLEMENTATION_REPORT.md](architecture/ARCHITECTURE_IMPLEMENTATION_REPORT.md) - Detailed implementation findings
-- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_LOCAL_LEAN.md) - In-depth, laptop-first architecture assessment plan and findings log template
-- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_FINANCIAL_LOCAL_LEAN.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-14_FINANCIAL_LOCAL_LEAN.md) - In-depth architecture assessment plan focused on lean, maintainable, laptop-first financial-analysis workflows
-- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md) - Current in-depth, laptop-first architecture assessment for local AI virtual psychologist sessions
+- [ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md](architecture/ARCHITECTURE_ASSESSMENT_PLAN_2026-02-22_LOCAL_LEAN_PSYCHOLOGIST.md) - Current in-depth, laptop-first architecture assessment for local AI virtual therapist sessions
+
+Older / superseded architecture assessment plans live in
+[docs/archive/assessments/architecture/](../archive/assessments/architecture/).
 
 **Key Findings:**
 - Trio migration completeness
@@ -51,9 +52,9 @@ High-level project health, code quality, and improvement opportunities.
 - [PROJECT_ASSESSMENT.md](project/PROJECT_ASSESSMENT.md) - Overall project evaluation
 - [IMPROVEMENT_RECOMMENDATIONS.md](project/IMPROVEMENT_RECOMMENDATIONS.md) - Prioritized improvement suggestions
 - [DELETABLE_FILES.md](project/DELETABLE_FILES.md) - Legacy code and cleanup opportunities
-- [CODEBASE_ASSESSMENT_2025-12-16.md](project/CODEBASE_ASSESSMENT_2025-12-16.md) - Holistic codebase review and improvement roadmap
-- [CODEBASE_ASSESSMENT_2025-12-22.md](project/CODEBASE_ASSESSMENT_2025-12-22.md) - Updated assessment with lean refactor plan and doc/tooling alignment
-- [CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.md](project/CODEBASE_ASSESSMENT_2025-12-22_LOCAL_LEAN.md) - Local-first assessment focused on lean architecture and protocol alignment
+
+Historical codebase snapshots live in
+[docs/archive/assessments/project/](../archive/assessments/project/).
 
 **Key Findings:**
 - Code quality metrics
@@ -195,4 +196,3 @@ When creating a new assessment:
 - [Active Features](../features/) - Implementation plans addressing assessment findings
 - [Architecture Overview](../ARCHITECTURE.md) - Current system architecture
 - [Legacy Documentation](../legacy/) - Historical assessments and completed work
-- [Tech Stack](../TECH_STACK.md) - Technology decisions and rationale

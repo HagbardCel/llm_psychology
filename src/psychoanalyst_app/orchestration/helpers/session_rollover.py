@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from psychoanalyst_app.models.data_models import Message, Session
+from psychoanalyst_app.models.domain import Message, Session
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowEvent, WorkflowState
 from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 

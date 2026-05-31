@@ -26,7 +26,7 @@ These shapes are what all clients should assume on the wire.
 - `user_id`: `string`
 - `name`: `string`
 - `alias`: `string | null`
-- `data_of_birth`: `string | null` (ISO 8601)
+- `date_of_birth`: `string | null` (ISO 8601)
 - `gender`: `string | null`
 - `cultural_background`: `string | null`
 - `primary_language`: `string`
@@ -131,7 +131,7 @@ These shapes are what all clients should assume on the wire.
 - `session_id`: `string`
 - `name`: `string`
 - `alias`: `string | null`
-- `data_of_birth`: `string | null` (ISO 8601)
+- `date_of_birth`: `string | null` (ISO 8601)
 - `gender`: `string | null`
 - `cultural_background`: `string | null`
 - `primary_language`: `string`
@@ -155,7 +155,7 @@ These shapes are what all clients should assume on the wire.
 - `user_id`: `string`
 - `name`: `string`
 - `alias`: `string | null`
-- `data_of_birth`: `string | null` (ISO 8601)
+- `date_of_birth`: `string | null` (ISO 8601)
 - `gender`: `string | null`
 - `cultural_background`: `string | null`
 - `primary_language`: `string`

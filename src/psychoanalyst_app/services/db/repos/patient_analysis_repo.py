@@ -8,7 +8,7 @@ from typing import Callable
 
 import sqlite3
 
-from psychoanalyst_app.models.data_models import PatientAnalysisVersion
+from psychoanalyst_app.models.domain import PatientAnalysisVersion
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
@@ -165,70 +165,6 @@ def _sync_save_analysis_version(
         return False
 
 
-async def save_analysis_version_and_supersede(
-    executor: TrioSQLiteExecutor,
-    analysis: PatientAnalysisVersion,
-    superseded_analysis_id: str | None,
-    datetime_to_iso: Callable[[datetime], str],
-) -> bool:
-    async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_save_analysis_version_and_supersede,
-            conn,
-            analysis,
-            superseded_version,
-            datetime_to_iso,
-        )
-
-
-def _sync_save_analysis_version_and_supersede(
-    conn: sqlite3.Connection,
-    analysis: PatientAnalysisVersion,
-    superseded_analysis_id: str | None,
-    datetime_to_iso: Callable[[datetime], str],
-) -> bool:
-    try:
-        cursor = conn.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
-
-        cursor.execute(
-            """
-            INSERT INTO patient_analysis
-            (analysis_id, user_id, version, analysis_data, created_at,
-             created_by_session, change_summary, superseded_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                analysis.analysis_id,
-                analysis.user_id,
-                analysis.version,
-                analysis.analysis_data.model_dump_json(),
-                datetime_to_iso(analysis.created_at),
-                analysis.created_by_session,
-                analysis.change_summary,
-                analysis.superseded_by,
-            ),
-        )
-
-        if superseded_analysis_id:
-            cursor.execute(
-                """
-                UPDATE patient_analysis
-                SET superseded_by = ?
-                WHERE analysis_id = ?
-                """,
-                (analysis.analysis_id, superseded_analysis_id),
-            )
-
-        conn.commit()
-        return True
-    except Exception as exc:  # pragma: no cover
-        reraise_locked_database_error(exc)
-        logger.error("Error superseding analysis: %s", exc, exc_info=True)
-        conn.rollback()
-        return False
-
-
 async def save_next_analysis_version(
     executor: TrioSQLiteExecutor,
     analysis: PatientAnalysisVersion,
@@ -276,36 +212,3 @@ def _sync_save_next_analysis_version(
         )
     conn.commit()
     return analysis
-
-
-async def mark_analysis_superseded(
-    executor: TrioSQLiteExecutor,
-    old_analysis_id: str,
-    new_analysis_id: str,
-) -> bool:
-    async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_mark_analysis_superseded, conn, old_analysis_id, new_analysis_id
-        )
-
-
-def _sync_mark_analysis_superseded(
-    conn: sqlite3.Connection, old_analysis_id: str, new_analysis_id: str
-) -> bool:
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE patient_analysis
-            SET superseded_by = ?
-            WHERE analysis_id = ?
-            """,
-            (new_analysis_id, old_analysis_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as exc:  # pragma: no cover
-        reraise_locked_database_error(exc)
-        logger.error("Error marking analysis superseded: %s", exc, exc_info=True)
-        conn.rollback()
-        return False

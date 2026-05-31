@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
-from psychoanalyst_app.models.data_models import (
+from psychoanalyst_app.models.domain import (
     UserProfile,
     UserProfileSummary,
     UserStatus,
@@ -19,7 +19,7 @@ from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_
 logger = logging.getLogger(__name__)
 
 PROFILE_COLUMNS = (
-    "user_id, name, alias, data_of_birth, gender, cultural_background, "
+    "user_id, name, alias, date_of_birth, gender, cultural_background, "
     "primary_language, profession, status, plan_id, parents, siblings, family_atmosphere, "
     "significant_events, education, work_history, relationship_to_work, "
     "relationships, social_context, current_situation, preferred_school, "
@@ -229,7 +229,7 @@ def _profile_from_row(
         user_id=row["user_id"],
         name=row["name"],
         alias=row["alias"],
-        data_of_birth=iso_to_datetime(row["data_of_birth"]) if row["data_of_birth"] else None,
+        date_of_birth=iso_to_datetime(row["date_of_birth"]) if row["date_of_birth"] else None,
         gender=row["gender"],
         cultural_background=row["cultural_background"],
         primary_language=row["primary_language"] or "English",
@@ -262,7 +262,7 @@ def _profile_values(
         profile.user_id,
         profile.name,
         profile.alias,
-        datetime_to_iso(profile.data_of_birth) if profile.data_of_birth else None,
+        datetime_to_iso(profile.date_of_birth) if profile.date_of_birth else None,
         profile.gender,
         profile.cultural_background,
         profile.primary_language or "English",

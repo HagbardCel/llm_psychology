@@ -43,7 +43,7 @@ async def test_trio_nursery():
 @pytest.mark.trio
 async def test_trio_database_service(tmp_path):
     """Test pure Trio database service."""
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
     from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -61,7 +61,7 @@ async def test_trio_database_service(tmp_path):
     user_profile = UserProfile(
         user_id="test_user_validation",
         name="Validation User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -81,7 +81,7 @@ async def test_trio_database_service(tmp_path):
 @pytest.mark.trio
 async def test_trio_database_concurrent_operations(tmp_path):
     """Test concurrent database operations with nursery."""
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
     from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -97,7 +97,7 @@ async def test_trio_database_concurrent_operations(tmp_path):
         profile = UserProfile(
             user_id=user_id,
             name=f"User {user_id}",
-            data_of_birth=None,
+            date_of_birth=None,
             profession="Test",
             status=UserStatus.PROFILE_ONLY,
             created_at=datetime.now(),

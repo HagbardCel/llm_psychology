@@ -237,7 +237,7 @@ def mock_llm_service_with_context():
                     {
                         "basic_info": {
                             "alias": "Fabian",
-                            "data_of_birth": None,
+                            "date_of_birth": None,
                             "gender": None,
                             "cultural_background": None,
                             "primary_language": "English",
@@ -393,7 +393,7 @@ def mock_llm_service_with_context():
                 {
                     "basic_info": {
                         "alias": "Fabian",
-                        "data_of_birth": None,
+                        "date_of_birth": None,
                         "gender": None,
                         "cultural_background": None,
                         "primary_language": "English",
@@ -946,7 +946,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             logger.info(f"Selecting therapy style: {selected_style}")
 
             # Manually create therapy plan and transition state
-            from psychoanalyst_app.models.data_models import TherapyPlan
+            from psychoanalyst_app.models.domain import TherapyPlan
 
             therapy_plan = TherapyPlan(
                 plan_id=str(uuid.uuid4()),

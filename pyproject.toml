@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "psychoanalyst-app"
 version = "0.1.0"
-description = "Virtual LLM-driven psychoanalyst backend services"
+description = "Virtual LLM-driven therapist backend services"
 requires-python = ">=3.11"
-authors = [{ name = "Psychoanalyst Team" }]
+authors = [{ name = "Therapist Team" }]
 dependencies = [
     "langchain==1.0.8",
     "langchain-google-genai",

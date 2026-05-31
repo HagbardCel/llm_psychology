@@ -36,7 +36,7 @@ async def active_session(test_server_websocket, server_url):
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user",
         name="Test User",
@@ -47,7 +47,7 @@ async def active_session(test_server_websocket, server_url):
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from psychoanalyst_app.models.data_models import TherapyPlan
+    from psychoanalyst_app.models.domain import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_test",
         user_id="test_user",
@@ -71,7 +71,7 @@ async def active_session(test_server_websocket, server_url):
         response.raise_for_status()
         session_payload = response.json()
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
     session = Session(
         session_id=session_payload["session_id"],
         user_id="test_user",
@@ -144,7 +144,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user_ext",
         name="Test User",
@@ -155,7 +155,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from psychoanalyst_app.models.data_models import TherapyPlan
+    from psychoanalyst_app.models.domain import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_ext",
         user_id="test_user_ext",
@@ -179,7 +179,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
         response.raise_for_status()
         session_payload = response.json()
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
     session = Session(
         session_id=session_payload["session_id"],
         user_id="test_user_ext",
@@ -214,7 +214,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
     db_service = test_server_websocket["db_service"]
 
     # Create user profile
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
     user_profile = UserProfile(
         user_id="test_user_timeup",
         name="Test User",
@@ -225,7 +225,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
     await db_service.save_user_profile(user_profile)
 
     # Create therapy plan
-    from psychoanalyst_app.models.data_models import TherapyPlan
+    from psychoanalyst_app.models.domain import TherapyPlan
     therapy_plan = TherapyPlan(
         plan_id="plan_timer_timeup",
         user_id="test_user_timeup",
@@ -249,7 +249,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
         response.raise_for_status()
         session_payload = response.json()
 
-    from psychoanalyst_app.models.data_models import Session
+    from psychoanalyst_app.models.domain import Session
     session = Session(
         session_id=session_payload["session_id"],
         user_id="test_user_timeup",

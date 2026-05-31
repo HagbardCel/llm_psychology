@@ -9,7 +9,7 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.structured_output_models import (
+from psychoanalyst_app.models.llm_outputs import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
 )

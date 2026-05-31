@@ -7,8 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Sequence, TypeVar
 
-from psychoanalyst_app.models.data_models import (
-    DetailedSession,
+from psychoanalyst_app.models.domain import (
     Message,
     PatientAnalysisVersion,
     Session,
@@ -97,10 +96,6 @@ def session_from_row(
         patient_reactions=row["patient_reactions"],
         enriched=bool(row["enriched"]),
     )
-
-
-def detailed_session_from_row(row, iso_to_datetime) -> DetailedSession:
-    return session_from_row(row, iso_to_datetime, model_cls=DetailedSession)
 
 
 def therapy_plan_from_row(row, iso_to_datetime) -> TherapyPlan:

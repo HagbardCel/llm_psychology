@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable
 
-from psychoanalyst_app.models.api_models import (
+from psychoanalyst_app.models.http import (
     RequiredWorkflowAction,
     WorkflowNextActionDTO,
 )
-from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
 

@@ -1,2 +1,5 @@
-"""Reflection agent helper modules."""
+"""Reflection agent package."""
 
+from psychoanalyst_app.agents.reflection.agent import TrioReflectionAgent
+
+__all__ = ["TrioReflectionAgent"]

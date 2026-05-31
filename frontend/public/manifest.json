@@ -1,7 +1,7 @@
 {
-  "name": "Psychoanalyst App",
-  "short_name": "PsychoAnalyst",
-  "description": "Virtual LLM-Driven Psychoanalyst application providing therapeutic support",
+  "name": "Therapist App",
+  "short_name": "Therapist",
+  "description": "Virtual LLM-Driven Therapist application providing therapeutic support",
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#1976d2",

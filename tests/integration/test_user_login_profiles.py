@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+from psychoanalyst_app.models.domain import UserProfile, UserStatus
 
 
 @pytest.mark.trio

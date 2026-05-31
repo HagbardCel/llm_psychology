@@ -1,5 +1,5 @@
 {
-  "name": "Psychoanalyst App Dev",
+  "name": "Therapist App Dev",
   "dockerComposeFile": "../docker-compose.yml",
   "service": "devcontainer",
   "workspaceFolder": "/app",

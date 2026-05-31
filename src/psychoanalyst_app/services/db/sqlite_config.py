@@ -1,8 +1,9 @@
-"""Shared SQLite connection configuration."""
+"""Shared SQLite connection configuration and datetime codecs."""
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 LOCKED_DATABASE_MARKERS = (
     "database is locked",
@@ -47,3 +48,13 @@ def reraise_locked_database_error(exc: BaseException) -> None:
     """Let executor-level retry handle transient SQLite lock failures."""
     if is_locked_database_error(exc):
         raise exc
+
+
+def datetime_to_iso(value: datetime) -> str:
+    """Serialize datetime to ISO string."""
+    return value.isoformat()
+
+
+def iso_to_datetime(value: str) -> datetime:
+    """Deserialize ISO string to datetime."""
+    return datetime.fromisoformat(value)

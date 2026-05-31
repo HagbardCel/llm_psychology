@@ -15,7 +15,7 @@ export interface UserProfileUpdate {
   user_id: string;
   session_id: string;
   name?: string;
-  data_of_birth?: string;
+  date_of_birth?: string;
   profession?: string;
   primary_language?: string;
 }

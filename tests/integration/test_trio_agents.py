@@ -10,26 +10,26 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
-from psychoanalyst_app.agents.trio_intake_agent import (
+from psychoanalyst_app.agents.assessment import TrioAssessmentAgent
+from psychoanalyst_app.agents.intake import (
     GOAL_PREFERENCE_PROMPT,
     RISK_SCREEN_PROMPT,
     TrioIntakeAgent,
 )
-from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
-from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
-from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
-from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
+from psychoanalyst_app.agents.memory import TrioMemoryAgent
+from psychoanalyst_app.agents.planning import TrioPlanningAgent
+from psychoanalyst_app.agents.reflection import TrioReflectionAgent
+from psychoanalyst_app.agents.therapist import TrioTherapistAgent
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.data_models import (
+from psychoanalyst_app.models.domain import (
     Message,
     Session,
     Topic,
     UserProfile,
     UserStatus,
 )
-from psychoanalyst_app.models.structured_output_models import (
+from psychoanalyst_app.models.llm_outputs import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
 )
@@ -70,7 +70,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_agents",
         name="Agent Test User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -335,7 +335,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
     guest_user = UserProfile(
         user_id="guest_test_user",
         name="Guest",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -393,7 +393,7 @@ async def test_intake_agent_guest_name_collection(service_container):
     guest_user = UserProfile(
         user_id="guest_name_test",
         name="Guest",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -453,7 +453,7 @@ async def test_intake_agent_tier1_extraction(service_container):
     test_user = UserProfile(
         user_id="tier1_test_user",
         name="Sarah Johnson",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="",
         status=UserStatus.INTAKE_IN_PROGRESS,
         created_at=datetime.now(),
@@ -710,7 +710,7 @@ async def test_reflection_agent_session_enrichment(
 
     from unittest.mock import AsyncMock
 
-    from psychoanalyst_app.models.structured_output_models import Tier2Enrichment
+    from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
 
     original_structured = llm_service.generate_structured_output_async
 
@@ -1088,7 +1088,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
     service_container, style_service
 ):
     """Test assessment agent creating initial Tier 3 & 4 data."""
-    from psychoanalyst_app.models.data_models import UserProfile, UserStatus
+    from psychoanalyst_app.models.domain import UserProfile, UserStatus
 
     llm_service = service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
@@ -1098,7 +1098,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
     test_user = UserProfile(
         user_id="tier34_test_user",
         name="Test Patient",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Engineer",
         status=UserStatus.INTAKE_COMPLETE,
         created_at=datetime.now(),
@@ -1221,8 +1221,8 @@ async def test_assessment_agent_creates_tier3_and_tier4(
 
     from unittest.mock import AsyncMock
 
-    from psychoanalyst_app.models.data_models import PatientAnalysis
-    from psychoanalyst_app.models.structured_output_models import Tier4Extract
+    from psychoanalyst_app.models.domain import PatientAnalysis
+    from psychoanalyst_app.models.llm_outputs import Tier4Extract
 
     original_structured = llm_service.generate_structured_output_async
 
@@ -1305,7 +1305,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     """Test Tier 3 versioning through reflection agent."""
     import json
 
-    from psychoanalyst_app.models.data_models import (
+    from psychoanalyst_app.models.domain import (
         Session,
         TherapyPlan,
         UserProfile,
@@ -1320,7 +1320,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     test_user = UserProfile(
         user_id="tier3_versioning_test",
         name="Versioning Test Patient",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Designer",
         status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
@@ -1356,7 +1356,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     )
 
     # Create initial Tier 3 (version 1)
-    from psychoanalyst_app.models.data_models import (
+    from psychoanalyst_app.models.domain import (
         AnalyticOrientation,
         CurrentFocus,
         DefensiveOrganization,
@@ -1485,8 +1485,8 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
 
     from unittest.mock import AsyncMock
 
-    from psychoanalyst_app.models.data_models import PatientAnalysis
-    from psychoanalyst_app.models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.domain import PatientAnalysis
+    from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision, Tier2Enrichment
 
     tier2_data = {
         "psychological_summary": (
@@ -1689,7 +1689,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     """Test Tier 3 not updated when session doesn't warrant change."""
     import json
 
-    from psychoanalyst_app.models.data_models import (
+    from psychoanalyst_app.models.domain import (
         Session,
         TherapyPlan,
         UserProfile,
@@ -1704,7 +1704,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     test_user = UserProfile(
         user_id="tier3_stable_test",
         name="Stable Test Patient",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Accountant",
         status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
@@ -1740,7 +1740,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     )
 
     # Create initial Tier 3 (version 1)
-    from psychoanalyst_app.models.data_models import (
+    from psychoanalyst_app.models.domain import (
         AnalyticOrientation,
         CurrentFocus,
         DefensiveOrganization,
@@ -1849,7 +1849,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
 
     from unittest.mock import AsyncMock
 
-    from psychoanalyst_app.models.structured_output_models import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision, Tier2Enrichment
 
     tier2_data = {
         "psychological_summary": (

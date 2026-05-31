@@ -67,7 +67,7 @@ export function ProfilePage() {
 
   const [formData, setFormData] = useState({
     name: '',
-    data_of_birth: '',
+    date_of_birth: '',
     profession: '',
     primary_language: 'English',
   });
@@ -77,7 +77,7 @@ export function ProfilePage() {
     if (user) {
       setFormData({
         name: user.name || '',
-        data_of_birth: user.data_of_birth || '',
+        date_of_birth: user.date_of_birth || '',
         profession: user.profession || '',
         primary_language: user.primary_language || 'English',
       });
@@ -96,10 +96,10 @@ export function ProfilePage() {
       newErrors.primary_language = 'Primary language is required';
     }
 
-    if (formData.data_of_birth) {
-      const date = new Date(formData.data_of_birth);
+    if (formData.date_of_birth) {
+      const date = new Date(formData.date_of_birth);
       if (isNaN(date.getTime())) {
-        newErrors.data_of_birth = 'Invalid date format';
+        newErrors.date_of_birth = 'Invalid date format';
       }
     }
 
@@ -121,7 +121,7 @@ export function ProfilePage() {
       const payload = {
         user_id: userId || `user_${Date.now()}`,
         name: formData.name.trim(),
-        data_of_birth: formData.data_of_birth || undefined,
+        date_of_birth: formData.date_of_birth || undefined,
         profession: formData.profession || undefined,
         primary_language: formData.primary_language.trim(),
       };
@@ -259,9 +259,9 @@ export function ProfilePage() {
         <FormField
           label="Birthdate"
           type="date"
-          value={formData.data_of_birth}
-          onChange={(value) => setFormData({ ...formData, data_of_birth: value })}
-          error={errors.data_of_birth}
+          value={formData.date_of_birth}
+          onChange={(value) => setFormData({ ...formData, date_of_birth: value })}
+          error={errors.date_of_birth}
           disabled={isPending}
           helperText="Optional - helps us personalize your experience"
         />

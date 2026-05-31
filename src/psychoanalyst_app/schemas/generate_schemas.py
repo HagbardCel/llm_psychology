@@ -18,8 +18,8 @@ from typing import Any, Type, get_args, get_origin
 from pydantic import BaseModel, Field, create_model
 
 # Import all models
-from psychoanalyst_app.models.data_models import UserStatus
-from psychoanalyst_app.models.http_models import (
+from psychoanalyst_app.models.domain import UserStatus
+from psychoanalyst_app.models.http import (
     CreateSessionRequestDTO,
     CreateUserProfileRequestDTO,
     EndSessionRequestDTO,
@@ -27,30 +27,26 @@ from psychoanalyst_app.models.http_models import (
     HealthCheckResponseDTO,
     MessageDTO,
     PatchUserProfileRequestDTO,
-    SessionTimerResponseDTO,
+    RequiredWorkflowAction,
     SessionDTO,
+    SessionTimerResponseDTO,
     StatusMessageResponseDTO,
     TherapyPlanDTO,
     TherapyStyleDTO,
     TopicDTO,
     UpdateUserProfileRequestDTO,
-    UserRegisterResponseDTO,
     UserProfileDTO,
+    UserRegisterResponseDTO,
     UserStatusResponseDTO,
+    VersionCheckRequest,
+    VersionCheckResponse,
+    VersionInfo,
     WorkflowCompleteProfileRequestDTO,
+    WorkflowNextActionDTO,
     WorkflowRetryPlanUpdateRequestDTO,
     WorkflowSelectTherapyStyleRequestDTO,
     WorkflowStartTherapyRequestDTO,
     WorkflowStartTherapyResponseDTO,
-)
-from psychoanalyst_app.models.api_models import (
-    RequiredWorkflowAction,
-    WorkflowNextActionDTO,
-)
-from psychoanalyst_app.models.version_models import (
-    VersionCheckRequest,
-    VersionCheckResponse,
-    VersionInfo,
 )
 from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 

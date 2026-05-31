@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from psychoanalyst_app.models.data_models import Session
+from psychoanalyst_app.models.domain import Session
 
 
 def extract_session_text(session: Session) -> str:

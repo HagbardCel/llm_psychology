@@ -8,7 +8,7 @@ import trio
 from werkzeug.local import LocalProxy
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.models.data_models import Message, TherapyPlan
+from psychoanalyst_app.models.domain import Message, TherapyPlan
 from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.orchestration.runtime.session_bootstrap import (
     load_conversation_context,
@@ -20,7 +20,7 @@ from psychoanalyst_app.orchestration.runtime.stream_dispatch import (
     send_typing_indicator,
 )
 from psychoanalyst_app.services.llm_service import LLMService
-from psychoanalyst_app.services.rag_service import RAGService
+from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class TrioConversationManager:
     def __init__(
         self,
         llm_service: LLMService,
-        rag_service: RAGService,
+        rag_service: RAGServiceProtocol,
         trio_db_service: TrioDatabaseService,
         nursery: trio.Nursery,
         config: Settings,

@@ -8,15 +8,19 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from psychoanalyst_app.agents.trio_intake_agent import (
+from psychoanalyst_app.agents.intake import (
     GOAL_PREFERENCE_PROMPT,
     RISK_SCREEN_PROMPT,
     TrioIntakeAgent,
 )
+from psychoanalyst_app.agents.intake.prompts import CLOSING_PROMPT
+from psychoanalyst_app.agents.intake.slots import (
+    identify_covered_topics,
+    identify_required_slots,
+)
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.data_models import Message, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
-from psychoanalyst_app.prompts.intake_prompts import CLOSING_PROMPT
 
 
 def _make_context(
@@ -102,9 +106,9 @@ async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
     assert "?" not in response.content
 
 
-def test_intake_topic_coverage_ignores_assistant_prompts(intake_agent):
+def test_intake_topic_coverage_ignores_assistant_prompts():
     """Assistant-authored checklists must not satisfy patient intake coverage."""
-    covered = intake_agent._identify_covered_topics(
+    covered = identify_covered_topics(
         "I am not sure.",
         [
             Message(
@@ -118,8 +122,8 @@ def test_intake_topic_coverage_ignores_assistant_prompts(intake_agent):
     assert covered == []
 
 
-def test_intake_slot_coverage_counts_substance_based_coping(intake_agent):
-    slots = intake_agent._identify_required_slots(
+def test_intake_slot_coverage_counts_substance_based_coping():
+    slots = identify_required_slots(
         "I have been drinking wine to get to sleep when work stress builds.",
         [],
     )

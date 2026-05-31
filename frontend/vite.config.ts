@@ -1,50 +1,5 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
-import { execSync } from 'child_process'
-import { existsSync, statSync } from 'fs'
-import { join } from 'path'
-
-/**
- * Vite plugin to ensure TypeScript types are generated from backend schemas
- * before building the application.
- */
-function generateTypesPlugin() {
-  return {
-    name: 'generate-types',
-    buildStart() {
-      const typesFile = join(__dirname, 'src/types/generated/api.ts')
-      const schemasDir = join(__dirname, '../schemas')
-
-      // Check if generated types file exists
-      if (!existsSync(typesFile)) {
-        console.log('🔧 Generated types not found, generating...')
-        try {
-          execSync('npm run generate:types', { stdio: 'inherit' })
-        } catch (error) {
-          console.error('✗ Failed to generate types')
-          throw error
-        }
-        return
-      }
-
-      // Check if schemas are newer than generated types
-      if (existsSync(schemasDir)) {
-        const typesTime = statSync(typesFile).mtimeMs
-        const schemasTime = statSync(schemasDir).mtimeMs
-
-        if (schemasTime > typesTime) {
-          console.log('🔧 Schemas updated, regenerating types...')
-          try {
-            execSync('npm run generate:types', { stdio: 'inherit' })
-          } catch (error) {
-            console.error('✗ Failed to regenerate types')
-            throw error
-          }
-        }
-      }
-    }
-  }
-}
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -53,7 +8,6 @@ export default defineConfig({
     __VITE_WS_URL__: JSON.stringify(process.env.VITE_WS_URL || ''),
   },
   plugins: [
-    generateTypesPlugin(),
     react(),
   ],
   server: {

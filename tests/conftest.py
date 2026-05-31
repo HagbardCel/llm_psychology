@@ -17,7 +17,7 @@ def _get_free_tcp_port(host: str = "127.0.0.1") -> int:
 
 
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan, UserProfile
+from psychoanalyst_app.models.domain import Message, Session, TherapyPlan, UserProfile
 
 # Note: DatabaseService and db_service fixture removed (obsolete asyncio version)
 # Trio tests use trio_db_service fixture instead (see app_config fixture below)
@@ -90,7 +90,7 @@ def mock_llm_service():
             return {
                 "basic_info": {
                     "alias": alias,
-                    "data_of_birth": None,
+                    "date_of_birth": None,
                     "gender": None,
                     "cultural_background": None,
                     "primary_language": "English",
@@ -267,7 +267,7 @@ def sample_user_profile():
     return UserProfile(
         user_id="test_user_123",
         name="Test User",
-        data_of_birth=datetime(1990, 1, 1),
+        date_of_birth=datetime(1990, 1, 1),
         profession="Software Engineer",
         created_at="2024-01-01T00:00:00",
         updated_at="2024-01-01T00:00:00",

@@ -16,9 +16,8 @@ import { PageContainer } from '../components/shared';
 import { useCurrentSessionId, useCurrentUserId } from '../contexts/AppContext';
 import { useWebSocketContext } from '../contexts/WebSocketContext';
 import { useUserProfile } from '../hooks/useUserProfile';
-import { TherapyStyle } from '../types';
-import { api } from '../services/api';
-import { ApiRequestError } from '../services/apiClient';
+import { TherapyStyle, TherapyStyleInfo, WorkflowNextAction } from '../types';
+import { apiClient, ApiRequestError } from '../services/apiClient';
 import { useWorkflowNextAction } from '../hooks/useWorkflowNavigation';
 import { labelForRequiredAction } from '../utils/workflow';
 
@@ -54,7 +53,10 @@ export function AssessmentPage() {
     error: stylesQueryError,
   } = useQuery({
     queryKey: ['therapyStyles', userId, sessionId],
-    queryFn: async () => api.therapy.getStyles(userId || '', sessionId || ''),
+    queryFn: async () =>
+      apiClient.get<TherapyStyleInfo[]>(
+        `/api/therapy/styles?user_id=${encodeURIComponent(userId || '')}&session_id=${encodeURIComponent(sessionId || '')}`
+      ),
     enabled: nextAction?.required_action === 'select_therapy_style' && !!sessionId,
   });
 
@@ -83,11 +85,14 @@ export function AssessmentPage() {
     setError(null);
 
     try {
-      await api.therapy.selectStyle({
-        user_id: user.user_id,
-        session_id: sessionId,
-        selected_therapy_style: style.toLowerCase()
-      });
+      await apiClient.post<WorkflowNextAction>(
+        '/api/workflow/select_therapy_style',
+        {
+          user_id: user.user_id,
+          session_id: sessionId,
+          selected_therapy_style: style.toLowerCase()
+        }
+      );
 
       await queryClient.invalidateQueries({
         queryKey: ['workflow', 'next', user.user_id, sessionId]

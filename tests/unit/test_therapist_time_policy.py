@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from psychoanalyst_app.agents.therapist.response_mode import resolve_response_mode
-from psychoanalyst_app.agents.therapist.time_policy import should_offer_extension
-from psychoanalyst_app.models.data_models import UserStatus
+from psychoanalyst_app.agents.therapist.session_policy import (
+    resolve_response_mode,
+    should_offer_extension,
+)
+from psychoanalyst_app.models.domain import UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowEvent
 
 

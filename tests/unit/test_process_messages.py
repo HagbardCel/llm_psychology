@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.models.data_models import UserProfile
-from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
+from psychoanalyst_app.models.domain import UserProfile
+from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 from psychoanalyst_app.orchestration.process_messages import finalize_agent_response
 

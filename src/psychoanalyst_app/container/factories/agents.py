@@ -34,7 +34,7 @@ def create_agent(
 
 def build_intake_agent(container: ServiceContainer, user_context: UserContext):
     """Build intake agent."""
-    from psychoanalyst_app.agents.trio_intake_agent import TrioIntakeAgent
+    from psychoanalyst_app.agents.intake import TrioIntakeAgent
 
     logger.debug("Creating TrioIntakeAgent for user %s", user_context.user_id)
     agent = TrioIntakeAgent(
@@ -48,7 +48,7 @@ def build_intake_agent(container: ServiceContainer, user_context: UserContext):
 
 def build_assessment_agent(container: ServiceContainer, user_context: UserContext):
     """Build assessment agent."""
-    from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
+    from psychoanalyst_app.agents.assessment import TrioAssessmentAgent
 
     logger.debug("Creating TrioAssessmentAgent for user %s", user_context.user_id)
     reflection_agent = container.create_reflection_agent(user_context)
@@ -66,7 +66,7 @@ def build_assessment_agent(container: ServiceContainer, user_context: UserContex
 
 def build_therapist_agent(container: ServiceContainer, user_context: UserContext):
     """Build psychoanalyst agent."""
-    from psychoanalyst_app.agents.trio_therapist_agent import TrioTherapistAgent
+    from psychoanalyst_app.agents.therapist import TrioTherapistAgent
 
     logger.debug("Creating TrioTherapistAgent for user %s", user_context.user_id)
     reflection_agent = container.create_reflection_agent(user_context)
@@ -84,7 +84,7 @@ def build_therapist_agent(container: ServiceContainer, user_context: UserContext
 
 def build_reflection_agent(container: ServiceContainer, user_context: UserContext):
     """Build reflection agent."""
-    from psychoanalyst_app.agents.trio_reflection_agent import TrioReflectionAgent
+    from psychoanalyst_app.agents.reflection import TrioReflectionAgent
 
     logger.debug("Creating TrioReflectionAgent for user %s", user_context.user_id)
     memory_agent = container.create_memory_agent(user_context)
@@ -104,7 +104,7 @@ def build_reflection_agent(container: ServiceContainer, user_context: UserContex
 
 def build_memory_agent(container: ServiceContainer, user_context: UserContext):
     """Build memory agent."""
-    from psychoanalyst_app.agents.trio_memory_agent import TrioMemoryAgent
+    from psychoanalyst_app.agents.memory import TrioMemoryAgent
 
     logger.debug("Creating TrioMemoryAgent for user %s", user_context.user_id)
     agent = TrioMemoryAgent(
@@ -119,7 +119,7 @@ def build_memory_agent(container: ServiceContainer, user_context: UserContext):
 
 def build_planning_agent(container: ServiceContainer, user_context: UserContext):
     """Build planning agent."""
-    from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
+    from psychoanalyst_app.agents.planning import TrioPlanningAgent
 
     logger.debug("Creating TrioPlanningAgent for user %s", user_context.user_id)
     memory_agent = container.create_memory_agent(user_context)

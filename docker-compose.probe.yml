@@ -3,7 +3,7 @@ services:
     extends:
       file: docker-compose.yml
       service: api
-    container_name: psychoanalyst_api_probe
+    container_name: therapist_api_probe
     environment:
       - APP_ENV=development
       - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
@@ -20,7 +20,7 @@ services:
     build:
       context: ./console-ui
       dockerfile: Dockerfile
-    container_name: psychoanalyst_console_probe
+    container_name: therapist_console_probe
     volumes:
       - ./console-ui/src:/app/src:delegated
       - ./console-ui/scenarios:/app/scenarios:ro

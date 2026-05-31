@@ -10,7 +10,7 @@ from quart import websocket
 from psychoanalyst_app.orchestration.orchestrator_helpers import (
     session_type_for_workflow_state,
 )
-from psychoanalyst_app.models.api_models import RequiredWorkflowAction
+from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.utils.ws_protocol import ClientMessageTypes, ServerMessageTypes
 from psychoanalyst_app.utils.ws_messages import (
     chat_chunk_message,

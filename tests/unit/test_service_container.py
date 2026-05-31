@@ -280,7 +280,7 @@ class TestServiceContainerAgentCreation:
         """Create user context for testing."""
         return UserContext("test_user")
 
-    @patch("psychoanalyst_app.agents.trio_intake_agent.TrioIntakeAgent")
+    @patch("psychoanalyst_app.agents.intake.TrioIntakeAgent")
     def test_create_intake_agent(self, mock_intake_agent, container, user_context):
         """Test Trio intake agent creation."""
         mock_agent = Mock()
@@ -296,7 +296,7 @@ class TestServiceContainerAgentCreation:
         )
 
     @patch.object(ServiceContainer, "create_reflection_agent")
-    @patch("psychoanalyst_app.agents.trio_assessment_agent.TrioAssessmentAgent")
+    @patch("psychoanalyst_app.agents.assessment.TrioAssessmentAgent")
     def test_create_assessment_agent(
         self,
         mock_assessment_agent,
@@ -324,7 +324,7 @@ class TestServiceContainerAgentCreation:
         )
 
     @patch.object(ServiceContainer, "create_reflection_agent")
-    @patch("psychoanalyst_app.agents.trio_therapist_agent.TrioTherapistAgent")
+    @patch("psychoanalyst_app.agents.therapist.TrioTherapistAgent")
     def test_create_therapist_agent(
         self,
         mock_therapist_agent,
@@ -351,9 +351,9 @@ class TestServiceContainerAgentCreation:
             config=container.config,
         )
 
-    @patch("psychoanalyst_app.agents.trio_reflection_agent.TrioReflectionAgent")
-    @patch("psychoanalyst_app.agents.trio_planning_agent.TrioPlanningAgent")
-    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.reflection.TrioReflectionAgent")
+    @patch("psychoanalyst_app.agents.planning.TrioPlanningAgent")
+    @patch("psychoanalyst_app.agents.memory.TrioMemoryAgent")
     def test_create_reflection_agent(
         self,
         mock_memory_agent,
@@ -399,7 +399,7 @@ class TestServiceContainerAgentCreation:
             config=container.config,
         )
 
-    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.memory.TrioMemoryAgent")
     def test_create_memory_agent(self, mock_memory_agent, container, user_context):
         """Test Trio memory agent creation."""
         mock_agent = Mock()
@@ -415,8 +415,8 @@ class TestServiceContainerAgentCreation:
             user_context=user_context,
         )
 
-    @patch("psychoanalyst_app.agents.trio_planning_agent.TrioPlanningAgent")
-    @patch("psychoanalyst_app.agents.trio_memory_agent.TrioMemoryAgent")
+    @patch("psychoanalyst_app.agents.planning.TrioPlanningAgent")
+    @patch("psychoanalyst_app.agents.memory.TrioMemoryAgent")
     def test_create_planning_agent(
         self, mock_memory_agent, mock_planning_agent, container, user_context
     ):

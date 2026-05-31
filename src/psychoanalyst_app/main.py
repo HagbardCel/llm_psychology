@@ -15,8 +15,10 @@ from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
 from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
-from psychoanalyst_app.services.session_enrichment_service import SessionEnrichmentService
-from psychoanalyst_app.services.session_enrichment_worker import run_session_enrichment_worker
+from psychoanalyst_app.services.session_enrichment import (
+    SessionEnrichmentService,
+    run_session_enrichment_worker,
+)
 from psychoanalyst_app.ui.base_ui import BaseUI
 from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 

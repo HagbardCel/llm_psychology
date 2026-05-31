@@ -1,5 +1,5 @@
-from psychoanalyst_app.agents.planning.extractors import _plan_update_details
-from psychoanalyst_app.models.structured_output_models import PlanUpdate
+from psychoanalyst_app.agents.planning.extraction import _plan_update_details
+from psychoanalyst_app.models.llm_outputs import PlanUpdate
 
 
 def test_plan_update_details_preserve_typed_items_without_truncation() -> None:

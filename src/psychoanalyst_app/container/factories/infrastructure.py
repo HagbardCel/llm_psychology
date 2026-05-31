@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.migration_service import MigrationService
-from psychoanalyst_app.services.rag_service import NoOpRAGService
+from psychoanalyst_app.services.rag import NoOpRAGService
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 

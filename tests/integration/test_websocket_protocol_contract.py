@@ -12,7 +12,7 @@ import pytest
 import trio
 from trio_websocket import ConnectionClosed, ConnectionRejected, open_websocket_url
 
-from psychoanalyst_app.models.data_models import Message, Session, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import Message, Session, UserProfile, UserStatus
 
 pytestmark = pytest.mark.trio
 
@@ -40,7 +40,7 @@ async def test_user(test_server_websocket) -> UserProfile:
     profile = UserProfile(
         user_id="websocket_test_user",
         name="WebSocket Test User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.PLAN_UPDATE_COMPLETE,
         created_at=datetime.now(),
@@ -150,7 +150,7 @@ async def test_ws_reconnect_reemits_style_selection_state_from_persistence(
     profile = UserProfile(
         user_id=user_id,
         name="Reconnect Assessment User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.ASSESSMENT_COMPLETE,
         created_at=datetime.now(),
@@ -217,7 +217,7 @@ async def test_ws_reconnect_reuses_persisted_intake_session_after_memory_loss(
     profile = UserProfile(
         user_id=user_id,
         name="Reconnect Intake User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.INTAKE_IN_PROGRESS,
         created_at=datetime.now(),

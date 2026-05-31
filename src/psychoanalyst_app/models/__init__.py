@@ -1,9 +1,1 @@
-"""Models package."""
-
-from .version_models import VersionCheckRequest, VersionCheckResponse, VersionInfo
-
-__all__ = [
-    "VersionInfo",
-    "VersionCheckRequest",
-    "VersionCheckResponse",
-]
+"""Models package: domain entities, LLM outputs, and HTTP DTOs."""

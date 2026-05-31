@@ -36,14 +36,14 @@ describe('Type Safety Integration', () => {
       const user: User = {
         user_id: 'user-123',
         name: 'Test User',
-        data_of_birth: '1990-01-01T00:00:00Z',
+        date_of_birth: '1990-01-01T00:00:00Z',
         profession: 'Engineer',
         status: 'PROFILE_ONLY',
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-02T00:00:00Z',
       };
 
-      expect(user.data_of_birth).toBeDefined();
+      expect(user.date_of_birth).toBeDefined();
       expect(user.profession).toBe('Engineer');
     });
 

@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from psychoanalyst_app.agents.trio_assessment_agent import TrioAssessmentAgent
+from psychoanalyst_app.agents.assessment import TrioAssessmentAgent
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.data_models import Message, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import ConversationContext
 
 
@@ -25,26 +25,28 @@ def _build_agent() -> TrioAssessmentAgent:
     )
 
 
-def test_resolve_recommendation_score_prefers_payload_and_clamps():
-    agent = _build_agent()
+from psychoanalyst_app.agents.assessment.recommendations import (
+    extract_key_topics,
+    resolve_recommendation_score,
+)
 
-    assert agent._resolve_recommendation_score({"score": 1.2}) == 1.0
-    assert agent._resolve_recommendation_score({"score": -1}) == 0.0
-    assert agent._resolve_recommendation_score({}) == 0.5
+
+def test_resolve_recommendation_score_prefers_payload_and_clamps():
+    assert resolve_recommendation_score({"score": 1.2}) == 1.0
+    assert resolve_recommendation_score({"score": -1}) == 0.0
+    assert resolve_recommendation_score({}) == 0.5
 
 
 def test_extract_key_topics_uses_payload_only():
-    agent = _build_agent()
-
-    assert agent._extract_key_topics({"key_topics": ["anxiety", "work stress"]}) == [
+    assert extract_key_topics({"key_topics": ["anxiety", "work stress"]}) == [
         "anxiety",
         "work stress",
     ]
-    assert agent._extract_key_topics({"topics": ["sleep", "avoidance"]}) == [
+    assert extract_key_topics({"topics": ["sleep", "avoidance"]}) == [
         "sleep",
         "avoidance",
     ]
-    assert agent._extract_key_topics({"assessment": "- Work conflict"}) == []
+    assert extract_key_topics({"assessment": "- Work conflict"}) == []
 
 
 @pytest.mark.trio

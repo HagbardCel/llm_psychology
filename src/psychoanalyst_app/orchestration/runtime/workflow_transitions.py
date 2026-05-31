@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from psychoanalyst_app.models.api_models import RequiredWorkflowAction
+from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 

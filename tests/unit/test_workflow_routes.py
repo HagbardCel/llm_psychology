@@ -6,7 +6,7 @@ import uuid
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import Message, Session, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import Message, Session, UserProfile, UserStatus
 from psychoanalyst_app.trio_server import TrioServer
 
 
@@ -37,7 +37,7 @@ async def test_select_therapy_style_rejects_wrong_state(trio_server):
     user_profile = UserProfile(
         user_id="workflow_routes_user",
         name="Workflow User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.INTAKE_IN_PROGRESS,
         created_at=datetime.now(),
@@ -78,7 +78,7 @@ async def test_select_therapy_style_accepts_assessment_complete(trio_server):
     user_profile = UserProfile(
         user_id="workflow_routes_user_complete",
         name="Workflow User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Tester",
         status=UserStatus.ASSESSMENT_COMPLETE,
         created_at=datetime.now(),

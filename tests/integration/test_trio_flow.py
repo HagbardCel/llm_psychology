@@ -12,7 +12,7 @@ import trio
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.data_models import Message, Session, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import Message, Session, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 from psychoanalyst_app.trio_server import TrioServer
 
@@ -79,7 +79,7 @@ async def test_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_123",
         name="Test User",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Software Engineer",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -112,7 +112,7 @@ async def test_trio_database_service_save_and_retrieve_user(service_container):
     user_profile = UserProfile(
         user_id="test_user_456",
         name="Jane Doe",
-        data_of_birth=None,
+        date_of_birth=None,
         profession="Doctor",
         status=UserStatus.PROFILE_ONLY,
         created_at=datetime.now(),
@@ -452,7 +452,7 @@ async def test_structured_concurrency_with_nursery(service_container):
         user_profile = UserProfile(
             user_id=user_id,
             name=f"User {user_id}",
-            data_of_birth=None,
+            date_of_birth=None,
             profession="Test",
             status=UserStatus.PROFILE_ONLY,
             created_at=datetime.now(),

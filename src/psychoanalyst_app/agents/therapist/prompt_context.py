@@ -7,11 +7,9 @@ from typing import Any
 
 import trio
 
-from psychoanalyst_app.models.data_models import TherapyPlan
+from psychoanalyst_app.agents.therapist.prompts import build_continuation_prompt
+from psychoanalyst_app.models.domain import TherapyPlan
 from psychoanalyst_app.orchestration.models import ConversationContext
-from psychoanalyst_app.prompts.therapist_prompt_builder import (
-    build_continuation_prompt,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +271,6 @@ async def build_continuation_prompt_with_context(
         plan_context=plan_context,
         additional_knowledge=knowledge_text,
         latest_message=message,
-        time_prompt="",
         style_instructions=style_instructions,
     )
 

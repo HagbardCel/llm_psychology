@@ -184,7 +184,7 @@ def mock_llm_service_natural_flow():
                     {
                         "basic_info": {
                             "alias": "Guest",
-                            "data_of_birth": None,
+                            "date_of_birth": None,
                             "gender": None,
                             "cultural_background": None,
                             "primary_language": "English",
@@ -335,7 +335,7 @@ def mock_llm_service_natural_flow():
                 {
                     "basic_info": {
                         "alias": "Guest",
-                        "data_of_birth": None,
+                        "date_of_birth": None,
                         "gender": None,
                         "cultural_background": None,
                         "primary_language": "English",

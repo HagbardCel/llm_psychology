@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from psychoanalyst_app.models.data_models import Message, TherapyPlan, UserProfile
+from psychoanalyst_app.models.domain import Message, TherapyPlan, UserProfile
 
 
 class WorkflowState(Enum):

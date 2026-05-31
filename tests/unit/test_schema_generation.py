@@ -15,8 +15,8 @@ from psychoanalyst_app.schemas.generate_schemas import (
 )
 
 # Imports from src directory (added to path by conftest.py)
-from psychoanalyst_app.models.data_models import UserStatus
-from psychoanalyst_app.models.http_models import MessageDTO, UserProfileDTO
+from psychoanalyst_app.models.domain import UserStatus
+from psychoanalyst_app.models.http import MessageDTO, UserProfileDTO
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 
 
@@ -120,13 +120,13 @@ class TestSchemaGeneration:
         with open(schema_file) as f:
             schema = json.load(f)
 
-        # data_of_birth is optional
-        data_of_birth_field = schema["properties"]["data_of_birth"]
-        assert "anyOf" in data_of_birth_field or "type" not in data_of_birth_field
+        # date_of_birth is optional
+        date_of_birth_field = schema["properties"]["date_of_birth"]
+        assert "anyOf" in date_of_birth_field or "type" not in date_of_birth_field
 
         # It should have a default value or be nullable
-        assert "default" in data_of_birth_field or any(
-            item.get("type") == "null" for item in data_of_birth_field.get("anyOf", [])
+        assert "default" in date_of_birth_field or any(
+            item.get("type") == "null" for item in date_of_birth_field.get("anyOf", [])
         )
 
     def test_datetime_fields_serialized_as_strings(self, tmp_path):
@@ -265,7 +265,7 @@ class TestSchemaIntegration:
 
             # Create a sample UserProfile instance
             from datetime import datetime
-            from psychoanalyst_app.models.http_models import UserProfileDTO
+            from psychoanalyst_app.models.http import UserProfileDTO
 
             user = UserProfileDTO(
                 user_id="test-123",

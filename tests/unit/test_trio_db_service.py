@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 import trio
 
-from psychoanalyst_app.models.data_models import (
+from psychoanalyst_app.models.domain import (
     Message,
     Session,
     TherapyPlan,
@@ -374,7 +374,7 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
     """Legacy DBs fail closed because foundation rows are intentionally incompatible."""
     import sqlite3
 
-    from psychoanalyst_app.models.data_models import UserProfile
+    from psychoanalyst_app.models.domain import UserProfile
     from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -405,7 +405,7 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 alias TEXT,
-                data_of_birth TEXT,
+                date_of_birth TEXT,
                 gender TEXT,
                 cultural_background TEXT,
                 primary_language TEXT NOT NULL DEFAULT 'English',

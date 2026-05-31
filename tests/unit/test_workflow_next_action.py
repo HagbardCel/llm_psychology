@@ -2,8 +2,8 @@
 
 from datetime import datetime
 
-from psychoanalyst_app.models.api_models import RequiredWorkflowAction
-from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.http import RequiredWorkflowAction
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
 from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 
@@ -14,7 +14,7 @@ def _complete_profile(user_id: str = "user-123") -> UserProfile:
     return UserProfile(
         user_id=user_id,
         name="Alice",
-        data_of_birth=now,
+        date_of_birth=now,
         gender="female",
         cultural_background="N/A",
         primary_language="English",

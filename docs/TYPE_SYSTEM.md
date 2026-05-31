@@ -82,7 +82,7 @@ class UserProfile(BaseModel):
     """Represents a user's personal information."""
     user_id: str
     name: str
-    data_of_birth: datetime | None = None
+    date_of_birth: datetime | None = None
     status: UserStatus = UserStatus.PROFILE_ONLY
     created_at: datetime
     updated_at: datetime
@@ -95,7 +95,7 @@ This automatically generates:
 export interface UserProfile {
     user_id: string;
     name: string;
-    data_of_birth?: string | null;  // ISO 8601 string
+    date_of_birth?: string | null;  // ISO 8601 string
     profession?: string | null;
     status: UserStatus;
     created_at: string;
@@ -383,7 +383,7 @@ it('accepts backend JSON without conversion', () => {
     user_id: 'api-123',
     name: 'API User',
     status: 'THERAPY_IN_PROGRESS',
-    data_of_birth: null,
+    date_of_birth: null,
     profession: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

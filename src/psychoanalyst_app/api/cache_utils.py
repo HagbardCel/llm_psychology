@@ -44,22 +44,6 @@ def add_cache_headers(
     return response
 
 
-def no_cache(response: Response) -> Response:
-    """
-    Add no-cache headers to prevent caching.
-
-    Args:
-        response: The Quart response object
-
-    Returns:
-        Response with no-cache headers added
-    """
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
 # Cache presets for common use cases
 CACHE_PRESETS = {
     "static_long": {"cache_type": "public", "max_age": 3600},  # 1 hour

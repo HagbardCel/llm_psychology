@@ -154,7 +154,7 @@ class DeterministicLLMService:
             return {
                 "basic_info": {
                     "alias": alias,
-                    "data_of_birth": None,
+                    "date_of_birth": None,
                     "gender": None,
                     "cultural_background": None,
                     "primary_language": "English",

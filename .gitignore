@@ -165,3 +165,11 @@ data/vector_db_usertest/data.pkl
 data/vector_db_usertest/faiss_index.bin
 .aider*
 .qwen/
+
+# Codegraph workspace database / daemon artifacts
+.codegraph
+.codegraph/
+
+# Playwright run metadata
+frontend/test-results/
+frontend/test-results/.last-run.json

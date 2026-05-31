@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from psychoanalyst_app.models.structured_output_models import StructuredUserProfileOutput
+from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 from psychoanalyst_app.orchestration.profile_persistence import (
     persist_structured_user_profile_output,

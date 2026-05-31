@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.models.data_models import Message, Session
+from psychoanalyst_app.models.domain import Message, Session
 from psychoanalyst_app.orchestration.helpers.active_sessions import (
     ActiveSessionRegistry,
     session_type_for_workflow_state,

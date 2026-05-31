@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.models.data_models import TherapyPlan
-from psychoanalyst_app.models.structured_output_models import (
+from psychoanalyst_app.models.domain import TherapyPlan
+from psychoanalyst_app.models.llm_outputs import (
     StructuredTherapyPlanOutput,
 )
 

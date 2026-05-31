@@ -5,16 +5,35 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from psychoanalyst_app.models.data_models import DetailedSession, Session
-from psychoanalyst_app.prompts.reflection_prompt_builder import (
-    build_tier2_enrichment_prompt,
-)
+from pydantic import ValidationError
+
+from psychoanalyst_app.agents.reflection.prompts import build_tier2_enrichment_prompt
+from psychoanalyst_app.models.domain import Session
+from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
-from .extractors import extract_tier2_enrichment
-
 logger = logging.getLogger(__name__)
+
+
+async def extract_tier2_enrichment(
+    llm_service: LLMService, prompt: str
+) -> dict[str, Any] | None:
+    """Run the Tier 2 enrichment structured output flow."""
+    try:
+        tier2 = await llm_service.generate_structured_output_async(
+            prompt,
+            Tier2Enrichment,
+            method="json_schema",
+            phase="post_session_update",
+        )
+        if not isinstance(tier2, Tier2Enrichment):
+            logger.error("Tier 2 enrichment returned unexpected type %s", type(tier2))
+            return None
+        return tier2.model_dump()
+    except ValidationError as exc:
+        logger.error("Tier 2 enrichment failed validation: %s", exc)
+        return None
 
 
 async def enrich_session_tier2(
@@ -99,7 +118,7 @@ async def ensure_recent_sessions_enriched(
     *,
     limit: int = 5,
     scan_limit: int | None = None,
-) -> list[DetailedSession]:
+) -> list[Session]:
     """Ensure recent sessions have Tier 2 enrichment, enriching on-demand."""
     scan_limit = scan_limit or max(limit * 3, 10)
 

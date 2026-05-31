@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from psychoanalyst_app.agents.assessment.recommendation_payloads import (
+from psychoanalyst_app.agents.assessment.recommendations import (
     build_recommendation_metadata,
     build_structured_recommendations,
+    extract_key_topics,
     format_recommendations,
+    resolve_recommendation_score,
 )
-from psychoanalyst_app.agents.assessment.scoring import resolve_recommendation_score
-from psychoanalyst_app.agents.assessment.topic_extraction import extract_key_topics
 
 
 def test_resolve_recommendation_score_clamps_and_falls_back() -> None:

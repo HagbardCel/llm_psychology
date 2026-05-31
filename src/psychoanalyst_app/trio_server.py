@@ -8,21 +8,20 @@ from datetime import datetime
 import trio
 from hypercorn.config import Config as HypercornConfig
 from hypercorn.trio import serve
-from quart import jsonify, request
+from quart import Blueprint, jsonify, request
 from quart_cors import cors
 from quart_trio import QuartTrio
 
 from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
-from psychoanalyst_app.api.health_routes import create_health_routes
 from psychoanalyst_app.api.session_routes import create_session_routes
 from psychoanalyst_app.api.therapy_routes import create_therapy_routes
 from psychoanalyst_app.api.user_routes import create_user_routes
-from psychoanalyst_app.api.version_routes import version_bp
+from psychoanalyst_app.api.version_routes import create_version_routes
 from psychoanalyst_app.api.workflow_routes import create_workflow_routes
 from psychoanalyst_app.api.ws_handler import register_ws_handler
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.http_models import HealthCheckResponseDTO
+from psychoanalyst_app.models.http import HealthCheckResponseDTO
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -121,8 +120,10 @@ class TrioServer:
         from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
         from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
         from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
-        from psychoanalyst_app.services.session_enrichment_service import SessionEnrichmentService
-        from psychoanalyst_app.services.session_enrichment_worker import run_session_enrichment_worker
+        from psychoanalyst_app.services.session_enrichment import (
+            SessionEnrichmentService,
+            run_session_enrichment_worker,
+        )
 
         # Get services
         llm_service = self.container.get("llm_service")
@@ -149,8 +150,14 @@ class TrioServer:
 
     def _setup_http_routes(self):
         """Setup HTTP API routes."""
-        self.app.register_blueprint(version_bp)
-        self.app.register_blueprint(create_health_routes(self))
+        health_bp = Blueprint("health", __name__)
+
+        @health_bp.route("/health", methods=["GET"])
+        async def health_check():
+            return await self._health_check()
+
+        self.app.register_blueprint(create_version_routes(self))
+        self.app.register_blueprint(health_bp)
         self.app.register_blueprint(create_user_routes(self))
         self.app.register_blueprint(create_session_routes(self))
         self.app.register_blueprint(create_therapy_routes(self))

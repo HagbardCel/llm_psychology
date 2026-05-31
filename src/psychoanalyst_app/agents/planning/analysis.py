@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from psychoanalyst_app.models.data_models import TherapyPlan
+from psychoanalyst_app.models.domain import TherapyPlan
 from psychoanalyst_app.services.style_service import StyleService
 
 from .models import PlanningStrategy

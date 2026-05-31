@@ -7,9 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import trio
-from langchain_classic.chains import LLMChain
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
@@ -691,64 +689,6 @@ class LLMService:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         return "\n".join(lines).strip()
-
-    def create_prompt_template(
-        self, template: str, input_variables: list[str]
-    ) -> PromptTemplate:
-        """
-        Create a prompt template for reusable prompts.
-
-        Args:
-            template (str): The template string with placeholders.
-            input_variables (List[str]): List of variable names in the template.
-
-        Returns:
-            PromptTemplate: The created prompt template.
-        """
-        return PromptTemplate(template=template, input_variables=input_variables)
-
-    def run_prompt_chain(
-        self, prompt_template: PromptTemplate, inputs: dict[str, Any]
-    ) -> str:
-        """
-        Run a prompt chain using a template and inputs.
-
-        Args:
-            prompt_template (PromptTemplate): The prompt template to use.
-            inputs (Dict[str, Any]): The input values for the template.
-
-        Returns:
-            str: The LLM's response.
-        """
-        try:
-            self._log_llm_call(
-                "request",
-                {
-                    "call_type": "run_prompt_chain",
-                    "template": prompt_template.template,
-                    "inputs": inputs,
-                },
-            )
-            chain = LLMChain(llm=self.llm, prompt=prompt_template)
-            response = chain.run(**inputs)
-            self._log_llm_call(
-                "response",
-                {
-                    "call_type": "run_prompt_chain",
-                    "response": response,
-                },
-            )
-            return response
-        except Exception as e:
-            import traceback
-
-            tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            logger.error(f"Error running prompt chain: {e}", exc_info=True)
-            # Re-raise with full stacktrace
-            error_message = f"Prompt chain failed: {type(e).__name__}: {str(e)}"
-            raise LLMServiceError(
-                f"{error_message}\n\nSTACKTRACE:\n{tb_str}"
-            ) from e
 
     async def generate_response_async(
         self,

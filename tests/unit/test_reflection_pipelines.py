@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.agents.reflection.session_summary_pipeline import (
+from psychoanalyst_app.agents.reflection.session_summary import (
     generate_session_summary_payload,
     validate_session_briefing_evidence,
 )
@@ -21,8 +21,8 @@ from psychoanalyst_app.agents.reflection.tier4_pipeline import (
     apply_tier4_updates,
     generate_combined_recommendations,
 )
-from psychoanalyst_app.models.data_models import Message, Session, TherapyPlan
-from psychoanalyst_app.models.briefing_models import SessionBriefing
+from psychoanalyst_app.models.domain import Message, Session, TherapyPlan
+from psychoanalyst_app.models.llm_outputs import SessionBriefing
 
 
 def _sample_session() -> Session:
@@ -299,7 +299,7 @@ async def test_generate_session_summary_payload_uses_helper(monkeypatch) -> None
         return "summary text"
 
     monkeypatch.setattr(
-        "psychoanalyst_app.agents.reflection.session_summary_pipeline.helper_generate_session_summary",
+        "psychoanalyst_app.agents.reflection.session_summary.generate_session_summary",
         _fake_summary,
     )
 

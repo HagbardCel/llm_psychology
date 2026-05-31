@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from psychoanalyst_app.agents.assessment.selection_handling import (
+from psychoanalyst_app.agents.assessment.selection import (
     build_continuation_choice_response,
     build_selection_pending_response,
 )

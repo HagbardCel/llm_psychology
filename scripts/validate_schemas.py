@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-from psychoanalyst_app.models.data_models import UserProfile, UserStatus, Message, TherapyPlan
+from psychoanalyst_app.models.domain import UserProfile, UserStatus, Message, TherapyPlan
 from psychoanalyst_app.orchestration.models import WorkflowState, WorkflowEvent
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"

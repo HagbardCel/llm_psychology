@@ -36,7 +36,7 @@ StructuredUserProfileOutput (emitted when Tier 1 updates are extracted):
 {
   "name": "Alex Rivera",
   "alias": "Alex",
-  "data_of_birth": "1992-04-17T00:00:00",
+  "date_of_birth": "1992-04-17T00:00:00",
   "primary_language": "English",
   "cultural_background": "Latinx",
   "education": "B.A. in Psychology",

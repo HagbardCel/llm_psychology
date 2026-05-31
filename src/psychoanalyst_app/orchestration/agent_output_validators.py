@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from psychoanalyst_app.models.data_models import UserProfile
-from psychoanalyst_app.models.structured_output_models import (
+from psychoanalyst_app.models.domain import UserProfile
+from psychoanalyst_app.models.llm_outputs import (
     StructuredTherapyPlanOutput,
     StructuredUserProfileOutput,
 )
@@ -19,9 +19,9 @@ def build_user_profile_output(payload: Any) -> StructuredUserProfileOutput:
 
     if isinstance(payload, dict):
         normalized = dict(payload)
-        data_of_birth = normalized.get("data_of_birth")
-        if isinstance(data_of_birth, str) and data_of_birth:
-            normalized["data_of_birth"] = parse_date_of_birth(data_of_birth)
+        date_of_birth = normalized.get("date_of_birth")
+        if isinstance(date_of_birth, str) and date_of_birth:
+            normalized["date_of_birth"] = parse_date_of_birth(date_of_birth)
         normalized.setdefault("primary_language", "English")
         return StructuredUserProfileOutput.model_validate(normalized)
 

@@ -5,11 +5,74 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.agents.trio_planning_agent import TrioPlanningAgent
-from psychoanalyst_app.models.data_models import TherapyPlan
+from psychoanalyst_app.agents.planning.agent import TrioPlanningAgent
+from psychoanalyst_app.models.domain import TherapyPlan
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
-from .helpers import should_update_tier4, update_tier4_fields
+
+def update_tier4_fields(
+    plan: TherapyPlan | None,
+    session_context,
+    plan_assessment: dict[str, Any] | None,
+    plan_recommendations: list[dict[str, Any]] | None,
+    session_summary: str,
+) -> bool:
+    """Refresh Tier 4 plan fields based on reflection context."""
+    if not plan:
+        return False
+
+    updated = False
+    indicators = getattr(session_context, "progress_indicators", []) or []
+    progress_parts: list[str] = []
+    if indicators:
+        progress_parts.append(
+            "Progress indicators: " + "; ".join(indicators[:3])
+        )
+    if plan_assessment:
+        strengths = plan_assessment.get("strengths") or []
+        if strengths:
+            progress_parts.append(
+                "Strengths noted: " + "; ".join(strengths[:2])
+            )
+
+    if not progress_parts and session_summary:
+        progress_parts.append(session_summary[:300])
+
+    new_progress = " ".join(progress_parts)[:2000]
+    if new_progress and new_progress != plan.current_progress:
+        plan.current_progress = new_progress
+        updated = True
+
+    rec_descriptions: list[str] = []
+    for rec in plan_recommendations or []:
+        description = rec.get("description")
+        if description:
+            rec_descriptions.append(description)
+        if len(rec_descriptions) == 3:
+            break
+
+    if rec_descriptions:
+        if plan.revision_recommendations != rec_descriptions:
+            plan.revision_recommendations = rec_descriptions
+            updated = True
+
+    return updated
+
+
+def should_update_tier4(
+    session_count: int,
+    tier3_updated: bool,
+    plan_recommendations: list[dict[str, Any]] | None,
+) -> bool:
+    """Decide if Tier 4 updates should be applied."""
+    if tier3_updated:
+        return True
+    if session_count > 0 and session_count % 5 == 0:
+        return True
+    for rec in plan_recommendations or []:
+        if rec.get("priority") == "high":
+            return True
+    return False
 
 
 async def apply_tier4_updates(
@@ -50,7 +113,7 @@ async def generate_combined_recommendations(
     current_plan: TherapyPlan | None,
 ) -> list[dict[str, Any]]:
     """Generate combined recommendations based on memory and planning insights."""
-    recommendations = []
+    recommendations: list[dict[str, Any]] = []
 
     if memory.relationship_quality in ["established", "strong"]:
         recommendations.append(

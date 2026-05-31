@@ -7,12 +7,11 @@ import sqlite3
 from datetime import datetime
 from typing import Callable
 
-from psychoanalyst_app.models.data_models import DetailedSession, Session
+from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     SESSION_COLUMNS,
-    detailed_session_from_row,
     dump_json,
     dump_messages,
     dump_topics,
@@ -122,44 +121,6 @@ def _sync_get_session(conn, session_id: str, iso_to_datetime) -> Session | None:
         return None
 
 
-async def get_session_details(
-    executor: TrioSQLiteExecutor,
-    session_id: str,
-    iso_to_datetime: Callable[[str], datetime],
-) -> DetailedSession | None:
-    """Fetch a session with Tier 2 enrichment."""
-    async with executor.connection(row_factory=sqlite3.Row) as conn:
-        return await executor.run_sync(
-            _sync_get_session_details, conn, session_id, iso_to_datetime
-        )
-
-
-def _sync_get_session_details(
-    conn: sqlite3.Connection, session_id: str, iso_to_datetime
-) -> DetailedSession | None:
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT {SESSION_COLUMNS}
-            FROM sessions
-            WHERE session_id = ?
-        """,
-            (session_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
-
-        conn.commit()
-        return detailed_session_from_row(row, iso_to_datetime)
-    except Exception as exc:  # pragma: no cover
-        logger.error(
-            "Error retrieving detailed session %s: %s", session_id, exc, exc_info=True
-        )
-        return None
-
-
 async def get_user_sessions(
     executor: TrioSQLiteExecutor,
     user_id: str,
@@ -240,7 +201,7 @@ async def get_recent_sessions(
     limit: int,
     enriched_only: bool,
     iso_to_datetime: Callable[[str], datetime],
-) -> list[DetailedSession]:
+) -> list[Session]:
     """Fetch recent sessions with optional enrichment filter."""
     async with executor.connection(row_factory=sqlite3.Row) as conn:
         return await executor.run_sync(
@@ -259,7 +220,7 @@ def _sync_get_recent_sessions(
     limit: int,
     enriched_only: bool,
     iso_to_datetime,
-) -> list[DetailedSession]:
+) -> list[Session]:
     try:
         cursor = conn.cursor()
         where_clause = "WHERE user_id = ?"
@@ -276,7 +237,7 @@ def _sync_get_recent_sessions(
             (user_id, limit),
         )
         rows = cursor.fetchall()
-        sessions = [detailed_session_from_row(row, iso_to_datetime) for row in rows]
+        sessions = [session_from_row(row, iso_to_datetime) for row in rows]
         conn.commit()
         return sessions
     except Exception as exc:  # pragma: no cover

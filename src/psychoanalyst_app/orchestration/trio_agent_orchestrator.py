@@ -15,10 +15,10 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.api_models import (
+from psychoanalyst_app.models.http import (
     WorkflowNextActionDTO,
 )
-from psychoanalyst_app.models.data_models import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,

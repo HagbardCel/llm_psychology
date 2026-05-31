@@ -4,26 +4,27 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.models.data_models import (
-    DetailedSession,
+from psychoanalyst_app.models.domain import (
     PatientAnalysisVersion,
     Session,
     TherapyPlan,
     UserProfile,
     UserProfileSummary,
 )
-from psychoanalyst_app.services.db.codecs import datetime_to_iso, iso_to_datetime
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.repos import (
     assessment_recommendations_repo,
     enrichment_jobs_repo,
-    llm_cache_repo,
     patient_analysis_repo,
     sessions_repo,
     therapy_plans_repo,
     users_repo,
 )
-from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
+from psychoanalyst_app.services.db.sqlite_config import (
+    datetime_to_iso,
+    iso_to_datetime,
+    reraise_locked_database_error,
+)
 from psychoanalyst_app.services.migration_service import MigrationService
 
 logger = logging.getLogger(__name__)
@@ -94,20 +95,6 @@ class TrioDatabaseService:
             Optional[Session]: The session if found, None otherwise.
         """
         return await sessions_repo.get_session(
-            self.executor, session_id, iso_to_datetime
-        )
-
-    async def get_session_details(self, session_id: str) -> DetailedSession | None:
-        """
-        Retrieve a session with Tier 2 enrichment fields.
-
-        Args:
-            session_id: Session identifier
-
-        Returns:
-            DetailedSession if found, None otherwise
-        """
-        return await sessions_repo.get_session_details(
             self.executor, session_id, iso_to_datetime
         )
 
@@ -333,65 +320,12 @@ class TrioDatabaseService:
         )
 
     # ========================================================================
-    # LLM Cache Methods
-    # ========================================================================
-
-    async def get_llm_cache_entry(self, cache_key: str) -> dict[str, Any] | None:
-        """Fetch a cached LLM response by key."""
-        return await llm_cache_repo.get_llm_cache_entry(self.executor, cache_key)
-
-    async def upsert_llm_cache_entry(
-        self,
-        *,
-        cache_key: str,
-        call_type: str,
-        model_name: str,
-        prompt: str,
-        context_json: str,
-        schema_hash: str | None,
-        response_json: str,
-        created_at: str,
-        user_id: str | None,
-        session_block_id: str | None,
-        source: str | None,
-    ) -> None:
-        """Insert or update a cached LLM response."""
-        await llm_cache_repo.upsert_llm_cache_entry(
-            self.executor,
-            cache_key=cache_key,
-            call_type=call_type,
-            model_name=model_name,
-            prompt=prompt,
-            context_json=context_json,
-            schema_hash=schema_hash,
-            response_json=response_json,
-            created_at=created_at,
-            user_id=user_id,
-            session_block_id=session_block_id,
-            source=source,
-        )
-
-    async def delete_llm_cache_entry(self, cache_key: str) -> int:
-        """Delete a cached LLM response by key."""
-        return await llm_cache_repo.delete_llm_cache_entry(self.executor, cache_key)
-
-    async def prune_llm_cache_before(self, cutoff_iso: str) -> int:
-        """Delete cache entries older than the cutoff timestamp."""
-        return await llm_cache_repo.prune_llm_cache_before(self.executor, cutoff_iso)
-
-    async def prune_llm_cache_to_max_rows(self, max_rows: int) -> int:
-        """Ensure cache contains at most max_rows entries."""
-        return await llm_cache_repo.prune_llm_cache_to_max_rows(
-            self.executor, max_rows
-        )
-
-    # ========================================================================
     # TIER 2: Session Enrichment Methods
     # ========================================================================
 
     async def get_recent_sessions(
         self, user_id: str, limit: int = 5, *, enriched_only: bool = True
-    ) -> list[DetailedSession]:
+    ) -> list[Session]:
         """
         Get recent enriched sessions for context.
 
@@ -401,7 +335,7 @@ class TrioDatabaseService:
             enriched_only: When True, returns only enriched (immutable) sessions
 
         Returns:
-            List of DetailedSession objects, ordered by timestamp DESC
+            List of Session objects, ordered by timestamp DESC
         """
         return await sessions_repo.get_recent_sessions(
             self.executor, user_id, limit, enriched_only, iso_to_datetime
@@ -516,16 +450,6 @@ class TrioDatabaseService:
             self.executor, analysis, datetime_to_iso
         )
 
-    async def save_patient_analysis_version_and_supersede(
-        self, analysis: PatientAnalysisVersion, supersede_analysis_id: str
-    ) -> bool:
-        return await patient_analysis_repo.save_analysis_version_and_supersede(
-            self.executor,
-            analysis,
-            supersede_analysis_id,
-            datetime_to_iso,
-        )
-
     async def save_patient_analysis_next_version_and_supersede(
         self,
         *,
@@ -550,10 +474,3 @@ class TrioDatabaseService:
             self.executor, analysis, supersede_analysis_id, datetime_to_iso
         )
         return result
-
-    async def mark_analysis_superseded(
-        self, old_analysis_id: str, new_analysis_id: str
-    ) -> bool:
-        return await patient_analysis_repo.mark_analysis_superseded(
-            self.executor, old_analysis_id, new_analysis_id
-        )

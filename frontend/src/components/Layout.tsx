@@ -47,7 +47,7 @@ export function Layout({ children }: LayoutProps) {
             <MenuIcon />
           </IconButton>
           <Typography variant="h6" noWrap component="div">
-            Psychoanalyst
+            Therapist
           </Typography>
         </Toolbar>
       </AppBar>

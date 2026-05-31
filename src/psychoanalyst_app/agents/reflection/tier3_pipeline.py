@@ -5,23 +5,54 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from psychoanalyst_app.models.data_models import PatientAnalysis, Session
-from psychoanalyst_app.models.data_models import (
-    PatientAnalysisVersion,
-)
-from psychoanalyst_app.prompts.reflection_prompt_builder import (
+from psychoanalyst_app.agents.reflection.prompts import (
     build_tier3_detection_prompt,
     build_tier3_update_prompt,
 )
+from psychoanalyst_app.models.domain import (
+    PatientAnalysis,
+    PatientAnalysisVersion,
+    Session,
+)
+from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision
 from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
-from .extractors import (
-    extract_tier3_change_decision,
-    extract_updated_tier3_analysis,
-)
-
 logger = logging.getLogger(__name__)
+
+
+async def extract_tier3_change_decision(
+    llm_service: LLMService, prompt: str
+) -> ChangeDetectionDecision | None:
+    """Call the Tier 3 change detection schema."""
+    decision = await llm_service.generate_structured_output_async(
+        prompt,
+        ChangeDetectionDecision,
+        method="json_schema",
+        phase="post_session_update",
+    )
+    if not isinstance(decision, ChangeDetectionDecision):
+        logger.error(
+            "Tier 3 change detection returned unexpected type %s", type(decision)
+        )
+        return None
+    return decision
+
+
+async def extract_updated_tier3_analysis(
+    llm_service: LLMService, prompt: str
+) -> PatientAnalysis | None:
+    """Call the Tier 3 update schema."""
+    analysis = await llm_service.generate_structured_output_async(
+        prompt,
+        PatientAnalysis,
+        method="json_schema",
+        phase="post_session_update",
+    )
+    if not isinstance(analysis, PatientAnalysis):
+        logger.error("Tier 3 update returned unexpected type %s", type(analysis))
+        return None
+    return analysis
 
 
 async def evaluate_tier3_update_necessity(

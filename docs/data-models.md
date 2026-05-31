@@ -51,7 +51,7 @@ Databases created before this model must be reset with
   - Workflow state persisted in the database.
 - `UserProfile`
   - Core user demographics and intake context.
-  - Includes `data_of_birth` (note the field name), `status`,
+  - Includes `date_of_birth` (note the field name), `status`,
     and therapy preferences (for example `preferred_school`).
 - `Message`
   - Single message in a transcript. `role` is typically `user` or `assistant`.
@@ -75,7 +75,7 @@ Databases created before this model must be reset with
 | user_id | str | Primary identifier. |
 | name | str | Display name. |
 | alias | str or null | Optional pseudonym. |
-| data_of_birth | datetime or null | Stored as ISO 8601 in SQLite. |
+| date_of_birth | datetime or null | Stored as ISO 8601 in SQLite. |
 | gender | str or null | Optional. |
 | cultural_background | str or null | Optional. |
 | primary_language | str | Defaults to `English`. |

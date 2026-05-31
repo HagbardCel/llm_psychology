@@ -8,13 +8,13 @@ from datetime import datetime
 from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
 
-from psychoanalyst_app.api.http_errors import validation_error_response
-from psychoanalyst_app.api.request_utils import (
+from psychoanalyst_app.api._helpers import (
     require_session_id,
     require_user_id,
     validate_session_for_user,
+    validation_error_response,
 )
-from psychoanalyst_app.models.http_models import (
+from psychoanalyst_app.models.http import (
     CreateSessionRequestDTO,
     EndSessionRequestDTO,
     EndSessionResponseDTO,
