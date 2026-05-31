@@ -152,8 +152,7 @@ Rationale:
 
 ### Tier 2 enrichment is off the request path
 Tier 2 enrichment is intentionally run by a background worker so normal reads/writes remain fast and deterministic:
-- Worker: `src/psychoanalyst_app/services/session_enrichment_worker.py`
-- Enrichment logic: `src/psychoanalyst_app/services/session_enrichment_service.py`
+- Service and worker: `src/psychoanalyst_app/services/session_enrichment.py`
 
 Design rule:
 - Avoid adding expensive LLM calls to HTTP “read” endpoints; prefer background jobs + persisted derived data.
