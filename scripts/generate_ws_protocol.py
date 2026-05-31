@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "schemas" / "ws_protocol.json"
 BACKEND_PATH = ROOT / "src" / "psychoanalyst_app" / "utils" / "ws_protocol.py"
 CONSOLE_PATH = ROOT / "console-ui" / "src" / "websocket_protocol.py"
-FRONTEND_PATH = ROOT / "frontend" / "src" / "types" / "ws_protocol.generated.ts"
 
 DEFAULT_CONNECTION_STATES = [
     "connecting",
@@ -44,7 +43,9 @@ def _load_spec() -> tuple[str, list[str], list[str], list[str], list[str]]:
     connection_states = data.get("connection_states") or DEFAULT_CONNECTION_STATES
     error_codes = data.get("error_codes") or DEFAULT_ERROR_CODES
     if not version or not client_types or not server_types:
-        raise ValueError("ws_protocol.json must include version and message_types arrays")
+        raise ValueError(
+            "ws_protocol.json must include version and message_types arrays"
+        )
     return (
         version,
         list(client_types),
@@ -54,7 +55,9 @@ def _load_spec() -> tuple[str, list[str], list[str], list[str], list[str]]:
     )
 
 
-def _render_python(version: str, client_types: list[str], server_types: list[str]) -> str:
+def _render_python(
+    version: str, client_types: list[str], server_types: list[str]
+) -> str:
     lines = [
         '"""Auto-generated from schemas/ws_protocol.json. Do not edit by hand."""',
         "",
@@ -159,67 +162,11 @@ def _render_console(
     return "\n".join(lines)
 
 
-def _render_typescript(
-    version: str,
-    client_types: list[str],
-    server_types: list[str],
-    connection_states: list[str],
-    error_codes: list[str],
-) -> str:
-    lines = [
-        "// Auto-generated from schemas/ws_protocol.json. Do not edit by hand.",
-        "",
-        f"export const WS_PROTOCOL_VERSION = '{version}' as const;",
-        "",
-        "export const WS_MESSAGE_TYPES = {",
-    ]
-    for message_type in client_types + server_types:
-        lines.append(f"  {_constant_name(message_type)}: '{message_type}',")
-    lines.extend(
-        [
-            "} as const;",
-            "",
-            "export type WSMessageType = typeof WS_MESSAGE_TYPES[keyof typeof WS_MESSAGE_TYPES];",
-            "",
-            "export const WS_CONNECTION_STATES = {",
-        ]
-    )
-    for state in connection_states:
-        lines.append(f"  {_constant_name(state)}: '{state}',")
-    lines.extend(
-        [
-            "} as const;",
-            "",
-            "export type WSConnectionState = typeof WS_CONNECTION_STATES[keyof typeof WS_CONNECTION_STATES];",
-            "",
-            "export const WS_ERROR_CODES = {",
-        ]
-    )
-    for code in error_codes:
-        lines.append(f"  {_constant_name(code)}: '{code}',")
-    lines.extend(
-        [
-            "} as const;",
-            "",
-            "export type WSErrorCode = typeof WS_ERROR_CODES[keyof typeof WS_ERROR_CODES];",
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
-
 def _render_all() -> dict[Path, str]:
     version, client_types, server_types, connection_states, error_codes = _load_spec()
     return {
         BACKEND_PATH: _render_python(version, client_types, server_types),
         CONSOLE_PATH: _render_console(
-            version,
-            client_types,
-            server_types,
-            connection_states,
-            error_codes,
-        ),
-        FRONTEND_PATH: _render_typescript(
             version,
             client_types,
             server_types,
@@ -253,7 +200,10 @@ def _check_generated_files(rendered: dict[Path, str]) -> int:
         print("\n".join(diff))
 
     if drifted:
-        print("\nRun `docker compose run --rm api python scripts/generate_ws_protocol.py`.")
+        print(
+            "\nRun `docker compose run --rm api "
+            "python scripts/generate_ws_protocol.py`."
+        )
         return 1
 
     print("✓ Generated WebSocket protocol files are up to date")
@@ -262,7 +212,9 @@ def _check_generated_files(rendered: dict[Path, str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Generate WebSocket protocol constants from schemas/ws_protocol.json."
+        description=(
+            "Generate WebSocket protocol constants from schemas/ws_protocol.json."
+        )
     )
     parser.add_argument(
         "--check",

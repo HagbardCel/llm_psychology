@@ -2,18 +2,16 @@
 """
 Generate JSON Schema files from Pydantic models.
 
-This script exports all API-facing Pydantic models to JSON Schema format
-for TypeScript type generation.
+This script exports all API-facing Pydantic models to JSON Schema format.
 """
 
 import argparse
 import json
 import sys
-from dataclasses import MISSING, asdict, fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Type, get_args, get_origin
 
 from pydantic import BaseModel, Field, create_model
 
@@ -55,7 +53,7 @@ OUTPUT_DIR = REPO_ROOT / "schemas"
 PRESERVED_SCHEMA_FILES = {"ws_protocol.json"}
 
 
-def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
+def dataclass_to_pydantic(dataclass_type: type) -> type[BaseModel]:
     """
     Convert a dataclass to a Pydantic model for schema generation.
 
@@ -72,7 +70,7 @@ def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
     field_definitions = {}
     for field in fields(dataclass_type):
         field_type = field.type
-        
+
         # Correctly handle default vs default_factory
         if field.default_factory is not MISSING:
             default = Field(default_factory=field.default_factory)
@@ -86,41 +84,17 @@ def dataclass_to_pydantic(dataclass_type: Type) -> Type[BaseModel]:
     # Create Pydantic model
     model_name = f"{dataclass_type.__name__}Model"
     pydantic_model = create_model(
-        model_name, __module__=__name__, __doc__=dataclass_type.__doc__, **field_definitions
+        model_name,
+        __module__=__name__,
+        __doc__=dataclass_type.__doc__,
+        **field_definitions,
     )
 
     return pydantic_model
 
 
-def enhance_schema_for_typescript(schema: dict, model: Type[BaseModel]) -> dict:
-    """
-    Enhance schema with TypeScript-friendly metadata.
-
-    Args:
-        schema: Generated JSON schema
-        model: Pydantic model type
-
-    Returns:
-        Enhanced schema dictionary
-    """
-    # Add metadata for better TypeScript generation
-    if "properties" in schema:
-        for field_name, field_info in model.model_fields.items():
-            if field_name in schema["properties"]:
-                field_type = field_info.annotation
-
-                # Check if field is an Enum
-                if isinstance(field_type, type) and issubclass(field_type, Enum):
-                    schema["properties"][field_name]["tsType"] = "enum"
-                    schema["properties"][field_name]["enumValues"] = [
-                        e.value for e in field_type
-                    ]
-
-    return schema
-
-
 def generate_schema(
-    model: Type[BaseModel], output_dir: Path, schema_name: str | None = None
+    model: type[BaseModel], output_dir: Path, schema_name: str | None = None
 ) -> None:
     """
     Generate JSON Schema for a single model.
@@ -140,9 +114,6 @@ def generate_schema(
     schema["$id"] = f"https://psychoanalyst.app/schemas/{name}.json"
     schema["title"] = name
 
-    # Enhance for TypeScript
-    schema = enhance_schema_for_typescript(schema, model)
-
     # Write to file
     output_file = output_dir / f"{name}.json"
     with open(output_file, "w") as f:
@@ -151,7 +122,7 @@ def generate_schema(
     print(f"✓ Generated schema: {output_file.name}")
 
 
-def generate_enum_schema(enum_type: Type[Enum], output_dir: Path) -> None:
+def generate_enum_schema(enum_type: type[Enum], output_dir: Path) -> None:
     """
     Generate JSON Schema for an enum.
 
@@ -188,7 +159,7 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
     print(f"Generating schemas in {output_dir.absolute()}...\n")
 
     # Pydantic models (model, optional schema name override)
-    pydantic_models: list[tuple[Type[BaseModel], str | None]] = [
+    pydantic_models: list[tuple[type[BaseModel], str | None]] = [
         (UserProfileDTO, "UserProfile"),
         (MessageDTO, "Message"),
         (TopicDTO, "Topic"),
@@ -218,7 +189,7 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
     ]
 
     # Enums
-    enums: list[Type[Enum]] = [
+    enums: list[type[Enum]] = [
         UserStatus,
         WorkflowState,
         WorkflowEvent,
@@ -259,12 +230,15 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
     print(f"\n{'='*60}")
     print(f"✓ Successfully generated {len(all_models)} schemas")
     print(f"  Output directory: {output_dir.absolute()}")
-    print(f"  Index file: index.json")
+    print("  Index file: index.json")
     print(f"{'='*60}")
+
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point that can be used by CLI scripts or tests."""
-    parser = argparse.ArgumentParser(description="Generate JSON schemas from Pydantic models")
+    parser = argparse.ArgumentParser(
+        description="Generate JSON schemas from Pydantic models"
+    )
     parser.add_argument(
         "--output-dir",
         default=str(OUTPUT_DIR),

@@ -6,235 +6,31 @@ on:
     paths:
       - 'src/psychoanalyst_app/models/**'
       - 'src/psychoanalyst_app/orchestration/models.py'
-      - 'scripts/generate_schemas.py'
+      - 'src/psychoanalyst_app/schemas/**'
+      - 'src/psychoanalyst_app/utils/ws_protocol.py'
+      - 'console-ui/src/websocket_protocol.py'
       - 'scripts/generate_ws_protocol.py'
+      - 'scripts/validate_schemas.py'
       - 'schemas/ws_protocol.json'
-      - 'frontend/src/**/*.ts'
-      - 'frontend/src/**/*.tsx'
-      - 'frontend/package.json'
-      - 'frontend/tsconfig.json'
+      - 'Makefile'
+      - 'docker-compose.yml'
   pull_request:
     branches: [master, main, develop]
 
 jobs:
-  backend-schemas:
-    name: Generate Backend Schemas
+  contracts:
+    name: Validate Backend And Console Contracts
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install uv
-          uv pip install --system -r requirements.txt
-          uv pip install --system -e .
-
-      - name: Generate JSON schemas
-        run: make generate-schemas
-
-      - name: Validate schemas
+      - name: Generate and validate transient JSON schemas
         run: make validate-schemas
 
-      - name: Enforce canonical session contract naming
-        run: |
-          if [ ! -f schemas/Session.json ]; then
-            echo "❌ Session.json is missing"
-            exit 1
-          fi
-          if [ -f schemas/SessionBlock.json ]; then
-            echo "❌ Legacy SessionBlock.json should not exist"
-            exit 1
-          fi
-          if grep -R -nE '"session_block_id"|SessionBlock' schemas/*.json; then
-            echo "❌ Legacy session_block naming detected in generated schemas"
-            exit 1
-          fi
-          if ! grep -q '"session_id"' schemas/Session.json; then
-            echo "❌ Session schema missing session_id"
-            exit 1
-          fi
+      - name: Validate generated WebSocket protocol constants
+        run: make validate-generated-contracts
 
-      - name: Upload schemas as artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: schemas
-          path: schemas/
-          retention-days: 1
-
-  frontend-types:
-    name: Generate and Validate Frontend Types
-    needs: backend-schemas
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Download schemas
-        uses: actions/download-artifact@v3
-        with:
-          name: schemas
-          path: schemas/
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm ci
-
-      - name: Generate TypeScript types
-        run: |
-          cd frontend
-          npm run generate:ts
-
-      - name: Verify generated types exist
-        run: |
-          if [ ! -f frontend/src/types/generated/api.ts ]; then
-            echo "❌ Generated types file not found!"
-            exit 1
-          fi
-          echo "✓ Generated types file exists"
-
-      - name: Enforce generated API naming
-        run: |
-          if grep -nE 'session_block_id|SessionBlock' frontend/src/types/generated/api.ts; then
-            echo "❌ Legacy session_block naming detected in generated frontend API types"
-            exit 1
-          fi
-          if ! grep -q 'session_id' frontend/src/types/generated/api.ts; then
-            echo "❌ generated/api.ts missing session_id"
-            exit 1
-          fi
-
-      - name: Type check
-        run: |
-          cd frontend
-          npm run type-check
-
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: frontend-dist
-          path: frontend/dist/
-          retention-days: 7
-
-  type-consistency-check:
-    name: Type Consistency Check
-    needs: backend-schemas
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Download schemas
-        uses: actions/download-artifact@v3
-        with:
-          name: schemas
-          path: schemas/
-
-      - name: Install Python dependencies
-        run: |
-          pip install uv
-          uv pip install --system -r requirements.txt
-          uv pip install --system -e .
-
-      - name: Run schema generation tests
-        run: |
-          pytest tests/unit/test_schema_generation.py -v
-
-      - name: Verify schema count
-        run: |
-          SCHEMA_COUNT=$(ls -1 schemas/*.json | grep -v index.json | wc -l)
-          echo "Generated $SCHEMA_COUNT schema files"
-          if [ "$SCHEMA_COUNT" -lt 15 ]; then
-            echo "❌ Expected at least 15 schema files, found $SCHEMA_COUNT"
-            exit 1
-          fi
-          echo "✓ Schema count validated"
-
-  ws-protocol-consistency:
-    name: WS Protocol Consistency
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Regenerate WS protocol constants
-        run: python scripts/generate_ws_protocol.py
-
-      - name: Ensure generated WS protocol files are up to date
-        run: |
-          git diff --exit-code \
-            src/psychoanalyst_app/utils/ws_protocol.py \
-            console-ui/src/websocket_protocol.py \
-            frontend/src/types/ws_protocol.generated.ts
-
-  summary:
-    name: Type Safety Summary
-    needs: [backend-schemas, frontend-types, type-consistency-check, ws-protocol-consistency]
-    runs-on: ubuntu-latest
-    if: always()
-
-    steps:
-      - name: Check job results
-        run: |
-          echo "🎯 Type Safety Validation Results:"
-          echo "=================================="
-          echo ""
-          echo "Backend Schemas: ${{ needs.backend-schemas.result }}"
-          echo "Frontend Types: ${{ needs.frontend-types.result }}"
-          echo "Type Consistency: ${{ needs.type-consistency-check.result }}"
-          echo "WS Protocol: ${{ needs.ws-protocol-consistency.result }}"
-          echo ""
-
-          if [ "${{ needs.backend-schemas.result }}" != "success" ]; then
-            echo "❌ Backend schema generation failed"
-            exit 1
-          fi
-
-          if [ "${{ needs.frontend-types.result }}" != "success" ]; then
-            echo "❌ Frontend type generation or build failed"
-            exit 1
-          fi
-
-          if [ "${{ needs.type-consistency-check.result }}" != "success" ]; then
-            echo "❌ Type consistency check failed"
-            exit 1
-          fi
-
-          if [ "${{ needs.ws-protocol-consistency.result }}" != "success" ]; then
-            echo "❌ WS protocol consistency check failed"
-            exit 1
-          fi
-
-          echo "✅ All type safety checks passed!"
+      - name: Check whitespace and stale generated diffs
+        run: git diff --check && git diff --exit-code

@@ -1,23 +1,21 @@
 """Tests for JSON schema generation from Pydantic models."""
 
 import json
-from pathlib import Path
 
 import pytest
-
-# Imports from scripts directory (added to path by conftest.py)
-from psychoanalyst_app.schemas.generate_schemas import (
-    dataclass_to_pydantic,
-    enhance_schema_for_typescript,
-    generate_enum_schema,
-    generate_schema,
-    generate_all_schemas,
-)
 
 # Imports from src directory (added to path by conftest.py)
 from psychoanalyst_app.models.domain import UserStatus
 from psychoanalyst_app.models.http import MessageDTO, UserProfileDTO
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
+
+# Imports from scripts directory (added to path by conftest.py)
+from psychoanalyst_app.schemas.generate_schemas import (
+    dataclass_to_pydantic,
+    generate_all_schemas,
+    generate_enum_schema,
+    generate_schema,
+)
 
 
 @pytest.mark.unit
@@ -96,22 +94,6 @@ class TestSchemaGeneration:
         assert schema["$id"].startswith("https://psychoanalyst.app/schemas/")
         assert schema["title"] == "Message"
 
-    def test_enum_enhancement_for_typescript(self, tmp_path):
-        """Test that enum fields are enhanced with TypeScript metadata."""
-        generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
-
-        schema_file = tmp_path / "UserProfile.json"
-        with open(schema_file) as f:
-            schema = json.load(f)
-
-        # Check that status field (enum) has TypeScript metadata
-        status_field = schema["properties"]["status"]
-        assert "tsType" in status_field
-        assert status_field["tsType"] == "enum"
-        assert "enumValues" in status_field
-        assert isinstance(status_field["enumValues"], list)
-        assert len(status_field["enumValues"]) > 0
-
     def test_optional_fields_handled_correctly(self, tmp_path):
         """Test that optional fields are properly represented."""
         generate_schema(UserProfileDTO, tmp_path, schema_name="UserProfile")
@@ -142,9 +124,10 @@ class TestSchemaGeneration:
         assert created_at["type"] == "string"
         assert created_at["format"] == "date-time"
 
-    def test_all_models_have_schemas(self):
+    def test_all_models_have_schemas(self, tmp_path):
         """Test that all expected models can generate schemas."""
-        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+        generate_all_schemas(tmp_path)
+        schemas_dir = tmp_path
 
         # Check that index.json exists
         index_file = schemas_dir / "index.json"
@@ -166,44 +149,6 @@ class TestSchemaGeneration:
             with open(schema_file) as f:
                 schema = json.load(f)
                 assert "$schema" in schema or "enum" in schema
-
-    def test_committed_schemas_up_to_date(self, tmp_path):
-        """Test that committed schema files match generation output."""
-        generate_all_schemas(tmp_path)
-
-        custom_schema_files = {"ws_protocol.json"}
-        committed_dir = Path(__file__).parent.parent.parent / "schemas"
-        committed_files = sorted(
-            p.name
-            for p in committed_dir.glob("*.json")
-            if p.name not in custom_schema_files
-        )
-        generated_files = sorted(
-            p.name
-            for p in tmp_path.glob("*.json")
-            if p.name not in custom_schema_files
-        )
-
-        assert (
-            committed_files == generated_files
-        ), "Generated schemas differ from committed set"
-
-        for filename in committed_files:
-            committed_path = committed_dir / filename
-            generated_path = tmp_path / filename
-
-            with open(committed_path) as f:
-                committed = json.load(f)
-            with open(generated_path) as f:
-                generated = json.load(f)
-
-            if filename == "index.json":
-                committed = {**committed, "generated_at": "<ignored>"}
-                generated = {**generated, "generated_at": "<ignored>"}
-
-            assert (
-                committed == generated
-            ), f"Committed schema out of date: {filename}"
 
     def test_session_schema_uses_session_id(self, tmp_path):
         """Session schema should use canonical session_id naming."""
@@ -253,9 +198,10 @@ class TestSchemaGeneration:
 class TestSchemaIntegration:
     """Integration tests for schema generation."""
 
-    def test_backend_models_match_schemas(self):
+    def test_backend_models_match_schemas(self, tmp_path):
         """Test that backend Pydantic models match generated schemas."""
-        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+        generate_all_schemas(tmp_path)
+        schemas_dir = tmp_path
 
         # Test UserProfile
         schema_file = schemas_dir / "UserProfile.json"
@@ -265,6 +211,7 @@ class TestSchemaIntegration:
 
             # Create a sample UserProfile instance
             from datetime import datetime
+
             from psychoanalyst_app.models.http import UserProfileDTO
 
             user = UserProfileDTO(
@@ -285,9 +232,10 @@ class TestSchemaIntegration:
                         field in user_dict
                     ), f"Required field {field} should be in model"
 
-    def test_enum_values_consistent(self):
+    def test_enum_values_consistent(self, tmp_path):
         """Test that enum values in schemas match Python enums."""
-        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+        generate_all_schemas(tmp_path)
+        schemas_dir = tmp_path
 
         # Test UserStatus enum
         schema_file = schemas_dir / "UserStatus.json"
@@ -296,15 +244,16 @@ class TestSchemaIntegration:
                 schema = json.load(f)
 
             schema_values = set(schema["enum"])
-            python_values = set(e.value for e in UserStatus)
+            python_values = {e.value for e in UserStatus}
 
             assert (
                 schema_values == python_values
             ), "Schema enum values should match Python enum"
 
-    def test_workflow_state_enum_consistency(self):
+    def test_workflow_state_enum_consistency(self, tmp_path):
         """Test WorkflowState enum consistency."""
-        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+        generate_all_schemas(tmp_path)
+        schemas_dir = tmp_path
 
         schema_file = schemas_dir / "WorkflowState.json"
         if schema_file.exists():
@@ -312,6 +261,6 @@ class TestSchemaIntegration:
                 schema = json.load(f)
 
             schema_values = set(schema["enum"])
-            python_values = set(e.value for e in WorkflowState)
+            python_values = {e.value for e in WorkflowState}
 
             assert schema_values == python_values
