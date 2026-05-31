@@ -1,4 +1,4 @@
-"""Trio-native conversation context, streaming, and RAG integration."""
+"""Trio-native conversation context, streaming, and optional retrieval hooks."""
 
 import logging
 from collections.abc import AsyncIterator
@@ -43,7 +43,7 @@ class TrioConversationManager:
     This class handles:
     - Streaming LLM responses token-by-token
     - Managing conversation context and history
-    - RAG retrieval integration
+    - Optional retrieval augmentation
     - Topic tracking
     - Time-aware session management
     """
@@ -61,7 +61,7 @@ class TrioConversationManager:
 
         Args:
             llm_service: Service for LLM API calls (synchronous)
-            rag_service: Service for RAG knowledge retrieval (synchronous)
+            rag_service: Optional retrieval augmentation service (synchronous)
             trio_db_service: Trio database service
             nursery: The Trio nursery for spawning background tasks.
             config: Application settings
@@ -206,7 +206,7 @@ class TrioConversationManager:
         Args:
             prompt: The prompt to generate a response for.
             session_id: The session ID to send the response to.
-            use_rag: Whether to use RAG for the response.
+            use_rag: Whether to request optional retrieval augmentation.
         """
         self.nursery.start_soon(self._background_streamer, prompt, session_id, use_rag)
 
@@ -238,7 +238,7 @@ class TrioConversationManager:
         Args:
             prompt: The prompt to send to LLM
             context: Conversation context
-            use_rag: Whether to use RAG for enhanced responses
+            use_rag: Whether to request optional retrieval augmentation
             agent: Name of the agent generating the response
             llm_service: Optional agent-specific LLM service
                 (defaults to self.llm_service)
@@ -248,7 +248,7 @@ class TrioConversationManager:
         """
         service = llm_service if llm_service is not None else self.llm_service
         try:
-            # Retrieve RAG context if needed and therapy plan exists
+            # Retrieve optional augmentation context when configured.
             augmented_prompt = prompt
             if use_rag and context.therapy_plan:
                 logger.info(

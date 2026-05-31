@@ -15,7 +15,7 @@ class StylePack:
 
     def _load_components(self):
         """Load all components from the style pack directory."""
-        # Load knowledge for RAG
+        # Load the reserved knowledge asset for optional retrieval augmentation.
         knowledge_file = self.path / "knowledge.md"
         self.knowledge = (
             knowledge_file.read_text(encoding="utf-8")

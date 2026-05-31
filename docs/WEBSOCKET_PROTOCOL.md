@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: WebSocket message envelope, event semantics, and versioned protocol references
 ---
@@ -579,7 +579,7 @@ Clients should implement exponential backoff:
 **Reconnection Behavior**:
 - On reconnection, the server rebinds an active session and emits `session_started`
 - The emitted `session_started.session_id` is the active session for subsequent
-  HTTP requests, even if it differs from local storage
+  HTTP requests, even if it differs from the client's cached value
 - Previous session context is maintained on server where the workflow supports it
 - Client should re-fetch session history and workflow-scoped data if needed
 
@@ -641,13 +641,14 @@ Clients should implement exponential backoff:
 
 ### Authentication
 
-- **Current**: User ID passed as query parameter (development only)
-- **Production**: Should continue using explicit `user_id` identifiers for sessions
+- **Current local operation**: User ID is passed as a query parameter
+- **Future remote exposure**: Add authentication and authorize session access;
+  explicit `user_id` identifiers alone are not sufficient
 
 ### Data Privacy
 
 - All messages contain user data
-- WebSocket should use WSS (TLS) in production
+- Any future remote exposure must use WSS (TLS)
 - Session IDs are UUIDs (not guessable)
 
 ### Rate Limiting

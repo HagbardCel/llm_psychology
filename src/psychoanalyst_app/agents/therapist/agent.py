@@ -216,7 +216,7 @@ class TrioTherapistAgent:
         therapy_plan: TherapyPlan,
         selected_style: str,
     ) -> str:
-        """Build continuation prompt with RAG context."""
+        """Build continuation prompt with optional retrieval context."""
         return await build_continuation_prompt_with_context(
             message=message,
             context=context,

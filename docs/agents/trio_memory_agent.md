@@ -14,7 +14,8 @@ References:
 
 ## Inputs
 - `Session` transcript for analysis.
-- `LLMService`, `RAGService`, `TrioDatabaseService`.
+- `LLMService`, the optional `RAGService` extension hook, and
+  `TrioDatabaseService`.
 - `UserContext` for user-level session retrieval.
 
 ## Outputs

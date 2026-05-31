@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Session lifecycle ownership, transitions, and persistence checkpoints
 ---
@@ -47,12 +47,12 @@ WebSocket handshake. Clients should reconnect if they need a fresh session bindi
 ### 1.3. Reconnect and Refresh Recovery
 
 WebSocket connection setup is the authoritative state-sync point for clients.
-After a browser refresh, WebSocket reconnect, or local backend restart, the
+After a client restart, WebSocket reconnect, or local backend restart, the
 server revalidates the user, ensures the workflow-appropriate session, emits
 `session_started`, then emits `workflow_next_action`.
 
 - Clients must treat `session_started.session_id` as the current active session,
-  replacing any session id cached in local storage.
+  replacing any session id cached by the client.
 - During intake, if active-session memory is empty, the server reuses the
   persisted intake session rather than creating a duplicate intake session.
 - At style selection, `workflow_next_action=select_therapy_style` re-emits
@@ -124,7 +124,8 @@ The session flow is driven by the **Orchestrator**, which routes user messages t
 
 ### 2.5. Phase 4: Plan Update (`TrioReflectionAgent`)
 
-**Active when State = `PLAN_UPDATE_IN_PROGRESS`**
+**Active when State = `PLAN_UPDATE_IN_PROGRESS`, retained
+`REFLECTION_IN_PROGRESS`, or `PLAN_UPDATE_FAILED`**
 
 - **Trigger:** Automatically activated when the `TherapistAgent` detects the session time is up (`context.is_time_up`).
 - **Role:** Analyzes the completed session, generates insights, and prepares for the next session.
