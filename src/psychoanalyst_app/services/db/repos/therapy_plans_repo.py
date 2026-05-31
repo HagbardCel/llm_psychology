@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from psychoanalyst_app.models.domain import TherapyPlan
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
@@ -35,7 +35,7 @@ async def save_therapy_plan(
 def _sync_save_therapy_plan(conn, plan: TherapyPlan, datetime_to_iso) -> bool:
     try:
         cursor = conn.cursor()
-        plan_details_json = dump_json(plan.plan_details)
+        themes_json = dump_json(plan.themes)
         initial_goals_json = dump_json(plan.initial_goals)
         planned_interventions_json = dump_json(plan.planned_interventions)
         revision_recommendations_json = dump_json(plan.revision_recommendations)
@@ -80,18 +80,20 @@ def _sync_save_therapy_plan(conn, plan: TherapyPlan, datetime_to_iso) -> bool:
         cursor.execute(
             """
             INSERT INTO therapy_plans
-            (plan_id, user_id, created_at, updated_at, plan_details,
+            (plan_id, user_id, created_at, updated_at, focus, themes, timeline,
              initial_goals, current_progress, planned_interventions, status,
              version, selected_therapy_style, session_briefing, supersedes_plan_id,
              superseded_by_plan_id, revision_recommendations)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 plan.plan_id,
                 plan.user_id,
                 datetime_to_iso(plan.created_at),
                 datetime_to_iso(plan.updated_at),
-                plan_details_json,
+                plan.focus,
+                themes_json,
+                plan.timeline,
                 initial_goals_json,
                 plan.current_progress,
                 planned_interventions_json,
@@ -146,7 +148,12 @@ def _sync_save_therapy_plan(conn, plan: TherapyPlan, datetime_to_iso) -> bool:
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
         reraise_locked_database_error(exc)
-        logger.error("Error saving therapy plan %s: %s", plan.plan_id, exc, exc_info=True)
+        logger.error(
+            "Error saving therapy plan %s: %s",
+            plan.plan_id,
+            exc,
+            exc_info=True,
+        )
         conn.rollback()
         return False
 

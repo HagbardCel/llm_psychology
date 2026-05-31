@@ -186,14 +186,8 @@ class ServiceContainer:
         )
 
     def _create_rag_service(self) -> NoOpRAGService:
-        backend = getattr(self.config, "RAG_BACKEND", "none").lower()
-        if backend in {"", "none"}:
-            logger.info("Created no-op RAGService (RAG_BACKEND=none)")
-            return NoOpRAGService()
-        raise ValueError(
-            "RAG_BACKEND currently supports only 'none'. "
-            "Local FAISS retrieval is deferred to a future extension."
-        )
+        logger.info("Created no-op RAGService")
+        return NoOpRAGService()
 
     def _create_style_service(self) -> StyleService:
         style_dir = getattr(self.config, "STYLES_DIR", None) or None
@@ -219,9 +213,11 @@ class ServiceContainer:
 
         llm_service = LLMService(
             provider=provider,
-            api_key=self.config.GOOGLE_API_KEY
-            if provider == "gemini"
-            else self.config.LLM_API_KEY,
+            api_key=(
+                self.config.GOOGLE_API_KEY
+                if provider == "gemini"
+                else self.config.LLM_API_KEY
+            ),
             model_name=model_name,
             base_url=base_url,
             rate_limit_enabled=self.config.LLM_RATE_LIMIT_ENABLED,
@@ -258,19 +254,14 @@ class ServiceContainer:
         )
 
     def _create_agent_llm_service(self, agent_type: str) -> LLMService:
-        if (
-            self.config.LLM_PROVIDER == "gemini"
-            and not self.config.GOOGLE_API_KEY
-        ):
+        if self.config.LLM_PROVIDER == "gemini" and not self.config.GOOGLE_API_KEY:
             raise ConfigurationError("GOOGLE_API_KEY must be configured")
         model_name = self.config.get_model_for_agent(agent_type)
         return self._get_or_create_llm_service_for_model(model_name, agent_type)
 
     def _get_llm_service_for_agent(self, agent_type: str) -> LLMService:
         """Resolve the configured LLM service for a given agent."""
-        service_key = self.AGENT_LLM_SERVICE_MAP.get(
-            agent_type.upper(), "llm_service"
-        )
+        service_key = self.AGENT_LLM_SERVICE_MAP.get(agent_type.upper(), "llm_service")
         return self.get(service_key)
 
     def __str__(self) -> str:

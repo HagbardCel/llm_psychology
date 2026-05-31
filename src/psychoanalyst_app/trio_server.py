@@ -45,7 +45,7 @@ class TrioServer:
         # 1b. Configure CORS for HTTP and WebSocket clients.
         self.app = cors(
             self.app,
-            allow_origin=self.container.config.CORS_ALLOWED_ORIGINS,  # Use configured origins
+            allow_origin=self.container.config.CORS_ALLOWED_ORIGINS,
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type"],
@@ -106,9 +106,12 @@ class TrioServer:
             # Add Vary header to indicate response varies by encoding
             response.headers["Vary"] = "Accept-Encoding"
 
+            reduction = 100 * (1 - len(compressed_data) / len(response_data))
             logger.debug(
-                f"Compressed response: {len(response_data)} -> {len(compressed_data)} bytes "
-                f"({100 * (1 - len(compressed_data) / len(response_data)):.1f}% reduction)"
+                "Compressed response: %s -> %s bytes (%.1f%% reduction)",
+                len(response_data),
+                len(compressed_data),
+                reduction,
             )
 
             return response
@@ -117,9 +120,15 @@ class TrioServer:
 
     def _initialize_orchestration(self, nursery: trio.Nursery):
         """Initialize Trio orchestration components."""
-        from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
-        from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
-        from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
+        from psychoanalyst_app.orchestration.trio_agent_orchestrator import (
+            TrioAgentOrchestrator,
+        )
+        from psychoanalyst_app.orchestration.trio_conversation_manager import (
+            TrioConversationManager,
+        )
+        from psychoanalyst_app.orchestration.trio_workflow_engine import (
+            TrioWorkflowEngine,
+        )
         from psychoanalyst_app.services.session_enrichment import (
             SessionEnrichmentService,
             run_session_enrichment_worker,
@@ -143,7 +152,9 @@ class TrioServer:
             llm_service=llm_service, db_service=self.db_service
         )
         nursery.start_soon(
-            run_session_enrichment_worker, self.db_service, self.session_enrichment_service
+            run_session_enrichment_worker,
+            self.db_service,
+            self.session_enrichment_service,
         )
 
         logger.info("Orchestration layer initialized with nursery")
@@ -196,7 +207,7 @@ class TrioServer:
             # Wait for Hypercorn to bind to the port
             await trio.sleep(0.2)
 
-            # Signal that server is ready (orchestration initialized, server binding complete)
+            # Signal that server is ready (orchestration initialized, binding complete).
             task_status.started()
 
             # Log after signaling ready

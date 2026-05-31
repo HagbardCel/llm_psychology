@@ -7,9 +7,10 @@ only the fields that should travel over the network.
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,7 +23,6 @@ from psychoanalyst_app.models.domain import (
 )
 from psychoanalyst_app.orchestration.models import WorkflowState
 
-
 # ============================================================================
 # Version negotiation
 # ============================================================================
@@ -33,7 +33,7 @@ class VersionInfo(BaseModel):
 
     api_version: str = Field(
         ...,
-        description="Current backend API version (semantic versioning: MAJOR.MINOR.PATCH)",
+        description="Current backend API version (MAJOR.MINOR.PATCH)",
         json_schema_extra={"example": "1.0.0"},
     )
     min_client_version: str = Field(
@@ -109,18 +109,19 @@ class WorkflowNextActionDTO(BaseModel):
         ..., description="Action the client is required to perform"
     )
     required_fields: list[str] = Field(
-        default_factory=list, description="Fields that must be provided before advancing"
+        default_factory=list,
+        description="Fields that must be provided before advancing",
     )
     defaults: Mapping[str, str] | None = Field(
         None,
         description="Optional defaults usable to pre-fill the required fields",
     )
-    prompt: Optional[str] = Field(
+    prompt: str | None = Field(
         None, description="Human-friendly prompt describing what should happen next"
     )
     blocking: bool = Field(
         True,
-        description="Indicates whether the workflow must wait for this action before continuing",
+        description="Whether the workflow must wait for this action before continuing",
     )
     timestamp: datetime = Field(
         default_factory=datetime.utcnow,
@@ -254,7 +255,9 @@ class TherapyPlanDTO(BaseHTTPModel):
     supersedes_plan_id: str | None = None
     superseded_by_plan_id: str | None = None
     selected_therapy_style: str | None = None
-    plan_details: dict[str, Any]
+    focus: str
+    themes: list[str] = Field(default_factory=list)
+    timeline: str | None = None
     initial_goals: list[str]
     current_progress: str
     planned_interventions: list[str]

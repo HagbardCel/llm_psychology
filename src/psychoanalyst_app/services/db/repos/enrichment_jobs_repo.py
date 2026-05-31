@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime
 from typing import Any
-
-import sqlite3
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
@@ -19,14 +18,10 @@ async def enqueue_job(
 ) -> bool:
     """Enqueue or requeue a session for enrichment."""
     async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_enqueue_job, conn, session_id, user_id
-        )
+        return await executor.run_sync(_sync_enqueue_job, conn, session_id, user_id)
 
 
-def _sync_enqueue_job(
-    conn: sqlite3.Connection, session_id: str, user_id: str
-) -> bool:
+def _sync_enqueue_job(conn: sqlite3.Connection, session_id: str, user_id: str) -> bool:
     try:
         cursor = conn.cursor()
         now = datetime.now().isoformat()
@@ -58,9 +53,7 @@ async def claim_next_job(
 ) -> dict[str, Any] | None:
     """Atomically claim the next queued enrichment job."""
     async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_claim_next_job, conn, max_attempts
-        )
+        return await executor.run_sync(_sync_claim_next_job, conn, max_attempts)
 
 
 def _sync_claim_next_job(
@@ -112,14 +105,10 @@ def _sync_claim_next_job(
 async def mark_job_complete(executor: TrioSQLiteExecutor, session_id: str) -> bool:
     """Mark an enrichment job as complete."""
     async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_mark_job_complete, conn, session_id
-        )
+        return await executor.run_sync(_sync_mark_job_complete, conn, session_id)
 
 
-def _sync_mark_job_complete(
-    conn: sqlite3.Connection, session_id: str
-) -> bool:
+def _sync_mark_job_complete(conn: sqlite3.Connection, session_id: str) -> bool:
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -146,9 +135,7 @@ async def mark_job_failed(
 ) -> bool:
     """Mark an enrichment job as failed with error text."""
     async with executor.connection() as conn:
-        return await executor.run_sync(
-            _sync_mark_job_failed, conn, session_id, error
-        )
+        return await executor.run_sync(_sync_mark_job_failed, conn, session_id, error)
 
 
 def _sync_mark_job_failed(

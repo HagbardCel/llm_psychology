@@ -25,8 +25,7 @@ from psychoanalyst_app.agents.therapist.session_policy import (
     should_offer_extension,
 )
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.models.domain import BriefingStatus
-from psychoanalyst_app.models.domain import TherapyPlan, UserProfile
+from psychoanalyst_app.models.domain import BriefingStatus, TherapyPlan, UserProfile
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
@@ -148,7 +147,10 @@ class TrioTherapistAgent:
 
         except Exception as exc:
             return AgentResponse(
-                content="I apologize, but I encountered an error. Could you please repeat that?",
+                content=(
+                    "I apologize, but I encountered an error. "
+                    "Could you please repeat that?"
+                ),
                 next_action="continue",
                 workflow_event=None,
                 metadata={"error": str(exc)},
@@ -168,7 +170,9 @@ class TrioTherapistAgent:
 
             if status in [BriefingStatus.FRESH, BriefingStatus.STALE]:
                 logger.info(
-                    f"Using session briefing (status: {status.value}) for user {user_profile.user_id}"
+                    "Using session briefing (status: %s) for user %s",
+                    status.value,
+                    user_profile.user_id,
                 )
                 return build_resumption_prompt(
                     user_profile, therapy_plan, briefing, status

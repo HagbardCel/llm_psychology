@@ -7,17 +7,17 @@ import logging
 
 from quart import websocket
 
+from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.orchestration.active_sessions import (
     session_type_for_workflow_state,
 )
-from psychoanalyst_app.models.http import RequiredWorkflowAction
-from psychoanalyst_app.utils.ws_protocol import ClientMessageTypes, ServerMessageTypes
 from psychoanalyst_app.utils.ws_messages import (
     chat_chunk_message,
     connected_message,
     error_message,
     session_started_message,
 )
+from psychoanalyst_app.utils.ws_protocol import ClientMessageTypes, ServerMessageTypes
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def register_ws_handler(app, server) -> None:
                                 "code": "chat_disabled_workflow_wait",
                                 "message": (
                                     "Chat is disabled while the workflow is waiting."
-                                )
+                                ),
                             },
                         )
                         continue

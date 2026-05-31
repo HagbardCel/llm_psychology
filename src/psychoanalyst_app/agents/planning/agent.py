@@ -1,4 +1,4 @@
-"""TrioPlanningAgent: Trio-native specialized agent for therapy plan creation and adjustment."""
+"""TrioPlanningAgent for therapy plan creation and adjustment."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from psychoanalyst_app.agents.planning.analysis import (
     recommend_therapy_style,
 )
 from psychoanalyst_app.agents.planning.extraction import (
-    generate_initial_plan_details,
-    generate_updated_plan_details,
+    generate_initial_plan_update,
+    generate_updated_plan_update,
     get_relevant_knowledge,
 )
 from psychoanalyst_app.agents.planning.formatting import extract_session_text
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrioPlanningAgent:
-    """Trio-native agent specialized in therapy plan creation and strategic adjustments."""
+    """Agent for therapy plan creation and strategic adjustments."""
 
     def __init__(
         self,
@@ -78,9 +78,7 @@ class TrioPlanningAgent:
 
         try:
             with trio.CancelScope(shield=True):
-                logger.debug(
-                    "TrioPlanningAgent.create_initial_plan started (shielded)"
-                )
+                logger.debug("TrioPlanningAgent.create_initial_plan started (shielded)")
                 structured_plan = await self.build_structured_plan_output(
                     intake_session, selected_style
                 )
@@ -92,7 +90,7 @@ class TrioPlanningAgent:
 
         except Exception as exc:
             logger.error(f"Failed to create initial therapy plan: {exc}", exc_info=True)
-            raise PlanningError(f"Initial plan creation failed: {exc}")
+            raise PlanningError(f"Initial plan creation failed: {exc}") from exc
 
     async def build_structured_plan_output(
         self,
@@ -125,7 +123,7 @@ class TrioPlanningAgent:
         self.current_strategy = strategy
 
         logger.debug("TrioPlanningAgent generating plan details via LLM")
-        plan_update, plan_details = await generate_initial_plan_details(
+        plan_update = await generate_initial_plan_update(
             self.llm_service,
             self.style_service,
             intake_session,
@@ -138,7 +136,9 @@ class TrioPlanningAgent:
         return build_therapy_plan_output(
             {
                 "selected_therapy_style": selected_style,
-                "plan_details": plan_details,
+                "focus": plan_update.focus,
+                "themes": plan_update.themes,
+                "timeline": plan_update.timeline,
                 "initial_goals": plan_update.goals,
                 "current_progress": "Baseline established",
                 "planned_interventions": plan_update.techniques,
@@ -166,11 +166,15 @@ class TrioPlanningAgent:
                 return build_therapy_plan_output(
                     {
                         "selected_therapy_style": current_plan.selected_therapy_style,
-                        "plan_details": current_plan.plan_details,
+                        "focus": current_plan.focus,
+                        "themes": current_plan.themes,
+                        "timeline": current_plan.timeline,
                         "initial_goals": current_plan.initial_goals,
                         "current_progress": current_plan.current_progress,
                         "planned_interventions": current_plan.planned_interventions,
-                        "revision_recommendations": current_plan.revision_recommendations,
+                        "revision_recommendations": (
+                            current_plan.revision_recommendations
+                        ),
                         "status": current_plan.status,
                     }
                 )
@@ -183,7 +187,7 @@ class TrioPlanningAgent:
                 current_plan.selected_therapy_style,
             )
 
-            plan_update, updated_details = await generate_updated_plan_details(
+            plan_update = await generate_updated_plan_update(
                 self.llm_service,
                 self.style_service,
                 self.memory_agent,
@@ -194,13 +198,13 @@ class TrioPlanningAgent:
                 relevant_knowledge,
             )
 
-            changes = identify_plan_changes(
-                current_plan.plan_details, updated_details
-            )
+            changes = identify_plan_changes(current_plan, plan_update)
             updated_plan_output = build_therapy_plan_output(
                 {
                     "selected_therapy_style": current_plan.selected_therapy_style,
-                    "plan_details": updated_details,
+                    "focus": plan_update.focus,
+                    "themes": plan_update.themes,
+                    "timeline": plan_update.timeline,
                     "initial_goals": plan_update.goals,
                     "current_progress": current_plan.current_progress,
                     "planned_interventions": plan_update.techniques,
@@ -226,7 +230,7 @@ class TrioPlanningAgent:
 
         except Exception as exc:
             logger.error(f"Failed to update therapy plan: {exc}", exc_info=True)
-            raise PlanningError(f"Plan update failed: {exc}")
+            raise PlanningError(f"Plan update failed: {exc}") from exc
 
     async def assess_plan_effectiveness(self, plan: TherapyPlan) -> dict[str, Any]:
         """Assess the effectiveness of a therapy plan based on progress indicators."""
@@ -361,9 +365,7 @@ class TrioPlanningAgent:
             if not await self.memory_agent.health_check():
                 return False
 
-            await self.db_service.get_current_therapy_plan(
-                self.user_context.user_id
-            )
+            await self.db_service.get_current_therapy_plan(self.user_context.user_id)
 
             test_prompt = "Respond with 'OK' if you can process this request."
             response = await trio.to_thread.run_sync(
@@ -376,10 +378,8 @@ class TrioPlanningAgent:
             return False
 
     def __str__(self) -> str:
-        return (
-            f"TrioPlanningAgent(user={self.user_context.user_id}, "
-            f"style={self.current_strategy.therapy_style if self.current_strategy else 'none'})"
-        )
+        style = self.current_strategy.therapy_style if self.current_strategy else "none"
+        return f"TrioPlanningAgent(user={self.user_context.user_id}, style={style})"
 
     def __repr__(self) -> str:
         evolution_count = len(self.plan_evolution)

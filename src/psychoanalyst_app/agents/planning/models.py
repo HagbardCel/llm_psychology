@@ -27,4 +27,3 @@ class PlanningStrategy:
     techniques: list[str]
     assessment_criteria: list[str]
     created_at: datetime = field(default_factory=datetime.now)
-

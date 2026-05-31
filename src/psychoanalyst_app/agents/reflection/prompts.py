@@ -155,77 +155,6 @@ CRITICAL REQUIREMENTS:
 Generate the complete JSON object now:
 """
 
-# Tier 2 session enrichment prompt
-TIER2_ENRICHMENT_PROMPT = """
-Analyze the following therapy session transcript and extract clinical \
-psychological data.
-
-SESSION TRANSCRIPT:
-{session_transcript}
-
-TASK:
-Extract psychological and clinical information from this session into \
-structured JSON format.
-Focus on observable clinical phenomena, affective states, and therapeutic \
-dynamics.
-
-Extract the following:
-
-1. PSYCHOLOGICAL_SUMMARY (2-3 paragraphs, max 3000 chars):
-   - Synthesize the clinical content of the session
-   - What were the central concerns and discussions?
-   - What psychological processes were observable?
-   - What was the overall trajectory of the session?
-
-2. DOMINANT_AFFECTS (list of strings):
-   - Primary emotional states observed during the session
-   - Use specific affect names: anxiety, sadness, anger, fear, shame, guilt, joy, etc.
-   - List 2-5 most prominent affects in order of salience
-
-3. KEY_THEMES (list of strings):
-   - Major psychological themes and concerns discussed
-   - Examples: "work-related stress", "relationship conflict", "grief about father"
-   - List 2-6 key themes
-
-4. NOTABLE_INTERACTIONS (string, max 1500 chars, or null):
-   - Significant transference or countertransference moments
-   - Moments of resistance or defensiveness
-   - Ruptures or repairs in therapeutic relationship
-   - Notable shifts in patient's engagement or openness
-   - Use null if no particularly notable interactions occurred
-
-5. INTERPRETATIONS (string, max 1000 chars, or null):
-   - Key interpretations or insights offered by the therapist
-   - Links made between present and past
-   - Patterns identified
-   - Use null if no explicit interpretations were offered
-
-6. PATIENT_REACTIONS (string, max 1000 chars, or null):
-   - How the patient responded to interventions
-   - Moments of insight or recognition
-   - Defensive responses or rejections
-   - Emotional shifts following interventions
-   - Use null if no significant reactions to note
-
-IMPORTANT GUIDELINES:
-- Extract ONLY information present in the transcript
-- Be clinically precise - avoid vague therapeutic jargon
-- Focus on observable phenomena, not speculation
-- Preserve the clinical significance of moments
-- Use professional psychological language
-- If a field has no meaningful content, use null (not empty string)
-
-Return the data as JSON with this exact structure:
-{{
-  "psychological_summary": "string (2-3 paragraphs)",
-  "dominant_affects": ["affect1", "affect2", "affect3"],
-  "key_themes": ["theme1", "theme2", "theme3"],
-  "notable_interactions": "string or null",
-  "interpretations": "string or null",
-  "patient_reactions": "string or null"
-}}
-"""
-
 # Tier 3 change detection prompt
 TIER3_CHANGE_DETECTION_PROMPT = """
 Evaluate whether the clinical formulation (Tier 3) should be updated based \
@@ -419,16 +348,6 @@ IMPORTANT:
 - Update only factual information explicitly stated by the patient
 - Do not invent data; keep unchanged fields null
 """
-
-
-def build_tier2_enrichment_prompt(session: Session) -> str:
-    """Format the session transcript for Tier 2 enrichment extraction."""
-    transcript_lines = []
-    for message in session.transcript:
-        role = "Therapist" if message.role == "assistant" else "Patient"
-        transcript_lines.append(f"{role}: {message.content}")
-    transcript = "\n".join(transcript_lines)
-    return TIER2_ENRICHMENT_PROMPT.format(session_transcript=transcript)
 
 
 def build_session_briefing_prompt(

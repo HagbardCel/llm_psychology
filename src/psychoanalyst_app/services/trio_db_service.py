@@ -213,7 +213,6 @@ class TrioDatabaseService:
             created_by_session=created_by_session,
         )
 
-
     async def get_user_profile(self, user_id: str) -> UserProfile | None:
         """
         Retrieve a user profile from the database.
@@ -315,8 +314,10 @@ class TrioDatabaseService:
         self, user_id: str
     ) -> list[dict[str, Any]] | None:
         """Fetch latest persisted assessment recommendations for a user."""
-        return await assessment_recommendations_repo.get_latest_assessment_recommendations(
-            self.executor, user_id
+        return (
+            await assessment_recommendations_repo.get_latest_assessment_recommendations(
+                self.executor, user_id
+            )
         )
 
     # ========================================================================
@@ -390,14 +391,10 @@ class TrioDatabaseService:
 
         Returns a dict with session_id, user_id, attempts, status, or None if no job.
         """
-        return await enrichment_jobs_repo.claim_next_job(
-            self.executor, max_attempts
-        )
+        return await enrichment_jobs_repo.claim_next_job(self.executor, max_attempts)
 
     async def mark_session_enrichment_job_complete(self, session_id: str) -> bool:
-        return await enrichment_jobs_repo.mark_job_complete(
-            self.executor, session_id
-        )
+        return await enrichment_jobs_repo.mark_job_complete(self.executor, session_id)
 
     async def mark_session_enrichment_job_failed(
         self, session_id: str, error: str
@@ -436,12 +433,8 @@ class TrioDatabaseService:
             self.executor, user_id, version, iso_to_datetime
         )
 
-    async def get_analysis_history(
-        self, user_id: str
-    ) -> list[PatientAnalysisVersion]:
-        return await patient_analysis_repo.get_analysis_history(
-            self.executor, user_id
-        )
+    async def get_analysis_history(self, user_id: str) -> list[PatientAnalysisVersion]:
+        return await patient_analysis_repo.get_analysis_history(self.executor, user_id)
 
     async def save_patient_analysis_version(
         self, analysis: PatientAnalysisVersion

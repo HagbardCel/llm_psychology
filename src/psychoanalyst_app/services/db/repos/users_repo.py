@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from psychoanalyst_app.models.domain import (
     UserProfile,
@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 PROFILE_COLUMNS = (
     "user_id, name, alias, date_of_birth, gender, cultural_background, "
-    "primary_language, profession, status, plan_id, parents, siblings, family_atmosphere, "
+    "primary_language, profession, status, plan_id, parents, siblings, "
+    "family_atmosphere, "
     "significant_events, education, work_history, relationship_to_work, "
     "relationships, social_context, current_situation, preferred_school, "
     "boundary_notes, frame_notes, created_at, updated_at"
@@ -144,9 +145,7 @@ def _sync_update_user_profile(
             (profile.user_id,),
         )
         row = cursor.fetchone()
-        previous_profile = (
-            _profile_from_row(row, iso_to_datetime) if row else None
-        )
+        previous_profile = _profile_from_row(row, iso_to_datetime) if row else None
 
         cursor.execute(
             f"""
@@ -229,7 +228,9 @@ def _profile_from_row(
         user_id=row["user_id"],
         name=row["name"],
         alias=row["alias"],
-        date_of_birth=iso_to_datetime(row["date_of_birth"]) if row["date_of_birth"] else None,
+        date_of_birth=(
+            iso_to_datetime(row["date_of_birth"]) if row["date_of_birth"] else None
+        ),
         gender=row["gender"],
         cultural_background=row["cultural_background"],
         primary_language=row["primary_language"] or "English",
@@ -293,9 +294,7 @@ async def list_user_profiles(
 ) -> list[UserProfileSummary]:
     """Fetch profile summaries ordered by most recent update."""
     async with executor.connection(row_factory=sqlite3.Row) as conn:
-        return await executor.run_sync(
-            _sync_list_user_profiles, conn, iso_to_datetime
-        )
+        return await executor.run_sync(_sync_list_user_profiles, conn, iso_to_datetime)
 
 
 def _sync_list_user_profiles(

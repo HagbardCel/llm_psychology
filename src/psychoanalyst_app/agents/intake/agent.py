@@ -54,7 +54,9 @@ class TrioIntakeAgent:
         """Process user message during intake (orchestrator interface)."""
         try:
             logger.info(
-                f"Processing message for user {context.user_profile.user_id}. Name: '{context.user_profile.name}'"
+                "Processing message for user %s. Name: '%s'",
+                context.user_profile.user_id,
+                context.user_profile.name,
             )
 
             covered_topics = identify_covered_topics(message, context.message_history)
@@ -67,7 +69,10 @@ class TrioIntakeAgent:
                     context.topics_covered.append(topic)
 
             logger.info(
-                f"Topics covered so far: {context.topics_covered} ({len(context.topics_covered)}/{len(self.intake_topics)})"
+                "Topics covered so far: %s (%s/%s)",
+                context.topics_covered,
+                len(context.topics_covered),
+                len(self.intake_topics),
             )
 
             is_complete = is_intake_complete(context, intake_slot_coverage)

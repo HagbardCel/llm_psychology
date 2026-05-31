@@ -25,6 +25,9 @@ _FOUNDATION_PLAN_COLUMNS = {
     "supersedes_plan_id",
     "superseded_by_plan_id",
     "revision_recommendations",
+    "focus",
+    "themes",
+    "timeline",
 }
 
 _TABLE_DDL: list[str] = [
@@ -84,7 +87,9 @@ _TABLE_DDL: list[str] = [
         user_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        plan_details TEXT NOT NULL,
+        focus TEXT NOT NULL,
+        themes TEXT NOT NULL DEFAULT '[]',
+        timeline TEXT,
         initial_goals TEXT,
         current_progress TEXT,
         planned_interventions TEXT,
@@ -171,21 +176,42 @@ _INDEX_DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_user_profiles_status ON user_profiles(status)",
     "CREATE INDEX IF NOT EXISTS idx_user_profiles_plan_id ON user_profiles(plan_id)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_sessions_user_timestamp ON sessions(user_id, timestamp DESC)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user_timestamp "
+        "ON sessions(user_id, timestamp DESC)"
+    ),
     "CREATE INDEX IF NOT EXISTS idx_sessions_plan_id ON sessions(plan_id)",
     "CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_id ON therapy_plans(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_created ON therapy_plans(user_id, created_at DESC)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_therapy_plans_user_created "
+        "ON therapy_plans(user_id, created_at DESC)"
+    ),
     """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_therapy_plans_current_user
     ON therapy_plans(user_id)
     WHERE superseded_by_plan_id IS NULL
     """,
-    "CREATE INDEX IF NOT EXISTS idx_analysis_user_version ON patient_analysis(user_id, version DESC)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_analysis_user_version "
+        "ON patient_analysis(user_id, version DESC)"
+    ),
     "CREATE INDEX IF NOT EXISTS idx_analysis_created ON patient_analysis(created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_user_status ON session_enrichment_jobs(user_id, status, updated_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status_updated ON session_enrichment_jobs(status, updated_at ASC)",
-    "CREATE INDEX IF NOT EXISTS idx_user_profile_history_user_created ON user_profile_history(user_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_assessment_recommendations_user_created ON assessment_recommendations(user_id, created_at DESC)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_user_status "
+        "ON session_enrichment_jobs(user_id, status, updated_at DESC)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status_updated "
+        "ON session_enrichment_jobs(status, updated_at ASC)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_user_profile_history_user_created "
+        "ON user_profile_history(user_id, created_at DESC)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_assessment_recommendations_user_created "
+        "ON assessment_recommendations(user_id, created_at DESC)"
+    ),
 ]
 
 

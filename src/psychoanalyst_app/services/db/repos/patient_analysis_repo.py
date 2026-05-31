@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Callable
-
 import sqlite3
+from collections.abc import Callable
+from datetime import datetime
 
 from psychoanalyst_app.models.domain import PatientAnalysisVersion
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
@@ -92,9 +91,7 @@ async def get_analysis_history(
     user_id: str,
 ) -> list[PatientAnalysisVersion]:
     async with executor.connection(row_factory=sqlite3.Row) as conn:
-        return await executor.run_sync(
-            _sync_get_analysis_history, conn, user_id
-        )
+        return await executor.run_sync(_sync_get_analysis_history, conn, user_id)
 
 
 def _sync_get_analysis_history(
@@ -111,9 +108,7 @@ def _sync_get_analysis_history(
         (user_id,),
     )
     rows = cursor.fetchall()
-    return [
-        analysis_version_from_row(row, datetime.fromisoformat) for row in rows
-    ]
+    return [analysis_version_from_row(row, datetime.fromisoformat) for row in rows]
 
 
 async def save_analysis_version(

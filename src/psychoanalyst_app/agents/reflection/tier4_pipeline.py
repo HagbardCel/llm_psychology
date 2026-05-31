@@ -25,15 +25,11 @@ def update_tier4_fields(
     indicators = getattr(session_context, "progress_indicators", []) or []
     progress_parts: list[str] = []
     if indicators:
-        progress_parts.append(
-            "Progress indicators: " + "; ".join(indicators[:3])
-        )
+        progress_parts.append("Progress indicators: " + "; ".join(indicators[:3]))
     if plan_assessment:
         strengths = plan_assessment.get("strengths") or []
         if strengths:
-            progress_parts.append(
-                "Strengths noted: " + "; ".join(strengths[:2])
-            )
+            progress_parts.append("Strengths noted: " + "; ".join(strengths[:2]))
 
     if not progress_parts and session_summary:
         progress_parts.append(session_summary[:300])

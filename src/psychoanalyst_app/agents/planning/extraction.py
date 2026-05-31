@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 import trio
 
 from psychoanalyst_app.agents.planning.formatting import (
     extract_session_text,
-    format_plan_details,
+    format_therapy_plan,
 )
 from psychoanalyst_app.agents.planning.models import PlanningStrategy
 from psychoanalyst_app.agents.planning.prompts import (
@@ -25,19 +24,6 @@ from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.style_service import StyleService
 
 logger = logging.getLogger(__name__)
-
-
-def _plan_update_details(plan_update: PlanUpdate) -> dict[str, Any]:
-    """Keep legacy display strings while exposing structured plan lists."""
-    details = plan_update.model_dump()
-    details["goals"] = "\n".join(
-        f"{index}. {goal}" for index, goal in enumerate(plan_update.goals, start=1)
-    )
-    details["techniques"] = "\n".join(
-        f"{index}. {technique}"
-        for index, technique in enumerate(plan_update.techniques, start=1)
-    )
-    return details
 
 
 async def get_relevant_knowledge(
@@ -74,14 +60,14 @@ async def get_relevant_knowledge(
         return []
 
 
-async def generate_initial_plan_details(
+async def generate_initial_plan_update(
     llm_service: LLMService,
     style_service: StyleService,
     intake_session: Session,
     session_context,
     strategy: PlanningStrategy,
     relevant_knowledge: list[dict[str, Any]],
-) -> tuple[PlanUpdate, dict[str, Any]]:
+) -> PlanUpdate:
     """Generate detailed plan using LLM."""
     session_text = extract_session_text(intake_session)
 
@@ -108,9 +94,7 @@ async def generate_initial_plan_details(
 
     reflection_prompt = None
     if style_service.get_style_pack(strategy.therapy_style):
-        reflection_prompt = style_service.get_reflection_prompt(
-            strategy.therapy_style
-        )
+        reflection_prompt = style_service.get_reflection_prompt(strategy.therapy_style)
 
     plan_prompt = build_initial_plan_prompt(
         context=context,
@@ -127,20 +111,10 @@ async def generate_initial_plan_details(
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Initial plan generation returned unexpected type")
 
-    plan_details = _plan_update_details(plan_update)
-    plan_details.update(
-        {
-            "created_from_session": intake_session.session_id,
-            "therapy_style": strategy.therapy_style,
-            "focus_areas": strategy.focus_areas,
-            "initial_themes": session_context.key_themes,
-            "initial_emotional_state": session_context.emotional_state,
-        }
-    )
-    return plan_update, plan_details
+    return plan_update
 
 
-async def generate_updated_plan_details(
+async def generate_updated_plan_update(
     llm_service: LLMService,
     style_service: StyleService,
     memory_agent,
@@ -149,14 +123,24 @@ async def generate_updated_plan_details(
     memory,
     current_plan: TherapyPlan,
     relevant_knowledge: list[dict[str, Any]],
-) -> tuple[PlanUpdate, dict[str, Any]]:
+) -> PlanUpdate:
     """Generate updated plan details using LLM."""
     session_text = extract_session_text(session)
     recent_context = await memory_agent.get_recent_context(num_sessions=3)
 
+    dominant_themes = (
+        ", ".join(list(memory.recurring_themes.keys())[:3])
+        if memory.recurring_themes
+        else "None"
+    )
+    emotional_progression = (
+        " → ".join(memory.emotional_patterns[-3:])
+        if memory.emotional_patterns
+        else "None"
+    )
     context = f"""
     Current Therapy Plan (Version {current_plan.version}):
-    {format_plan_details(current_plan.plan_details)}
+    {format_therapy_plan(current_plan)}
 
     Latest Session Analysis:
     Key Themes: {", ".join(session_context.key_themes)}
@@ -168,8 +152,8 @@ async def generate_updated_plan_details(
     {recent_context.get("context_summary", "No recent context")}
 
     Therapeutic Memory Patterns:
-    Dominant Themes: {", ".join(list(memory.recurring_themes.keys())[:3]) if memory.recurring_themes else "None"}
-    Emotional Progression: {" → ".join(memory.emotional_patterns[-3:]) if memory.emotional_patterns else "None"}
+    Dominant Themes: {dominant_themes}
+    Emotional Progression: {emotional_progression}
     Relationship Quality: {memory.relationship_quality}
 
     Latest Session Transcript:
@@ -201,18 +185,4 @@ async def generate_updated_plan_details(
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Plan update generation returned unexpected type")
 
-    updated_details = current_plan.plan_details.copy()
-    for key, value in _plan_update_details(plan_update).items():
-        if isinstance(value, str) and value.strip():
-            updated_details[key] = value
-
-    updated_details.update(
-        {
-            "updated_from_session": session.session_id,
-            "update_timestamp": datetime.now().isoformat(),
-            "memory_insights": recent_context.get("insights", [])[-2:],
-            "progress_indicators": session_context.progress_indicators,
-        }
-    )
-
-    return plan_update, updated_details
+    return plan_update

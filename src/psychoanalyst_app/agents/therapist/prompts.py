@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.models.domain import BriefingStatus
-from psychoanalyst_app.models.domain import TherapyPlan, UserProfile
+from psychoanalyst_app.models.domain import BriefingStatus, TherapyPlan, UserProfile
 
 # Initial session greeting with personalized touch and therapy plan context
 INITIAL_SESSION_PROMPT = """
@@ -83,7 +82,7 @@ DEEP_TOPIC_DETECTION_PROMPT = (
     "Assess whether the conversation below is currently in a deep "
     "emotionally sensitive topic where ending now would feel abrupt.\n\n"
     "Return JSON with:\n"
-    '- in_deep_topic: boolean\n'
+    "- in_deep_topic: boolean\n"
     '- confidence: "high" | "medium" | "low"\n'
     "- rationale: short explanation\n\n"
     "Mark in_deep_topic=true only when there is active emotionally "

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrioMemoryAgent:
-    """Trio-native agent specialized in managing therapeutic memory and session context."""
+    """Agent for therapeutic memory and session context."""
 
     def __init__(
         self,
@@ -99,7 +99,7 @@ class TrioMemoryAgent:
 
         except Exception as exc:
             logger.error(f"Failed to analyze session context: {exc}", exc_info=True)
-            raise MemoryError(f"Session context analysis failed: {exc}")
+            raise MemoryError(f"Session context analysis failed: {exc}") from exc
 
     async def get_therapeutic_memory(self, refresh: bool = False) -> TherapeuticMemory:
         """Get comprehensive therapeutic memory for the user."""
@@ -145,7 +145,7 @@ class TrioMemoryAgent:
 
         except Exception as exc:
             logger.error(f"Failed to build therapeutic memory: {exc}", exc_info=True)
-            raise MemoryError(f"Therapeutic memory building failed: {exc}")
+            raise MemoryError(f"Therapeutic memory building failed: {exc}") from exc
 
     async def get_recent_context(self, num_sessions: int = 3) -> dict[str, Any]:
         """Get context from recent sessions for immediate therapy planning."""
@@ -206,7 +206,7 @@ class TrioMemoryAgent:
 
         except Exception as exc:
             logger.error(f"Failed to get recent context: {exc}", exc_info=True)
-            raise MemoryError(f"Recent context retrieval failed: {exc}")
+            raise MemoryError(f"Recent context retrieval failed: {exc}") from exc
 
     async def identify_patterns(self) -> dict[str, Any]:
         """Identify patterns and trends across all sessions."""
@@ -229,7 +229,7 @@ class TrioMemoryAgent:
 
         except Exception as exc:
             logger.error(f"Failed to identify patterns: {exc}", exc_info=True)
-            raise MemoryError(f"Pattern identification failed: {exc}")
+            raise MemoryError(f"Pattern identification failed: {exc}") from exc
 
     async def get_continuity_context(self, current_session_topics: list[str]) -> str:
         """Get context for maintaining continuity with current session."""
@@ -249,7 +249,8 @@ class TrioMemoryAgent:
 
             if related_themes:
                 context_parts.append(
-                    f"Related themes from previous sessions: {', '.join(related_themes)}"
+                    "Related themes from previous sessions: "
+                    + ", ".join(related_themes)
                 )
 
             if recent_context["emotional_progression"]:

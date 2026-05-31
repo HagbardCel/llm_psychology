@@ -5,16 +5,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
+from quart import Blueprint, jsonify, request
 
-from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
 from psychoanalyst_app.api._helpers import (
     require_session_id,
     require_user_id,
     validate_session_for_user,
     validation_error_response,
 )
+from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
 from psychoanalyst_app.models.http import (
     CreateUserProfileRequestDTO,
     PatchUserProfileRequestDTO,
@@ -24,8 +24,8 @@ from psychoanalyst_app.models.http import (
     UserRegisterResponseDTO,
     UserStatusResponseDTO,
     session_to_dto,
-    user_profile_to_dto,
     user_profile_summary_to_dto,
+    user_profile_to_dto,
 )
 from psychoanalyst_app.orchestration.active_sessions import (
     session_type_for_workflow_state,
@@ -37,6 +37,7 @@ def create_user_routes(server) -> Blueprint:
     """Create blueprint with user profile/status endpoints."""
     logger = logging.getLogger(__name__)
     bp = Blueprint("user", __name__, url_prefix="/api/user")
+
     @bp.route("/status", methods=["GET"])
     async def get_user_status():
         """Get user workflow state."""

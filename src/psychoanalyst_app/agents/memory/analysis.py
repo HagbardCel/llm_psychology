@@ -115,9 +115,7 @@ def generate_context_summary(
         summary_parts.append(f"Current emotional state: {recent_emotion}")
 
     if insights:
-        summary_parts.append(
-            f"Recent insights: {len(insights)} new insights gained"
-        )
+        summary_parts.append(f"Recent insights: {len(insights)} new insights gained")
 
     return (
         " | ".join(summary_parts)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
@@ -45,7 +45,12 @@ def _sync_save_assessment_recommendations(
         cursor = conn.cursor()
         payload = dump_json(recommendations)
         created_at = datetime_to_iso(datetime.now())
-        logger.info(f"Saving assessment recommendations: user_id={user_id}, intake_session_block_id={intake_session_block_id}, payload_len={len(payload)}")
+        logger.info(
+            "Saving assessment recommendations: user_id=%s block_id=%s len=%s",
+            user_id,
+            intake_session_block_id,
+            len(payload),
+        )
         cursor.execute(
             """
             INSERT OR REPLACE INTO assessment_recommendations

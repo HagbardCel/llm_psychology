@@ -5,7 +5,8 @@ Shared helpers for serializing and deserializing DB JSON columns.
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import Any, TypeVar
 
 from psychoanalyst_app.models.domain import (
     Message,
@@ -58,7 +59,7 @@ SESSION_COLUMNS = (
 )
 
 THERAPY_PLAN_COLUMNS = (
-    "plan_id, user_id, created_at, updated_at, plan_details, initial_goals, "
+    "plan_id, user_id, created_at, updated_at, focus, themes, timeline, initial_goals, "
     "current_progress, planned_interventions, status, version, "
     "selected_therapy_style, session_briefing, supersedes_plan_id, "
     "superseded_by_plan_id, revision_recommendations"
@@ -99,7 +100,7 @@ def session_from_row(
 
 
 def therapy_plan_from_row(row, iso_to_datetime) -> TherapyPlan:
-    plan_details_data = load_json(row["plan_details"], default={})
+    themes = load_json(row["themes"], default=[])
     initial_goals = load_json(row["initial_goals"], default=[])
     planned_interventions = load_json(row["planned_interventions"], default=[])
     session_briefing = load_json(row["session_briefing"], default=None)
@@ -109,7 +110,9 @@ def therapy_plan_from_row(row, iso_to_datetime) -> TherapyPlan:
         user_id=row["user_id"],
         created_at=iso_to_datetime(row["created_at"]),
         updated_at=iso_to_datetime(row["updated_at"]),
-        plan_details=plan_details_data,
+        focus=row["focus"],
+        themes=themes,
+        timeline=row["timeline"],
         initial_goals=initial_goals,
         current_progress=row["current_progress"] or "",
         planned_interventions=planned_interventions,
@@ -119,9 +122,7 @@ def therapy_plan_from_row(row, iso_to_datetime) -> TherapyPlan:
         superseded_by_plan_id=row["superseded_by_plan_id"],
         selected_therapy_style=row["selected_therapy_style"],
         session_briefing=session_briefing,
-        revision_recommendations=load_json(
-            row["revision_recommendations"], default=[]
-        ),
+        revision_recommendations=load_json(row["revision_recommendations"], default=[]),
     )
 
 

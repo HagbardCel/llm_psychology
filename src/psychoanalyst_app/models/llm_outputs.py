@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -110,8 +110,8 @@ class PlanUpdate(BaseModel):
     focus: str
     goals: list[str] = Field(..., min_length=1)
     techniques: list[str] = Field(..., min_length=1)
-    themes: str
-    timeline: str
+    themes: list[str] = Field(default_factory=list)
+    timeline: str | None = None
 
 
 class SessionAnalysis(BaseModel):
@@ -156,7 +156,9 @@ class StructuredTherapyPlanOutput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     selected_therapy_style: str | None = None
-    plan_details: dict[str, Any]
+    focus: str = Field(..., min_length=1)
+    themes: list[str] = Field(default_factory=list)
+    timeline: str | None = None
     initial_goals: list[str] = Field(..., min_length=1)
     current_progress: str = Field(..., min_length=1, max_length=2000)
     planned_interventions: list[str] = Field(..., min_length=1)
@@ -216,7 +218,7 @@ class KeyTheme(BaseModel):
     theme: str = Field(..., min_length=3, max_length=100)
     status: str = Field(
         ...,
-        description="'ongoing', 'newly introduced', 'underlying', 'emerging', 'resolved'",
+        description="ongoing | newly introduced | underlying | emerging | resolved",
     )
     priority: str = Field(..., description="'high', 'medium', 'low'")
     frequency: int = Field(..., ge=1, description="Number of sessions where discussed")

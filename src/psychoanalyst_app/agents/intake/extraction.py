@@ -61,7 +61,8 @@ async def extract_tier1_data(
         }
 
         logger.info(
-            f"Successfully extracted Tier 1 data for patient: {extracted.basic_info.alias}"
+            "Successfully extracted Tier 1 data for patient: %s",
+            extracted.basic_info.alias,
         )
 
         return tier1_updates

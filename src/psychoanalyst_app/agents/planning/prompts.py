@@ -25,9 +25,10 @@ Provide your response in JSON format with the following structure:
     "formulation": "Brief clinical formulation...",
     "risk_assessment": "Risk assessment findings...",
     "focus": "Main areas of focus...",
-    "goals": "Specific therapeutic goals (short and long term)...",
-    "techniques": "Suggested techniques...",
-    "themes": "Key themes to explore..."
+    "goals": ["Specific therapeutic goal..."],
+    "techniques": ["Suggested technique..."],
+    "themes": ["Key theme to explore..."],
+    "timeline": "Optional planning horizon..."
 }}
 """
 
@@ -52,9 +53,10 @@ Provide your response in JSON format with the following structure:
     "new_insights": "Key insights from recent sessions...",
     "dynamics": "Observations on resistance or transference...",
     "focus": "Updated main areas of focus...",
-    "goals": "Updated therapeutic goals...",
-    "techniques": "Updated suggested techniques...",
-    "themes": "Emerging themes to explore..."
+    "goals": ["Updated therapeutic goal..."],
+    "techniques": ["Updated suggested technique..."],
+    "themes": ["Emerging theme to explore..."],
+    "timeline": "Optional updated planning horizon..."
 }}
 """
 

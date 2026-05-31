@@ -12,9 +12,7 @@ def validation_error_response(error: ValidationError):
     """Convert a ValidationError into a consistent HTTP response payload."""
     parts = []
     for err in error.errors():
-        location = ".".join(
-            str(loc) for loc in err.get("loc", []) if loc is not None
-        )
+        location = ".".join(str(loc) for loc in err.get("loc", []) if loc is not None)
         prefix = f"{location}: " if location else ""
         parts.append(f"{prefix}{err.get('msg', 'Invalid value')}")
     message = "; ".join(parts) if parts else "Invalid request payload"

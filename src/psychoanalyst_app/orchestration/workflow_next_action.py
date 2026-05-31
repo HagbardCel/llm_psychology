@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable
 
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile
 from psychoanalyst_app.models.http import (
     RequiredWorkflowAction,
     WorkflowNextActionDTO,
 )
-from psychoanalyst_app.models.domain import TherapyPlan, UserProfile
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
 
@@ -153,7 +152,8 @@ def _profile_defaults(profile: UserProfile | None) -> dict[str, str]:
 def _session_prompt(state: WorkflowState, session: SessionInfo | None) -> str:
     if session:
         return (
-            f"Session {session.session_id} in state {state.value} needs your next message."
+            f"Session {session.session_id} in state {state.value} "
+            "needs your next message."
         )
     return f"Start or continue the {state.value.replace('_', ' ')} session."
 
@@ -202,7 +202,10 @@ def _continue_therapy_action(
 ) -> WorkflowNextActionDTO:
     """Helper for therapy continuation prompts."""
     if state == WorkflowState.PLAN_UPDATE_COMPLETE:
-        prompt = "Your session reflection is complete. Resume therapy whenever you're ready."
+        prompt = (
+            "Your session reflection is complete. Resume therapy whenever you're"
+            "ready."
+        )
     else:
         prompt = "Resume your therapy session or start a new one whenever you're ready."
     return WorkflowNextActionDTO(

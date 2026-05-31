@@ -15,9 +15,11 @@ from psychoanalyst_app.agents.reflection.prompts import (
     build_session_briefing_prompt,
 )
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.models.llm_outputs import SessionBriefing
 from psychoanalyst_app.models.domain import Session, TherapyPlan
-from psychoanalyst_app.models.llm_outputs import StructuredTherapyPlanOutput
+from psychoanalyst_app.models.llm_outputs import (
+    SessionBriefing,
+    StructuredTherapyPlanOutput,
+)
 from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,9 @@ def is_noop_plan_update(
         return False
     return (
         plan_output.selected_therapy_style == current_plan.selected_therapy_style
-        and plan_output.plan_details == current_plan.plan_details
+        and plan_output.focus == current_plan.focus
+        and plan_output.themes == current_plan.themes
+        and plan_output.timeline == current_plan.timeline
         and plan_output.initial_goals == current_plan.initial_goals
         and plan_output.current_progress == current_plan.current_progress
         and plan_output.planned_interventions == current_plan.planned_interventions
@@ -73,7 +77,9 @@ def build_plan_snapshot(
         updated_at=datetime.now(),
         version=version,
         selected_therapy_style=selected_style,
-        plan_details=plan_output.plan_details,
+        focus=plan_output.focus,
+        themes=plan_output.themes,
+        timeline=plan_output.timeline,
         initial_goals=plan_output.initial_goals,
         current_progress=plan_output.current_progress,
         planned_interventions=plan_output.planned_interventions,
@@ -91,15 +97,16 @@ def format_reflection_summary(reflection: dict[str, Any]) -> str:
         context = reflection["session_context"]
         summary_parts.append("## Session Reflection\n")
         summary_parts.append(f"Key themes: {', '.join(context.get('key_themes', []))}")
-        summary_parts.append(f"Emotional state: {context.get('emotional_state', 'N/A')}")
+        summary_parts.append(
+            f"Emotional state: {context.get('emotional_state', 'N/A')}"
+        )
 
     if "therapeutic_memory" in reflection:
         memory = reflection["therapeutic_memory"]
         summary_parts.append("\n## Progress Overview")
         summary_parts.append(f"Total sessions: {memory.get('total_sessions', 0)}")
         summary_parts.append(
-            "Relationship quality: "
-            + memory.get("relationship_quality", "developing")
+            "Relationship quality: " + memory.get("relationship_quality", "developing")
         )
 
     if "plan_recommendations" in reflection and reflection["plan_recommendations"]:
@@ -110,17 +117,11 @@ def format_reflection_summary(reflection: dict[str, Any]) -> str:
     return "\n".join(summary_parts)
 
 
-async def generate_session_summary(
-    llm_service: LLMService, session: Session
-) -> str:
+async def generate_session_summary(llm_service: LLMService, session: Session) -> str:
     """Generate a traditional session summary using blocking LLM call."""
-    session_text = "\n".join(
-        f"{msg.role}: {msg.content}" for msg in session.transcript
-    )
+    session_text = "\n".join(f"{msg.role}: {msg.content}" for msg in session.transcript)
     summary_prompt = SESSION_SUMMARY_PROMPT.format(session_text=session_text)
-    return await trio.to_thread.run_sync(
-        llm_service.generate_response, summary_prompt
-    )
+    return await trio.to_thread.run_sync(llm_service.generate_response, summary_prompt)
 
 
 async def generate_session_summary_payload(
@@ -149,7 +150,8 @@ def validate_session_briefing_evidence(
             continue
         if evidence.patient_turn_index is None or not evidence.patient_evidence:
             raise ValueError(
-                f"{evidence.evidence_level} intervention evidence requires a patient citation"
+                f"{evidence.evidence_level} intervention evidence "
+                "requires a patient citation"
             )
         if not 0 <= evidence.patient_turn_index < len(patient_turns):
             raise ValueError("Intervention evidence patient turn index is out of range")

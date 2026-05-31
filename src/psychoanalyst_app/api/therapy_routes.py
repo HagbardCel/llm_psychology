@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import logging
-from quart import Blueprint, jsonify, request
-from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
+
+from quart import Blueprint, jsonify
+
 from psychoanalyst_app.api._helpers import (
     require_session_id,
     require_user_id,
     validate_session_for_user,
-    validation_error_response,
 )
+from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
 from psychoanalyst_app.models.http import (
     TherapyStyleDTO,
     therapy_plan_to_dto,
@@ -19,8 +20,9 @@ from psychoanalyst_app.models.http import (
 
 def create_therapy_routes(server) -> Blueprint:
     """Create blueprint for therapy style and plan endpoints."""
-    logger = logging.getLogger(__name__)
+    logging.getLogger(__name__)
     bp = Blueprint("therapy", __name__, url_prefix="/api/therapy")
+
     @bp.route("/styles", methods=["GET"])
     async def get_therapy_styles():
         """Get available therapy styles with descriptions."""

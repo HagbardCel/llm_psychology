@@ -35,37 +35,67 @@ def patient_messages(message: str, message_history: list[Message]) -> list[Messa
     """Return patient-authored evidence without duplicating the current turn."""
     messages = [item for item in message_history if item.role == "user"]
     if message.strip() and (not messages or messages[-1].content != message):
-        messages.append(
-            Message(role="user", content=message, timestamp=datetime.now())
-        )
+        messages.append(Message(role="user", content=message, timestamp=datetime.now()))
     return messages
 
 
-def identify_required_slots(
-    message: str, message_history: list[Message]
-) -> set[str]:
+def identify_required_slots(message: str, message_history: list[Message]) -> set[str]:
     """Derive completion slots from patient answers and explicit follow-ups."""
     p_messages = patient_messages(message, message_history)
     combined_text = " ".join(item.content.lower() for item in p_messages)
     slots: set[str] = set()
     slot_keywords = {
         "presenting_problem": [
-            "anxiety", "anxious", "worry", "worried", "stress", "dreading",
-            "struggling", "problem", "panic",
+            "anxiety",
+            "anxious",
+            "worry",
+            "worried",
+            "stress",
+            "dreading",
+            "struggling",
+            "problem",
+            "panic",
         ],
         "duration": [
-            "week", "month", "year", "lately", "recently", "since", "for ",
+            "week",
+            "month",
+            "year",
+            "lately",
+            "recently",
+            "since",
+            "for ",
         ],
         "sleep_impact": [
-            "sleep", "insomnia", "awake", "ceiling", "bed", "tired",
+            "sleep",
+            "insomnia",
+            "awake",
+            "ceiling",
+            "bed",
+            "tired",
         ],
         "coping_attempts": [
-            "cope", "coping", "try", "tried", "exercise", "breathing",
-            "meditation", "avoid", "alcohol", "wine", "caffeine", "substance",
+            "cope",
+            "coping",
+            "try",
+            "tried",
+            "exercise",
+            "breathing",
+            "meditation",
+            "avoid",
+            "alcohol",
+            "wine",
+            "caffeine",
+            "substance",
         ],
         "functional_impairment": [
-            "work", "deadline", "project", "school", "focus", "concentrate",
-            "relationship", "function",
+            "work",
+            "deadline",
+            "project",
+            "school",
+            "focus",
+            "concentrate",
+            "relationship",
+            "function",
         ],
     }
     for slot, keywords in slot_keywords.items():
@@ -91,8 +121,14 @@ def identify_required_slots(
         if item.content == RISK_SCREEN_PROMPT and any(
             keyword in answer_text
             for keyword in (
-                "harm", "suicid", "hurt myself", "hurt anyone", "safe",
-                "urgent", "medical", "chest",
+                "harm",
+                "suicid",
+                "hurt myself",
+                "hurt anyone",
+                "safe",
+                "urgent",
+                "medical",
+                "chest",
             )
         ):
             slots.add("risk_screen")
@@ -104,9 +140,7 @@ def identify_required_slots(
     return slots
 
 
-def identify_covered_topics(
-    message: str, message_history: list[Message]
-) -> list[str]:
+def identify_covered_topics(message: str, message_history: list[Message]) -> list[str]:
     """Analyze conversation to identify which topics were covered."""
     p_messages = patient_messages(message, message_history)
     combined_text = " ".join(msg.content.lower() for msg in p_messages)

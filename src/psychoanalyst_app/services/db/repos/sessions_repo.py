@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
@@ -245,9 +245,7 @@ def _sync_get_recent_sessions(
         return []
 
 
-async def get_session_count(
-    executor: TrioSQLiteExecutor, user_id: str
-) -> int:
+async def get_session_count(executor: TrioSQLiteExecutor, user_id: str) -> int:
     """Count number of sessions for a user."""
     async with executor.connection() as conn:
         return await executor.run_sync(_sync_get_session_count, conn, user_id)
@@ -319,9 +317,7 @@ def _sync_update_session_reflection(
     session_briefing: dict | None,
 ) -> bool:
     cursor = conn.cursor()
-    session_briefing_json = (
-        dump_json(session_briefing) if session_briefing else None
-    )
+    session_briefing_json = dump_json(session_briefing) if session_briefing else None
     cursor.execute(
         """
         UPDATE sessions

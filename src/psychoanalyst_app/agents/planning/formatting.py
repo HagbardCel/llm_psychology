@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from psychoanalyst_app.models.domain import Session
+from psychoanalyst_app.models.domain import Session, TherapyPlan
 
 
 def extract_session_text(session: Session) -> str:
@@ -13,13 +13,17 @@ def extract_session_text(session: Session) -> str:
     return "\n".join(f"{msg.role}: {msg.content}" for msg in session.transcript)
 
 
-def format_plan_details(plan_details: dict[str, Any]) -> str:
-    """Format plan details for LLM context."""
-    formatted = []
-    for key, value in plan_details.items():
-        if isinstance(value, (str, int, float)):
-            formatted.append(f"{key.title()}: {value}")
-    return "\n".join(formatted)
+def format_therapy_plan(plan: TherapyPlan) -> str:
+    """Format typed therapy-plan fields for LLM context."""
+    return "\n".join(
+        [
+            f"Focus: {plan.focus}",
+            f"Themes: {', '.join(plan.themes) or 'None'}",
+            f"Goals: {', '.join(plan.initial_goals)}",
+            f"Techniques: {', '.join(plan.planned_interventions)}",
+            f"Timeline: {plan.timeline or 'Not specified'}",
+        ]
+    )
 
 
 def split_bullets(value: Any) -> list[str]:

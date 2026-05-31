@@ -6,9 +6,11 @@ import logging
 
 import trio
 
-from psychoanalyst_app.agents.reflection.prompts import TIER2_ENRICHMENT_PROMPT
 from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.session_enrichment_prompts import (
+    build_tier2_enrichment_prompt,
+)
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -30,14 +32,7 @@ class SessionEnrichmentService:
         if getattr(session, "enriched", False):
             return True
 
-        transcript_lines: list[str] = []
-        for msg in session.transcript:
-            role = "Therapist" if msg.role == "assistant" else "Patient"
-            transcript_lines.append(f"{role}: {msg.content}")
-
-        enrichment_prompt = TIER2_ENRICHMENT_PROMPT.format(
-            session_transcript="\n".join(transcript_lines)
-        )
+        enrichment_prompt = build_tier2_enrichment_prompt(session)
 
         tier2 = await self.llm_service.generate_structured_output_async(
             enrichment_prompt,
@@ -45,9 +40,15 @@ class SessionEnrichmentService:
             method="json_schema",
         )
         if not isinstance(tier2, Tier2Enrichment):
-            logger.error("Tier 2 enrichment returned unexpected type for %s", session_id)
+            logger.error(
+                "Tier 2 enrichment returned unexpected type for %s",
+                session_id,
+            )
             return False
-        return await self.db_service.update_session_tier2(session_id, tier2.model_dump())
+        return await self.db_service.update_session_tier2(
+            session_id,
+            tier2.model_dump(),
+        )
 
 
 async def run_session_enrichment_worker(
@@ -64,7 +65,9 @@ async def run_session_enrichment_worker(
     """
     logger.info("Session enrichment worker started")
     while True:
-        job = await db_service.claim_next_session_enrichment_job(max_attempts=max_attempts)
+        job = await db_service.claim_next_session_enrichment_job(
+            max_attempts=max_attempts
+        )
         if not job:
             await trio.sleep(poll_interval_seconds)
             continue

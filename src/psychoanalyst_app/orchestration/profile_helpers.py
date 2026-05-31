@@ -148,7 +148,5 @@ async def persist_structured_user_profile_output(
         created_by_session=session_id,
     )
     if not saved:
-        logger.error(
-            "Failed to persist structured profile update for user %s", user_id
-        )
+        logger.error("Failed to persist structured profile update for user %s", user_id)
     return saved

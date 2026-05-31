@@ -16,10 +16,10 @@ import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
+from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.models.http import (
     WorkflowNextActionDTO,
 )
-from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
@@ -40,12 +40,16 @@ from psychoanalyst_app.orchestration.process_messages import (
 from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile
 from psychoanalyst_app.orchestration.response_handler import AgentResponseHandler
 from psychoanalyst_app.orchestration.session_lifecycle import SessionLifecycleManager
+from psychoanalyst_app.orchestration.trio_conversation_manager import (
+    TrioConversationManager,
+)
+from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 from psychoanalyst_app.orchestration.workflow_transitions import (
     emit_workflow_next_action as emit_workflow_next_action_runtime,
+)
+from psychoanalyst_app.orchestration.workflow_transitions import (
     get_workflow_next_action as get_workflow_next_action_runtime,
 )
-from psychoanalyst_app.orchestration.trio_conversation_manager import TrioConversationManager
-from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
 # Agent imports moved to factory methods to avoid circular dependency
 
@@ -139,16 +143,12 @@ class TrioAgentOrchestrator:
                 self.session_lifecycle, user_id, session_id
             )
 
-            await record_user_message(
-                self.conversation_manager, session_id, message
-            )
+            await record_user_message(self.conversation_manager, session_id, message)
 
             state = await self.workflow_engine.get_user_state(user_id)
             logger.info("User %s workflow state: %s", user_id, state)
 
-            await ensure_profile_for_new_state(
-                self.service_container, user_id, state
-            )
+            await ensure_profile_for_new_state(self.service_container, user_id, state)
 
             agent_type, agent, context = await resolve_agent_and_context(
                 self.workflow_engine,
@@ -342,9 +342,7 @@ class TrioAgentOrchestrator:
         self, user_id: str, session_id: str
     ) -> None:
         """Send cached assessment recommendations if available."""
-        await self.response_handler.emit_assessment_recommendations(
-            session_id, user_id
-        )
+        await self.response_handler.emit_assessment_recommendations(session_id, user_id)
 
     async def ensure_assessment_job(self, user_id: str, session_id: str) -> None:
         """Ensure assessment jobs are running when required."""
@@ -354,7 +352,9 @@ class TrioAgentOrchestrator:
         """Retry reflection for the ended therapy session that failed persistence."""
         state = await self.workflow_engine.get_user_state(user_id)
         if state != WorkflowState.PLAN_UPDATE_FAILED:
-            raise ValueError("Plan update retry is only allowed after reflection failure")
+            raise ValueError(
+                "Plan update retry is only allowed after reflection failure"
+            )
         trio_db_service = self.service_container.get("trio_db_service")
         session = await trio_db_service.get_session(session_id)
         if (
@@ -371,9 +371,7 @@ class TrioAgentOrchestrator:
         )
         await self.response_handler.ensure_reflection_job(user_id, session_id)
 
-    async def create_user_profile(
-        self, profile_data: dict[str, Any]
-    ) -> UserProfile:
+    async def create_user_profile(self, profile_data: dict[str, Any]) -> UserProfile:
         """
         Create a new user profile.
 
@@ -397,9 +395,8 @@ class TrioAgentOrchestrator:
                 trio_db_service, user_id, profile_data
             )
 
-            if (
-                prior_status == UserStatus.PROFILE_ONLY
-                and is_profile_complete(user_profile)
+            if prior_status == UserStatus.PROFILE_ONLY and is_profile_complete(
+                user_profile
             ):
                 await self.workflow_engine.transition(
                     user_id,
@@ -486,22 +483,14 @@ class TrioAgentOrchestrator:
                 )
                 return existing_plan
 
-            intake_sessions = await self.session_lifecycle.find_intake_sessions(
-                user_id
-            )
+            intake_sessions = await self.session_lifecycle.find_intake_sessions(user_id)
             if not intake_sessions:
-                raise ValueError(
-                    f"Intake session not found for user {user_id}"
-                )
+                raise ValueError(f"Intake session not found for user {user_id}")
             if len(intake_sessions) > 1:
-                raise ValueError(
-                    f"Multiple intake sessions found for user {user_id}"
-                )
+                raise ValueError(f"Multiple intake sessions found for user {user_id}")
             intake_session = intake_sessions[0]
 
-            reflection_agent = await self._get_or_create_agent(
-                "REFLECTION", user_id
-            )
+            reflection_agent = await self._get_or_create_agent("REFLECTION", user_id)
             plan_output = await reflection_agent.create_initial_plan_with_style(
                 intake_session, therapy_style
             )

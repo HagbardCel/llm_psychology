@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Any, Callable
+from typing import Any
 
 import trio
 
@@ -123,8 +124,7 @@ class TrioSQLiteExecutor:
                 _rollback_if_connection(args)
                 attempt += 1
                 logger.warning(
-                    "SQLite database locked; retrying operation "
-                    "(attempt %s/%s)",
+                    "SQLite database locked; retrying operation " "(attempt %s/%s)",
                     attempt,
                     self.locked_retry_attempts,
                 )

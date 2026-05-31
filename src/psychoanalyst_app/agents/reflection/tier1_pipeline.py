@@ -107,7 +107,10 @@ async def maybe_update_tier1_profile(
                 updates["date_of_birth"] = info.date_of_birth
             if info.gender is not None and info.gender.strip():
                 updates["gender"] = info.gender
-            if info.cultural_background is not None and info.cultural_background.strip():
+            if (
+                info.cultural_background is not None
+                and info.cultural_background.strip()
+            ):
                 updates["cultural_background"] = info.cultural_background
             if info.primary_language is not None and info.primary_language.strip():
                 updates["primary_language"] = info.primary_language
@@ -118,9 +121,15 @@ async def maybe_update_tier1_profile(
                 updates["parents"] = family.parents
             if family.siblings is not None and family.siblings.strip():
                 updates["siblings"] = family.siblings
-            if family.family_atmosphere is not None and family.family_atmosphere.strip():
+            if (
+                family.family_atmosphere is not None
+                and family.family_atmosphere.strip()
+            ):
                 updates["family_atmosphere"] = family.family_atmosphere
-            if family.significant_events is not None and family.significant_events.strip():
+            if (
+                family.significant_events is not None
+                and family.significant_events.strip()
+            ):
                 updates["significant_events"] = family.significant_events
 
         if patch.history:
@@ -129,16 +138,28 @@ async def maybe_update_tier1_profile(
                 updates["education"] = history.education
             if history.work_history is not None and history.work_history.strip():
                 updates["work_history"] = history.work_history
-            if history.relationship_to_work is not None and history.relationship_to_work.strip():
+            if (
+                history.relationship_to_work is not None
+                and history.relationship_to_work.strip()
+            ):
                 updates["relationship_to_work"] = history.relationship_to_work
 
         if patch.context:
             context_patch = patch.context
-            if context_patch.relationships is not None and context_patch.relationships.strip():
+            if (
+                context_patch.relationships is not None
+                and context_patch.relationships.strip()
+            ):
                 updates["relationships"] = context_patch.relationships
-            if context_patch.social_context is not None and context_patch.social_context.strip():
+            if (
+                context_patch.social_context is not None
+                and context_patch.social_context.strip()
+            ):
                 updates["social_context"] = context_patch.social_context
-            if context_patch.current_situation is not None and context_patch.current_situation.strip():
+            if (
+                context_patch.current_situation is not None
+                and context_patch.current_situation.strip()
+            ):
                 updates["current_situation"] = context_patch.current_situation
 
         if patch.frame:

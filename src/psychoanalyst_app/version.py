@@ -39,7 +39,7 @@ class Version(NamedTuple):
                 raise ValueError(f"Invalid version format: {version_str}")
             return cls(int(parts[0]), int(parts[1]), int(parts[2]))
         except (ValueError, IndexError) as e:
-            raise ValueError(f"Invalid version string '{version_str}': {e}")
+            raise ValueError(f"Invalid version string '{version_str}': {e}") from e
 
     def is_compatible_with(self, client_version: "Version") -> bool:
         """

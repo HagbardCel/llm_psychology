@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 
-def build_session_context_prompt(
-    *, session_text: str, knowledge_context: str
-) -> str:
+def build_session_context_prompt(*, session_text: str, knowledge_context: str) -> str:
     """Build the session context analysis prompt."""
     return f"""
             Analyze this therapy session transcript and extract key contextual information:

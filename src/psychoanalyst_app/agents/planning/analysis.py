@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from psychoanalyst_app.models.domain import TherapyPlan
+from psychoanalyst_app.models.llm_outputs import PlanUpdate
 from psychoanalyst_app.services.style_service import StyleService
 
 from .models import PlanningStrategy
@@ -57,7 +58,7 @@ def assess_update_necessity(session_context, memory, current_plan: TherapyPlan) 
     if len(session_context.insights) >= 2:
         return True
 
-    current_themes = set(current_plan.plan_details.get("themes", "").split(", "))
+    current_themes = set(current_plan.themes)
     new_themes = set(session_context.key_themes)
     if len(new_themes - current_themes) >= 2:
         return True
@@ -71,21 +72,19 @@ def assess_update_necessity(session_context, memory, current_plan: TherapyPlan) 
     return False
 
 
-def identify_plan_changes(
-    old_details: dict[str, Any], new_details: dict[str, Any]
-) -> list[str]:
+def identify_plan_changes(current_plan: TherapyPlan, update: PlanUpdate) -> list[str]:
     """Identify specific changes between plan versions."""
     changes = []
-    for key in ["focus", "goals", "techniques", "themes"]:
-        old_value = old_details.get(key, "")
-        new_value = new_details.get(key, "")
+    values = {
+        "focus": (current_plan.focus, update.focus),
+        "goals": (current_plan.initial_goals, update.goals),
+        "techniques": (current_plan.planned_interventions, update.techniques),
+        "themes": (current_plan.themes, update.themes),
+        "timeline": (current_plan.timeline, update.timeline),
+    }
+    for key, (old_value, new_value) in values.items():
         if old_value != new_value:
             changes.append(f"{key}_updated")
-
-    if "memory_insights" in new_details:
-        changes.append("memory_insights_integrated")
-    if "progress_indicators" in new_details:
-        changes.append("progress_tracking_updated")
     return changes
 
 
@@ -122,7 +121,10 @@ def calculate_effectiveness_score(
     if progress_indicators:
         score += min(0.3, len(progress_indicators) * 0.1)
 
-    emotional_trend = patterns.get("emotional_patterns", {}).get("recent_trend", "stable")
+    emotional_trend = patterns.get("emotional_patterns", {}).get(
+        "recent_trend",
+        "stable",
+    )
     if emotional_trend == "improving":
         score += 0.2
     elif emotional_trend == "declining":
@@ -188,7 +190,7 @@ def recommend_theme_adjustments(
     recommendations = []
     theme_patterns = patterns.get("theme_patterns", {})
     dominant_themes = theme_patterns.get("dominant_themes", [])
-    current_themes = set(plan.plan_details.get("themes", "").split(", "))
+    current_themes = set(plan.themes)
 
     for theme in dominant_themes[:2]:
         if theme not in current_themes:
@@ -210,7 +212,9 @@ def recommend_technique_adjustments(plan: TherapyPlan, memory) -> list[dict[str,
         recommendations.append(
             {
                 "type": "technique_advancement",
-                "description": "Consider introducing more advanced therapeutic techniques",
+                "description": (
+                    "Consider introducing more advanced therapeutic techniques"
+                ),
                 "rationale": "Strong therapeutic relationship allows for deeper work",
                 "priority": "medium",
             }
@@ -255,4 +259,3 @@ def prioritize_recommendations(
         recommendations,
         key=lambda x: priority_order.get(x.get("priority", "low"), 2),
     )
-

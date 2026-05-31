@@ -27,7 +27,9 @@ async def send_stream_chunk(
     ws = websockets.get(session_id)
     if ws is not None:
         try:
-            await ws.send(json.dumps(chat_chunk_message(chunk, is_complete=is_complete)))
+            await ws.send(
+                json.dumps(chat_chunk_message(chunk, is_complete=is_complete))
+            )
         except Exception as exc:
             logger.error("Error sending chunk to session %s: %s", session_id, exc)
         return
@@ -78,7 +80,7 @@ async def send_json_message(
     ws = websockets.get(session_id)
     if ws is None:
         logger.warning(
-            "No WebSocket registered for session %s when sending %s (active sessions: %s)",
+            "No WebSocket for session %s when sending %s (active: %s)",
             session_id,
             message_type,
             list(websockets.keys()),
@@ -107,7 +109,7 @@ async def run_background_streamer(
     ws = websockets.get(session_id)
     if ws is None:
         logger.error(
-            "No websocket registered for session %s. Cannot stream background response.",
+            "No websocket for session %s; cannot stream background response.",
             session_id,
         )
         return
@@ -134,7 +136,7 @@ async def run_background_streamer(
         await ws.send(
             json.dumps(
                 error_message(
-                    "An error occurred while generating the initial response. Please try again."
+                    "Error generating the initial response. Please try again."
                 )
             )
         )

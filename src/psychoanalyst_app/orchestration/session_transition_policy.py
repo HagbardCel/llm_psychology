@@ -91,13 +91,10 @@ async def _resolve_desired_start_state(
             )
             return None
 
-    if (
-        desired_state == WorkflowState.THERAPY_IN_PROGRESS
-        and state in (
-            WorkflowState.ASSESSMENT_COMPLETE,
-            WorkflowState.INITIAL_PLAN_COMPLETE,
-            WorkflowState.PLAN_UPDATE_COMPLETE,
-        )
+    if desired_state == WorkflowState.THERAPY_IN_PROGRESS and state in (
+        WorkflowState.ASSESSMENT_COMPLETE,
+        WorkflowState.INITIAL_PLAN_COMPLETE,
+        WorkflowState.PLAN_UPDATE_COMPLETE,
     ):
         plan = await trio_db_service.get_current_therapy_plan(user_id)
         if not plan or not plan.selected_therapy_style:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
+from quart import Blueprint, jsonify, request
 
 from psychoanalyst_app.api._helpers import (
     require_session_id,
@@ -31,6 +31,7 @@ def create_session_routes(server) -> Blueprint:
     """Create blueprint for session CRUD endpoints."""
     logger = logging.getLogger(__name__)
     bp = Blueprint("sessions", __name__, url_prefix="/api/sessions")
+
     @bp.route("", methods=["GET"])
     async def get_sessions():
         """Get all sessions for a user."""
@@ -80,9 +81,7 @@ def create_session_routes(server) -> Blueprint:
         except ValidationError as error:
             return validation_error_response(error)
 
-        user_profile = await server.db_service.get_user_profile(
-            session_request.user_id
-        )
+        user_profile = await server.db_service.get_user_profile(session_request.user_id)
         if not user_profile:
             return jsonify({"error": "User profile not found"}), 404
 
@@ -178,9 +177,7 @@ def create_session_routes(server) -> Blueprint:
             context = await server.conversation_manager.get_context(session_id)
             elapsed_minutes = context.time_elapsed_minutes
             remaining_minutes = context.time_remaining_minutes
-            total_duration = context.duration_minutes + (
-                context.extensions_used * 5
-            )
+            total_duration = context.duration_minutes + (context.extensions_used * 5)
 
             timer_dto = SessionTimerResponseDTO(
                 session_id=session_id,

@@ -7,10 +7,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from psychoanalyst_app.agents.reflection.prompts import build_tier2_enrichment_prompt
 from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.session_enrichment_prompts import (
+    build_tier2_enrichment_prompt,
+)
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)

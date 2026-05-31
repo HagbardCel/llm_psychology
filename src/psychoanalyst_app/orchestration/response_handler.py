@@ -49,6 +49,7 @@ EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
 
 class AgentResponseHandler:
     """Handle AgentResponse transitions and follow-up actions."""
+
     def __init__(
         self,
         service_container: ServiceContainer,
@@ -71,6 +72,7 @@ class AgentResponseHandler:
         self._assessment_recommendations: dict[str, list[dict[str, Any]]] = {}
         self._assessment_jobs: set[str] = set()
         self._reflection_jobs: set[str] = set()
+
     def attach_session_callbacks(
         self,
         *,
@@ -80,6 +82,7 @@ class AgentResponseHandler:
         """Attach session lifecycle callbacks after initialization."""
         self._end_session = end_session
         self._start_therapy_session = start_therapy_session
+
     async def handle(
         self, user_id: str, session_id: str, agent_response: AgentResponse
     ) -> None:
@@ -218,6 +221,7 @@ class AgentResponseHandler:
             return
 
         logger.warning("Unknown agent action '%s' for user %s", action, user_id)
+
     async def run_reflection(self, user_id: str, session_id: str) -> None:
         """Run reflection automatically after a therapy session completes."""
         try:
@@ -293,7 +297,8 @@ class AgentResponseHandler:
             )
             if not success:
                 raise RuntimeError(
-                    f"Failed to persist reflection summary/briefing for session {session_id}"
+                    "Failed to persist reflection summary/briefing for "
+                    f"session {session_id}"
                 )
 
             tier2_enrichment = metadata.get("tier2_enrichment")

@@ -270,7 +270,8 @@ class TrioWorkflowEngine:
 
         if not self.can_transition(current_state, next_state):
             raise InvalidStateTransitionError(
-                f"Cannot transition from {current_state} to {next_state} on event {event}"
+                f"Cannot transition from {current_state} to {next_state} "
+                f"on event {event}"
             )
 
         return next_state

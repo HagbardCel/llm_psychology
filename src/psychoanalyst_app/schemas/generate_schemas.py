@@ -217,7 +217,7 @@ def generate_all_schemas(output_dir: Path = OUTPUT_DIR) -> None:
 
     index = {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "Psychoanalyst API Schema Index",
+        "title": "Local Therapist Tool API Schema Index",
         "description": "Index of all API data models",
         "version": "1.0.0",
         "generated_at": datetime.now().isoformat(),

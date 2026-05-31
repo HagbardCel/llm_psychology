@@ -29,6 +29,7 @@ async def iter_in_thread(
 
     async def _pump():
         try:
+
             def _run():
                 try:
                     iterator = iterator_factory()

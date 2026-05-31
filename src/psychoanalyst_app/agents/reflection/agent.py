@@ -1,4 +1,4 @@
-"""TrioReflectionAgent: Trio-native agent for analyzing therapy sessions and updating plans."""
+"""TrioReflectionAgent for session analysis and plan updates."""
 
 from __future__ import annotations
 
@@ -128,13 +128,16 @@ class TrioReflectionAgent:
             )
         else:
             logger.warning(
-                f"Session briefing generation returned None for session {session.session_id}"
+                "Session briefing generation returned None for session %s",
+                session.session_id,
             )
 
         therapy_plan_payload = build_therapy_plan_output(
             {
                 "selected_therapy_style": updated_plan.selected_therapy_style,
-                "plan_details": updated_plan.plan_details,
+                "focus": updated_plan.focus,
+                "themes": updated_plan.themes,
+                "timeline": updated_plan.timeline,
                 "initial_goals": updated_plan.initial_goals,
                 "current_progress": updated_plan.current_progress,
                 "planned_interventions": updated_plan.planned_interventions,
@@ -170,7 +173,8 @@ class TrioReflectionAgent:
     ) -> StructuredTherapyPlanOutput:
         """Coordinate initial therapy plan creation using specialized agents."""
         logger.info(
-            f"TrioReflectionAgent: Coordinating initial plan creation for user {self.user_context.user_id}"
+            "Coordinating initial plan creation for user %s",
+            self.user_context.user_id,
         )
 
         try:
@@ -188,14 +192,15 @@ class TrioReflectionAgent:
             logger.error(
                 f"Failed to coordinate initial plan creation: {exc}", exc_info=True
             )
-            raise ReflectionError(f"Initial plan creation failed: {exc}")
+            raise ReflectionError(f"Initial plan creation failed: {exc}") from exc
 
     async def create_initial_plan_with_style(
         self, intake_session: Session, selected_style: str
     ) -> StructuredTherapyPlanOutput:
         """Create initial therapy plan with specific style."""
         logger.info(
-            f"TrioReflectionAgent: Creating initial {selected_style.upper()} therapy plan"
+            "Creating initial %s therapy plan",
+            selected_style.upper(),
         )
         return await self.create_initial_plan(intake_session, selected_style)
 
@@ -204,7 +209,8 @@ class TrioReflectionAgent:
     ) -> StructuredTherapyPlanOutput:
         """Coordinate therapy plan updates using specialized agents."""
         logger.info(
-            f"TrioReflectionAgent: Coordinating plan update for user {self.user_context.user_id}"
+            "Coordinating plan update for user %s",
+            self.user_context.user_id,
         )
 
         try:
@@ -215,7 +221,7 @@ class TrioReflectionAgent:
 
                 if current_plan is None:
                     logger.warning(
-                        "No existing plan found. Creating initial plan based on session."
+                        "No existing plan found; creating initial plan from session."
                     )
                     return await self.planning_agent.create_initial_plan(session)
 
@@ -230,7 +236,7 @@ class TrioReflectionAgent:
 
         except Exception as exc:
             logger.error(f"Failed to coordinate plan update: {exc}", exc_info=True)
-            raise ReflectionError(f"Plan update failed: {exc}")
+            raise ReflectionError(f"Plan update failed: {exc}") from exc
 
     async def generate_comprehensive_reflection(
         self, session: Session, current_plan: TherapyPlan | None = None
@@ -240,9 +246,10 @@ class TrioReflectionAgent:
         dict[str, Any] | None,
         dict[str, Any] | None,
     ]:
-        """Generate comprehensive reflection combining memory analysis and planning insights."""
+        """Generate reflection from memory analysis and planning insights."""
         logger.info(
-            f"TrioReflectionAgent: Generating comprehensive reflection for session {session.session_id}"
+            "Generating comprehensive reflection for session %s",
+            session.session_id,
         )
 
         try:
@@ -260,7 +267,7 @@ class TrioReflectionAgent:
             logger.error(
                 f"Failed to generate comprehensive reflection: {exc}", exc_info=True
             )
-            raise ReflectionError(f"Reflection generation failed: {exc}")
+            raise ReflectionError(f"Reflection generation failed: {exc}") from exc
 
     async def generate_session_summary(self, session: Session) -> dict[str, Any]:
         """Generate a simple session summary (backwards compatibility)."""
@@ -278,7 +285,7 @@ class TrioReflectionAgent:
     async def ensure_recent_sessions_enriched(
         self, user_id: str, *, limit: int = 5, scan_limit: int | None = None
     ) -> list[Session]:
-        """Ensure recent sessions have Tier 2 enrichment, enriching on-demand when missing."""
+        """Ensure recent sessions have Tier 2 enrichment on demand."""
         return await ensure_recent_sessions_enriched(
             self.db_service,
             self.llm_service,

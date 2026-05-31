@@ -5,17 +5,18 @@ Provides version information and compatibility checking for clients.
 These endpoints are intentionally public so clients can check compatibility.
 """
 
-from datetime import datetime, timezone
-from quart import Blueprint, jsonify, request
-from pydantic import ValidationError
+from datetime import UTC, datetime
 
-from psychoanalyst_app.version import API_VERSION, MIN_CLIENT_VERSION, Version
+from pydantic import ValidationError
+from quart import Blueprint, jsonify, request
+
+from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
 from psychoanalyst_app.models.http import (
-    VersionInfo,
     VersionCheckRequest,
     VersionCheckResponse,
+    VersionInfo,
 )
-from psychoanalyst_app.api.cache_utils import add_cache_headers, CACHE_PRESETS
+from psychoanalyst_app.version import API_VERSION, MIN_CLIENT_VERSION, Version
 
 
 def create_version_routes(server) -> Blueprint:
@@ -36,7 +37,7 @@ def create_version_routes(server) -> Blueprint:
         version_info = VersionInfo(
             api_version=str(API_VERSION),
             min_client_version=str(MIN_CLIENT_VERSION),
-            server_time=datetime.now(timezone.utc).isoformat(),
+            server_time=datetime.now(UTC).isoformat(),
         )
 
         response = jsonify(version_info.model_dump())
@@ -96,7 +97,8 @@ def create_version_routes(server) -> Blueprint:
             elif not compatible:
                 message = (
                     f"Client version {client_version} is not compatible with "
-                    f"backend API version {API_VERSION}. Major version mismatch detected."
+                    f"backend API version {API_VERSION}. "
+                    "Major version mismatch detected."
                 )
             elif upgrade_recommended:
                 message = (

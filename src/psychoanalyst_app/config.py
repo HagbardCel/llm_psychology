@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # Application Configuration
-    APP_NAME: str = "Virtual LLM-Driven Psychoanalyst"
+    APP_NAME: str = "Local Therapist Tool"
     VERSION: str = "0.1.0"
 
     # Environment
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     )
     THERAPIST_MODEL: str = Field(
         default="",
-        description="Model for psychoanalyst agent (defaults to MODEL_NAME)",
+        description="Model for therapist agent (defaults to MODEL_NAME)",
     )
     REFLECTION_MODEL: str = Field(
         default="", description="Model for reflection agent (defaults to MODEL_NAME)"
@@ -155,36 +155,10 @@ class Settings(BaseSettings):
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
     DATABASE_BACKUP_DIR: str = Field(default="data/backups")
 
-    # Retrieval Configuration
-    RAG_BACKEND: str = Field(
-        default="none",
-        description=(
-            "RAG backend to use. Only 'none' is supported in the current release."
-        ),
-    )
-    VECTOR_DB_PATH: str = Field(
-        default="data/vector_db",
-        description="Reserved for future local retrieval extensions.",
-    )
-
-    # Domain Knowledge Configuration
-    DOMAIN_KNOWLEDGE_PATH: str = Field(
-        default="data/domain_knowledge",
-        description="Reserved for future local retrieval extensions.",
-    )
+    # Therapy style packs retain knowledge assets for a future retrieval extension.
     STYLES_DIR: str | None = Field(
         default=None,
         description="Optional override directory for therapy style packs",
-    )
-
-    # Deferred Retrieval Configuration
-    USE_ONNX_EMBEDDINGS: bool = Field(
-        default=True,
-        description="Reserved for future local retrieval extensions.",
-    )
-    EMBEDDING_MODEL_NAME: str = Field(
-        default="all-MiniLM-L6-v2",
-        description="Reserved for future local retrieval extensions.",
     )
 
     # Session Configuration

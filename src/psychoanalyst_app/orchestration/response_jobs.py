@@ -49,9 +49,15 @@ async def emit_assessment_recommendations(
     if not recommendations:
         try:
             db_service = service_container.get("trio_db_service")
-            recommendations = await db_service.get_latest_assessment_recommendations(user_id)
+            recommendations = await db_service.get_latest_assessment_recommendations(
+                user_id
+            )
         except Exception:
-            logger.warning("Failed to load assessment recommendations for user %s", user_id, exc_info=True)
+            logger.warning(
+                "Failed to load assessment recommendations for user %s",
+                user_id,
+                exc_info=True,
+            )
             return
         if not recommendations:
             return

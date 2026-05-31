@@ -24,12 +24,9 @@ from psychoanalyst_app.trio_server import TrioServer
 logger = logging.getLogger(__name__)
 
 
-def _configure_e2e_settings(
-    settings: Settings, *, db_path: str, vector_db_path: str
-) -> None:
+def _configure_e2e_settings(settings: Settings, *, db_path: str) -> None:
     settings.APP_ENV = "e2e"
     settings.DATABASE_PATH = db_path
-    settings.VECTOR_DB_PATH = vector_db_path
 
     # Some services may check for a key at creation time; we replace the LLM service,
     # but setting a dummy keeps configuration checks harmless.
@@ -45,16 +42,13 @@ async def main() -> int:
     setup_logging(settings)
 
     db_path = os.getenv("E2E_DB_PATH")
-    vector_db_path = os.getenv("E2E_VECTOR_DB_PATH")
-
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
-    if not db_path or not vector_db_path:
+    if not db_path:
         temp_dir = tempfile.TemporaryDirectory(prefix="psychoanalyst_e2e_")
         base_dir = Path(temp_dir.name)
         db_path = db_path or str(base_dir / "e2e.db")
-        vector_db_path = vector_db_path or str(base_dir / "vector_db")
 
-    _configure_e2e_settings(settings, db_path=db_path, vector_db_path=vector_db_path)
+    _configure_e2e_settings(settings, db_path=db_path)
 
     logger.info("Starting deterministic workflow-probe server on %s:%s", host, port)
     logger.info("Deterministic probe DB: %s", db_path)

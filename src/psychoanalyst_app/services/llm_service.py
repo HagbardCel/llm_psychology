@@ -318,9 +318,7 @@ class LLMService:
         return value
 
     def _sanitize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return {
-            key: self._sanitize_value(key, value) for key, value in payload.items()
-        }
+        return {key: self._sanitize_value(key, value) for key, value in payload.items()}
 
     @staticmethod
     def _build_langchain_messages(
@@ -445,7 +443,11 @@ class LLMService:
                     },
                 )
                 self._log_metric(
-                    "finish", "generate_response", phase, started_at=started_at, response=response
+                    "finish",
+                    "generate_response",
+                    phase,
+                    started_at=started_at,
+                    response=response,
                 )
                 return response.content
             else:
@@ -464,23 +466,35 @@ class LLMService:
                     },
                 )
                 self._log_metric(
-                    "finish", "generate_response", phase, started_at=started_at, response=response
+                    "finish",
+                    "generate_response",
+                    phase,
+                    started_at=started_at,
+                    response=response,
                 )
                 return response.content
         except LLMQuotaExhaustedError:
-            self._log_metric("failure", "generate_response", phase, started_at=started_at)
+            self._log_metric(
+                "failure",
+                "generate_response",
+                phase,
+                started_at=started_at,
+            )
             raise
         except Exception as e:
-            self._log_metric("failure", "generate_response", phase, started_at=started_at)
+            self._log_metric(
+                "failure",
+                "generate_response",
+                phase,
+                started_at=started_at,
+            )
             import traceback
 
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             logger.error(f"Error generating LLM response: {e}", exc_info=True)
             # Re-raise the exception with full context instead of hiding it
             error_message = f"LLM generation failed: {type(e).__name__}: {str(e)}"
-            raise LLMServiceError(
-                f"{error_message}\n\nSTACKTRACE:\n{tb_str}"
-            ) from e
+            raise LLMServiceError(f"{error_message}\n\nSTACKTRACE:\n{tb_str}") from e
 
     async def generate_response_stream(
         self, prompt: str, context: list[dict[str, str]] | None = None
@@ -548,9 +562,7 @@ class LLMService:
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             logger.error(f"Error streaming LLM response: {e}", exc_info=True)
             error_message = f"LLM streaming failed: {type(e).__name__}: {str(e)}"
-            raise LLMServiceError(
-                f"{error_message}\n\nSTACKTRACE:\n{tb_str}"
-            ) from e
+            raise LLMServiceError(f"{error_message}\n\nSTACKTRACE:\n{tb_str}") from e
 
     def generate_structured_output(
         self,
@@ -565,7 +577,9 @@ class LLMService:
         self._log_metric("start", "generate_structured_output", phase)
         try:
             if self.provider != "gemini":
-                response = self._generate_structured_output_from_json_prompt(prompt, schema)
+                response = self._generate_structured_output_from_json_prompt(
+                    prompt, schema
+                )
                 self._log_metric(
                     "finish", "generate_structured_output", phase, started_at=started_at
                 )
@@ -592,7 +606,11 @@ class LLMService:
                     },
                 )
                 self._log_metric(
-                    "finish", "generate_structured_output", phase, started_at=started_at, response=response
+                    "finish",
+                    "generate_structured_output",
+                    phase,
+                    started_at=started_at,
+                    response=response,
                 )
                 return response
 
@@ -615,7 +633,11 @@ class LLMService:
                 },
             )
             self._log_metric(
-                "finish", "generate_structured_output", phase, started_at=started_at, response=response
+                "finish",
+                "generate_structured_output",
+                phase,
+                started_at=started_at,
+                response=response,
             )
             return response
         except Exception:
@@ -710,7 +732,11 @@ class LLMService:
         await self._acquire_rate_limit()
 
         if phase is None:
-            return await trio.to_thread.run_sync(self.generate_response, prompt, context)
+            return await trio.to_thread.run_sync(
+                self.generate_response,
+                prompt,
+                context,
+            )
         return await trio.to_thread.run_sync(
             lambda: self.generate_response(prompt, context, phase=phase)
         )

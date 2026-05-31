@@ -1,4 +1,5 @@
 """Trio-native conversation context, streaming, and RAG integration."""
+
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -8,7 +9,11 @@ import trio
 from werkzeug.local import LocalProxy
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.models.domain import Message, TherapyPlan
+from psychoanalyst_app.models.domain import Message
+from psychoanalyst_app.orchestration.conversation_rag import (
+    augment_prompt,
+    retrieve_rag_context,
+)
 from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.orchestration.stream_dispatch import (
     run_background_streamer,
@@ -75,7 +80,9 @@ class TrioConversationManager:
 
     def register_websocket(self, session_id: str, ws: Any):
         """Registers a websocket for a given session."""
-        self.websockets[session_id] = ws._get_current_object() if isinstance(ws, LocalProxy) else ws
+        self.websockets[session_id] = (
+            ws._get_current_object() if isinstance(ws, LocalProxy) else ws
+        )
         event = self._websocket_ready_events.get(session_id)
         if event is None:
             event = trio.Event()
@@ -120,7 +127,12 @@ class TrioConversationManager:
         """Return whether a session is still delivering its initial greeting."""
         return session_id in self._initial_greeting_pending
 
-    async def wait_for_websocket(self, session_id: str, *, timeout_seconds: float) -> bool:
+    async def wait_for_websocket(
+        self,
+        session_id: str,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
         """Wait until a websocket is registered for the given session."""
         if session_id in self.websockets:
             return True
@@ -200,6 +212,7 @@ class TrioConversationManager:
 
     async def _background_streamer(self, prompt: str, session_id: str, use_rag: bool):
         """The actual background task that streams the response."""
+
         async def _stream(context: ConversationContext):
             async for chunk in self.stream_response(prompt, context, use_rag):
                 yield chunk
@@ -242,10 +255,10 @@ class TrioConversationManager:
                     f"Retrieving RAG context for style: "
                     f"{context.therapy_plan.selected_therapy_style}"
                 )
-                rag_context = await self._retrieve_rag_context(
-                    prompt, context.therapy_plan
+                rag_context = await retrieve_rag_context(
+                    self.rag_service, prompt, context.therapy_plan
                 )
-                augmented_prompt = self._augment_prompt(prompt, rag_context)
+                augmented_prompt = augment_prompt(prompt, rag_context)
                 logger.debug(f"Augmented prompt: {augmented_prompt[:200]}...")
 
             # Convert message history to context format
@@ -262,7 +275,9 @@ class TrioConversationManager:
                 phase=(
                     "therapy_opening"
                     if agent == "THERAPIST"
-                    and not any(message.role == "user" for message in context.message_history)
+                    and not any(
+                        message.role == "user" for message in context.message_history
+                    )
                     else "therapy_response" if agent == "THERAPIST" else None
                 ),
             ):
@@ -366,7 +381,8 @@ class TrioConversationManager:
 
             # Save assistant message to database
             logger.info(
-                f"DEBUG: stream_static_response calling add_message for session {context.session_id}"
+                "DEBUG: stream_static_response add_message for session %s",
+                context.session_id,
             )
             await self.add_message(context.session_id, "assistant", content, agent)
 
@@ -410,72 +426,6 @@ class TrioConversationManager:
         except Exception as e:
             logger.error(f"Error in LLM streaming: {e}", exc_info=True)
             raise
-
-    async def _retrieve_rag_context(self, query: str, therapy_plan: TherapyPlan) -> str:
-        """
-        Retrieve relevant context from RAG system using Trio.
-
-        Args:
-            query: User's message/query
-            therapy_plan: Current therapy plan with style info
-
-        Returns:
-            Relevant context from knowledge base
-        """
-        try:
-            filter_source = therapy_plan.selected_therapy_style
-            if filter_source and not filter_source.endswith(".md"):
-                filter_source = f"{filter_source}.md"
-
-            # Run synchronous RAG call in thread
-            relevant_docs = await trio.to_thread.run_sync(
-                self.rag_service.retrieve_relevant_knowledge,
-                query,
-                3,  # n_results
-                filter_source,
-            )
-
-            if not relevant_docs:
-                logger.warning("No relevant documents found in RAG")
-                return ""
-
-            # Format context
-            context_parts = []
-            for i, doc in enumerate(relevant_docs[:3], 1):  # Top 3 docs
-                # Extract text content from doc dict
-                if isinstance(doc, dict):
-                    text = doc.get("content") or doc.get("text") or str(doc)
-                else:
-                    text = str(doc)
-                context_parts.append(f"[Context {i}]: {text}")
-
-            return "\n\n".join(context_parts)
-
-        except Exception as e:
-            logger.error(f"Error retrieving RAG context: {e}", exc_info=True)
-            return ""
-
-    def _augment_prompt(self, prompt: str, rag_context: str) -> str:
-        """
-        Augment prompt with RAG context.
-
-        Args:
-            prompt: Original prompt
-            rag_context: Context from RAG system
-
-        Returns:
-            Augmented prompt
-        """
-        if not rag_context:
-            return prompt
-
-        return f"""
-Relevant theoretical context:
-{rag_context}
-
-Based on the above context and your therapeutic approach, respond to:
-{prompt}
-"""
 
     def _build_conversation_history(self, context: ConversationContext) -> list:
         """
@@ -527,7 +477,7 @@ Based on the above context and your therapeutic approach, respond to:
                     logger.info(f"Persisted message for session {session_id}: {role}")
                 else:
                     logger.warning(
-                        "Did not persist message for session %s (session may be immutable/enriched)",
+                        "Did not persist message for session %s (immutable/enriched)",
                         session_id,
                     )
             else:

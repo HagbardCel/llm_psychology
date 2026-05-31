@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from quart import Blueprint, jsonify, request
 from pydantic import ValidationError
+from quart import Blueprint, jsonify, request
 
 from psychoanalyst_app.api._helpers import (
     require_session_id,
@@ -39,9 +39,7 @@ def create_workflow_routes(server) -> Blueprint:
         if error:
             return error
 
-        session_error = await validate_session_for_user(
-            server, user_id, session_id
-        )
+        session_error = await validate_session_for_user(server, user_id, session_id)
         if session_error:
             return session_error
 
@@ -117,7 +115,9 @@ def create_workflow_routes(server) -> Blueprint:
             return (
                 jsonify(
                     {
-                        "error": "Therapy style selection is only allowed after assessment",
+                        "error": (
+                            "Therapy style selection is only allowed after assessment"
+                        ),
                         "workflow_state": state.value,
                     }
                 ),

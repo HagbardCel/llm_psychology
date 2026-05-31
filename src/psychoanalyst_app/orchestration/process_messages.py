@@ -15,18 +15,30 @@ from psychoanalyst_app.orchestration.profile_helpers import (
 logger = logging.getLogger(__name__)
 
 
-async def ensure_session(session_lifecycle, user_id: str, session_id: str | None) -> str:
+async def ensure_session(
+    session_lifecycle,
+    user_id: str,
+    session_id: str | None,
+) -> str:
     """Ensure a session exists and return its ID."""
     return await session_lifecycle.ensure_session_id(user_id, session_id)
 
 
-async def record_user_message(conversation_manager, session_id: str, message: str) -> None:
+async def record_user_message(
+    conversation_manager,
+    session_id: str,
+    message: str,
+) -> None:
     """Persist user messages when non-empty."""
     if message.strip():
         await conversation_manager.add_message(session_id, "user", message)
 
 
-async def ensure_profile_for_new_state(service_container, user_id: str, state: WorkflowState) -> None:
+async def ensure_profile_for_new_state(
+    service_container,
+    user_id: str,
+    state: WorkflowState,
+) -> None:
     """Require a profile for NEW users before entering message processing."""
     if state != WorkflowState.NEW:
         return

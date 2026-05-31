@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime
-from typing import Any
 
 import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
-from psychoanalyst_app.models.domain import Message, Session
+from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
     WorkflowEvent,
@@ -25,6 +22,13 @@ from psychoanalyst_app.utils.ws_protocol import ServerMessageTypes
 
 from .active_sessions import ActiveSessionRegistry
 from .initial_greeting import send_initial_greeting
+from .session_follow_up import run_session_end_follow_up
+from .session_records import (
+    build_session_info,
+    create_persisted_session,
+    find_intake_sessions,
+    get_latest_therapy_session,
+)
 from .session_transition_policy import (
     advance_workflow_on_session_end,
     maybe_transition_for_session_start,
@@ -35,52 +39,6 @@ logger = logging.getLogger(__name__)
 ProcessMessageFn = Callable[[str, str, str | None], AsyncIterator[str]]
 RunReflectionFn = Callable[[str, str], Awaitable[None]]
 EmitNextActionFn = Callable[[str, str | None], Awaitable[None]]
-
-
-async def run_session_end_follow_up(
-    user_id: str,
-    session_id: str,
-    follow_up: RunReflectionFn,
-    follow_up_args: tuple[Any, ...],
-    workflow_engine: TrioWorkflowEngine,
-    emit_next_action: EmitNextActionFn | None,
-) -> None:
-    """Complete reflection after the client-visible session lifecycle has ended."""
-    try:
-        await follow_up(*follow_up_args)
-    except Exception:
-        logger.error(
-            "Follow-up job failed for session %s (user=%s)",
-            session_id,
-            user_id,
-            exc_info=True,
-        )
-
-    try:
-        final_state = await workflow_engine.get_user_state(user_id)
-        logger.info(
-            "Post-session follow-up finished for session %s in state %s",
-            session_id,
-            final_state,
-        )
-    except Exception:
-        logger.warning(
-            "Failed to refresh workflow state after session end "
-            "(user=%s, session=%s)",
-            user_id,
-            session_id,
-            exc_info=True,
-        )
-
-    if emit_next_action:
-        try:
-            await emit_next_action(user_id, session_id)
-        except Exception:
-            logger.warning(
-                "Could not emit workflow next action after follow-up for session %s",
-                session_id,
-                exc_info=True,
-            )
 
 
 class SessionLifecycleManager:
@@ -120,16 +78,7 @@ class SessionLifecycleManager:
         self, user_id: str, *, limit: int = 1000
     ) -> list[Session]:
         """Return intake sessions for a user (should be at most one)."""
-        trio_db_service = self.service_container.get("trio_db_service")
-        sessions = await trio_db_service.get_user_sessions(user_id, limit=limit)
-        intake_sessions = [session for session in sessions if session.session_type == "intake"]
-        if len(intake_sessions) > 1:
-            logger.error(
-                "Expected a single intake session for user %s; found %s",
-                user_id,
-                len(intake_sessions),
-            )
-        return intake_sessions
+        return await find_intake_sessions(self.service_container, user_id, limit=limit)
 
     async def get_single_intake_session(self, user_id: str) -> Session | None:
         """Return the sole intake session for a user when present."""
@@ -140,12 +89,7 @@ class SessionLifecycleManager:
 
     async def get_latest_therapy_session(self, user_id: str) -> Session | None:
         """Return the most recent persisted therapy session for workflow recovery."""
-        trio_db_service = self.service_container.get("trio_db_service")
-        sessions = await trio_db_service.get_user_sessions(user_id, limit=1000)
-        therapy_sessions = [
-            session for session in sessions if session.session_type == "therapy"
-        ]
-        return therapy_sessions[0] if therapy_sessions else None
+        return await get_latest_therapy_session(self.service_container, user_id)
 
     async def ensure_session_id(
         self, user_id: str, session_id: str | None = None
@@ -224,14 +168,10 @@ class SessionLifecycleManager:
                         existing_intake.session_id,
                     )
             state = await self.workflow_engine.get_user_state(user_id)
-            if (
-                normalized_session_type == "therapy"
-                and state
-                in (
-                    WorkflowState.PLAN_UPDATE_IN_PROGRESS,
-                    WorkflowState.REFLECTION_IN_PROGRESS,
-                    WorkflowState.PLAN_UPDATE_FAILED,
-                )
+            if normalized_session_type == "therapy" and state in (
+                WorkflowState.PLAN_UPDATE_IN_PROGRESS,
+                WorkflowState.REFLECTION_IN_PROGRESS,
+                WorkflowState.PLAN_UPDATE_FAILED,
             ):
                 existing_therapy = await self.get_latest_therapy_session(user_id)
                 if existing_therapy:
@@ -362,7 +302,6 @@ class SessionLifecycleManager:
     async def create_session(self, user_id: str, session_type: str = "therapy") -> str:
         """Create a new session in the database and return the ID."""
         try:
-            state = await self.workflow_engine.get_user_state(user_id)
             if session_type == "intake":
                 existing_intake = await self.get_single_intake_session(user_id)
                 if existing_intake:
@@ -389,31 +328,19 @@ class SessionLifecycleManager:
                     reason="Replaced by new session",
                 )
 
-            session_id = str(uuid.uuid4())
-
             trio_db_service = self.service_container.get("trio_db_service")
             latest_plan = await trio_db_service.get_current_therapy_plan(user_id)
-            plan_id = latest_plan.plan_id if session_type == "therapy" and latest_plan else None
-
-            session = Session(
-                session_id=session_id,
+            plan_id = (
+                latest_plan.plan_id
+                if session_type == "therapy" and latest_plan
+                else None
+            )
+            session_id = await create_persisted_session(
+                self.service_container,
                 user_id=user_id,
                 session_type=session_type,
                 plan_id=plan_id,
-                timestamp=datetime.now(),
-                transcript=[
-                    Message(
-                        role="system",
-                        content="Session started",
-                        timestamp=datetime.now(),
-                    )
-                ],
-                topics=[],
             )
-            success = await trio_db_service.save_session(session)
-
-            if not success:
-                raise ValueError("Failed to save session to database")
 
             self.active_sessions.set_active_session_id(user_id, session_id)
             logger.info("Created session %s for user %s", session_id, user_id)
@@ -446,24 +373,12 @@ class SessionLifecycleManager:
         if not plan or not plan.selected_therapy_style:
             raise ValueError("Therapy plan with selected style not found")
 
-        new_session_id = str(uuid.uuid4())
-        therapy_session = Session(
-            session_id=new_session_id,
+        new_session_id = await create_persisted_session(
+            self.service_container,
             user_id=user_id,
             session_type="therapy",
             plan_id=plan.plan_id,
-            timestamp=datetime.now(),
-            transcript=[
-                Message(
-                    role="system",
-                    content="Session started",
-                    timestamp=datetime.now(),
-                )
-            ],
-            topics=[],
         )
-        if not await db_service.save_session(therapy_session):
-            raise ValueError("Failed to save therapy session to database")
 
         await self.workflow_engine.transition(
             user_id,
@@ -491,24 +406,11 @@ class SessionLifecycleManager:
         return session_info
 
     async def _build_session_info(self, user_id: str, session_id: str) -> SessionInfo:
-        trio_db_service = self.service_container.get("trio_db_service")
-        session = await trio_db_service.get_session(session_id)
-        created_at = session.timestamp if session else datetime.now()
-        state = await self.workflow_engine.get_user_state(user_id)
-        agent_type = self.workflow_engine.get_current_agent(state)
-        plan = (
-            await trio_db_service.get_therapy_plan(session.plan_id)
-            if session and session.session_type == "therapy" and session.plan_id
-            else None
-        )
-        return SessionInfo(
-            session_id=session_id,
+        return await build_session_info(
+            self.service_container,
+            self.workflow_engine,
             user_id=user_id,
-            agent_type=agent_type,
-            workflow_state=state,
-            created_at=created_at,
-            session_type=session.session_type if session else "intake",
-            selected_therapy_style=plan.selected_therapy_style if plan else None,
+            session_id=session_id,
         )
 
     async def _send_initial_greeting(self, user_id: str, session_id: str) -> None:

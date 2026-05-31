@@ -54,7 +54,7 @@ async def build_plan_context(
 ) -> str:
     """Build the therapy plan context string."""
     selected_style = therapy_plan.selected_therapy_style
-    plan_focus = therapy_plan.plan_details.get("focus", "")
+    plan_focus = therapy_plan.focus
 
     relevant_knowledge = await _retrieve_relevant_knowledge(
         rag_service,
@@ -66,9 +66,11 @@ async def build_plan_context(
 
     context = f"""
         Therapy Plan (Version {therapy_plan.version}):
-        Focus: {therapy_plan.plan_details.get("focus", "General exploration")}
-        Goals: {therapy_plan.plan_details.get("goals", "Explore thoughts and feelings")}
-        Techniques: {therapy_plan.plan_details.get("techniques", "Active listening and reflection")}
+        Focus: {therapy_plan.focus}
+        Goals: {", ".join(therapy_plan.initial_goals)}
+        Techniques: {", ".join(therapy_plan.planned_interventions)}
+        Themes: {", ".join(therapy_plan.themes) or "None"}
+        Timeline: {therapy_plan.timeline or "Not specified"}
 
         Relevant Psychological Knowledge:
         """
@@ -128,7 +130,9 @@ async def load_patient_context(
                 )
 
             async def load_tier4() -> None:
-                tier4_result["data"] = await db_service.get_current_therapy_plan(user_id)
+                tier4_result["data"] = await db_service.get_current_therapy_plan(
+                    user_id
+                )
 
             nursery.start_soon(load_tier1)
             nursery.start_soon(load_tier2)
@@ -140,7 +144,9 @@ async def load_patient_context(
         current_analysis = tier3_result["data"]
         treatment_plan = tier4_result["data"]
 
-        has_data = any([user_profile, recent_sessions, current_analysis, treatment_plan])
+        has_data = any(
+            [user_profile, recent_sessions, current_analysis, treatment_plan],
+        )
         if not has_data:
             logger.info("No patient context data for user %s", user_id)
             return None
