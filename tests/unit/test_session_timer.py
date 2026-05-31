@@ -6,9 +6,10 @@ Tests the time tracking and extension features of therapy sessions.
 
 from datetime import datetime, timedelta
 
-import pytest
-
-from psychoanalyst_app.models.domain import Message, TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.domain import (
+    UserProfile,
+    UserStatus,
+)
 from psychoanalyst_app.orchestration.models import ConversationContext
 
 

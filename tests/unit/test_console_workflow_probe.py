@@ -5,10 +5,8 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
-
 
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 

@@ -1,6 +1,5 @@
 """Tests for multi-model configuration support."""
 
-import pytest
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer

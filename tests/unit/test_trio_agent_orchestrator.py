@@ -9,7 +9,9 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
+from psychoanalyst_app.orchestration.trio_agent_orchestrator import (
+    TrioAgentOrchestrator,
+)
 
 
 @pytest.fixture
@@ -171,7 +173,7 @@ async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
         user_id="test_user",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={},
+        focus="Stabilize presenting concerns",
         initial_goals=["Stabilize presenting concerns"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],
@@ -250,7 +252,7 @@ async def test_create_therapy_plan_prevents_duplicate_v1(
         user_id="test_user",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={},
+        focus="Stabilize presenting concerns",
         initial_goals=["Stabilize presenting concerns"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],

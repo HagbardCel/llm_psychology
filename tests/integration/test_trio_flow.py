@@ -4,8 +4,8 @@ Integration tests for the Trio-native server flow.
 Tests the complete flow from HTTP endpoint through database using pure Trio.
 """
 
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 import pytest
 import trio

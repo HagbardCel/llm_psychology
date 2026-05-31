@@ -4,32 +4,26 @@ Unit tests for tiered patient information data models.
 Tests validation, serialization, and deserialization of all Tier 1-4 models.
 """
 
-import json
 from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
 
 from psychoanalyst_app.models.domain import (
-    AnalyticFrame,
     AnalyticOrientation,
     BasicPatientBackground,
     CurrentFocus,
     DefensiveOrganization,
-    Session,
-    EducationalWorkHistory,
     FamilyConstellation,
     Message,
     PatientAnalysis,
     PatientAnalysisVersion,
     RecurringNarrative,
-    RelationalLifeContext,
+    Session,
     TherapyPlan,
-    Topic,
     TransferenceImpressions,
     UserProfile,
 )
-
 
 # ============================================================================
 # TIER 1: Static Background Tests
@@ -389,7 +383,7 @@ class TestTherapyPlanTier4:
             TherapyPlan(
                 plan_id="plan123",
                 user_id="user123",
-                plan_details={"focus": "stabilize"},
+                focus="stabilize",
             )
 
     def test_custom_tier4_data(self):
@@ -397,7 +391,7 @@ class TestTherapyPlanTier4:
         plan = TherapyPlan(
             plan_id="plan123",
             user_id="user123",
-            plan_details={"focus": "growth"},
+            focus="growth",
             initial_goals=["Reduce anxiety"],
             current_progress="Moderate improvement",
             planned_interventions=["CBT", "Mindfulness"],
@@ -413,7 +407,7 @@ class TestTherapyPlanTier4:
         original = TherapyPlan(
             plan_id="planABC",
             user_id="user123",
-            plan_details={"focus": "relationships"},
+            focus="relationships",
             initial_goals=["Improve communication"],
             current_progress="Baseline established",
             planned_interventions=["Role-play"],
@@ -470,7 +464,7 @@ class TestModelIntegration:
         # Tier 4: Therapy Plan
         plan = TherapyPlan(
             user_id="user123",
-            plan_details={"focus": "stability"},
+            focus="stability",
             initial_goals=["Goal 1"],
             current_progress="Progress",
             planned_interventions=["Supportive listening"],

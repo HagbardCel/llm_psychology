@@ -34,8 +34,7 @@ async def test_iter_in_thread_handles_consumer_stop():
     produced = []
 
     def iterator():
-        for value in ("one", "two", "three"):
-            yield value
+        yield from ("one", "two", "three")
 
     async with aclosing(iter_in_thread(iterator)) as gen:
         async for chunk in gen:

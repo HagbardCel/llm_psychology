@@ -14,7 +14,8 @@ from psychoanalyst_app.models.llm_outputs import StructuredTherapyPlanOutput
 def _plan_output(style: str = "cbt", progress: str = "baseline") -> StructuredTherapyPlanOutput:
     return StructuredTherapyPlanOutput(
         selected_therapy_style=style,
-        plan_details={"focus": "anxiety"},
+        focus="anxiety",
+        themes=["anxiety"],
         initial_goals=["Reduce anxiety"],
         current_progress=progress,
         planned_interventions=["Supportive listening"],
@@ -30,7 +31,8 @@ def _current_plan() -> TherapyPlan:
         updated_at=datetime.now(),
         version=2,
         selected_therapy_style="cbt",
-        plan_details={"focus": "anxiety"},
+        focus="anxiety",
+        themes=["anxiety"],
         initial_goals=["Reduce anxiety"],
         current_progress="baseline",
         planned_interventions=["Supportive listening"],

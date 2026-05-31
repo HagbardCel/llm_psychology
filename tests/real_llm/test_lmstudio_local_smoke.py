@@ -9,7 +9,6 @@ import pytest
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
 
-
 pytestmark = [pytest.mark.real_llm]
 
 

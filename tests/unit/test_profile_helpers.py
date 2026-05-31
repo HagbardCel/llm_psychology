@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from psychoanalyst_app.models.domain import UserProfile, UserStatus
-from psychoanalyst_app.orchestration.profile_helpers import ensure_user_profile, merge_user_profile
+from psychoanalyst_app.orchestration.profile_helpers import (
+    ensure_user_profile,
+    merge_user_profile,
+)
 
 
 @pytest.mark.trio

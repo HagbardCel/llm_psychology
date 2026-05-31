@@ -12,8 +12,8 @@ import pytest
 from psychoanalyst_app.agents.therapist import TrioTherapistAgent
 from psychoanalyst_app.agents.therapist.prompt_context import load_patient_context
 from psychoanalyst_app.agents.therapist.prompts import build_resumption_prompt
-from psychoanalyst_app.models.domain import BriefingStatus
 from psychoanalyst_app.models.domain import (
+    BriefingStatus,
     TherapyPlan,
     UserProfile,
 )
@@ -62,11 +62,9 @@ def sample_therapy_plan():
         user_id="test_user_123",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={
-            "goals": ["Reduce anxiety", "Build confidence"],
-            "approaches": ["CBT", "Mindfulness"],
-            "timeline": "12 weeks",
-        },
+        focus="Anxiety management",
+        themes=["anxiety", "confidence"],
+        timeline="12 weeks",
         initial_goals=["Reduce anxiety", "Build confidence"],
         current_progress="Baseline established",
         planned_interventions=["CBT", "Mindfulness"],
@@ -242,7 +240,7 @@ async def test_load_patient_context_includes_tiers(app_config):
             user_id="test_user_123",
             created_at=datetime.now(),
             updated_at=datetime.now(),
-            plan_details={},
+            focus="Anxiety management",
             initial_goals=["Reduce anxiety"],
             current_progress="Baseline",
             planned_interventions=["Supportive listening"],
@@ -251,7 +249,7 @@ async def test_load_patient_context_includes_tiers(app_config):
             selected_therapy_style="cbt",
         )
     )
-    agent = TrioTherapistAgent(
+    TrioTherapistAgent(
         llm_service=mock_llm,
         db_service=mock_db,
         rag_service=mock_rag,

@@ -43,7 +43,9 @@ def test_build_therapy_plan_output():
     output = build_therapy_plan_output(
         {
             "selected_therapy_style": "cbt",
-            "plan_details": {"focus": "test"},
+            "focus": "test",
+            "themes": ["anxiety"],
+            "timeline": "12 weeks",
             "initial_goals": ["Goal 1"],
             "current_progress": "Baseline established",
             "planned_interventions": ["Supportive listening"],
@@ -52,4 +54,5 @@ def test_build_therapy_plan_output():
     )
 
     assert output.selected_therapy_style == "cbt"
-    assert output.plan_details["focus"] == "test"
+    assert output.focus == "test"
+    assert output.themes == ["anxiety"]

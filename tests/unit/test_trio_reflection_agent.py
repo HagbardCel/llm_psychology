@@ -14,11 +14,16 @@ from psychoanalyst_app.agents.reflection.session_summary import (
     generate_session_briefing,
 )
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.domain import Message, Session, TherapyPlan, Topic, UserProfile
+from psychoanalyst_app.models.domain import (
+    Message,
+    Session,
+    TherapyPlan,
+    Topic,
+    UserProfile,
+)
 from psychoanalyst_app.orchestration.models import (
     ConversationContext,
     WorkflowEvent,
-    WorkflowState,
 )
 
 # Note: Using mock_service_container fixture from conftest.py instead of local fixture
@@ -83,11 +88,9 @@ def sample_therapy_plan():
         user_id="test_user_123",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={
-            "goals": ["Reduce anxiety", "Improve sleep"],
-            "approaches": ["CBT", "Mindfulness"],
-            "timeline": "12 weeks",
-        },
+        focus="Anxiety management",
+        themes=["anxiety", "sleep"],
+        timeline="12 weeks",
         initial_goals=["Reduce anxiety", "Improve sleep"],
         current_progress="Baseline established",
         planned_interventions=["CBT", "Mindfulness"],
@@ -157,7 +160,7 @@ async def test_generate_session_briefing_structure(
         user_id="test_user_123",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"goals": ["test"]},
+        focus="test",
         initial_goals=["test"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],
@@ -220,7 +223,7 @@ async def test_briefing_generation_failure_propagates(
         user_id="test_user_123",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"goals": ["test"]},
+        focus="test",
         initial_goals=["test"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],

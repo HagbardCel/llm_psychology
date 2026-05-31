@@ -36,7 +36,6 @@ from psychoanalyst_app.models.llm_outputs import (
 from psychoanalyst_app.orchestration.models import (
     ConversationContext,
     WorkflowEvent,
-    WorkflowState,
 )
 from psychoanalyst_app.orchestration.persistence import (
     persist_therapy_plan_from_output,
@@ -1303,7 +1302,6 @@ async def test_assessment_agent_creates_tier3_and_tier4(
 @pytest.mark.integration
 async def test_reflection_agent_tier3_versioning(service_container, style_service):
     """Test Tier 3 versioning through reflection agent."""
-    import json
 
     from psychoanalyst_app.models.domain import (
         Session,
@@ -1422,7 +1420,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
         user_id=test_user.user_id,
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"focus": "career anxiety"},
+        focus="career anxiety",
         initial_goals=[
             "Explore relationship between career anxiety and family patterns",
             "Develop tolerance for uncertainty",
@@ -1486,7 +1484,10 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     from unittest.mock import AsyncMock
 
     from psychoanalyst_app.models.domain import PatientAnalysis
-    from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.llm_outputs import (
+        ChangeDetectionDecision,
+        Tier2Enrichment,
+    )
 
     tier2_data = {
         "psychological_summary": (
@@ -1687,7 +1688,6 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     service_container, style_service
 ):
     """Test Tier 3 not updated when session doesn't warrant change."""
-    import json
 
     from psychoanalyst_app.models.domain import (
         Session,
@@ -1799,7 +1799,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
         user_id=test_user.user_id,
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"focus": "stress management"},
+        focus="stress management",
         initial_goals=["Develop stress management skills"],
         current_progress="Baseline",
         planned_interventions=["Skills practice"],
@@ -1849,7 +1849,10 @@ async def test_reflection_agent_tier3_no_update_when_stable(
 
     from unittest.mock import AsyncMock
 
-    from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision, Tier2Enrichment
+    from psychoanalyst_app.models.llm_outputs import (
+        ChangeDetectionDecision,
+        Tier2Enrichment,
+    )
 
     tier2_data = {
         "psychological_summary": (

@@ -306,7 +306,7 @@ def mock_llm_service_with_context():
                         "focus": "Anxiety management",
                         "goals": ["Reduce anxiety", "Improve sleep"],
                         "techniques": ["Cognitive restructuring", "Mindfulness"],
-                        "themes": "Anxiety, coping",
+                        "themes": ["Anxiety", "coping"],
                         "timeline": "12 weeks",
                     }
                 )
@@ -462,7 +462,7 @@ def mock_llm_service_with_context():
                     "focus": "Anxiety management",
                     "goals": ["Reduce anxiety", "Improve sleep"],
                     "techniques": ["Cognitive restructuring", "Mindfulness"],
-                    "themes": "Anxiety, coping",
+                    "themes": ["Anxiety", "coping"],
                     "timeline": "12 weeks",
                 }
             )
@@ -769,7 +769,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to name"
 
@@ -821,7 +821,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 1"
             response_1 = complete_responses[0].get("data", {}).get("full_response", "")
@@ -854,7 +854,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 2"
             response_2 = complete_responses[0].get("data", {}).get("full_response", "")
@@ -887,7 +887,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 3"
             response_3 = complete_responses[0].get("data", {}).get("full_response", "")
@@ -953,11 +953,8 @@ async def test_complete_patient_journey_intake_to_therapy(
                 user_id=user_id,
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
-                plan_details={
-                    "focus": "Anxiety management and work-related stress",
-                    "goals": ["Develop coping strategies for workplace anxiety"],
-                    "techniques": ["Cognitive restructuring", "Thought challenging"],
-                },
+                focus="Anxiety management and work-related stress",
+                themes=["workplace anxiety"],
                 initial_goals=["Develop coping strategies for workplace anxiety"],
                 current_progress="Baseline established",
                 planned_interventions=["Cognitive restructuring"],
@@ -1030,7 +1027,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive therapy response 1"
             therapy_response_1 = (
@@ -1066,7 +1063,7 @@ async def test_complete_patient_journey_intake_to_therapy(
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive therapy response 2"
             therapy_response_2 = (
@@ -1265,7 +1262,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to name"
 
@@ -1317,7 +1314,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 1"
             response_1 = complete_responses[0].get("data", {}).get("full_response", "")
@@ -1350,7 +1347,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 2"
             response_2 = complete_responses[0].get("data", {}).get("full_response", "")
@@ -1383,7 +1380,7 @@ async def test_intake_flow_only(test_server_websocket, mock_rag_service):
             complete_responses = [
                 c
                 for c in received_events["chat_response_chunk"]
-                if c.get("data", {}).get("is_complete") == True
+                if c.get("data", {}).get("is_complete")
             ]
             assert len(complete_responses) > 0, "Should receive response to message 3"
             response_3 = complete_responses[0].get("data", {}).get("full_response", "")

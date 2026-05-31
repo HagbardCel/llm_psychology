@@ -175,7 +175,7 @@ def mock_llm_service_natural_flow():
                         "focus": "CBT for anxiety",
                         "goals": ["Reduce anxiety symptoms", "Improve sleep"],
                         "techniques": ["Cognitive restructuring", "Mindfulness"],
-                        "themes": "Anxiety, coping",
+                        "themes": ["Anxiety", "coping"],
                         "timeline": "12 weeks",
                     }
                 )
@@ -326,7 +326,7 @@ def mock_llm_service_natural_flow():
                     "focus": "CBT for anxiety",
                     "goals": ["Reduce anxiety symptoms", "Improve sleep"],
                     "techniques": ["Cognitive restructuring", "Mindfulness"],
-                    "themes": "Anxiety, coping",
+                    "themes": ["Anxiety", "coping"],
                     "timeline": "12 weeks",
                 }
             )

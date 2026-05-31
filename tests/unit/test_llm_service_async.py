@@ -1,6 +1,5 @@
 import pytest
 
-
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
 

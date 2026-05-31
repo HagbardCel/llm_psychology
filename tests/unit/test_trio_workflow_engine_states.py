@@ -6,7 +6,6 @@ from psychoanalyst_app.exceptions import InvalidStateTransitionError
 from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 from psychoanalyst_app.orchestration.trio_workflow_engine import TrioWorkflowEngine
 
-
 pytestmark = pytest.mark.unit
 
 

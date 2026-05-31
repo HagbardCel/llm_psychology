@@ -2,8 +2,8 @@
 
 from datetime import datetime
 
-from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.models.domain import TherapyPlan, UserProfile, UserStatus
+from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.orchestration.models import SessionInfo, WorkflowState
 from psychoanalyst_app.orchestration.workflow_next_action import resolve_next_action
 
@@ -48,7 +48,7 @@ def _therapy_plan(style: str = "freud") -> TherapyPlan:
         updated_at=now,
         version=1,
         selected_therapy_style=style,
-        plan_details={"focus": "test"},
+        focus="test",
         initial_goals=["Goal"],
         current_progress="progress",
         planned_interventions=["intervention"],

@@ -7,7 +7,6 @@ import pytest
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 
-
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
 

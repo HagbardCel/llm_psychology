@@ -10,7 +10,6 @@ from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import ConversationContext
 
-
 pytestmark = [pytest.mark.unit]
 
 

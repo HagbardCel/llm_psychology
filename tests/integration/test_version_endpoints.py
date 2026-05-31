@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+
 from psychoanalyst_app.version import API_VERSION, MIN_CLIENT_VERSION
 
 pytestmark = pytest.mark.trio
@@ -225,7 +226,7 @@ async def test_version_check_patch_difference(server_url):
 async def test_console_client_version_check_flow(server_url):
     """Test the console client's version-check helper against the running backend."""
     version_check = _load_console_version_check()
-    check_backend_version = getattr(version_check, "check_backend_version")
+    check_backend_version = version_check.check_backend_version
     compatible, message = await check_backend_version(server_url)
     assert compatible is True
     assert message

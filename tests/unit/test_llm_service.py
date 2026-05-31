@@ -264,7 +264,7 @@ def test_openai_compatible_provider_disables_thinking(monkeypatch):
 
     monkeypatch.setattr(llm_module, "ChatOpenAI", _fake_chat_openai)
 
-    service = LLMService(
+    LLMService(
         provider="openai_compatible",
         model_name="local-model",
         base_url="http://host.docker.internal:8080/v1",

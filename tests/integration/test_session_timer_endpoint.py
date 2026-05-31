@@ -2,10 +2,10 @@
 Integration tests for session timer API endpoint.
 """
 
-import pytest
-import trio
-import httpx
 from datetime import datetime, timedelta
+
+import httpx
+import pytest
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ async def active_session(test_server_websocket, server_url):
         created_at=datetime.now(),
         updated_at=datetime.now(),
         selected_therapy_style="freud",
-        plan_details={"focus": "test", "goals": "test goals"},
+        focus="test",
         initial_goals=["Stabilize presenting concerns"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],
@@ -162,7 +162,7 @@ async def test_get_session_timer_with_extensions(test_server_websocket, server_u
         created_at=datetime.now(),
         updated_at=datetime.now(),
         selected_therapy_style="freud",
-        plan_details={"focus": "test", "goals": "test goals"},
+        focus="test",
         initial_goals=["Stabilize presenting concerns"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],
@@ -232,7 +232,7 @@ async def test_get_session_timer_time_up(test_server_websocket, server_url):
         created_at=datetime.now(),
         updated_at=datetime.now(),
         selected_therapy_style="freud",
-        plan_details={"focus": "test", "goals": "test goals"},
+        focus="test",
         initial_goals=["Stabilize presenting concerns"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],

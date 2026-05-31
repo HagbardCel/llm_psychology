@@ -1,8 +1,7 @@
-import os
+from datetime import datetime
 from unittest.mock import Mock
 
 import pytest
-from datetime import datetime
 
 # NOTE: Do not import app modules at top-level unless needed for fixtures.
 # This file is imported by pytest during collection.
@@ -42,7 +41,6 @@ def mock_google_api_key(monkeypatch, request):
 @pytest.fixture
 def mock_llm_service():
     """Create a mock LLMService for testing."""
-    import json
     from datetime import datetime
 
     from pydantic import BaseModel
@@ -77,7 +75,7 @@ def mock_llm_service():
                 "focus": "Anxiety management",
                 "goals": ["Reduce anxiety", "Improve sleep"],
                 "techniques": ["Cognitive restructuring", "Mindfulness"],
-                "themes": "Anxiety, coping, work stress",
+                "themes": ["Anxiety", "coping", "work stress"],
                 "timeline": "12 weeks",
             }
 
@@ -318,12 +316,9 @@ def sample_therapy_plan():
         user_id="test_user_123",
         created_at="2024-01-01T00:00:00",
         updated_at="2024-01-01T00:00:00",
-        plan_details={
-            "focus": "Work-related stress and anxiety management",
-            "goals": "Develop coping strategies and identify stress triggers",
-            "techniques": "Cognitive restructuring and mindfulness exercises",
-            "themes": "Work stress, anxiety, coping mechanisms",
-        },
+        focus="Work-related stress and anxiety management",
+        themes=["Work stress", "anxiety", "coping mechanisms"],
+        timeline="12 weeks",
         initial_goals=["Develop coping strategies"],
         current_progress="Baseline established",
         planned_interventions=["Cognitive restructuring"],

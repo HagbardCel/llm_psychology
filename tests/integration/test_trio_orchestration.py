@@ -11,8 +11,11 @@ import trio
 
 from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.models.domain import UserProfile, UserStatus
+from psychoanalyst_app.orchestration.conversation_rag import retrieve_rag_context
 from psychoanalyst_app.orchestration.models import WorkflowState
-from psychoanalyst_app.orchestration.trio_agent_orchestrator import TrioAgentOrchestrator
+from psychoanalyst_app.orchestration.trio_agent_orchestrator import (
+    TrioAgentOrchestrator,
+)
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
     LLM_RETRY_ERROR_MESSAGE,
     LLM_TERMINAL_ERROR_MESSAGE,
@@ -361,7 +364,7 @@ async def test_conversation_manager_rag_filter_source_and_content(conversation_m
 
     therapy_plan = TherapyPlan(
         user_id="rag_test_user",
-        plan_details={"focus": "test"},
+        focus="test",
         initial_goals=["test"],
         current_progress="test",
         planned_interventions=["test"],
@@ -373,7 +376,9 @@ async def test_conversation_manager_rag_filter_source_and_content(conversation_m
         {"text": "WRONG", "content": "RIGHT", "source": "cbt.md"}
     ]
 
-    rag_context = await conversation_manager._retrieve_rag_context("query", therapy_plan)
+    rag_context = await retrieve_rag_context(
+        conversation_manager.rag_service, "query", therapy_plan
+    )
 
     conversation_manager.rag_service.retrieve_relevant_knowledge.assert_called_once_with(
         "query", 3, "cbt.md"

@@ -44,11 +44,9 @@ def sample_therapy_plan():
         user_id="test_user_123",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={
-            "goals": ["Reduce anxiety", "Improve sleep"],
-            "approaches": ["CBT", "Mindfulness"],
-            "timeline": "12 weeks",
-        },
+        focus="Anxiety management",
+        themes=["anxiety", "sleep"],
+        timeline="12 weeks",
         initial_goals=["Reduce anxiety"],
         current_progress="Initial baseline established",
         planned_interventions=["CBT", "Mindfulness"],
@@ -104,6 +102,9 @@ async def test_save_and_load_therapy_plan_with_briefing(
     assert retrieved_plan is not None, "Failed to retrieve therapy plan"
     assert retrieved_plan.plan_id == sample_therapy_plan.plan_id
     assert retrieved_plan.user_id == sample_therapy_plan.user_id
+    assert retrieved_plan.focus == "Anxiety management"
+    assert retrieved_plan.themes == ["anxiety", "sleep"]
+    assert retrieved_plan.timeline == "12 weeks"
     assert retrieved_plan.initial_goals == ["Reduce anxiety"]
     assert retrieved_plan.current_progress.startswith("Initial baseline")
     assert retrieved_plan.planned_interventions[0] == "CBT"
@@ -218,7 +219,7 @@ async def test_get_current_therapy_plan_with_briefing(
         user_id=user_id,
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"goals": ["Goal 1"]},
+        focus="Goal 1",
         initial_goals=["Goal 1"],
         current_progress="Baseline established",
         planned_interventions=["Supportive listening"],
@@ -244,7 +245,7 @@ async def test_get_current_therapy_plan_with_briefing(
         user_id=user_id,
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        plan_details={"goals": ["Goal 1", "Goal 2"]},
+        focus="Goal 1 and Goal 2",
         initial_goals=["Goal 1", "Goal 2"],
         current_progress="Progress improving",
         planned_interventions=["CBT"],
@@ -374,7 +375,6 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
     """Legacy DBs fail closed because foundation rows are intentionally incompatible."""
     import sqlite3
 
-    from psychoanalyst_app.models.domain import UserProfile
     from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -454,7 +454,9 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
                 user_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                plan_details TEXT NOT NULL,
+                focus TEXT NOT NULL,
+                themes TEXT NOT NULL DEFAULT '[]',
+                timeline TEXT,
                 initial_goals TEXT,
                 current_progress TEXT,
                 planned_interventions TEXT,

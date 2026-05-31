@@ -46,7 +46,7 @@ def _sample_plan() -> TherapyPlan:
         updated_at=datetime.now(),
         version=1,
         selected_therapy_style="cbt",
-        plan_details={"focus": "anxiety"},
+        focus="anxiety",
         initial_goals=["reduce anxiety"],
         current_progress="baseline",
         planned_interventions=["supportive listening"],
