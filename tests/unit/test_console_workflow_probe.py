@@ -107,6 +107,14 @@ async def test_recorder_writes_required_text_artifacts(probe_modules, tmp_path):
     assert json.loads((tmp_path / "metadata.json").read_text())["status"] == "PASS"
 
 
+async def test_recorder_omits_slash_commands_from_clinical_transcript(probe_modules, tmp_path):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    await recorder.record("user_input", text="/quit", prompt_kind="chat")
+    await recorder.write_artifacts("PASS", {"id": "scenario"})
+
+    assert "/quit" not in (tmp_path / "transcript.md").read_text()
+
+
 async def test_db_snapshot_uses_backup_integrity_and_attributable_rows(probe_modules, tmp_path):
     source = tmp_path / "runtime.sqlite"
     with sqlite3.connect(source) as conn:
@@ -121,3 +129,24 @@ async def test_db_snapshot_uses_backup_integrity_and_attributable_rows(probe_mod
     assert payload["sessions"] == [{"session_id": "s1", "user_id": "probe"}]
     with sqlite3.connect(tmp_path / "db_snapshot.sqlite") as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+async def test_probe_requires_completed_therapy_enrichment(probe_modules, tmp_path):
+    source = tmp_path / "runtime.sqlite"
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "CREATE TABLE sessions "
+            "(session_id TEXT, user_id TEXT, session_type TEXT, enriched INTEGER)"
+        )
+        conn.execute(
+            "CREATE TABLE session_enrichment_jobs "
+            "(session_id TEXT, user_id TEXT, status TEXT)"
+        )
+        conn.execute("INSERT INTO sessions VALUES ('s1', 'probe', 'therapy', 1)")
+        conn.execute(
+            "INSERT INTO session_enrichment_jobs VALUES ('s1', 'probe', 'complete')"
+        )
+
+    assert probe_modules["db_snapshot"].session_enrichment_complete(
+        source, "probe", ["s1"]
+    )

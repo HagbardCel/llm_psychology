@@ -1,7 +1,7 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-all test-frontend test-e2e test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
 .PHONY: docker-up docker-up-all docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean docker-usertest
 .PHONY: ui-standalone ui-standalone-test ui-console ui-console-test ui-web ui-web-test ui-all ui-all-test
-.PHONY: probe probe-logs probe-db check-usertest-env
+.PHONY: probe probe-console-deterministic probe-console-local-llm probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: frontend-sync-deps validate-frontend generate-schemas validate-schemas validate-generated-contracts validate-docs validate-architecture finalization-check
 
@@ -52,6 +52,8 @@ help:
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
 	@echo "  probe             - Run local-LLM full-stack console workflow probe"
+	@echo "  probe-console-deterministic - Run deterministic full-stack console workflow probe"
+	@echo "  probe-console-local-llm - Run local-LLM full-stack console workflow probe"
 	@echo "  probe-logs        - Print latest workflow probe summary"
 	@echo "  probe-db          - Print rows created by latest workflow probe"
 	@echo "  ui-web            - Run web UI (Docker, browser interface)"
@@ -227,6 +229,13 @@ clean-testdb:
 		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db_usertest /data/test_vector_db" 2>/dev/null || true; \
 	fi
 	@echo "✓ Test databases cleaned"
+
+# Reset usertest DB and containers
+reset-foundation-db:
+	@echo "Resetting incompatible foundation databases..."
+	@docker compose down --remove-orphans
+	docker compose run --rm -v "$(PWD)/data:/app/data" api python scripts/purge_databases.py
+	@echo "Foundation databases reset."
 
 # Reset usertest DB and containers
 reset-usertest:
@@ -479,6 +488,11 @@ ui-console-test:
 # Local full-stack diagnostic probe. This is intentionally not a CI gate.
 probe:
 	@./scripts/probe_local_llm.sh
+
+probe-console-deterministic:
+	@./scripts/probe_deterministic.sh
+
+probe-console-local-llm: probe
 
 probe-logs:
 	@if [ -f logs/workflow-probes/latest/summary.md ]; then \

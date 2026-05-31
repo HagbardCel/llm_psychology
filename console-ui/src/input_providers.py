@@ -67,6 +67,10 @@ def infer_prompt_kind(prompt: str | None) -> str:
         return "primary_language"
     if "therapy style" in normalized or "style id" in normalized:
         return "therapy_style"
+    if "start therapy now" in normalized:
+        return "start_therapy"
+    if "retry plan update" in normalized:
+        return "retry_plan_update"
     if "number for your choice" in normalized:
         return "profile_selection"
     if normalized.startswith("enter ") and "language" not in normalized:
@@ -84,10 +88,14 @@ def simulator_phase_for_action(workflow_action: dict[str, Any] | None) -> str:
         return "You are answering intake questions."
     if action == "continue_therapy":
         return "You are in a therapy conversation."
+    if action == "start_therapy":
+        return "You are deciding whether to continue into therapy now."
     if action == "select_therapy_style":
         return "You are choosing a therapy style."
     if action == "wait":
         return "The conversation is paused."
+    if action == "retry_plan_update":
+        return "You are deciding whether to retry session reflection."
     return "You are in a therapy conversation."
 
 

@@ -16,7 +16,8 @@ class LocalUser:
     def __init__(self, scenario: dict[str, Any], recorder: Any):
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("MODEL_NAME")
-        if not base_url or not model:
+        self.deterministic = os.getenv("PROBE_DETERMINISTIC_USER", "").lower() == "true"
+        if not self.deterministic and (not base_url or not model):
             raise ValueError("LLM_BASE_URL and MODEL_NAME are required for make probe")
         self.scenario = scenario
         self.transcript: list[dict[str, str]] = []
@@ -24,12 +25,16 @@ class LocalUser:
         self.therapy_started = False
         self.therapy_turns = 0
         self.max_total_turns = int(scenario.get("limits", {}).get("max_total_turns", 14))
-        self.simulator = LocalLLMUserSimulator(
-            base_url=base_url,
-            model=model,
-            api_key=os.getenv("LLM_API_KEY"),
-            temperature=float(os.getenv("USER_SIM_LLM_TEMPERATURE", "0")),
-            recorder=recorder,
+        self.simulator = (
+            None
+            if self.deterministic
+            else LocalLLMUserSimulator(
+                base_url=base_url,
+                model=model,
+                api_key=os.getenv("LLM_API_KEY"),
+                temperature=float(os.getenv("USER_SIM_LLM_TEMPERATURE", "0")),
+                recorder=recorder,
+            )
         )
 
     async def get_input(self, context: InputContext) -> str | InputResult:
@@ -40,11 +45,17 @@ class LocalUser:
             return "/quit"
         if self.turn_index >= self.max_total_turns:
             return "/quit"
+        if self.deterministic:
+            replies = self.scenario.get("deterministic_chat_replies", [])
+            if not replies:
+                raise ValueError("deterministic_chat_replies are required for deterministic probe mode")
+            return str(replies[min(self.turn_index, len(replies) - 1)])
         probe_context = replace(
             context,
             transcript_tail=self.transcript[-8:],
             turn_index=self.turn_index,
         )
+        assert self.simulator is not None
         result = await self.simulator.generate_user_reply(
             scenario=self.scenario,
             context=probe_context,
@@ -67,10 +78,9 @@ class LocalUser:
                     self.turn_index += 1
                     if self.therapy_started:
                         self.therapy_turns += 1
-        elif event == "therapy_style_selected":
+        elif event == "session_started" and fields.get("data", {}).get("session_type") == "therapy":
             self.therapy_started = True
-            style = str(fields.get("selected_therapy_style") or "").upper()
-            self._append("system", f"The user selected {style}. Therapy has started.")
+            self._append("system", "Therapy has started.")
 
     def _structural_answer(self, context: InputContext) -> str | None:
         structural = self.scenario.get("structural_answers", {})
@@ -79,6 +89,8 @@ class LocalUser:
             "profile_name": "Console Probe User",
             "primary_language": context.default or "English",
             "therapy_style": "cbt",
+            "start_therapy": "y",
+            "retry_plan_update": "y",
         }
         if context.prompt_kind in defaults:
             return str(structural.get(context.prompt_kind, defaults[context.prompt_kind]))

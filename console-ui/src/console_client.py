@@ -62,6 +62,7 @@ class ConsoleClient:
         # WebSocket connection
         self.ws = None
         self.connected = False
+        self.reconnect_required = False
 
         # Streaming state
         self.current_message = ""
@@ -69,6 +70,7 @@ class ConsoleClient:
 
         # Session state
         self.session_ready = trio.Event()
+        self.session_started_event = trio.Event()
         self.waiting_for_initial_message = False
         self.waiting_for_response = False
         self.response_complete = trio.Event()
@@ -216,6 +218,7 @@ class ConsoleClient:
         self.current_session_id = data.get("session_id")
         self.session_end_requested = False
         self.session_ready = trio.Event()
+        self.session_started_event.set()
         # Always wait for the initial message before allowing user input.
         self.waiting_for_initial_message = True
         self.welcome_shown = False
@@ -476,6 +479,51 @@ class ConsoleClient:
                 message="Therapy style selection failed",
                 data={"message": message, "session_id": self.current_session_id},
             )
+
+    async def _start_therapy(self, ws) -> bool:
+        """Offer seamless continuation into the first plan-linked therapy session."""
+        choice = await self._get_user_input("Start therapy now? [Y/n]: ", default="y")
+        if choice.strip().lower() not in {"", "y", "yes"}:
+            await self._request_end_session(
+                ws, reason="User finished onboarding without starting therapy"
+            )
+            return False
+        if not self.current_session_id:
+            self.output.error("❌ No active intake session. Please reconnect.")
+            return False
+        self.session_started_event = trio.Event()
+        response = await self._api_request(
+            "POST",
+            "/workflow/start_therapy",
+            json={"user_id": self.user_id, "session_id": self.current_session_id},
+        )
+        session = response.get("session") or {}
+        if session.get("session_id"):
+            self.current_session_id = session["session_id"]
+        with trio.move_on_after(2):
+            await self.session_started_event.wait()
+        if not self.session_started_event.is_set():
+            self.reconnect_required = True
+            self.output.system("🔄 Reconnecting to start the therapy session...")
+            return False
+        self.output.user_text("✅ Starting your therapy session...", flush=True)
+        return True
+
+    async def _retry_plan_update(self) -> None:
+        """Offer an explicit retry for a failed post-session reflection."""
+        choice = await self._get_user_input("Retry plan update now? [Y/n]: ", default="y")
+        if choice.strip().lower() not in {"", "y", "yes"}:
+            self.output.user_text("Plan update retry deferred.", flush=True)
+            return
+        if not self.current_session_id:
+            self.output.error("❌ No therapy session is available to retry.")
+            return
+        await self._api_request(
+            "POST",
+            "/workflow/retry_plan_update",
+            json={"user_id": self.user_id, "session_id": self.current_session_id},
+        )
+        self.output.user_text("⏳ Retrying session reflection...", flush=True)
 
     async def _get_user_input(
         self,
@@ -759,21 +807,23 @@ class ConsoleClient:
 
     async def _send_end_session(self, ws, reason: str | None = None):
         """Request the backend to end the current session."""
-        if not self.connected or not ws:
-            self.output.error("❌ Not connected to WebSocket server")
-            return
-
         if not self.current_session_id:
             self.output.user_text("⚠️  No active session to end.", flush=True)
             return
 
         try:
-            payload = {"reason": reason} if reason else {}
-            msg_data = {
-                "type": ClientMessageTypes.END_SESSION,
-                "data": payload,
-            }
-            await ws.send_message(json.dumps(msg_data))
+            session_id = self.current_session_id
+            response = await self._api_request(
+                "POST",
+                f"/sessions/{session_id}/end",
+                json={
+                    "user_id": self.user_id,
+                    "session_id": session_id,
+                    "reason": reason,
+                },
+            )
+            if not self.session_end_requested:
+                await self._handle_session_ended(response)
             logger.debug("Sent end_session request for session %s", self.current_session_id)
         except Exception as e:
             logger.error(f"Error sending end_session: {e}")
@@ -797,16 +847,11 @@ class ConsoleClient:
 
     async def _get_user_status(self) -> Dict[str, Any]:
         """Get user status from backend API."""
-        if not self.current_session_id:
-            return {"error": "No active session"}
         try:
             return await self._api_request(
                 "GET",
                 "/user/status",
-                params={
-                    "user_id": self.user_id,
-                    "session_id": self.current_session_id,
-                },
+                params={"user_id": self.user_id},
             )
         except Exception as e:
             logger.error(f"Error getting user status: {e}")
@@ -1112,6 +1157,15 @@ class ConsoleClient:
                 await self._select_therapy_style()
                 continue
 
+            if action == "start_therapy":
+                if not await self._start_therapy(ws):
+                    break
+                continue
+
+            if action == "retry_plan_update":
+                await self._retry_plan_update()
+                continue
+
             if action in {"start_intake", "continue_therapy"}:
                 if not self.current_session_id:
                     await self._ensure_session(ws)
@@ -1147,61 +1201,67 @@ class ConsoleClient:
             if not await self._select_or_create_profile():
                 return
 
-            # Connect to WebSocket and run with structured concurrency
             ws_url = self._build_websocket_url()
+            while True:
+                self.reconnect_required = False
+                await self._run_websocket_session(ws_url)
+                if not self.reconnect_required:
+                    break
 
-            logger.info(f"Connecting to WebSocket: {ws_url}")
+    async def _run_websocket_session(self, ws_url: str) -> None:
+        """Connect once and follow the workflow until completion or reconnect."""
+        logger.info(f"Connecting to WebSocket: {ws_url}")
 
-            try:
-                # Include Origin header for CORS validation during WebSocket handshake
-                async with open_websocket_url(
-                    ws_url, extra_headers=self._websocket_headers()
-                ) as ws:
-                    self.ws = ws
-                    self.connected = True
-                    logger.info("Connected to WebSocket server")
-                    self.output.system("✅ Connected to therapy session server")
+        try:
+            # Include Origin header for CORS validation during WebSocket handshake
+            async with open_websocket_url(
+                ws_url, extra_headers=self._websocket_headers()
+            ) as ws:
+                self.ws = ws
+                self.connected = True
+                logger.info("Connected to WebSocket server")
+                self.output.system("✅ Connected to therapy session server")
 
-                    # Use nursery for structured concurrency
-                    async with trio.open_nursery() as nursery:
-                        # Start WebSocket receiver task
-                        nursery.start_soon(self._websocket_receiver, ws)
+                # Use nursery for structured concurrency
+                async with trio.open_nursery() as nursery:
+                    # Start WebSocket receiver task
+                    nursery.start_soon(self._websocket_receiver, ws)
 
-                        # Give connection a moment to stabilize
-                        await trio.sleep(1)
+                    # Give connection a moment to stabilize
+                    await trio.sleep(1)
 
-                        if not self.connected:
-                            self.output.error(
-                                "❌ Failed to establish connection. Exiting."
-                            )
-                            nursery.cancel_scope.cancel()
-                            return
+                    if not self.connected:
+                        self.output.error(
+                            "❌ Failed to establish connection. Exiting."
+                        )
+                        nursery.cancel_scope.cancel()
+                        return
 
-                        # Get user status
-                        self.output.system("📊 Checking user status...")
-                        status = await self._get_user_status()
+                    # Get user status
+                    self.output.system("📊 Checking user status...")
+                    status = await self._get_user_status()
 
-                        if "error" in status:
+                    if "error" in status:
+                        self.output.system(
+                            f"⚠️  Could not get user status: {status['error']}"
+                        )
+                        self.output.system("Proceeding with basic session...")
+                    else:
+                        workflow_state = status.get("workflow_state")
+                        if workflow_state:
                             self.output.system(
-                                f"⚠️  Could not get user status: {status['error']}"
+                                f"📍 Current workflow state: {workflow_state}"
                             )
-                            self.output.system("Proceeding with basic session...")
-                        else:
-                            workflow_state = status.get("workflow_state")
-                            if workflow_state:
-                                self.output.system(
-                                    f"📍 Current workflow state: {workflow_state}"
-                                )
 
-                        try:
-                            await self._follow_workflow(ws)
-                        finally:
-                            # Cancel nursery to clean up receiver task
-                            nursery.cancel_scope.cancel()
+                    try:
+                        await self._follow_workflow(ws)
+                    finally:
+                        # Cancel nursery to clean up receiver task
+                        nursery.cancel_scope.cancel()
 
-            except ConnectionClosed:
-                self.output.error("❌ WebSocket connection closed unexpectedly")
-                logger.error("WebSocket connection closed")
-            except Exception as e:
-                logger.error(f"Failed to connect to WebSocket: {e}")
-                self.output.error(f"❌ Failed to connect to WebSocket server: {e}")
+        except ConnectionClosed:
+            self.output.error("❌ WebSocket connection closed unexpectedly")
+            logger.error("WebSocket connection closed")
+        except Exception as e:
+            logger.error(f"Failed to connect to WebSocket: {e}")
+            self.output.error(f"❌ Failed to connect to WebSocket server: {e}")

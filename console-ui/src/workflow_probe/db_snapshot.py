@@ -14,6 +14,38 @@ TABLES = (
 )
 
 
+def session_enrichment_complete(
+    db_path: str | Path, user_id: str, session_ids: list[str]
+) -> bool:
+    """Return whether attributable session enrichment jobs and sessions completed."""
+    if not session_ids or not Path(db_path).exists():
+        return False
+    marks = ", ".join("?" for _ in session_ids)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sessions = conn.execute(
+            f"SELECT session_id, session_type, enriched FROM sessions "
+            f"WHERE user_id = ? AND session_id IN ({marks})",
+            [user_id, *session_ids],
+        ).fetchall()
+        therapy_ids = [
+            row["session_id"]
+            for row in sessions
+            if row["session_type"] == "therapy"
+        ]
+        if not therapy_ids or any(
+            not row["enriched"] for row in sessions if row["session_type"] == "therapy"
+        ):
+            return False
+        job_marks = ", ".join("?" for _ in therapy_ids)
+        jobs = conn.execute(
+            f"SELECT status FROM session_enrichment_jobs "
+            f"WHERE user_id = ? AND session_id IN ({job_marks})",
+            [user_id, *therapy_ids],
+        ).fetchall()
+    return bool(jobs) and all(row["status"] == "complete" for row in jobs)
+
+
 def snapshot_and_extract(db_path: str | Path, output_dir: str | Path, user_id: str, session_ids: list[str]) -> dict[str, Any]:
     source_path = Path(db_path)
     output_path = Path(output_dir)

@@ -494,18 +494,16 @@ async def test_request_end_session_waits_for_session_ended(console_client_cls):
     client.connected = True
     client.current_session_id = "session-1"
 
-    class FakeWebSocket:
-        def __init__(self) -> None:
-            self.messages: list[str] = []
+    async def fake_api_request(*_args, **_kwargs):
+        return {
+            "session_id": "session-1",
+            "workflow_state": "plan_update_in_progress",
+            "reason": "User ended session",
+        }
 
-        async def send_message(self, message: str) -> None:
-            self.messages.append(message)
-            await client._handle_session_ended({"reason": "User ended session"})
+    client._api_request = fake_api_request  # type: ignore[method-assign]
+    await client._request_end_session(ws=None, reason="User ended session")
 
-    ws = FakeWebSocket()
-    await client._request_end_session(ws, reason="User ended session")
-
-    assert ws.messages
     assert client.session_end_requested is True
 
 

@@ -7,6 +7,7 @@
   },
   "persona": {
     "presenting_problem": "work-related anxiety and sleep disruption",
+    "coping_attempt": "tried breathing exercises and sometimes drinks wine to fall asleep",
     "style": "cooperative, reflective, concise"
   },
   "workflow_preferences": {
@@ -18,11 +19,25 @@
     "primary_language": "English",
     "therapy_style": "cbt"
   },
+  "deterministic_chat_replies": [
+    "I have been anxious about work and sleeping badly for three months.",
+    "I have not had thoughts of harming myself or anyone else. The chest tightness is not medically urgent.",
+    "I tried breathing exercises. I want to sleep better and stop freezing when my manager pressures me about Monday deadlines.",
+    "This week the Monday deadline made my chest tighten and I worried that I was failing."
+  ],
   "limits": {
     "max_total_turns": 14,
-    "overall_timeout_seconds": 420,
+    "overall_timeout_seconds": 900,
     "api_timeout_seconds": 180,
-    "plan_update_timeout_seconds": 120
+    "plan_update_timeout_seconds": 360,
+    "enrichment_timeout_seconds": 120
+  },
+  "timing_warning_thresholds_ms": {
+    "assessment_generation_ms": 180000,
+    "initial_plan_generation_ms": 180000,
+    "therapy_opening_ms": 120000,
+    "therapy_response_ms": 120000,
+    "post_session_update_ms": 300000
   },
   "milestones": {
     "required_actions": [
@@ -30,6 +45,21 @@
       "select_therapy_style",
       "continue_therapy"
     ],
+    "minimum_intake_patient_turns": 3,
+    "therapy_response_relevance_terms": [
+      "monday",
+      "deadline",
+      "chest",
+      "failing",
+      "ceiling",
+      "sleep",
+      "thought",
+      "frustrated",
+      "writing",
+      "grounding",
+      "worry"
+    ],
+    "minimum_therapy_relevance_terms": 2,
     "forbidden_platform_phrases": [
       "system messages can slip through",
       "therapy plan isn't currently loaded",
