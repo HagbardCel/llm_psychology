@@ -21,7 +21,6 @@ ACTIVE_DOCS = [
     "docs/TYPE_SYSTEM.md",
     "docs/data-models.md",
     "docs/agents/README.md",
-    "docs/assessments/README.md",
 ]
 
 REQUIRED_KEYS = {

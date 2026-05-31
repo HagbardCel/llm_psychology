@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-28
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Project-level architecture and implementation invariants
 ---
@@ -61,7 +61,7 @@ The codebase is organized to keep business logic testable and reusable behind th
 Canonical examples:
 - Gateway: `src/psychoanalyst_app/trio_server.py` (composition/middleware) + `src/psychoanalyst_app/api/*_routes.py` (HTTP blueprints) + `src/psychoanalyst_app/api/ws_handler.py`
 - Orchestration: `src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py`, `src/psychoanalyst_app/orchestration/trio_conversation_manager.py`, `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
-- Agents: `src/psychoanalyst_app/agents/trio_*_agent.py`
+- Agents: `src/psychoanalyst_app/agents/<role>/agent.py`
 - Services: `src/psychoanalyst_app/services/*`
 
 ### 3) Workflow is an explicit state machine
@@ -78,7 +78,7 @@ Cross-process boundaries use explicit models and stable serialization rules:
 - Generated JSON schemas validate HTTP DTO contract shape.
 
 Canonical examples:
-- HTTP DTOs: `src/psychoanalyst_app/models/http_models.py`
+- HTTP DTOs: `src/psychoanalyst_app/models/http.py`
 - Schema pipeline overview: `docs/TYPE_SYSTEM.md`
 - Schema pipeline overview: `docs/TYPE_SYSTEM.md`
 
@@ -101,7 +101,8 @@ Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisf
 Support tiers:
 - **Tier 0:** backend workflow engine, persistence, HTTP DTOs, WebSocket protocol, schema/type generation, generated protocol constants, LLM abstraction, deterministic fake-provider behavior, backend tests, and architecture/documentation validation.
 - **Tier 1:** WebSocket-based console UI as the only maintained frontend and canonical integration client.
-- Archived UI surfaces are documented in `docs/ui-scope.md`.
+- Removed UI surfaces must not be recreated unless explicitly requested; see
+  `docs/ui-scope.md`.
 
 Design rules during stabilization:
 - Backend owns workflow progression. Clients may render workflow state and submit explicit user actions, but must not mutate workflow state directly.
@@ -155,22 +156,17 @@ The backend has multiple “expensive” or “global-ish” dependencies (DB po
 Design rule:
 - Create runtime dependencies through the container, not by module-level singletons or ad-hoc instantiation spread across the codebase.
 
-Related plan/doc:
-- `docs/plans/phase-3/PHASE_3_DI_COMPOSITION_CLEANUP_IMPLEMENTATION_PLAN.md`
-
----
-
 ## Domain Model vs Wire Model (Backend)
 
 This codebase distinguishes between:
 
 ### 1) Persistence/domain models (internal)
-Defined in `src/psychoanalyst_app/models/data_models.py`. Examples:
+Defined in `src/psychoanalyst_app/models/domain.py`. Examples:
 - `UserProfile`, `Session`, `TherapyPlan`, `Message`, `Topic`
 - Tiered “clinical” structures (Tier 1 profile, Tier 2 enriched session, Tier 3 analysis, Tier 4 plan trajectory)
 
 ### 2) HTTP-facing DTOs (external contract)
-Defined in `src/psychoanalyst_app/models/http_models.py`. Key goals:
+Defined in `src/psychoanalyst_app/models/http.py`. Key goals:
 - expose only what clients need
 - keep types stable across refactors
 - centralize conversions (`*_to_dto()` helpers)
@@ -228,7 +224,7 @@ Workflow states are explicit and validated:
 - transition validation in `src/psychoanalyst_app/orchestration/trio_workflow_engine.py`
 
 ### Backend-driven workflow invariants
-These principles are non-negotiable and are sourced from the implementation plans:
+These principles are non-negotiable:
 - The backend orchestrator is the single source of truth for workflow state and required action.
 - Clients never advance workflow state directly; profile PATCH/PUT must not mutate `status`.
 - Profile creation is explicit via `POST /api/user/register`; WebSocket connections for unknown users are rejected.
@@ -236,11 +232,6 @@ These principles are non-negotiable and are sourced from the implementation plan
 - Active session tracking is in-memory (single active session per user) and is not durable across restarts/instances; clients must reconnect to rebind, and multi-instance deployments require sticky sessions or a shared store (not implemented).
 - Assessment runs as a backend job; clients display `required_action: "wait"` until completion.
 - Reconnects must re-emit `session_started` and `workflow_next_action`, and re-kick assessment jobs when needed.
-
-Authoritative plan references:
-- `docs/assessments/project/plans/BACKEND_DRIVEN_WORKFLOW_MIGRATION_PLAN.md`
-- `docs/assessments/project/plans/SESSION_BOUND_WORKFLOW_IMPLEMENTATION_PLAN.md`
-- `docs/assessments/project/plans/BACKEND_DRIVEN_WORKFLOW_REMEDIATION_PLAN.md`
 
 ### AgentResponse is the orchestrator contract
 Agents return an `AgentResponse` with:
@@ -288,16 +279,19 @@ Container keys:
 
 ### Prompts live close to the domain
 Prompts are versioned as code assets:
-- shared prompt templates: `src/psychoanalyst_app/prompts/*`
+- agent prompt templates: `src/psychoanalyst_app/agents/<role>/prompts.py`
 - therapist prompt composition: `src/psychoanalyst_app/agents/therapist/prompts.py`
 
 Design rule:
 - Prefer small prompt composition helpers that receive typed inputs and produce a single string prompt.
 
 Example helper modules:
-- Reflection: `src/psychoanalyst_app/agents/reflection/helpers.py` (prompt assembly + structured outputs for Tier updates)
-- Planning: `src/psychoanalyst_app/agents/planning/helpers.py` (plan strategy models, RAG requests, structured extraction, recommendation scoring)
-Agents (`src/psychoanalyst_app/agents/reflection/agent.py`, `src/psychoanalyst_app/agents/planning/agent.py`) now orchestrate these helpers instead of holding mega-methods.
+- Reflection: `src/psychoanalyst_app/agents/reflection/tier*_pipeline.py`
+  (structured Tier updates)
+- Planning: `src/psychoanalyst_app/agents/planning/analysis.py`,
+  `extraction.py`, and `formatting.py`
+Agents (`src/psychoanalyst_app/agents/reflection/agent.py`,
+`src/psychoanalyst_app/agents/planning/agent.py`) orchestrate these helpers.
 
 ### Therapy styles are “style packs”
 Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app/styles/<style_id>/` (e.g., `freud`, `jung`, `cbt`), typically including:
@@ -306,7 +300,9 @@ Therapy styles are modeled as directory-based packs under `src/psychoanalyst_app
 - `therapist_prompt.txt`, `reflection_prompt.txt`, `assessment_prompt.txt` (style-specific instructions)
 
 Loader/service:
-- `src/psychoanalyst_app/services/style_service.py` loads those prompts via `importlib.resources` for packaged/container runtime resolution (override with `settings.STYLES_DIR` when you explicitly need alternate style assets).
+- `src/psychoanalyst_app/services/style_service.py` loads those prompts via
+  `importlib.resources` for packaged/container runtime resolution (override
+  with `settings.STYLES_DIR` when you explicitly need alternate style assets).
 
 ### RAG is disabled for the current release
 `RAG_BACKEND=none` is the only supported path and wires a no-op retriever.
@@ -356,7 +352,7 @@ Implementation lives in:
 - `src/psychoanalyst_app/trio_server.py` (composition root that wires middleware, blueprints, and the WS handler)
 
 Design rules:
-- Validate request bodies with Pydantic request DTOs (see `Create*RequestDTO` in `src/psychoanalyst_app/models/http_models.py`).
+- Validate request bodies with Pydantic request DTOs (see `Create*RequestDTO` in `src/psychoanalyst_app/models/http.py`).
 - Return response DTOs (e.g., `UserProfileDTO`, `SessionDTO`) rather than internal models.
 - Keep “read endpoints” free from LLM calls; persist derived analyses via workers when possible.
 
@@ -438,7 +434,7 @@ Runtime, Docker images, and tooling all target Python 3.11 (`pyproject.toml` set
 ## Common Implementation Playbooks
 
 ### Add a new HTTP endpoint
-1. Define request/response DTOs in `src/psychoanalyst_app/models/http_models.py` (or extend existing ones).
+1. Define request/response DTOs in `src/psychoanalyst_app/models/http.py` (or extend existing ones).
 2. Create or extend the appropriate blueprint under `src/psychoanalyst_app/api/<domain>_routes.py` (or add a new module) and validate inputs with the DTOs/Pydantic.
 3. If you introduced a brand-new blueprint, register it inside `TrioServer._setup_http_routes()`; existing domain files are already wired up.
 4. Return DTOs (not persistence models) and ensure datetimes serialize as ISO 8601 strings.

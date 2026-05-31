@@ -725,8 +725,8 @@ console.log('[WS]', message.type, message.data);
 
 ### Related Documentation
 
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - System architecture overview
-- [design-principles.md](../design-principles.md) - Architecture and workflow invariants
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture overview
+- [design-principles.md](design-principles.md) - Architecture and workflow invariants
 
 ---
 

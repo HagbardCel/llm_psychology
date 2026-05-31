@@ -29,9 +29,8 @@ Tier 1 is the maintained `console-ui` reference frontend. It exercises
 registration, connection, workflow-next-action events, streaming, session
 ending, style selection, and deterministic full-stack probes.
 
-React/Vite, browser E2E tooling, the standalone in-process terminal UI, and
-multi-UI startup modes are archived. Their preserved state is documented in
-`docs/ui-scope.md`.
+Removed frontend implementations are not part of the maintained product
+surface. See `docs/ui-scope.md`.
 
 ## Design Rules
 
@@ -41,7 +40,7 @@ multi-UI startup modes are archived. Their preserved state is documented in
 3. Contract changes update specs, DTOs, schemas or protocol constants, and
    deterministic tests together.
 4. Prefer backend, protocol, and workflow-probe coverage over frontend logic.
-5. Do not recreate archived clients unless explicitly approved as separate
+5. Do not recreate removed clients unless explicitly approved as separate
    product work.
 6. Keep optional RAG, dashboard polish, and multi-client support deferred.
 
@@ -89,5 +88,5 @@ Use these Docker-backed layers:
 ## Exit Review
 
 After the checklist passes, choose deliberately whether the project should stay
-API-first, restore an archived browser client through a porting effort, or add a
+API-first, restore a removed browser client through a porting effort, or add a
 new client against the stabilized contracts.

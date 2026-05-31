@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-28
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Runtime architecture boundaries and component responsibilities
 ---
@@ -29,7 +29,8 @@ The Virtual LLM-Driven Psychoanalyst is a therapy application built on a clean, 
 During foundation stabilization, maintenance priority is backend-first:
 - Tier 0 is the backend, workflow/session lifecycle, persistence, HTTP DTOs, WebSocket protocol, schema/type pipeline, LLM abstraction, and deterministic tests.
 - Tier 1 is the WebSocket console UI, the only maintained frontend and the canonical integration client.
-- Archived UI surfaces are documented in `docs/ui-scope.md`.
+- Removed UI surfaces must not be recreated unless explicitly requested; see
+  `docs/ui-scope.md`.
 
 The runtime therapy agent role is `THERAPIST`. The modality is stored and
 transported separately as `selected_therapy_style` (`cbt`, `freud`, or `jung`).
@@ -332,7 +333,7 @@ local servers such as LM Studio
 - Token management
 - Error handling and retries
 
-#### RAGService (`src/psychoanalyst_app/services/rag_service.py`)
+#### RAGService (`src/psychoanalyst_app/services/rag.py`)
 
 **Purpose**: No-op retrieval boundary for the current release
 

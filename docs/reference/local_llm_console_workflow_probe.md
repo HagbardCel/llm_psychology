@@ -1,12 +1,12 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-05-30
+status: supporting
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Local full-stack workflow probe
 ---
 
-# Phase 1 Local Workflow Probe Refactor
+# Local LLM Console Workflow Probe
 
 ## Decision
 

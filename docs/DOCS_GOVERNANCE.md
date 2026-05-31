@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: supporting
-last_reviewed: 2026-05-28
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Documentation governance policy and active-doc standards
 ---
@@ -24,10 +24,11 @@ It establishes a strict active-doc set and a predictable review process.
 - May evolve quickly and can defer broad editorial cleanup.
 - Must link back to an active canonical document for context.
 
-### Archived
+### Historical
 - Historical records, completed plans, legacy migration notes.
 - Not canonical for current implementation behavior.
-- Must stay under `docs/archive/` or `docs/legacy/`.
+- Must be deleted after durable guidance is incorporated into active docs.
+- Recover old context from Git history when needed.
 
 ## Active Docs Set
 The current active canonical set is:
@@ -44,7 +45,6 @@ The current active canonical set is:
 10. `docs/TYPE_SYSTEM.md`
 11. `docs/data-models.md`
 12. `docs/agents/README.md`
-13. `docs/assessments/README.md`
 
 ## Required Front Matter for Active Docs
 All active docs must include this metadata block at the top:
@@ -70,7 +70,8 @@ source_of_truth_for: <short scope statement>
 1. If behavior/contracts change, update the canonical active doc in the same PR.
 2. Do not duplicate canonical guidance in multiple active docs; link instead.
 3. Keep top-level docs concise and route deep details to focused pages.
-4. If a doc becomes historical, move it to `docs/archive/` or `docs/legacy/`.
+4. If a doc becomes historical, incorporate any durable guidance into an active
+   doc and delete the historical file. Do not create archive folders.
 
 ## Validation
 Use the docs metadata validator:

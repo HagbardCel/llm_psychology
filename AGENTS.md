@@ -10,7 +10,7 @@
 
 ## Documentation Map (Read First)
 - `docs/README.md`: Doc index and pointers to deeper references.
-- `docs/ui-scope.md`: Active frontend policy and archived UI references.
+- `docs/ui-scope.md`: Active frontend policy.
 - `docs/design-principles.md`: Non-negotiable architecture rules, layering, and workflow invariants.
 - `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`: Current stabilization priorities.
 - `docs/ARCHITECTURE.md`: System overview, orchestration flow, and component responsibilities.
@@ -59,16 +59,9 @@ Run all commands inside containers. Do not run Python or Node on the host.
 Until foundation stabilization is complete, treat the backend, workflow engine, persistence model, API DTOs, WebSocket protocol, schema generation, LLM abstraction, deterministic tests, and workflow probes as the main product.
 
 - Maintain `console-ui` as the only supported frontend.
-- Do not recreate, repair, test, or optimize the archived React/Vite frontend.
-- Do not recreate the archived standalone in-process terminal UI.
+- Do not recreate, repair, test, or optimize removed frontends unless explicitly requested.
 - Do not add multi-frontend orchestration modes.
 - Prefer backend, protocol, workflow-probe, and console-client tests.
-
-Archived UI state is preserved at:
-
-- branch: `archive/ui-state-2026-05-31`
-- tag: `archive-ui-state-2026-05-31`
-- commit: `0e6ddd9efd7b89c5c9852d093dd94967bc68723b`
 
 ## Schema and Protocol Generation (Containerized)
 - Generate JSON schemas: `make generate-schemas`

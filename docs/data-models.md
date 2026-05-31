@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Domain model inventory and mapping between persistence, orchestration, and wire DTOs
 ---
@@ -21,21 +21,18 @@ Related docs:
 ## Model Layers
 
 1. Domain and persistence models (Pydantic)
-   - `src/psychoanalyst_app/models/data_models.py`
+   - `src/psychoanalyst_app/models/domain.py`
    - Stored by `src/psychoanalyst_app/services/trio_db_service.py`
 2. Orchestration models (dataclasses)
    - `src/psychoanalyst_app/orchestration/models.py`
 3. API request/response DTOs (Pydantic)
-   - `src/psychoanalyst_app/models/http_models.py`
-   - `src/psychoanalyst_app/models/api_models.py`
+   - `src/psychoanalyst_app/models/http.py`
 4. Structured LLM outputs and validation (Pydantic)
-   - `src/psychoanalyst_app/models/structured_output_models.py`
-   - `src/psychoanalyst_app/models/briefing_models.py`
-   - `src/psychoanalyst_app/models/version_models.py`
+   - `src/psychoanalyst_app/models/llm_outputs.py`
 
 ## Core Domain Models
 
-Defined in `src/psychoanalyst_app/models/data_models.py`.
+Defined in `src/psychoanalyst_app/models/domain.py`.
 
 `TherapyPlan` is an immutable revision. `supersedes_plan_id` and
 `superseded_by_plan_id` form its lineage, and exactly one revision per user has
@@ -137,7 +134,7 @@ Databases created before this model must be reset with
 
 ## Tiered Clinical Data Model
 
-All tiers live in `src/psychoanalyst_app/models/data_models.py`.
+All tiers live in `src/psychoanalyst_app/models/domain.py`.
 
 Tier 1 (static background):
 - `BasicPatientBackground`
@@ -175,7 +172,7 @@ Defined in `src/psychoanalyst_app/orchestration/models.py`.
 
 ## API DTO Models
 
-Defined in `src/psychoanalyst_app/models/http_models.py`.
+Defined in `src/psychoanalyst_app/models/http.py`.
 
 Key DTOs:
 - `UserProfileDTO`
@@ -187,16 +184,16 @@ Key DTOs:
 - `CreateSessionRequestDTO`, `WorkflowCompleteProfileRequestDTO`, `WorkflowSelectTherapyStyleRequestDTO`, `WorkflowStartTherapyRequestDTO`, `WorkflowRetryPlanUpdateRequestDTO`
 
 Workflow UI guidance:
-- `WorkflowNextActionDTO` and `RequiredWorkflowAction` in `src/psychoanalyst_app/models/api_models.py`
-- Step-completion requests for profile+style are defined in `src/psychoanalyst_app/models/http_models.py`
+- `WorkflowNextActionDTO` and `RequiredWorkflowAction` in `src/psychoanalyst_app/models/http.py`
+- Step-completion requests for profile+style are defined in `src/psychoanalyst_app/models/http.py`
 
 Version negotiation:
 - `VersionInfo`, `VersionCheckRequest`, `VersionCheckResponse`
-  in `src/psychoanalyst_app/models/version_models.py`
+  in `src/psychoanalyst_app/models/http.py`
 
 ## Structured Outputs (LLM Extracts and Patches)
 
-Defined in `src/psychoanalyst_app/models/structured_output_models.py`.
+Defined in `src/psychoanalyst_app/models/llm_outputs.py`.
 
 - `Tier2Enrichment`
   - Populates the clinical summary fields on `Session`.
@@ -213,19 +210,19 @@ Defined in `src/psychoanalyst_app/models/structured_output_models.py`.
 
 Briefing data validation:
 - `SessionBriefing` and related models in
-  `src/psychoanalyst_app/models/briefing_models.py`
+  `src/psychoanalyst_app/models/domain.py`
   (stored in `TherapyPlan.session_briefing`).
 
 ## Persistence Mapping
 
 The database layer stores and retrieves domain models via:
 - `src/psychoanalyst_app/services/trio_db_service.py`
-- `src/psychoanalyst_app/services/db/repositories.py`
+- `src/psychoanalyst_app/services/db/repos/`
 - `src/psychoanalyst_app/services/db_serialization.py`
 
 HTTP handlers convert domain models to DTOs using helpers:
 - `user_profile_to_dto`, `session_to_dto`, `therapy_plan_to_dto`
-  in `src/psychoanalyst_app/models/http_models.py`
+  in `src/psychoanalyst_app/models/http.py`
 
 ## Database Tables and Storage Mapping
 

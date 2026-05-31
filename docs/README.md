@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-28
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Documentation entrypoint and canonical navigation
 ---
@@ -12,7 +12,7 @@ source_of_truth_for: Documentation entrypoint and canonical navigation
 Use this order if you are new to the codebase:
 
 1. `docs/design-principles.md` for architecture invariants and implementation rules.
-2. `docs/ui-scope.md` for the supported frontend and archived UI policy.
+2. `docs/ui-scope.md` for the supported frontend policy.
 3. `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` for current stabilization priorities.
 4. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
 5. `docs/user_journey.md` for end-to-end user and protocol flow.
@@ -35,24 +35,19 @@ These docs are the only canonical, actively governed set.
 - [Type System](TYPE_SYSTEM.md)
 - [Data Models](data-models.md)
 - [Agents](agents/README.md)
-- [Assessments Index](assessments/README.md)
 
 ## Supporting Documentation
 Use these for focused implementation work; active docs remain the source of truth.
 
 - `docs/current_issues/`: active troubleshooting and known issues.
-- `docs/features/`: feature-level implementation details.
-- `docs/plans/`: current finalization baseline and implementation plans in progress.
-- `docs/assessments/`: architecture, testing, UX and project assessments.
 - `docs/reference/`: companion guides linked from active docs; includes the active foundation stabilization plan.
+- `docs/reference/local_llm_console_workflow_probe.md`: optional local LLM workflow-probe runbook.
 
-## Archive and Legacy
-These paths are historical context, not canonical guidance:
-
-- `docs/archive/`
-- `docs/legacy/`
-
-When archive content conflicts with active docs, follow active docs.
+## Historical Documentation
+Do not keep completed plans, stale assessments, migration notes, or legacy
+guides in the working tree. Delete historical documentation after its durable
+guidance has been incorporated into active docs; use Git history when old
+context is needed.
 
 ## Docker-First Documentation Commands
 Run documentation checks through Docker:

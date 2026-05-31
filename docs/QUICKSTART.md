@@ -504,7 +504,7 @@ For production load:
 ## Next Steps
 
 - [Architecture Documentation](./ARCHITECTURE.md) - Deep dive into system design
-- [API Reference](./API.md) - Complete API documentation
+- [HTTP API Contract](./contracts/HTTP_API_CONTRACT.md) - Endpoint contract
 
 ## Support
 

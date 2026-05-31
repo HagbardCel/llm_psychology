@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: supporting
-last_reviewed: 2026-02-22
+last_reviewed: 2026-05-31
 review_cycle_days: 180
 source_of_truth_for: Operational and troubleshooting notes for runtime architecture
 ---
@@ -168,12 +168,12 @@ Future enhancements:
 6. Create unit tests
 
 ### Adding a New API Endpoint
-1. Add route in `UnifiedServer._setup_http_routes()`
-2. Implement handler method
-3. Use orchestrator for business logic
-4. Return JSON response
-5. Add error handling
-6. Document in the architecture docs
+1. Add or extend a blueprint under `src/psychoanalyst_app/api/`
+2. Register new blueprints in `TrioServer._setup_http_routes()`
+3. Use orchestrator services for business logic
+4. Return a validated DTO response
+5. Add error handling and contract coverage
+6. Document the endpoint in `docs/contracts/HTTP_API_CONTRACT.md`
 
 ### Adding a New WebSocket Event
 1. Add event handler in `WebSocketGateway`
@@ -188,7 +188,7 @@ Future enhancements:
 ### Common Issues
 
 WebSocket won't connect:
-- Check CORS configuration in `UnifiedServer`
+- Check CORS configuration in `TrioServer`
 - Verify WebSocket client compatibility and URL path
 - Verify the `user_id` query parameter is provided
 
@@ -221,20 +221,3 @@ logger.error("Error processing message", exc_info=True)
 - Average response latency
 - Error rates by endpoint
 - State transition counts
-
-## Migration from Legacy
-
-Before:
-- Agents directly interacted with UI
-- Full session management in each agent
-- No central orchestration
-
-After:
-- Agents return prompts (pure business logic)
-- Orchestrator handles session management
-- Streaming handled by `ConversationManager`
-- State machine coordinates workflow
-
-Backward compatibility:
-- Agents still support legacy `conduct_session()` method
-- This can be removed in a future major version
