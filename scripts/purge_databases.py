@@ -1,11 +1,11 @@
-"""Purge production and usertest SQLite databases."""
+"""Purge local and usertest SQLite databases."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-DEFAULT_PROD_DB = Path("data/psychoanalyst.db")
+DEFAULT_LOCAL_DB = Path("data/psychoanalyst.db")
 DEFAULT_USERTEST_DB = Path("data/psychoanalyst_usertest.db")
 
 
@@ -21,12 +21,12 @@ def _delete_sqlite_artifacts(db_path: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Purge production and usertest SQLite database files."
+        description="Purge local and usertest SQLite database files."
     )
     parser.add_argument(
-        "--production",
+        "--local",
         action="store_true",
-        help="Purge the production database (data/psychoanalyst.db)",
+        help="Purge the local database (data/psychoanalyst.db)",
     )
     parser.add_argument(
         "--usertest",
@@ -36,11 +36,11 @@ def main() -> int:
     args = parser.parse_args()
 
     targets = []
-    if not args.production and not args.usertest:
-        targets = [DEFAULT_PROD_DB, DEFAULT_USERTEST_DB]
+    if not args.local and not args.usertest:
+        targets = [DEFAULT_LOCAL_DB, DEFAULT_USERTEST_DB]
     else:
-        if args.production:
-            targets.append(DEFAULT_PROD_DB)
+        if args.local:
+            targets.append(DEFAULT_LOCAL_DB)
         if args.usertest:
             targets.append(DEFAULT_USERTEST_DB)
 

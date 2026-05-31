@@ -402,7 +402,7 @@ def resolve_user_sim_max_tokens() -> int | None:
 
     - Explicit positive integer: use that cap.
     - 0 or negative: no cap (omit max_tokens from the API request).
-    - Unset: 8192 for APP_ENV=testing; no cap otherwise (production default).
+    - Unset: 8192 for APP_ENV=testing; no cap otherwise (local default).
     """
     raw = os.getenv("USER_SIM_LLM_MAX_TOKENS")
     if raw is not None and raw.strip() != "":
@@ -410,7 +410,7 @@ def resolve_user_sim_max_tokens() -> int | None:
         if value <= 0:
             return None
         return value
-    if os.getenv("APP_ENV", "production").strip().lower() == "testing":
+    if os.getenv("APP_ENV", "local").strip().lower() == "testing":
         return LOCAL_USER_SIM_MAX_TOKENS
     return None
 

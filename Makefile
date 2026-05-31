@@ -56,7 +56,7 @@ help:
 	@echo "  reset-usertest    - Stop usertest containers and clear usertest database"
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
-	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=prod|usertest, default: prod)"
+	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=local|usertest, default: local)"
 	@echo "  docker-db-backup  - Back up the local SQLite database"
 	@echo "  docker-db-backup-verify - Verify a backup (usage: make docker-db-backup-verify BACKUP=data/backups/file.db)"
 	@echo "  docker-db-restore - Restore a backup (usage: make docker-db-restore BACKUP=data/backups/file.db)"
@@ -73,7 +73,7 @@ install-uv:
 	@echo "⚠️  install-uv is deprecated in Docker-only workflow."
 	@echo "    Use 'make requirements' to compile lockfiles in Docker."
 
-# Install production dependencies inside Docker
+# Install runtime dependencies inside Docker
 install:
 	docker compose build api
 
@@ -111,7 +111,7 @@ finalization-check:
 	$(MAKE) test-validate
 	$(MAKE) probe-console-deterministic
 
-# Real LLM/RAG smoke tests (Docker, requires secrets / external services)
+# Real LLM smoke tests (Docker, requires secrets / external services)
 test-real-llm:
 	$(MAKE) check-usertest-key
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
@@ -274,15 +274,15 @@ docker-logs-api:
 
 # Start database viewer for debugging
 # Usage:
-#   make docker-db-view             # View production DB (default)
+#   make docker-db-view             # View local DB (default)
 #   make docker-db-view DB=usertest # View usertest DB
 # Note: Test databases use in-memory SQLite and don't create viewable files
 docker-db-view:
-	@DB_NAME=$${DB:-prod}; \
+	@DB_NAME=$${DB:-local}; \
 	case $$DB_NAME in \
-		prod) DB_FILE=psychoanalyst.db ;; \
+		local) DB_FILE=psychoanalyst.db ;; \
 		usertest) DB_FILE=psychoanalyst_usertest.db ;; \
-		*) echo "❌ Invalid DB. Use: prod or usertest"; \
+		*) echo "❌ Invalid DB. Use: local or usertest"; \
 		   echo ""; \
 		   echo "Note: Test databases use in-memory SQLite (:memory:) and"; \
 		   echo "      don't create persistent files to view."; \
@@ -297,7 +297,7 @@ docker-db-view:
 		ls -1 data/*.db 2>/dev/null || echo "  (none)"; \
 		echo ""; \
 		echo "💡 Tip: Run the app to create databases:"; \
-		echo "   - Production: make ui-console"; \
+		echo "   - Local: make ui-console"; \
 		echo "   - Usertest: make ui-console-test"; \
 		exit 1; \
 	fi; \
@@ -305,7 +305,7 @@ docker-db-view:
 		echo "⚠️  Warning: Database file is empty (0 bytes): data/$$DB_FILE"; \
 		echo ""; \
 		echo "💡 This database hasn't been initialized yet. Run the app to create tables:"; \
-		echo "   - Production: make ui-console"; \
+		echo "   - Local: make ui-console"; \
 		echo "   - Usertest: make ui-console-test"; \
 		echo ""; \
 		read -p "Continue anyway? (y/N) " -n 1 -r; \
@@ -321,7 +321,7 @@ docker-db-view:
 	echo ""; \
 	DB_FILE=$$DB_FILE docker compose --profile debug up db-viewer
 
-# Back up the local production SQLite database.
+# Back up the local SQLite database.
 docker-db-backup:
 	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup backup
 
