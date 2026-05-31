@@ -139,12 +139,11 @@ dmypy.json
 Thumbs.db
 
 # Data directories
-data/vector_db/
+# Ignore legacy local retrieval artifacts if they still exist on a workstation.
+data/vector_db*/
 data/psychoanalyst.db
-src/data/vector_db/
 src/data/psychoanalyst.db
 src/data/psychoanalyst_test.db
-src/psychoanalyst_app/data/vector_db/
 
 # Log files
 logs/
@@ -161,8 +160,6 @@ data/psychoanalyst.db-wal
 schemas/*.json
 !schemas/.gitkeep
 !schemas/ws_protocol.json
-data/vector_db_usertest/data.pkl
-data/vector_db_usertest/faiss_index.bin
 # AI assistant local config (not project-tracked)
 .aider*
 .qwen/

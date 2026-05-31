@@ -9,9 +9,6 @@
     // Testing
     "ms-python.pytest",
 
-    // Git
-    "eamodio.gitlens",
-
     // Docker
     "ms-azuretools.vscode-docker",
 
@@ -19,12 +16,7 @@
     "yzhang.markdown-all-in-one",
 
     // YAML for docker-compose
-    "redhat.vscode-yaml",
-
-    // Productivity
-    "usernamehw.errorlens",
-    "aaron-bond.better-comments",
-    "esbenp.prettier-vscode"
+    "redhat.vscode-yaml"
   ],
   "unwantedRecommendations": [
     // Avoid conflicts with our stack

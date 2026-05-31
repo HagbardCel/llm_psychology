@@ -43,7 +43,10 @@ def main() -> int:
     now = datetime.utcnow().isoformat()
     updated_profiles = _execute(
         cur,
-        "UPDATE user_profiles SET status = ?, plan_id = NULL, updated_at = ? WHERE user_id = ?",
+        (
+            "UPDATE user_profiles SET status = ?, plan_id = NULL, "
+            "updated_at = ? WHERE user_id = ?"
+        ),
         ("INTAKE_COMPLETE", now, args.user_id),
     )
     updated_sessions = _execute(

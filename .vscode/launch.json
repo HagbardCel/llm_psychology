@@ -5,14 +5,15 @@
       "name": "Python: Trio Server",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/src/trio_server.py",
+      "module": "psychoanalyst_app.server",
       "console": "integratedTerminal",
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
         "APP_ENV": "development",
         "SERVER_HOST": "0.0.0.0",
-        "SERVER_PORT": "8000"
+        "SERVER_PORT": "8000",
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "cwd": "${workspaceFolder}"
     },

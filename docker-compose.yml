@@ -7,9 +7,10 @@ x-api-base: &api-base
   volumes:
     - ./src:/app/src:delegated
     - ./tests:/app/tests:delegated
+    - ./scripts:/app/scripts:delegated
+    - ./pyproject.toml:/app/pyproject.toml:ro
     - ./data:/app/data
     - ./logs:/app/logs
-    - ./deployment_validation.py:/app/deployment_validation.py:delegated
     - pip-cache:/root/.cache/pip
   environment:
     - APP_ENV=development
@@ -161,28 +162,6 @@ services:
     tty: true
     volumes:
       - .:/app
-
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    container_name: psychoanalyst_app_prod
-    profiles: ["production"]
-    volumes:
-      - ./data:/app/data
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    networks:
-      - app-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 volumes:
   pip-cache:

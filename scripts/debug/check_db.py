@@ -42,12 +42,14 @@ def check_database(db_path):
 
         if count > 0:
             cursor.execute(
-                "SELECT plan_id, user_id, created_at, version FROM therapy_plans LIMIT 5"
+                "SELECT plan_id, user_id, created_at, version "
+                "FROM therapy_plans LIMIT 5"
             )
             rows = cursor.fetchall()
             for row in rows:
                 print(
-                    f"  - Plan ID: {row[0]}, User ID: {row[1]}, Created: {row[2]}, Version: {row[3]}"
+                    f"  - Plan ID: {row[0]}, User ID: {row[1]}, "
+                    f"Created: {row[2]}, Version: {row[3]}"
                 )
         else:
             print("  No therapy plans found")

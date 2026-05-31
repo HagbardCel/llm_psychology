@@ -12,10 +12,9 @@ This script performs comprehensive validation of generated JSON schemas:
 import json
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
-from psychoanalyst_app.models.domain import UserProfile, UserStatus, Message, TherapyPlan
-from psychoanalyst_app.orchestration.models import WorkflowState, WorkflowEvent
+from psychoanalyst_app.models.domain import UserStatus
+from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
 CUSTOM_SCHEMA_FILES = {"ws_protocol.json"}
@@ -33,7 +32,7 @@ def validate_json_syntax(schema_file: Path) -> None:
         with open(schema_file) as f:
             json.load(f)
     except json.JSONDecodeError as e:
-        raise ValidationError(f"Invalid JSON in {schema_file.name}: {e}")
+        raise ValidationError(f"Invalid JSON in {schema_file.name}: {e}") from e
 
 
 def validate_schema_structure(schema_file: Path, schema: dict) -> None:
@@ -73,7 +72,7 @@ def validate_enum_values(schema_file: Path, schema: dict) -> None:
 
     python_enum = enum_mapping[schema_name]
     schema_values = set(schema["enum"])
-    python_values = set(e.value for e in python_enum)
+    python_values = {e.value for e in python_enum}
 
     if schema_values != python_values:
         missing_in_schema = python_values - schema_values
@@ -183,7 +182,7 @@ def validate_index_file() -> None:
         )
 
 
-def validate_all_schemas() -> Tuple[int, List[str]]:
+def validate_all_schemas() -> tuple[int, list[str]]:
     """
     Validate all schema files.
 
@@ -250,7 +249,7 @@ def main() -> int:
         success_count, errors = validate_all_schemas()
 
         print(f"\n{'='*60}")
-        print(f"Validation Results:")
+        print("Validation Results:")
         print(f"  ✓ Passed: {success_count}")
         print(f"  ✗ Failed: {len(errors)}")
         print(f"{'='*60}")
@@ -274,4 +273,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     import sys
+
     raise SystemExit(main())

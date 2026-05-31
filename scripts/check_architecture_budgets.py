@@ -17,8 +17,8 @@ BUDGETS: dict[str, int] = {
     "src/psychoanalyst_app/agents/reflection/agent.py": 360,
     "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 570,
     "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 600,
-    "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 430,
-    "src/psychoanalyst_app/orchestration/helpers/response_handler.py": 500,
+    "src/psychoanalyst_app/orchestration/session_lifecycle.py": 430,
+    "src/psychoanalyst_app/orchestration/response_handler.py": 500,
     "src/psychoanalyst_app/container/service_container.py": 500,
     "src/psychoanalyst_app/agents/reflection/insights_pipeline.py": 260,
     "src/psychoanalyst_app/agents/therapist/prompt_context.py": 340,
@@ -31,8 +31,8 @@ METHOD_LENGTH_BUDGETS: dict[str, int] = {
     "src/psychoanalyst_app/agents/reflection/agent.py": 120,
     "src/psychoanalyst_app/orchestration/trio_agent_orchestrator.py": 120,
     "src/psychoanalyst_app/orchestration/trio_conversation_manager.py": 120,
-    "src/psychoanalyst_app/orchestration/helpers/session_lifecycle.py": 180,
-    "src/psychoanalyst_app/orchestration/helpers/response_handler.py": 180,
+    "src/psychoanalyst_app/orchestration/session_lifecycle.py": 180,
+    "src/psychoanalyst_app/orchestration/response_handler.py": 180,
 }
 
 FORBIDDEN_IMPORTS_BY_LAYER: dict[str, set[str]] = {

@@ -1,9 +1,9 @@
-
-import sqlite3
-import pandas as pd
 import os
+import sqlite3
 
-db_path = 'data/psychoanalyst_usertest.db'
+import pandas as pd
+
+db_path = "data/psychoanalyst_usertest.db"
 
 if not os.path.exists(db_path):
     print(f"Database not found at {db_path}")
@@ -18,11 +18,19 @@ tables = cursor.fetchall()
 print("Tables found:", [t[0] for t in tables])
 
 # Check content of likely tables
-likely_tables = ['assessment_recommendations', 'assessments', 'recommendations', 'therapy_plans']
+likely_tables = [
+    "assessment_recommendations",
+    "assessments",
+    "recommendations",
+    "therapy_plans",
+]
 found_relevant = False
 
 for table_name in [t[0] for t in tables]:
-    if any(likely in table_name for likely in likely_tables) or 'assessment' in table_name:
+    if (
+        any(likely in table_name for likely in likely_tables)
+        or "assessment" in table_name
+    ):
         print(f"\n--- Content of table: {table_name} ---")
         try:
             df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)

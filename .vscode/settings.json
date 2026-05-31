@@ -7,10 +7,6 @@
     "-v",
     "--tb=short"
   ],
-  "python.linting.enabled": true,
-  "python.linting.ruffEnabled": true,
-  "python.formatting.provider": "black",
-
   // Python-specific editor settings
   "[python]": {
     "editor.defaultFormatter": "ms-python.black-formatter",
@@ -54,32 +50,13 @@
   "search.exclude": {
     "**/__pycache__": true,
     "**/*.pyc": true,
-    "**/data/vector_db": true,
-    "**/data/vector_db_usertest": true,
     "**/.venv": true,
     "**/venv": true
   },
 
-  // Terminal settings
-  "terminal.integrated.scrollback": 10000,
-  "terminal.integrated.enableMultiLinePasteWarning": "auto",
-
-  // Editor settings
-  "editor.suggestSelection": "first",
-  "editor.minimap.enabled": true,
-  "editor.bracketPairColorization.enabled": true,
-  "editor.guides.bracketPairs": "active",
-
-  // Git settings
-  "git.confirmSync": false,
-  "git.autofetch": true,
-  "git.enableSmartCommit": true,
-
   // File watchers
   "files.watcherExclude": {
     "**/__pycache__/**": true,
-    "**/data/vector_db/**": true,
-    "**/data/vector_db_usertest/**": true,
     "**/.venv/**": true
   }
 }

@@ -63,9 +63,6 @@ help:
 	@echo "  docker-test-reset - Reset test database"
 	@echo "  docker-clean      - Clean up all Docker resources"
 	@echo ""
-	@echo "Docker Production:"
-	@echo "  docker-prod       - Start production app"
-	@echo ""
 	@echo "DevContainer:"
 	@echo "  devcontainer-rebuild - Rebuild devcontainer without cache"
 	@echo "  devcontainer-test    - Test devcontainer configuration"
@@ -106,6 +103,7 @@ test-integration:
 
 # Full release-candidate validation path.
 finalization-check:
+	$(MAKE) lint
 	$(MAKE) validate-docs
 	$(MAKE) validate-schemas
 	$(MAKE) validate-generated-contracts
@@ -120,8 +118,7 @@ test-real-llm:
 	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 
 # Run devcontainer setup tests (Docker)
-test-devcontainer:
-	docker compose run --rm api python scripts/devcontainer_test.py
+test-devcontainer: devcontainer-test
 
 # Quick tests in devContainer (Docker)
 test-dev:
@@ -167,11 +164,6 @@ clean:
 		data/psychoanalyst.db \
 		data/psychoanalyst_test.db \
 		data/psychoanalyst_usertest.db 2>/dev/null || true
-	@# Use Docker to remove vector DB files created by Docker containers
-	@if [ -d "data/vector_db" ] || [ -d "data/vector_db_usertest" ]; then \
-		echo "Removing Docker-created vector DB files..."; \
-		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db /data/vector_db_usertest" 2>/dev/null || true; \
-	fi
 	@echo "✓ Cleanup complete"
 
 # Clean test databases only
@@ -179,11 +171,6 @@ clean-testdb:
 	@echo "Cleaning test databases..."
 	@rm -rf data/psychoanalyst_test.db \
 		data/psychoanalyst_usertest.db 2>/dev/null || true
-	@# Use Docker to remove files created by Docker containers (no sudo needed)
-	@if [ -d "data/vector_db_usertest" ] || [ -d "data/test_vector_db" ]; then \
-		echo "Removing Docker-created files..."; \
-		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db_usertest /data/test_vector_db" 2>/dev/null || true; \
-	fi
 	@echo "✓ Test databases cleaned"
 
 # Reset usertest DB and containers
@@ -198,11 +185,6 @@ reset-usertest:
 	@echo "Resetting usertest environment..."
 	@docker compose --profile usertest-console down --remove-orphans
 	@rm -rf data/psychoanalyst_usertest.db 2>/dev/null || true
-	@# Use Docker to remove files created by Docker containers (no sudo needed)
-	@if [ -d "data/vector_db_usertest" ]; then \
-		echo "Removing Docker-created usertest vector DB files..."; \
-		docker run --rm -v "$(PWD)/data:/data" alpine sh -c "rm -rf /data/vector_db_usertest" 2>/dev/null || true; \
-	fi
 	@echo "✓ Usertest environment reset"
 
 # Generate locked requirements from .in files with UV
@@ -370,18 +352,6 @@ docker-clean:
 	docker system prune -f
 
 # ============================================
-# Docker Production Commands
-# ============================================
-
-# Run production app
-docker-prod:
-	docker compose --profile production up --build --remove-orphans app
-
-# Run production in detached mode
-docker-prod-detach:
-	docker compose --profile production up -d --remove-orphans app
-
-# ============================================
 # UI Mode Selection Commands
 # ============================================
 
@@ -447,20 +417,12 @@ devcontainer-rebuild:
 # Test devcontainer configuration
 devcontainer-test:
 	@echo "✅ Testing devcontainer setup..."
-	@echo ""
-	@echo "Checking configuration files exist..."
 	@test -f .devcontainer/devcontainer.json && echo "✓ .devcontainer/devcontainer.json exists"
 	@test -f .vscode/settings.json && echo "✓ .vscode/settings.json exists"
 	@test -f .vscode/extensions.json && echo "✓ .vscode/extensions.json exists"
 	@test -f .vscode/launch.json && echo "✓ .vscode/launch.json exists"
-	@echo ""
-	@echo "Validating JSON syntax (note: VSCode supports JSONC with comments)..."
-	@python3 -c "import json; json.load(open('.devcontainer/devcontainer.json'))" && echo "✓ devcontainer.json is valid" || echo "⚠ devcontainer.json has comments (valid JSONC)"
-	@echo ""
-	@echo "Configuration files are ready! ✨"
-	@echo ""
-	@echo "Note: VSCode config files (.vscode/*) support comments (JSONC format)."
-	@echo "They will work correctly in VSCode even if they fail strict JSON validation."
+	docker compose --profile devcontainer config --quiet
+	@echo "✓ Docker Compose devcontainer profile is valid"
 
 # Open project in VSCode devcontainer
 devcontainer-open:
@@ -475,9 +437,9 @@ devcontainer-open:
 		echo "2. Press Ctrl+Shift+P"; \
 		echo "3. Run 'Dev Containers: Reopen in Container'"; \
 	fi
-check-usertest-key:
+check-usertest-key: check-usertest-env
 	@set -a && . ./.env.usertest && set +a && \
-	if [ -z "$${GOOGLE_API_KEY:-}" ] || [ "$${GOOGLE_API_KEY}" = "test_mock_api_key_for_testing" ]; then \
+	if [ -z "$${GOOGLE_API_KEY:-}" ] || [ "$${GOOGLE_API_KEY}" = "test_mock_api_key_for_testing" ] || [ "$${GOOGLE_API_KEY}" = "your_gemini_api_key_here" ]; then \
 		echo "❌ GOOGLE_API_KEY is not configured in .env.usertest."; \
 		echo "   Please edit .env.usertest and provide your real API key before running user-test commands."; \
 		echo "   (This profile uses real Gemini responses: MODEL_NAME=$${MODEL_NAME:-unset})"; \

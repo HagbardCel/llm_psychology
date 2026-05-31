@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import sys
 from datetime import date
 from pathlib import Path
 
@@ -129,6 +128,13 @@ def main() -> int:
             errors.append(f"{doc}: owner must not be empty")
         if not metadata["source_of_truth_for"]:
             errors.append(f"{doc}: source_of_truth_for must not be empty")
+
+        text = path.read_text(encoding="utf-8")
+        for marker in ("Last Verified", "Last Updated"):
+            if marker in text:
+                errors.append(
+                    f"{doc}: remove duplicate body freshness marker '{marker}'"
+                )
 
     _validate_active_readme_index(repo_root, errors)
 

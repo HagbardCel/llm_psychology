@@ -1,11 +1,10 @@
-
-import sqlite3
 import json
+import sqlite3
 from datetime import datetime
 
-db_path = 'data/psychoanalyst_usertest.db'
-user_id = 'console_user_test'
-intake_session_id = 'f4dae00e-e00e-4df1-87fb-af68c1ea6497'
+db_path = "data/psychoanalyst_usertest.db"
+user_id = "console_user_test"
+intake_session_id = "f4dae00e-e00e-4df1-87fb-af68c1ea6497"
 recommendations = [{"style_id": "test", "score": 1.0}]
 payload = json.dumps(recommendations)
 created_at = datetime.now().isoformat()

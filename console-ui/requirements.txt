@@ -7,8 +7,3 @@ trio-websocket>=0.12.2
 # HTTP client for API requests
 httpx>=0.28.1
 
-# For async HTTP requests in textual_ui
-aiohttp>=3.9.0
-
-# Temporary comment to invalidate Docker cache
-

@@ -7,7 +7,6 @@ services:
     environment:
       - APP_ENV=development
       - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
-      - VECTOR_DB_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/vector_db
       - LLM_PROVIDER=openai_compatible
       - SESSION_DURATION_MINUTES=${PROBE_SESSION_DURATION_MINUTES:-10}
       - REFLECTION_TIMEOUT_SECONDS=${PROBE_REFLECTION_TIMEOUT_SECONDS:-300}

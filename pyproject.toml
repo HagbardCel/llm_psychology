@@ -9,11 +9,10 @@ description = "Virtual LLM-driven therapist backend services"
 requires-python = ">=3.11"
 authors = [{ name = "Therapist Team" }]
 dependencies = [
-    "langchain==1.0.8",
+    "langchain-core",
     "langchain-google-genai",
     "langchain-ollama==1.0.0",
     "langchain-openai==1.0.3",
-    "langchain-community",
     "python-dotenv",
     "pydantic",
     "pydantic-settings",
@@ -60,6 +59,15 @@ select = [
     "UP",   # pyupgrade
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 32
+
+[tool.ruff.lint.per-file-ignores]
+"**/prompts.py" = ["E501"]
+"tests/**" = ["C901", "E501", "E402"]
+"src/psychoanalyst_app/orchestration/response_handler.py" = ["C901"]
+"src/psychoanalyst_app/agents/therapist/prompt_context.py" = ["C901"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
@@ -70,9 +78,7 @@ disallow_untyped_defs = true
 module = [
     "langchain.*",
     "langchain_google_genai.*",
-    "sentence_transformers.*",
     "google.generativeai.*",
-    "textual.*",
     "dotenv.*",
     "pydantic.*",
     "pydantic_settings.*",

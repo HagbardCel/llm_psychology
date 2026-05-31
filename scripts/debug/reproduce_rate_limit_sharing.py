@@ -11,7 +11,8 @@ async def main():
     # We need to mock the API key if it's not set, to allow instantiation
     if not container.config.GOOGLE_API_KEY:
         print(
-            "WARNING: GOOGLE_API_KEY not set. Setting a dummy key for testing instantiation."
+            "WARNING: GOOGLE_API_KEY not set. "
+            "Setting a dummy key for testing instantiation."
         )
         container.config.GOOGLE_API_KEY = "dummy_key_for_testing"
 
@@ -34,18 +35,20 @@ async def main():
     print(f"Intake service ID:  {id(service_intake)}")
     print(f"Assess service ID:  {id(service_assessment)}")
 
-    print(f"Model Names:")
+    print("Model Names:")
     print(f"  Default: {service_default.model_name}")
     print(f"  Intake:  {service_intake.model_name}")
     print(f"  Assess:  {service_assessment.model_name}")
 
     if is_same_intake and is_same_assessment:
         print(
-            "\n[SUCCESS] Services are the SAME object instance. Rate limiting is shared."
+            "\n[SUCCESS] Services are the SAME object instance. "
+            "Rate limiting is shared."
         )
     else:
         print(
-            "\n[FAIL] Services are DIFFERENT object instances. Rate limiting is NOT shared."
+            "\n[FAIL] Services are DIFFERENT object instances. "
+            "Rate limiting is NOT shared."
         )
 
 
