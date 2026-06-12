@@ -16,9 +16,11 @@ def probe_modules(monkeypatch):
     repo_root = Path(__file__).resolve().parents[2]
     monkeypatch.syspath_prepend(str(repo_root / "console-ui"))
     modules = {
+        "assertions": importlib.import_module("src.workflow_probe.assertions"),
         "db_snapshot": importlib.import_module("src.workflow_probe.db_snapshot"),
         "local_user": importlib.import_module("src.workflow_probe.local_user"),
         "recorder": importlib.import_module("src.workflow_probe.recorder"),
+        "runner": importlib.import_module("src.workflow_probe.runner"),
         "simulator": importlib.import_module("src.llm_user_simulator"),
     }
     yield modules
@@ -157,7 +159,12 @@ async def test_recorder_writes_required_text_artifacts(probe_modules, tmp_path):
     assert (tmp_path / "trace.jsonl").exists()
     assert (tmp_path / "summary.md").exists()
     assert (tmp_path / "transcript.md").exists()
-    assert json.loads((tmp_path / "metadata.json").read_text())["status"] == "PASS"
+    assert (tmp_path / "timeline.md").exists()
+    assert (tmp_path / "run_manifest.json").exists()
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+    assert metadata["status"] == "PASS"
+    assert manifest == metadata
 
 
 async def test_recorder_omits_slash_commands_from_clinical_transcript(probe_modules, tmp_path):
@@ -166,6 +173,116 @@ async def test_recorder_omits_slash_commands_from_clinical_transcript(probe_modu
     await recorder.write_artifacts("PASS", {"id": "scenario"})
 
     assert "/quit" not in (tmp_path / "transcript.md").read_text()
+
+
+async def test_recorder_renders_timeline_with_scalar_error_data(probe_modules, tmp_path):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    await recorder.record(
+        "error",
+        message="Workflow probe failed",
+        data="RuntimeError('Timed out waiting for post-session plan update')",
+    )
+    await recorder.write_artifacts("FAIL", {"id": "scenario"})
+
+    timeline = (tmp_path / "timeline.md").read_text()
+    assert "Workflow Timeline" in timeline
+    assert "Workflow probe failed" in timeline
+    assert "Timed out waiting for post-session plan update" in timeline
+
+
+async def test_recorder_escapes_timeline_table_cells(probe_modules, tmp_path):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    await recorder.record("warning", message="left|right", workflow_state="a|b")
+
+    timeline = recorder._render_timeline()
+
+    assert "left\\|right" in timeline
+    assert "a\\|b" in timeline
+
+
+async def test_probe_post_session_follow_up_requires_plan_update_state(probe_modules):
+    runner = probe_modules["runner"]
+    assert not runner._needs_post_session_follow_up(
+        [
+            {
+                "kind": "session_ended",
+                "data": {"workflow_state": "intake_in_progress"},
+            },
+            {
+                "kind": "error",
+                "data": "RuntimeError('Timed out waiting for post-session plan update')",
+            },
+        ]
+    )
+    assert runner._needs_post_session_follow_up(
+        [
+            {
+                "kind": "session_ended",
+                "data": {"workflow_state": "plan_update_in_progress"},
+            }
+        ]
+    )
+
+
+async def test_probe_assertion_event_data_helper_tolerates_scalar_data(probe_modules):
+    assertions = probe_modules["assertions"]
+    assert assertions._event_data({"kind": "error", "data": "boom"}) == {}
+    assert assertions._event_data({"kind": "event", "data": {"session_id": "s1"}}) == {
+        "session_id": "s1"
+    }
+
+
+async def test_probe_concrete_step_terms_accept_breath(probe_modules):
+    assertions = probe_modules["assertions"]
+    response = "Try taking a breath and naming what you notice."
+
+    assert any(
+        term in response.lower()
+        for term in assertions.DEFAULT_CONCRETE_STEP_TERMS
+    )
+
+
+async def test_recorder_counts_unphased_finish_events(probe_modules, tmp_path):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    metrics_path = tmp_path / "backend_llm_calls.jsonl"
+    metrics_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "stream_response",
+                        "phase": "intake_response",
+                        "latency_ms": 12.5,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "generate_response",
+                        "phase": None,
+                        "latency_ms": 7.25,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "status": "start",
+                        "call_type": "generate_response",
+                        "phase": None,
+                        "latency_ms": None,
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = recorder._load_llm_timing_summary()
+
+    assert summary["phase_timings_ms"] == {"intake_response_ms": 12.5}
+    assert summary["llm_finished_count"] == 2
+    assert summary["llm_unphased_finish_count"] == 1
+    assert summary["llm_unphased_latency_ms"] == 7.25
 
 
 async def test_db_snapshot_uses_backup_integrity_and_attributable_rows(probe_modules, tmp_path):

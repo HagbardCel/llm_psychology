@@ -278,7 +278,11 @@ class TrioConversationManager:
                     and not any(
                         message.role == "user" for message in context.message_history
                     )
-                    else "therapy_response" if agent == "THERAPIST" else None
+                    else "therapy_response"
+                    if agent == "THERAPIST"
+                    else "intake_response"
+                    if agent == "INTAKE"
+                    else None
                 ),
             ):
                 full_response += chunk
@@ -521,6 +525,12 @@ class TrioConversationManager:
                 therapy_plan = await self.db_service.get_current_therapy_plan(
                     session.user_id
                 )
+                if therapy_plan and not therapy_plan.session_briefing:
+                    therapy_plan = await self._with_latest_session_briefing(
+                        therapy_plan,
+                        user_id=session.user_id,
+                        active_session_id=session_id,
+                    )
             except Exception as exc:
                 logger.warning(
                     "No therapy plan found for user %s: %s", session.user_id, exc
@@ -544,6 +554,30 @@ class TrioConversationManager:
         except Exception as e:
             logger.error(f"Error loading context: {e}", exc_info=True)
             raise
+
+    async def _with_latest_session_briefing(
+        self,
+        therapy_plan,
+        *,
+        user_id: str,
+        active_session_id: str,
+    ):
+        """Attach latest persisted session briefing without mutating plan storage."""
+        recent_sessions = await self.db_service.get_recent_sessions(
+            user_id,
+            limit=5,
+            enriched_only=False,
+        )
+        for recent_session in recent_sessions:
+            if recent_session.session_id == active_session_id:
+                continue
+            if recent_session.session_type != "therapy":
+                continue
+            if recent_session.session_briefing:
+                return therapy_plan.model_copy(
+                    update={"session_briefing": recent_session.session_briefing}
+                )
+        return therapy_plan
 
     def clear_context(self, session_id: str) -> None:
         """

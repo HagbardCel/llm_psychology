@@ -38,6 +38,7 @@ class SessionEnrichmentService:
             enrichment_prompt,
             Tier2Enrichment,
             method="json_schema",
+            phase="post_session_update",
         )
         if not isinstance(tier2, Tier2Enrichment):
             logger.error(
