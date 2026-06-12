@@ -68,6 +68,61 @@ async def test_local_user_tracks_transcript_outside_console_client(probe_modules
     ]
 
 
+async def test_local_user_uses_user_sim_model_over_model_name(probe_modules, monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://therapist/v1")
+    monkeypatch.setenv("MODEL_NAME", "therapist-model")
+    monkeypatch.setenv("USER_SIM_LLM_MODEL", "patient-model")
+    recorder = probe_modules["recorder"].ProbeRecorder(Path("/tmp") / "probe-test", "scenario")
+
+    user = probe_modules["local_user"].LocalUser({}, recorder)
+
+    assert user.simulator is not None
+    assert user.simulator.model == "patient-model"
+
+
+async def test_local_user_uses_user_sim_base_url_over_llm_base_url(
+    probe_modules, monkeypatch
+):
+    monkeypatch.setenv("LLM_BASE_URL", "http://therapist/v1")
+    monkeypatch.setenv("MODEL_NAME", "therapist-model")
+    monkeypatch.setenv("USER_SIM_LLM_BASE_URL", "http://patient/v1")
+    recorder = probe_modules["recorder"].ProbeRecorder(Path("/tmp") / "probe-test", "scenario")
+
+    user = probe_modules["local_user"].LocalUser({}, recorder)
+
+    assert user.simulator is not None
+    assert user.simulator.base_url == "http://patient/v1"
+
+
+async def test_local_user_falls_back_to_model_name_for_user_sim_model(
+    probe_modules, monkeypatch
+):
+    monkeypatch.setenv("LLM_BASE_URL", "http://therapist/v1")
+    monkeypatch.setenv("MODEL_NAME", "therapist-model")
+    monkeypatch.delenv("USER_SIM_LLM_MODEL", raising=False)
+    recorder = probe_modules["recorder"].ProbeRecorder(Path("/tmp") / "probe-test", "scenario")
+
+    user = probe_modules["local_user"].LocalUser({}, recorder)
+
+    assert user.simulator is not None
+    assert user.simulator.model == "therapist-model"
+
+
+async def test_local_user_deterministic_mode_does_not_construct_simulator(
+    probe_modules, monkeypatch
+):
+    monkeypatch.setenv("PROBE_DETERMINISTIC_USER", "true")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    monkeypatch.delenv("USER_SIM_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("USER_SIM_LLM_MODEL", raising=False)
+    recorder = probe_modules["recorder"].ProbeRecorder(Path("/tmp") / "probe-test", "scenario")
+
+    user = probe_modules["local_user"].LocalUser({}, recorder)
+
+    assert user.simulator is None
+
+
 async def test_simulator_retries_invalid_reply_then_fails_explicitly(probe_modules):
     simulator_mod = probe_modules["simulator"]
     simulator = simulator_mod.LocalLLMUserSimulator("http://unused", "model")
