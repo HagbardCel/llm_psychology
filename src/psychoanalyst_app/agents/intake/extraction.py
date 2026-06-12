@@ -34,6 +34,7 @@ async def extract_tier1_data(
             extraction_prompt,
             PatientProfileExtract,
             method="json_schema",
+            phase="assessment_generation",
         )
         if not isinstance(extracted, PatientProfileExtract):
             logger.error("Tier 1 extraction returned unexpected type")

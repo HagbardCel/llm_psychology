@@ -18,7 +18,8 @@ References:
 ## Inputs
 - `ConversationContext` (message history for intake summary).
 - `LLMService` for style assessment.
-- `RAGService` and `StyleService` for style prompts and descriptions.
+- `RAGService` reserved extension hook and `StyleService` for style prompts and
+  descriptions. Runtime composition uses `NoOpRAGService` by default.
 - `TrioDatabaseService` for profile lookups in advanced extraction helpers.
 - `TrioReflectionAgent` for plan creation with selected style.
 

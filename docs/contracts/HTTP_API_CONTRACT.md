@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: HTTP wire contract and DTO shape guarantees
 ---
@@ -341,6 +341,8 @@ These shapes are what all clients should assume on the wire.
 ### `POST /api/version/check`
 
 - Request: `{ "client_version": "...", "client_type": "console" | "web" }`
+- `web` remains an accepted wire-level discriminator for compatibility; it
+  does not represent a maintained browser frontend.
 - **200**: `VersionCheckResponseDTO`
 - **400**: `{ "error": "Invalid request", "details": [...] }` (or other invalid request shapes)
 

@@ -33,6 +33,7 @@
     "enrichment_timeout_seconds": 120
   },
   "timing_warning_thresholds_ms": {
+    "intake_response_ms": 120000,
     "assessment_generation_ms": 180000,
     "initial_plan_generation_ms": 180000,
     "therapy_opening_ms": 120000,

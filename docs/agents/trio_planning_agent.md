@@ -15,7 +15,7 @@ References:
 
 ## Inputs
 - `Session` and current `TherapyPlan` where applicable.
-- `LLMService`, `RAGService`, `StyleService`.
+- `LLMService`, the optional `RAGService` extension hook, and `StyleService`.
 - `TrioMemoryAgent` for session context and longitudinal memory.
 
 ## Outputs

@@ -1,4 +1,4 @@
-"""LLM + RAG helper functions for the planning agent."""
+"""LLM and optional retrieval helpers for the planning agent."""
 
 from __future__ import annotations
 

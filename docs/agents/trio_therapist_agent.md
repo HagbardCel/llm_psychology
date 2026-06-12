@@ -5,8 +5,8 @@ Conducts the primary therapy conversation, using the current therapy plan
 and session context to generate prompts and drive workflow transitions.
 
 ## Trigger / Invocation
-- Routed by workflow states `ASSESSMENT_COMPLETE`, `THERAPY_IN_PROGRESS`,
-  and `PLAN_UPDATE_COMPLETE`.
+- Routed by workflow states `ASSESSMENT_COMPLETE`, `INITIAL_PLAN_COMPLETE`,
+  `THERAPY_IN_PROGRESS`, and `PLAN_UPDATE_COMPLETE`.
 - Entry point: `process_message`.
 
 References:
@@ -16,7 +16,8 @@ References:
 ## Inputs
 - `ConversationContext` including `therapy_plan` and session history.
 - `LLMService` for prompt responses.
-- `RAGService` for contextual knowledge retrieval.
+- `RAGService` optional retrieval hook. Runtime composition uses
+  `NoOpRAGService` by default.
 - `StyleService` for style configuration and prompt building.
 - `Settings` for session time and briefing validity windows.
 

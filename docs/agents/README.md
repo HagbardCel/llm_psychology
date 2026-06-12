@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-02-14
+last_reviewed: 2026-05-31
 review_cycle_days: 90
 source_of_truth_for: Agent responsibilities, workflow routing, and orchestration integration contract
 ---
@@ -25,9 +25,15 @@ The orchestrator uses this mapping to pick the agent on each user message.
 | INTAKE_COMPLETE | ASSESSMENT | `TrioAssessmentAgent` |
 | ASSESSMENT_IN_PROGRESS | ASSESSMENT | `TrioAssessmentAgent` |
 | ASSESSMENT_COMPLETE | THERAPIST | `TrioTherapistAgent` |
+| INITIAL_PLAN_COMPLETE | THERAPIST | `TrioTherapistAgent` |
 | THERAPY_IN_PROGRESS | THERAPIST | `TrioTherapistAgent` |
+| PLAN_UPDATE_IN_PROGRESS | REFLECTION | `TrioReflectionAgent` |
 | REFLECTION_IN_PROGRESS | REFLECTION | `TrioReflectionAgent` |
+| PLAN_UPDATE_FAILED | REFLECTION | `TrioReflectionAgent` |
 | PLAN_UPDATE_COMPLETE | THERAPIST | `TrioTherapistAgent` |
+
+Runtime composition uses `NoOpRAGService` by default. Agent retrieval hooks are
+reserved extension points, and deterministic probes or tests may inject fakes.
 
 ## Execution Pipeline (High Level)
 

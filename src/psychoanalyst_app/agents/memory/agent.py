@@ -81,6 +81,7 @@ class TrioMemoryAgent:
                 analysis_prompt,
                 SessionAnalysis,
                 method="json_schema",
+                phase="post_session_update",
             )
             if not isinstance(analysis, SessionAnalysis):
                 raise MemoryError("Session analysis returned unexpected type")

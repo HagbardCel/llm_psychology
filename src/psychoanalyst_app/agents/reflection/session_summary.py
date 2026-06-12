@@ -23,7 +23,19 @@ from psychoanalyst_app.models.llm_outputs import (
 from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
-OVERCLAIM_PHRASES = ("agreed to try", "readily accepting", "completed the")
+OVERCLAIM_PHRASES = (
+    "agreed to try",
+    "readily accepting",
+    "completed the",
+    "accepted the",
+    "practiced the",
+    "implemented the",
+    "successfully used",
+    "made progress",
+    "session advanced",
+    "client engaged with",
+    "patient engaged with",
+)
 
 
 def is_noop_plan_update(
@@ -121,7 +133,12 @@ async def generate_session_summary(llm_service: LLMService, session: Session) ->
     """Generate a traditional session summary using blocking LLM call."""
     session_text = "\n".join(f"{msg.role}: {msg.content}" for msg in session.transcript)
     summary_prompt = SESSION_SUMMARY_PROMPT.format(session_text=session_text)
-    return await trio.to_thread.run_sync(llm_service.generate_response, summary_prompt)
+    return await trio.to_thread.run_sync(
+        lambda: llm_service.generate_response(
+            summary_prompt,
+            phase="post_session_update",
+        )
+    )
 
 
 async def generate_session_summary_payload(

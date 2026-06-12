@@ -15,7 +15,7 @@ class DeterministicLLMService:
     """
     Deterministic, no-network LLM service replacement.
 
-    Implements the subset of the production LLMService interface used by agents
+    Implements the subset of the runtime LLMService interface used by agents
     and orchestration so the backend can run in CI/E2E without API keys.
     """
 

@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
 
     # Environment
-    APP_ENV: str = Field(default="production")
+    APP_ENV: str = Field(default="local")
 
     # LLM Configuration
     LLM_PROVIDER: str = Field(

@@ -14,11 +14,7 @@ class LocalUser:
     """Provide deterministic structural answers and model-generated chat replies."""
 
     def __init__(self, scenario: dict[str, Any], recorder: Any):
-        base_url = os.getenv("LLM_BASE_URL")
-        model = os.getenv("MODEL_NAME")
         self.deterministic = os.getenv("PROBE_DETERMINISTIC_USER", "").lower() == "true"
-        if not self.deterministic and (not base_url or not model):
-            raise ValueError("LLM_BASE_URL and MODEL_NAME are required for make probe")
         self.scenario = scenario
         self.transcript: list[dict[str, str]] = []
         self.turn_index = 0
@@ -28,13 +24,7 @@ class LocalUser:
         self.simulator = (
             None
             if self.deterministic
-            else LocalLLMUserSimulator(
-                base_url=base_url,
-                model=model,
-                api_key=os.getenv("LLM_API_KEY"),
-                temperature=float(os.getenv("USER_SIM_LLM_TEMPERATURE", "0")),
-                recorder=recorder,
-            )
+            else LocalLLMUserSimulator.from_env(recorder=recorder)
         )
 
     async def get_input(self, context: InputContext) -> str | InputResult:

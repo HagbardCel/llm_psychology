@@ -5,7 +5,8 @@ Analyzes completed therapy sessions, updates the therapy plan, generates
 session summaries/briefings, and produces Tier 2/3 enrichments.
 
 ## Trigger / Invocation
-- Routed by workflow state `REFLECTION_IN_PROGRESS`.
+- Routed by workflow states `PLAN_UPDATE_IN_PROGRESS`, retained
+  `REFLECTION_IN_PROGRESS`, and `PLAN_UPDATE_FAILED`.
 - Automatically invoked after session completion via
   `AgentResponseHandler.ensure_reflection_job`.
 - Entry points: `process_message` (orchestrator) and `process_reflection`.

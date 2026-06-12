@@ -35,6 +35,7 @@ async def detect_deep_topic_via_llm(
             prompt,
             DeepTopicSignalOutput,
             method="json_schema",
+            phase="therapy_response",
         )
         if not isinstance(signal_output, DeepTopicSignalOutput):
             signal_output = DeepTopicSignalOutput.model_validate(signal_output)

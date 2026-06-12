@@ -250,7 +250,7 @@ async def build_continuation_prompt_with_context(
     style_service,
     db_service,
 ) -> str:
-    """Build continuation prompt with RAG + patient context."""
+    """Build continuation prompt with optional retrieval and patient context."""
     recent_messages = context.message_history[-3:]
     recent_context = " ".join([msg.content for msg in recent_messages] + [message])
     context_knowledge = await _retrieve_relevant_knowledge(

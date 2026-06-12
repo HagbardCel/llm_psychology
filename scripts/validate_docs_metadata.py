@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 ACTIVE_DOCS = [
@@ -82,6 +82,41 @@ def _validate_active_readme_index(repo_root: Path, errors: list[str]) -> None:
             )
 
 
+def _validate_review_freshness(
+    doc: str,
+    metadata: dict[str, str],
+    errors: list[str],
+    *,
+    today: date | None = None,
+) -> None:
+    try:
+        reviewed = date.fromisoformat(metadata["last_reviewed"])
+    except ValueError:
+        errors.append(
+            f"{doc}: last_reviewed must be ISO date YYYY-MM-DD, "
+            f"got '{metadata['last_reviewed']}'"
+        )
+        return
+
+    try:
+        cycle = int(metadata["review_cycle_days"])
+        if cycle <= 0:
+            raise ValueError
+    except ValueError:
+        errors.append(
+            f"{doc}: review_cycle_days must be a positive integer, "
+            f"got '{metadata['review_cycle_days']}'"
+        )
+        return
+
+    due = reviewed + timedelta(days=cycle)
+    if (today or date.today()) > due:
+        errors.append(
+            f"{doc}: documentation review is overdue "
+            f"(last reviewed {reviewed.isoformat()}, due {due.isoformat()})"
+        )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     errors: list[str] = []
@@ -106,23 +141,7 @@ def main() -> int:
         if metadata["status"] != "active":
             errors.append(f"{doc}: status must be 'active', got '{metadata['status']}'")
 
-        try:
-            date.fromisoformat(metadata["last_reviewed"])
-        except ValueError:
-            errors.append(
-                f"{doc}: last_reviewed must be ISO date YYYY-MM-DD, "
-                f"got '{metadata['last_reviewed']}'"
-            )
-
-        try:
-            cycle = int(metadata["review_cycle_days"])
-            if cycle <= 0:
-                raise ValueError
-        except ValueError:
-            errors.append(
-                f"{doc}: review_cycle_days must be a positive integer, "
-                f"got '{metadata['review_cycle_days']}'"
-            )
+        _validate_review_freshness(doc, metadata, errors)
 
         if not metadata["owner"]:
             errors.append(f"{doc}: owner must not be empty")
