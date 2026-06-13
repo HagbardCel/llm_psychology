@@ -8,12 +8,18 @@ from pathlib import Path
 
 import pytest
 
+from psychoanalyst_app.shared.intake_slot_evidence import (
+    GOAL_PREFERENCE_PROMPT,
+    RISK_SCREEN_PROMPT,
+)
+
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
 
 @pytest.fixture
 def probe_modules(monkeypatch):
     repo_root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(repo_root / "src"))
     monkeypatch.syspath_prepend(str(repo_root / "console-ui"))
     modules = {
         "assertions": importlib.import_module("src.workflow_probe.assertions"),
@@ -216,11 +222,7 @@ async def test_recorder_writes_intake_diagnostics_and_failure_summary(
                         },
                         {
                             "role": "assistant",
-                            "content": (
-                                "Before we continue, I want to check your safety "
-                                "directly. Have you had any thoughts of harming "
-                                "yourself or someone else?"
-                            ),
+                            "content": RISK_SCREEN_PROMPT,
                         },
                         {
                             "role": "user",
@@ -228,11 +230,7 @@ async def test_recorder_writes_intake_diagnostics_and_failure_summary(
                         },
                         {
                             "role": "assistant",
-                            "content": (
-                                "What would you most want to be different as a "
-                                "result of therapy, and what would feel like the "
-                                "most useful place for us to start?"
-                            ),
+                            "content": GOAL_PREFERENCE_PROMPT,
                         },
                         {
                             "role": "user",
@@ -282,11 +280,7 @@ async def test_recorder_rejects_vague_duration_evidence(probe_modules, tmp_path)
                         },
                         {
                             "role": "assistant",
-                            "content": (
-                                "Before we continue, I want to check your safety "
-                                "directly. Have you had any thoughts of harming "
-                                "yourself or someone else?"
-                            ),
+                            "content": RISK_SCREEN_PROMPT,
                         },
                         {
                             "role": "user",
@@ -294,10 +288,7 @@ async def test_recorder_rejects_vague_duration_evidence(probe_modules, tmp_path)
                         },
                         {
                             "role": "assistant",
-                            "content": (
-                                "What would you most want to be different as a "
-                                "result of therapy?"
-                            ),
+                            "content": GOAL_PREFERENCE_PROMPT,
                         },
                         {
                             "role": "user",
@@ -317,6 +308,47 @@ async def test_recorder_rejects_vague_duration_evidence(probe_modules, tmp_path)
     assert "duration" in diagnostics["missing_hard_slots"]
     assert diagnostics["slot_evidence"]["duration"]["status"] == "missing"
     assert diagnostics["slot_evidence"]["duration"]["evidence_quote"] is None
+
+
+async def test_recorder_covers_risk_screen_medical_urgency_answer(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.created_rows = {
+        "sessions": [
+            {
+                "session_id": "intake-1",
+                "session_type": "intake",
+                "timestamp": "2026-06-12T00:00:00+00:00",
+                "transcript": json.dumps(
+                    [
+                        {
+                            "role": "user",
+                            "content": (
+                                "I have been anxious about work for several "
+                                "months and sleeping badly."
+                            ),
+                        },
+                        {"role": "assistant", "content": RISK_SCREEN_PROMPT},
+                        {
+                            "role": "user",
+                            "content": (
+                                "No thoughts of harm. Chest tightness is not "
+                                "medically urgent."
+                            ),
+                        },
+                    ]
+                ),
+            }
+        ],
+        "user_profiles": [{"status": "INTAKE_IN_PROGRESS"}],
+    }
+
+    diagnostics = recorder._intake_completion_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics["slot_evidence"]["risk_screen"]["status"] == "covered"
+    assert "risk_screen" in diagnostics["covered_slots"]
 
 
 async def test_recorder_omits_slash_commands_from_clinical_transcript(probe_modules, tmp_path):

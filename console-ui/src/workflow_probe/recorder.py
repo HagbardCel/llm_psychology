@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
-import re
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from psychoanalyst_app.shared.intake_slot_evidence import (
+    HARD_REQUIRED_INTAKE_SLOTS,
+    REQUIRED_INTAKE_SLOTS,
+    SOFT_REQUIRED_INTAKE_SLOTS,
+    covered_slots_from_evidence,
+    intake_slot_evidence_from_transcript,
+    next_required_follow_up_slot,
+)
 
 
 class ProbeRecorder:
@@ -774,48 +782,12 @@ class ProbeRecorder:
             for item in transcript
             if isinstance(item, dict) and item.get("role") == "user"
         ]
-        required = {
-            "presenting_problem",
-            "duration",
-            "sleep_impact",
-            "coping_attempts",
-            "functional_impairment",
-            "risk_screen",
-            "goal_preference",
-        }
-        hard = {
-            "presenting_problem",
-            "duration",
-            "functional_impairment",
-            "risk_screen",
-            "goal_preference",
-        }
-        soft = required - hard
-        slot_evidence = _intake_slot_evidence_from_transcript(transcript)
-        covered = {
-            slot
-            for slot, detail in slot_evidence.items()
-            if detail.get("status") == "covered"
-            and (
-                slot not in hard
-                or (
-                    detail.get("explicitness") == "explicit"
-                    and detail.get("evidence_role") == "user"
-                    and bool(detail.get("evidence_quote"))
-                )
-            )
-        }
-        missing_required = required - covered
-        missing_hard = hard - covered
-        missing_soft = soft - covered
-        if "risk_screen" in missing_hard:
-            next_follow_up = "risk_screen"
-        elif "goal_preference" in missing_hard:
-            next_follow_up = "goal_preference"
-        elif "coping_attempts" in missing_soft:
-            next_follow_up = "coping_attempts"
-        else:
-            next_follow_up = None
+        slot_evidence = intake_slot_evidence_from_transcript(transcript)
+        covered = covered_slots_from_evidence(slot_evidence)
+        missing_required = REQUIRED_INTAKE_SLOTS - covered
+        missing_hard = HARD_REQUIRED_INTAKE_SLOTS - covered
+        missing_soft = SOFT_REQUIRED_INTAKE_SLOTS - covered
+        next_follow_up = next_required_follow_up_slot(covered)
         final_state = self._final_workflow_state()
         completion_decision = (
             "complete_intake"
@@ -1243,182 +1215,6 @@ def _percentile(values: list[float], percentile: float) -> float:
         return 0.0
     index = round((len(values) - 1) * percentile)
     return round(values[index], 3)
-
-
-_REQUIRED_INTAKE_SLOTS = {
-    "presenting_problem",
-    "duration",
-    "sleep_impact",
-    "coping_attempts",
-    "functional_impairment",
-    "risk_screen",
-    "goal_preference",
-}
-_SLOT_KEYWORDS = {
-    "presenting_problem": (
-        "anxiety",
-        "anxious",
-        "worry",
-        "worried",
-        "stress",
-        "dreading",
-        "struggling",
-        "problem",
-        "panic",
-    ),
-    "sleep_impact": ("sleep", "insomnia", "awake", "ceiling", "bed", "tired"),
-    "coping_attempts": (
-        "cope",
-        "coping",
-        "try",
-        "tried",
-        "not tried",
-        "haven't tried",
-        "have not tried",
-        "nothing yet",
-        "anything yet",
-        "exercise",
-        "breathing",
-        "meditation",
-        "avoid",
-        "avoiding",
-        "alcohol",
-        "wine",
-        "caffeine",
-        "medication",
-        "talking to someone",
-        "substance",
-    ),
-    "functional_impairment": (
-        "work",
-        "deadline",
-        "project",
-        "school",
-        "focus",
-        "concentrate",
-        "relationship",
-        "function",
-        "miss meetings",
-        "missed meetings",
-        "can't speak",
-        "cannot speak",
-    ),
-}
-_DURATION_PATTERNS = [
-    re.compile(
-        r"\b(for|over|about|around|roughly|nearly|almost)\s+"
-        r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|several|a few)\s+"
-        r"(day|days|week|weeks|month|months|year|years)\b"
-    ),
-    re.compile(r"\bsince\s+[a-z0-9][a-z0-9 ,/-]{1,40}\b"),
-    re.compile(
-        r"\b(twice|once|daily|nightly|weekly|monthly|every\s+"
-        r"(day|night|week|month)|\d+\s+times\s+(a|per)\s+"
-        r"(day|week|month|year))\b"
-    ),
-    re.compile(r"\b(last|past)\s+(few|couple|several|\d+)\s+(days|weeks|months|years)\b"),
-]
-
-
-def _intake_slot_evidence_from_transcript(
-    transcript: list[Any],
-) -> dict[str, dict[str, Any]]:
-    evidence = {
-        slot: _missing_slot_evidence(slot, "No explicit patient evidence found")
-        for slot in _REQUIRED_INTAKE_SLOTS
-    }
-    user_messages = [
-        (index, str(item.get("content") or ""))
-        for index, item in enumerate(transcript)
-        if isinstance(item, dict) and item.get("role") == "user"
-    ]
-
-    for slot, keywords in _SLOT_KEYWORDS.items():
-        for index, content in user_messages:
-            if any(keyword in content.lower() for keyword in keywords):
-                evidence[slot] = _covered_slot_evidence(slot, index, content)
-                break
-
-    for index, content in user_messages:
-        if any(pattern.search(content.lower()) for pattern in _DURATION_PATTERNS):
-            evidence["duration"] = _covered_slot_evidence("duration", index, content)
-            break
-    if evidence["duration"]["status"] == "missing":
-        evidence["duration"]["reason"] = (
-            "No patient statement specifies onset, duration, or frequency"
-        )
-
-    for index, item in enumerate(transcript):
-        if not isinstance(item, dict) or item.get("role") != "assistant":
-            continue
-        if index + 1 >= len(transcript):
-            continue
-        answer = transcript[index + 1]
-        if not isinstance(answer, dict) or answer.get("role") != "user":
-            continue
-        answer_text = str(answer.get("content") or "")
-        prompt_text = str(item.get("content") or "").lower()
-        if "thoughts of harming yourself or someone else" in prompt_text and any(
-            keyword in answer_text.lower()
-            for keyword in ("harm", "suicid", "hurt myself", "hurt anyone", "safe")
-        ):
-            evidence["risk_screen"] = _covered_slot_evidence(
-                "risk_screen", index + 1, answer_text
-            )
-        if "what would you most want to be different" in prompt_text and any(
-            keyword in answer_text.lower()
-            for keyword in ("goal", "want", "hope", "start", "different", "better")
-        ):
-            evidence["goal_preference"] = _covered_slot_evidence(
-                "goal_preference", index + 1, answer_text
-            )
-
-    return evidence
-
-
-def _missing_slot_evidence(slot: str, reason: str) -> dict[str, Any]:
-    return {
-        "slot_id": slot,
-        "status": "missing",
-        "explicitness": "not_present",
-        "evidence_message_index": None,
-        "evidence_role": None,
-        "evidence_quote": None,
-        "confidence": 0.0,
-        "reason": reason,
-    }
-
-
-def _covered_slot_evidence(slot: str, index: int, quote: str) -> dict[str, Any]:
-    return {
-        "slot_id": slot,
-        "status": "covered",
-        "explicitness": "explicit",
-        "evidence_message_index": index,
-        "evidence_role": "user",
-        "evidence_quote": _slot_quote_excerpt(quote),
-        "confidence": 1.0,
-        "reason": None,
-    }
-
-
-def _slot_quote_excerpt(text: str, *, limit: int = 220) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 13].rstrip() + " <truncated>"
-
-
-def _infer_intake_slots(combined_text: str, assistant_text: str) -> set[str]:
-    transcript = [{"role": "user", "content": combined_text}]
-    if assistant_text:
-        transcript.insert(0, {"role": "assistant", "content": assistant_text})
-    evidence = _intake_slot_evidence_from_transcript(transcript)
-    return {
-        slot
-        for slot, detail in evidence.items()
-        if detail["status"] == "covered"
-    }
 
 
 def _walk_session_ids(value: Any):

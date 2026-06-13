@@ -23,9 +23,11 @@ services:
     volumes:
       - ./console-ui/src:/app/src:delegated
       - ./console-ui/scenarios:/app/scenarios:ro
+      - ./src:/app/backend-src:ro
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/backend-src
       - BACKEND_URL=http://api-probe:8000
       - WEBSOCKET_URL=http://api-probe:8000
       - WEBSOCKET_ORIGIN=http://localhost
