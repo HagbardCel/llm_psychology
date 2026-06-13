@@ -23,8 +23,10 @@ class _FakeChatModel:
         self.with_structured_output_calls: list[tuple[object, str]] = []
 
         self.response_content: str = "fake response"
+        self.response_usage_metadata: dict[str, int] = {}
         self.raise_on_invoke: Exception | None = None
         self.stream_chunk_contents: list[str] = ["Hello ", "", "world!"]
+        self.stream_usage_metadata: dict[str, int] = {}
         self.structured_result: object = {"ok": True}
         self.last_runnable: object | None = None
 
@@ -32,12 +34,28 @@ class _FakeChatModel:
         self.invoke_calls.append(messages)
         if self.raise_on_invoke:
             raise self.raise_on_invoke
-        return type("Resp", (), {"content": self.response_content})()
+        return type(
+            "Resp",
+            (),
+            {
+                "content": self.response_content,
+                "usage_metadata": self.response_usage_metadata,
+            },
+        )()
 
     def stream(self, messages):
         self.stream_calls.append(messages)
-        for content in self.stream_chunk_contents:
-            yield type("Chunk", (), {"content": content})()
+        for index, content in enumerate(self.stream_chunk_contents):
+            usage = (
+                self.stream_usage_metadata
+                if index == len(self.stream_chunk_contents) - 1
+                else {}
+            )
+            yield type(
+                "Chunk",
+                (),
+                {"content": content, "usage_metadata": usage},
+            )()
 
     def with_structured_output(self, schema, method: str = "json_schema"):
         self.with_structured_output_calls.append((schema, method))
@@ -140,6 +158,34 @@ def test_generate_response_with_context_maps_roles(fake_chat_model):
     assert messages[-1].content == "How are you?"
 
 
+def test_generate_response_metrics_include_token_status_and_chars(fake_chat_model):
+    metrics_logger = _FakeLogger()
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
+    service._llm_metrics_logger = metrics_logger
+    fake_chat_model.response_content = "ok"
+    fake_chat_model.response_usage_metadata = {
+        "input_tokens": 4,
+        "output_tokens": 2,
+    }
+
+    result = service.generate_response("Hello", phase=THERAPY_RESPONSE)
+
+    assert result == "ok"
+    finish = [
+        json.loads(message)
+        for message in metrics_logger.messages
+        if json.loads(message)["status"] == "finish"
+    ][0]
+    assert finish["token_count_status"] == "complete"
+    assert finish["prompt_tokens"] == 4
+    assert finish["completion_tokens"] == 2
+    assert finish["completion_chars"] == 2
+
+
 def test_generate_response_wraps_exceptions(fake_chat_model):
     service = LLMService(
         api_key="test",
@@ -200,6 +246,45 @@ async def test_stream_response_yields_non_empty_chunks(fake_chat_model):
 
     assert chunks == ["a", "b"]
     assert len(fake_chat_model.stream_calls) == 1
+
+
+@pytest.mark.trio
+async def test_stream_response_metrics_include_boundary_and_chunk_counts(
+    fake_chat_model,
+):
+    metrics_logger = _FakeLogger()
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
+    service._llm_metrics_logger = metrics_logger
+    fake_chat_model.stream_chunk_contents = ["a", "", "bc"]
+    fake_chat_model.stream_usage_metadata = {
+        "input_tokens": 5,
+        "output_tokens": 3,
+    }
+
+    chunks: list[str] = []
+    async for chunk in service.stream_response(
+        "Hello", context=None, phase=INTAKE_RESPONSE
+    ):
+        chunks.append(chunk)
+
+    assert chunks == ["a", "bc"]
+    finish = [
+        json.loads(message)
+        for message in metrics_logger.messages
+        if json.loads(message)["status"] == "finish"
+    ][0]
+    assert finish["token_count_status"] == "complete"
+    assert finish["prompt_tokens"] == 5
+    assert finish["completion_tokens"] == 3
+    assert finish["chunk_count"] == 2
+    assert finish["completion_chars"] == 3
+    assert finish["request_boundary_ms"] is not None
+    assert finish["prompt_eval_ms"] is not None
+    assert finish["generation_ms"] is not None
 
 
 @pytest.mark.trio

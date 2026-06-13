@@ -40,6 +40,62 @@ except Exception:  # pragma: no cover - optional dependency fallback
 SUPPORTED_LLM_PROVIDERS = {"gemini", "ollama", "lmstudio", "openai_compatible"}
 
 
+def _usage_value(usage: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _response_usage(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage_metadata", None)
+    if isinstance(usage, dict):
+        return usage
+
+    response_metadata = getattr(response, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        token_usage = response_metadata.get("token_usage")
+        if isinstance(token_usage, dict):
+            return token_usage
+        usage = response_metadata.get("usage")
+        if isinstance(usage, dict):
+            return usage
+
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            return usage
+
+    return {}
+
+
+def _token_counts(response: Any) -> dict[str, int | str | None]:
+    usage = _response_usage(response)
+    prompt_tokens = _usage_value(usage, "input_tokens", "prompt_tokens")
+    completion_tokens = _usage_value(
+        usage,
+        "output_tokens",
+        "completion_tokens",
+        "completion_token_count",
+    )
+    if prompt_tokens is not None and completion_tokens is not None:
+        status = "complete"
+    elif prompt_tokens is not None or completion_tokens is not None:
+        status = "partial"
+    else:
+        status = "unavailable"
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "token_count_status": status,
+    }
+
+
 def _get_llm_call_logger() -> logging.Logger:
     llm_logger = logging.getLogger(LLM_CALL_LOGGER_NAME)
     if not llm_logger.handlers:
@@ -375,7 +431,7 @@ class LLMService:
         extra: dict[str, Any] | None = None,
         response: Any = None,
     ) -> None:
-        usage = getattr(response, "usage_metadata", None) or {}
+        token_counts = _token_counts(response)
         now = time.perf_counter()
         latency_ms = (
             round((now - started_at) * 1000, 3)
@@ -406,8 +462,7 @@ class LLMService:
             "requests_per_minute": self.requests_per_minute,
             "burst_capacity": self.burst_capacity,
             "status": status,
-            "prompt_tokens": usage.get("input_tokens"),
-            "completion_tokens": usage.get("output_tokens"),
+            **token_counts,
             "recorded_at": datetime.now(UTC).isoformat(),
         }
         if extra:
@@ -497,6 +552,7 @@ class LLMService:
                     call_id=call_id,
                     rate_limit_wait_ms=rate_limit_wait_ms,
                     response=response,
+                    extra={"completion_chars": len(str(response.content or ""))},
                 )
                 return response.content
             else:
@@ -523,6 +579,7 @@ class LLMService:
                     call_id=call_id,
                     rate_limit_wait_ms=rate_limit_wait_ms,
                     response=response,
+                    extra={"completion_chars": len(str(response.content or ""))},
                 )
                 return response.content
         except LLMQuotaExhaustedError:
@@ -592,6 +649,12 @@ class LLMService:
         started_at = time.perf_counter()
         first_chunk_ms: float | None = None
         first_chunk_at: float | None = None
+        provider_started_at: float | None = None
+        provider_first_chunk_at: float | None = None
+        provider_finished_at: float | None = None
+        emitted_chunk_count = 0
+        completion_chars = 0
+        last_response_chunk: Any = None
         self._log_metric(
             "start",
             "stream_response",
@@ -613,10 +676,21 @@ class LLMService:
             messages = self._build_langchain_messages(prompt, context)
 
             def _iterator():
-                for chunk in self.llm.stream(messages):
-                    chunk_text = getattr(chunk, "content", None)
-                    if chunk_text:
-                        yield chunk_text
+                nonlocal provider_started_at
+                nonlocal provider_first_chunk_at
+                nonlocal provider_finished_at
+                nonlocal last_response_chunk
+                provider_started_at = time.perf_counter()
+                try:
+                    for chunk in self.llm.stream(messages):
+                        if provider_first_chunk_at is None:
+                            provider_first_chunk_at = time.perf_counter()
+                        last_response_chunk = chunk
+                        chunk_text = getattr(chunk, "content", None)
+                        if chunk_text:
+                            yield chunk_text
+                finally:
+                    provider_finished_at = time.perf_counter()
 
             async for chunk in iter_in_thread(_iterator, buffer_size=3):
                 if first_chunk_ms is None:
@@ -631,11 +705,30 @@ class LLMService:
                         "chunk": chunk,
                     },
                 )
+                emitted_chunk_count += 1
+                completion_chars += len(chunk)
                 yield chunk
             finished_at = time.perf_counter()
             stream_ms = (
                 round((finished_at - first_chunk_at) * 1000, 3)
                 if first_chunk_at is not None
+                else None
+            )
+            request_boundary_ms = (
+                round((provider_finished_at - provider_started_at) * 1000, 3)
+                if provider_started_at is not None and provider_finished_at is not None
+                else None
+            )
+            prompt_eval_ms = (
+                round((provider_first_chunk_at - provider_started_at) * 1000, 3)
+                if provider_started_at is not None
+                and provider_first_chunk_at is not None
+                else None
+            )
+            generation_ms = (
+                round((provider_finished_at - provider_first_chunk_at) * 1000, 3)
+                if provider_first_chunk_at is not None
+                and provider_finished_at is not None
                 else None
             )
             self._log_metric(
@@ -648,7 +741,15 @@ class LLMService:
                 rate_limit_wait_ms=rate_limit_wait_ms,
                 first_chunk_ms=first_chunk_ms,
                 stream_ms=stream_ms,
-                extra={"finished_at": datetime.now(UTC).isoformat()},
+                response=last_response_chunk,
+                extra={
+                    "finished_at": datetime.now(UTC).isoformat(),
+                    "request_boundary_ms": request_boundary_ms,
+                    "prompt_eval_ms": prompt_eval_ms,
+                    "generation_ms": generation_ms,
+                    "chunk_count": emitted_chunk_count,
+                    "completion_chars": completion_chars,
+                },
             )
 
         except Exception as e:
