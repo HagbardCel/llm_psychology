@@ -166,6 +166,76 @@ def test_openai_compatible_provider_config_custom_base_url(monkeypatch):
     assert settings.get_llm_base_url() == "http://llamacpp:8080/v1"
 
 
+def test_local_llm_endpoint_detection_defaults_to_local_llamacpp(monkeypatch):
+    """Test default OpenAI-compatible llama.cpp endpoint is local."""
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.is_local_llm_endpoint() is True
+    assert settings.effective_llm_rate_limit_enabled() is False
+
+
+def test_openai_compatible_local_base_urls_disable_rate_limit(monkeypatch):
+    """Test loopback and private OpenAI-compatible endpoints are local."""
+    local_urls = (
+        "http://localhost:8080/v1",
+        "http://127.0.0.1:8080/v1",
+        "http://[::1]:8080/v1",
+        "http://10.0.0.2:8080/v1",
+        "http://172.16.0.2:8080/v1",
+        "http://192.168.1.10:8080/v1",
+        "http://169.254.1.10:8080/v1",
+        "http://host.docker.internal:8080/v1",
+        "http://host.containers.internal:8080/v1",
+    )
+    for base_url in local_urls:
+        monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+        monkeypatch.setenv("LLM_BASE_URL", base_url)
+        monkeypatch.setenv("LLM_RATE_LIMIT_ENABLED", "true")
+        settings = Settings(_env_file=None)
+
+        assert settings.is_local_llm_endpoint() is True
+        assert settings.effective_llm_rate_limit_enabled() is False
+
+
+def test_openai_compatible_remote_base_url_keeps_rate_limit(monkeypatch):
+    """Test remote OpenAI-compatible endpoints are not treated as local."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("LLM_RATE_LIMIT_ENABLED", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.is_local_llm_endpoint() is False
+    assert settings.effective_llm_rate_limit_enabled() is True
+
+
+def test_local_providers_disable_rate_limit(monkeypatch):
+    """Test Ollama and LM Studio are always treated as local providers."""
+    for provider in ("ollama", "lmstudio"):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("LLM_BASE_URL", "")
+        monkeypatch.setenv("LLM_RATE_LIMIT_ENABLED", "true")
+        settings = Settings(_env_file=None)
+
+        assert settings.is_local_llm_endpoint() is True
+        assert settings.effective_llm_rate_limit_enabled() is False
+
+
+def test_gemini_is_not_local_and_honors_rate_limit_flag(monkeypatch):
+    """Test Gemini never uses the local-model rate-limit bypass."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("LLM_RATE_LIMIT_ENABLED", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.is_local_llm_endpoint() is False
+    assert settings.effective_llm_rate_limit_enabled() is True
+
+
 def test_default_llm_service_unchanged(monkeypatch):
     """Test that default llm_service still uses MODEL_NAME."""
     _clear_agent_model_env(monkeypatch)

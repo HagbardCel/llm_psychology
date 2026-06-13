@@ -162,6 +162,40 @@ class WorkflowNextActionDTO(BaseModel):
         return self
 
 
+class JobStatusDTO(BaseModel):
+    """Progress status for backend workflow work."""
+
+    job_id: str = Field(..., description="Stable semantic job identifier")
+    job_type: str = Field(..., description="Backend job category")
+    user_id: str = Field(..., description="User that owns the job")
+    session_id: str | None = Field(None, description="Session associated with the job")
+    status: str = Field(
+        ...,
+        description="not_started, queued, running, complete, or failed",
+    )
+    current_step: str | None = Field(
+        None, description="Human-readable current blocker or step"
+    )
+    workflow_state: WorkflowState | None = Field(
+        None, description="Current workflow state when relevant"
+    )
+    attempt: int | None = Field(None, description="Current or last attempt number")
+    correlation_id: str = Field(
+        ..., description="Stable identifier for this semantic job attempt"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When this status was evaluated or last updated",
+    )
+    last_error: str | None = Field(None, description="Bounded failure detail")
+    children: list["JobStatusDTO"] = Field(
+        default_factory=list,
+        description="Child jobs that determine aggregate status",
+    )
+
+    model_config = ConfigDict(use_enum_values=True)
+
+
 # ============================================================================
 # HTTP DTOs
 # ============================================================================

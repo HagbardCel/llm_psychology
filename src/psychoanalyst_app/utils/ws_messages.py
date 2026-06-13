@@ -49,5 +49,10 @@ def workflow_next_action_message(payload: dict[str, Any]) -> dict[str, Any]:
     return ws_message(ServerMessageTypes.WORKFLOW_NEXT_ACTION, payload)
 
 
+def job_status_message(payload: dict[str, Any]) -> dict[str, Any]:
+    """Encapsulate the job_status event payload."""
+    return ws_message(ServerMessageTypes.JOB_STATUS, payload)
+
+
 def error_message(message: str) -> dict[str, Any]:
     return ws_message(ServerMessageTypes.ERROR, {"message": message})

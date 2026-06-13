@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 import trio
@@ -177,6 +179,8 @@ class LLMService:
 
         # Initialize rate limiter
         self.rate_limit_enabled = rate_limit_enabled
+        self.requests_per_minute = requests_per_minute
+        self.burst_capacity = burst_capacity
         if rate_limit_enabled:
             # Convert requests per minute to tokens per second
             tokens_per_second = requests_per_minute / 60.0
@@ -361,34 +365,62 @@ class LLMService:
         phase: str | None,
         *,
         started_at: float | None = None,
+        lifecycle_started_at: float | None = None,
+        call_id: str | None = None,
+        rate_limit_wait_ms: float | None = None,
+        first_chunk_ms: float | None = None,
+        stream_ms: float | None = None,
+        total_wall_ms: float | None = None,
+        extra: dict[str, Any] | None = None,
         response: Any = None,
     ) -> None:
         usage = getattr(response, "usage_metadata", None) or {}
+        now = time.perf_counter()
+        latency_ms = (
+            round((now - started_at) * 1000, 3)
+            if started_at is not None
+            else None
+        )
+        if total_wall_ms is None and lifecycle_started_at is not None:
+            total_wall_ms = round((now - lifecycle_started_at) * 1000, 3)
+        record = {
+            "phase": phase,
+            "call_type": call_type,
+            "call_id": call_id,
+            "provider": self.provider,
+            "model": self.model_name,
+            "latency_ms": latency_ms,
+            "provider_latency_ms": latency_ms,
+            "total_wall_ms": total_wall_ms,
+            "rate_limit_wait_ms": (
+                round(rate_limit_wait_ms, 3)
+                if rate_limit_wait_ms is not None
+                else None
+            ),
+            "ttft_ms": (
+                round(first_chunk_ms, 3) if first_chunk_ms is not None else None
+            ),
+            "stream_ms": round(stream_ms, 3) if stream_ms is not None else None,
+            "rate_limit_enabled": self.rate_limit_enabled,
+            "requests_per_minute": self.requests_per_minute,
+            "burst_capacity": self.burst_capacity,
+            "status": status,
+            "prompt_tokens": usage.get("input_tokens"),
+            "completion_tokens": usage.get("output_tokens"),
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
+        if extra:
+            record.update(extra)
         self._llm_metrics_logger.info(
-            json.dumps(
-                {
-                    "phase": phase,
-                    "call_type": call_type,
-                    "provider": self.provider,
-                    "model": self.model_name,
-                    "latency_ms": (
-                        round((time.perf_counter() - started_at) * 1000, 3)
-                        if started_at is not None
-                        else None
-                    ),
-                    "status": status,
-                    "prompt_tokens": usage.get("input_tokens"),
-                    "completion_tokens": usage.get("output_tokens"),
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-            )
+            json.dumps(record, ensure_ascii=True, sort_keys=True)
         )
 
-    async def _acquire_rate_limit(self) -> None:
-        """Acquire rate limit token if rate limiting is enabled."""
+    async def _acquire_rate_limit(self) -> float:
+        """Acquire rate limit token and return wait time in milliseconds."""
+        started_at = time.perf_counter()
         if self.rate_limit_enabled and self._rate_limiter is not None:
             await self._rate_limiter.acquire()
+        return round((time.perf_counter() - started_at) * 1000, 3)
 
     def generate_response(
         self,
@@ -396,6 +428,9 @@ class LLMService:
         context: list[dict[str, str]] | None = None,
         *,
         phase: str | None = None,
+        call_id: str | None = None,
+        lifecycle_started_at: float | None = None,
+        rate_limit_wait_ms: float | None = None,
     ) -> str:
         """
         Generate a response from the LLM.
@@ -407,8 +442,17 @@ class LLMService:
         Returns:
             str: The LLM's response.
         """
+        call_id = call_id or uuid.uuid4().hex
+        lifecycle_started_at = lifecycle_started_at or time.perf_counter()
         started_at = time.perf_counter()
-        self._log_metric("start", "generate_response", phase)
+        self._log_metric(
+            "start",
+            "generate_response",
+            phase,
+            call_id=call_id,
+            lifecycle_started_at=lifecycle_started_at,
+            rate_limit_wait_ms=rate_limit_wait_ms,
+        )
         try:
             self._log_llm_call(
                 "request",
@@ -447,6 +491,9 @@ class LLMService:
                     "generate_response",
                     phase,
                     started_at=started_at,
+                    lifecycle_started_at=lifecycle_started_at,
+                    call_id=call_id,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
                     response=response,
                 )
                 return response.content
@@ -470,6 +517,9 @@ class LLMService:
                     "generate_response",
                     phase,
                     started_at=started_at,
+                    lifecycle_started_at=lifecycle_started_at,
+                    call_id=call_id,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
                     response=response,
                 )
                 return response.content
@@ -479,6 +529,9 @@ class LLMService:
                 "generate_response",
                 phase,
                 started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
             )
             raise
         except Exception as e:
@@ -487,6 +540,9 @@ class LLMService:
                 "generate_response",
                 phase,
                 started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
             )
             import traceback
 
@@ -523,10 +579,21 @@ class LLMService:
         This bridges LangChain's blocking stream iterator into Trio so callers can
         `async for` chunks and emit them as they arrive.
         """
-        await self._acquire_rate_limit()
-
+        call_id = uuid.uuid4().hex
+        lifecycle_started_at = time.perf_counter()
+        rate_limit_wait_ms = await self._acquire_rate_limit()
         started_at = time.perf_counter()
-        self._log_metric("start", "stream_response", phase)
+        first_chunk_ms: float | None = None
+        first_chunk_at: float | None = None
+        self._log_metric(
+            "start",
+            "stream_response",
+            phase,
+            call_id=call_id,
+            lifecycle_started_at=lifecycle_started_at,
+            rate_limit_wait_ms=rate_limit_wait_ms,
+            extra={"request_started_at": datetime.now(UTC).isoformat()},
+        )
         try:
             self._log_llm_call(
                 "request",
@@ -545,6 +612,11 @@ class LLMService:
                         yield chunk_text
 
             async for chunk in iter_in_thread(_iterator, buffer_size=3):
+                if first_chunk_ms is None:
+                    first_chunk_at = time.perf_counter()
+                    first_chunk_ms = round(
+                        (first_chunk_at - lifecycle_started_at) * 1000, 3
+                    )
                 self._log_llm_call(
                     "stream_chunk",
                     {
@@ -553,10 +625,35 @@ class LLMService:
                     },
                 )
                 yield chunk
-            self._log_metric("finish", "stream_response", phase, started_at=started_at)
+            finished_at = time.perf_counter()
+            stream_ms = (
+                round((finished_at - first_chunk_at) * 1000, 3)
+                if first_chunk_at is not None
+                else None
+            )
+            self._log_metric(
+                "finish",
+                "stream_response",
+                phase,
+                started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
+                first_chunk_ms=first_chunk_ms,
+                stream_ms=stream_ms,
+                extra={"finished_at": datetime.now(UTC).isoformat()},
+            )
 
         except Exception as e:
-            self._log_metric("failure", "stream_response", phase, started_at=started_at)
+            self._log_metric(
+                "failure",
+                "stream_response",
+                phase,
+                started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
+            )
             import traceback
 
             tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -571,17 +668,37 @@ class LLMService:
         *,
         method: str = "json_schema",
         phase: str | None = None,
+        call_id: str | None = None,
+        lifecycle_started_at: float | None = None,
+        rate_limit_wait_ms: float | None = None,
     ) -> Any:
         """Generate a structured output and normalize it to the requested schema."""
+        call_id = call_id or uuid.uuid4().hex
+        lifecycle_started_at = lifecycle_started_at or time.perf_counter()
         started_at = time.perf_counter()
-        self._log_metric("start", "generate_structured_output", phase)
+        self._log_metric(
+            "start",
+            "generate_structured_output",
+            phase,
+            call_id=call_id,
+            lifecycle_started_at=lifecycle_started_at,
+            rate_limit_wait_ms=rate_limit_wait_ms,
+        )
         try:
             if self.provider != "gemini":
                 response = self._generate_structured_output_from_json_prompt(
-                    prompt, schema
+                    prompt,
+                    schema,
+                    phase=phase,
                 )
                 self._log_metric(
-                    "finish", "generate_structured_output", phase, started_at=started_at
+                    "finish",
+                    "generate_structured_output",
+                    phase,
+                    started_at=started_at,
+                    lifecycle_started_at=lifecycle_started_at,
+                    call_id=call_id,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
                 )
                 return response
 
@@ -610,6 +727,9 @@ class LLMService:
                     "generate_structured_output",
                     phase,
                     started_at=started_at,
+                    lifecycle_started_at=lifecycle_started_at,
+                    call_id=call_id,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
                     response=response,
                 )
                 return response
@@ -637,12 +757,21 @@ class LLMService:
                 "generate_structured_output",
                 phase,
                 started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
                 response=response,
             )
             return response
         except Exception:
             self._log_metric(
-                "failure", "generate_structured_output", phase, started_at=started_at
+                "failure",
+                "generate_structured_output",
+                phase,
+                started_at=started_at,
+                lifecycle_started_at=lifecycle_started_at,
+                call_id=call_id,
+                rate_limit_wait_ms=rate_limit_wait_ms,
             )
             raise
 
@@ -650,6 +779,8 @@ class LLMService:
         self,
         prompt: str,
         schema: dict | type[BaseModel],
+        *,
+        phase: str | None = None,
     ) -> Any:
         """Use prompt-constrained JSON for providers without native schema support."""
         schema_payload: dict[str, Any]
@@ -686,9 +817,35 @@ class LLMService:
             else:
                 parsed = json.loads(content)
         except Exception as error:
+            schema_name = (
+                schema.__name__
+                if isinstance(schema, type) and issubclass(schema, BaseModel)
+                else "json_schema"
+            )
+            metadata = {
+                "phase": phase,
+                "schema_name": schema_name,
+                "provider": self.provider,
+                "model_name": self.model_name,
+                "parse_error_type": type(error).__name__,
+                "parse_error": str(error),
+                "response_preview": self._preview_text(content, limit=240),
+            }
+            logger.error(
+                "Structured LLM output parsing failed "
+                "(phase=%s schema=%s provider=%s model=%s error=%s "
+                "response_preview=%r)",
+                phase,
+                schema_name,
+                self.provider,
+                self.model_name,
+                error,
+                metadata["response_preview"],
+            )
             raise LLMServiceError(
                 "LLM structured output parsing failed: "
-                f"{type(error).__name__}: {error}"
+                f"{type(error).__name__}: {error}",
+                metadata=metadata,
             ) from error
 
         self._log_llm_call(
@@ -712,6 +869,10 @@ class LLMService:
             lines = lines[:-1]
         return "\n".join(lines).strip()
 
+    @staticmethod
+    def _preview_text(content: str, *, limit: int = 240) -> str:
+        return content.replace("\n", "\\n")[:limit]
+
     async def generate_response_async(
         self,
         prompt: str,
@@ -728,17 +889,29 @@ class LLMService:
         Returns:
             str: The LLM's response
         """
-        # Apply rate limiting before starting the request
-        await self._acquire_rate_limit()
+        call_id = uuid.uuid4().hex
+        lifecycle_started_at = time.perf_counter()
+        rate_limit_wait_ms = await self._acquire_rate_limit()
 
         if phase is None:
             return await trio.to_thread.run_sync(
-                self.generate_response,
-                prompt,
-                context,
+                lambda: self.generate_response(
+                    prompt,
+                    context,
+                    call_id=call_id,
+                    lifecycle_started_at=lifecycle_started_at,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
+                )
             )
         return await trio.to_thread.run_sync(
-            lambda: self.generate_response(prompt, context, phase=phase)
+            lambda: self.generate_response(
+                prompt,
+                context,
+                phase=phase,
+                call_id=call_id,
+                lifecycle_started_at=lifecycle_started_at,
+                rate_limit_wait_ms=rate_limit_wait_ms,
+            )
         )
 
     async def generate_structured_output_async(
@@ -750,15 +923,30 @@ class LLMService:
         phase: str | None = None,
     ) -> Any:
         """Async wrapper for generate_structured_output with rate limiting."""
-        await self._acquire_rate_limit()
+        call_id = uuid.uuid4().hex
+        lifecycle_started_at = time.perf_counter()
+        rate_limit_wait_ms = await self._acquire_rate_limit()
         # trio.to_thread.run_sync doesn't forward arbitrary kwargs to the target
         # callable, so pass keyword-only args via a closure.
         if phase is None:
             return await trio.to_thread.run_sync(
-                lambda: self.generate_structured_output(prompt, schema, method=method)
+                lambda: self.generate_structured_output(
+                    prompt,
+                    schema,
+                    method=method,
+                    call_id=call_id,
+                    lifecycle_started_at=lifecycle_started_at,
+                    rate_limit_wait_ms=rate_limit_wait_ms,
+                )
             )
         return await trio.to_thread.run_sync(
             lambda: self.generate_structured_output(
-                prompt, schema, method=method, phase=phase
+                prompt,
+                schema,
+                method=method,
+                phase=phase,
+                call_id=call_id,
+                lifecycle_started_at=lifecycle_started_at,
+                rate_limit_wait_ms=rate_limit_wait_ms,
             )
         )

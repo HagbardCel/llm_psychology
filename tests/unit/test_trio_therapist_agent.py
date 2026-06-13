@@ -11,7 +11,10 @@ import pytest
 
 from psychoanalyst_app.agents.therapist import TrioTherapistAgent
 from psychoanalyst_app.agents.therapist.prompt_context import load_patient_context
-from psychoanalyst_app.agents.therapist.prompts import build_resumption_prompt
+from psychoanalyst_app.agents.therapist.prompts import (
+    build_initial_prompt,
+    build_resumption_prompt,
+)
 from psychoanalyst_app.models.domain import (
     BriefingStatus,
     TherapyPlan,
@@ -148,6 +151,18 @@ def create_briefing(days_ago: int = 0) -> dict:
             ],
         },
     }
+
+
+def test_initial_prompt_first_therapy_after_intake_avoids_welcome_back() -> None:
+    prompt = build_initial_prompt(
+        user_name="Test User",
+        plan_context="CBT plan for worry loops.",
+        style_instructions="Use CBT.",
+        session_context_kind="first_therapy_after_intake",
+    )
+
+    assert "Do not say 'welcome back'" in prompt
+    assert "first therapy session immediately after intake" in prompt
 
 
 @pytest.mark.trio

@@ -181,6 +181,93 @@ class TestServiceContainer:
         assert llm_service.provider == "openai_compatible"
         assert llm_service.model_name == "local-model"
         assert llm_service.base_url == "http://host.docker.internal:8080/v1"
+        assert llm_service.rate_limit_enabled is False
+        assert llm_service._rate_limiter is None
+
+    def test_local_llm_service_disables_rate_limit_even_when_configured(self):
+        """Test local providers bypass rate limiting regardless of env flag."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "local-model",
+                "LLM_PROVIDER": "openai_compatible",
+                "LLM_BASE_URL": "http://host.docker.internal:8080/v1",
+                "LLM_RATE_LIMIT_ENABLED": True,
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.rate_limit_enabled is False
+        assert llm_service._rate_limiter is None
+
+    def test_remote_llm_service_keeps_configured_rate_limit(self):
+        """Test remote OpenAI-compatible providers keep configured rate limits."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "remote-model",
+                "LLM_PROVIDER": "openai_compatible",
+                "LLM_BASE_URL": "https://api.example.com/v1",
+                "LLM_RATE_LIMIT_ENABLED": True,
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.rate_limit_enabled is True
+        assert llm_service._rate_limiter is not None
+
+    def test_remote_llm_service_honors_disabled_rate_limit_flag(self):
+        """Test explicit disabled rate limit still applies to remote endpoints."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "remote-model",
+                "LLM_PROVIDER": "openai_compatible",
+                "LLM_BASE_URL": "https://api.example.com/v1",
+                "LLM_RATE_LIMIT_ENABLED": False,
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service")
+
+        assert llm_service.rate_limit_enabled is False
+        assert llm_service._rate_limiter is None
+
+    def test_agent_specific_local_llm_service_disables_rate_limit(self):
+        """Test agent-specific services inherit local rate-limit bypass."""
+        settings = Settings(_env_file=None).model_copy(
+            update={
+                "GOOGLE_API_KEY": "",
+                "MODEL_NAME": "local-model",
+                "INTAKE_MODEL": "intake-local-model",
+                "LLM_PROVIDER": "lmstudio",
+                "LLM_RATE_LIMIT_ENABLED": True,
+            }
+        )
+        with patch(
+            "psychoanalyst_app.services.llm_service.LLMService._build_llm_client",
+            return_value=Mock(),
+        ):
+            container = ServiceContainer(settings)
+            llm_service = container.get("llm_service_intake")
+
+        assert llm_service.model_name == "intake-local-model"
+        assert llm_service.rate_limit_enabled is False
+        assert llm_service._rate_limiter is None
 
     def test_gemini_llm_service_requires_google_api_key(self):
         """Test Gemini still fails fast without a configured Google key."""

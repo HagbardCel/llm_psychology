@@ -59,7 +59,11 @@ async def emit_workflow_next_action(
     try:
         action = await get_workflow_next_action(user_id, session_id=resolved_session_id)
         action.emission_source = emission_source
-        if not force_emit and emitted_signatures.get(user_id) == action.state_signature:
+        signature_key = f"{user_id}:{resolved_session_id}"
+        if (
+            not force_emit
+            and emitted_signatures.get(signature_key) == action.state_signature
+        ):
             logger.debug(
                 "Suppressing duplicate workflow next action "
                 "(user=%s, session=%s, signature=%s, source=%s)",
@@ -74,7 +78,7 @@ async def emit_workflow_next_action(
             ServerMessageTypes.WORKFLOW_NEXT_ACTION,
             action.model_dump(mode="json"),
         )
-        emitted_signatures[user_id] = action.state_signature
+        emitted_signatures[signature_key] = action.state_signature
 
         if (
             include_resume_payloads

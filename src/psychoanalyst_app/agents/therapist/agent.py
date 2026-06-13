@@ -207,6 +207,10 @@ class TrioTherapistAgent:
             user_name=user_name,
             plan_context=plan_context,
             style_instructions=style_instructions,
+            session_context_kind=await self._session_context_kind(
+                user_profile.user_id,
+                active_session_id,
+            ),
         )
 
     async def _build_continuation_prompt(
@@ -226,6 +230,25 @@ class TrioTherapistAgent:
             style_service=self.style_service,
             db_service=self.db_service,
         )
+
+    async def _session_context_kind(
+        self, user_id: str, active_session_id: str | None
+    ) -> str:
+        """Classify whether an initial greeting is first therapy or resumption."""
+        recent_sessions = await self.db_service.get_recent_sessions(
+            user_id,
+            limit=5,
+            enriched_only=False,
+        )
+        prior_therapy_sessions = [
+            session
+            for session in recent_sessions
+            if session.session_type == "therapy"
+            and session.session_id != active_session_id
+        ]
+        if not prior_therapy_sessions:
+            return "first_therapy_after_intake"
+        return "resumed_after_previous_therapy"
 
     async def _should_offer_extension(self, context: ConversationContext) -> bool:
         """Check if session extension should be offered."""

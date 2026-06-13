@@ -14,6 +14,7 @@ from psychoanalyst_app.agents.intake.prompts import (
 from psychoanalyst_app.agents.intake.slots import (
     identify_covered_topics,
     identify_required_slots,
+    intake_completion_diagnostics,
     is_intake_complete,
     next_required_follow_up,
 )
@@ -63,6 +64,9 @@ class TrioIntakeAgent:
             intake_slot_coverage = identify_required_slots(
                 message, context.message_history
             )
+            completion_diagnostics = intake_completion_diagnostics(
+                context, intake_slot_coverage
+            )
 
             for topic in covered_topics:
                 if topic not in context.topics_covered:
@@ -100,6 +104,7 @@ class TrioIntakeAgent:
                         metadata={
                             "topics_covered": context.topics_covered,
                             "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "intake_completion_diagnostics": completion_diagnostics,
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -120,6 +125,7 @@ class TrioIntakeAgent:
                         metadata={
                             "topics_covered": context.topics_covered,
                             "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "intake_completion_diagnostics": completion_diagnostics,
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -164,6 +170,7 @@ class TrioIntakeAgent:
                         metadata={
                             "topics_covered": context.topics_covered,
                             "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "intake_completion_diagnostics": completion_diagnostics,
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -184,6 +191,8 @@ class TrioIntakeAgent:
                         workflow_event=workflow_event,
                         metadata={
                             "topics_covered": context.topics_covered,
+                            "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "intake_completion_diagnostics": completion_diagnostics,
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -197,6 +206,7 @@ class TrioIntakeAgent:
                         metadata={
                             "topics_covered": context.topics_covered,
                             "intake_slot_coverage": sorted(intake_slot_coverage),
+                            "intake_completion_diagnostics": completion_diagnostics,
                             "time_remaining_minutes": context.time_remaining_minutes,
                             "can_extend": context.can_extend,
                             "is_time_up": context.is_time_up,
@@ -218,6 +228,7 @@ class TrioIntakeAgent:
                 metadata={
                     "topics_covered": context.topics_covered,
                     "intake_slot_coverage": sorted(intake_slot_coverage),
+                    "intake_completion_diagnostics": completion_diagnostics,
                     "time_remaining_minutes": context.time_remaining_minutes,
                     "can_extend": context.can_extend,
                     "is_time_up": context.is_time_up,

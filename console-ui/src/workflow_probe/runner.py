@@ -18,7 +18,7 @@ from ..event_sink import CompositeConsoleEventSink
 from ..llm_user_simulator import LocalLLMUserSimulatorError
 from ..output import ConsoleOutput, setup_logging
 from .assertions import run_assertions
-from .db_snapshot import session_enrichment_complete, snapshot_and_extract
+from .db_snapshot import snapshot_and_extract
 from .local_user import LocalUser
 from .recorder import ProbeRecorder
 from .scenario import load_scenario
@@ -61,9 +61,15 @@ async def run_probe(args: argparse.Namespace) -> int:
         timeout = float(scenario.get("limits", {}).get("overall_timeout_seconds", 420))
         with trio.fail_after(timeout):
             await client.run()
-        if any(event["kind"] == "session_ended" for event in recorder.events):
-            await wait_for_plan_update(args.backend_url, user_id, scenario, recorder)
-            await wait_for_session_enrichment(args.db_path, user_id, scenario, recorder)
+        post_session_id = _post_session_update_session_id(recorder.events)
+        if post_session_id:
+            await wait_for_post_session_update(
+                args.backend_url,
+                user_id,
+                post_session_id,
+                scenario,
+                recorder,
+            )
         recorder.created_rows = await trio.to_thread.run_sync(
             partial(
                 snapshot_and_extract,
@@ -88,7 +94,11 @@ async def run_probe(args: argparse.Namespace) -> int:
         status = "TIMEOUT"
         exit_code = 5
     except Exception as exc:
-        await recorder.record("error", message="Workflow probe failed", data=repr(exc))
+        await recorder.record(
+            "error",
+            message="Workflow probe failed",
+            exception=repr(exc),
+        )
         exit_code = 2
     finally:
         if not recorder.created_rows:
@@ -104,6 +114,9 @@ async def run_probe(args: argparse.Namespace) -> int:
         await recorder.write_artifacts(status, scenario)
     print(f"{status}: local workflow probe")
     print(f"Artifacts: {args.output_dir}")
+    failure_summary_path = Path(args.output_dir) / "failure_summary.md"
+    if status != "PASS" and failure_summary_path.exists():
+        print(failure_summary_path.read_text(encoding="utf-8").strip())
     return exit_code
 
 
@@ -126,46 +139,99 @@ async def check_local_llm() -> None:
         response.raise_for_status()
 
 
-async def wait_for_plan_update(
-    base_url: str, user_id: str, scenario: dict, recorder: ProbeRecorder
+async def wait_for_post_session_update(
+    base_url: str,
+    user_id: str,
+    session_id: str,
+    scenario: dict,
+    recorder: ProbeRecorder,
 ) -> None:
     timeout = float(scenario.get("limits", {}).get("plan_update_timeout_seconds", 120))
+    job_id = f"post_session_update:{session_id}"
+    last_status: dict | None = None
     with trio.move_on_after(timeout) as scope:
         while True:
+            websocket_status = _latest_job_status(recorder.events, job_id)
+            if websocket_status:
+                last_status = websocket_status
+                if websocket_status.get("status") == "complete":
+                    return
+                if websocket_status.get("status") == "failed":
+                    raise RuntimeError(
+                        f"Post-session update failed: {websocket_status}"
+                    )
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
-                    f"{base_url.rstrip('/')}/api/user/status",
+                    f"{base_url.rstrip('/')}/api/jobs/{job_id}",
                     params={"user_id": user_id},
                 )
                 response.raise_for_status()
-                state = response.json().get("workflow_state")
-            await recorder.record("post_session_state", workflow_state=state)
-            if state == "plan_update_complete":
-                return
-            if state == "plan_update_failed":
-                raise RuntimeError("Post-session plan update failed")
-            await trio.sleep(2)
-    if scope.cancelled_caught:
-        raise RuntimeError("Timed out waiting for post-session plan update")
-
-
-async def wait_for_session_enrichment(
-    db_path: str, user_id: str, scenario: dict, recorder: ProbeRecorder
-) -> None:
-    """Require asynchronous Tier 2 enrichment before declaring probe success."""
-    timeout = float(scenario.get("limits", {}).get("enrichment_timeout_seconds", 120))
-    session_ids = recorder.observed_session_ids()
-    with trio.move_on_after(timeout) as scope:
-        while True:
-            complete = await trio.to_thread.run_sync(
-                partial(session_enrichment_complete, db_path, user_id, session_ids)
+                status = response.json()
+            last_status = status
+            await recorder.record(
+                "post_session_job_status",
+                job_id=job_id,
+                job_type=status.get("job_type"),
+                status=status.get("status"),
+                current_step=status.get("current_step"),
+                workflow_state=status.get("workflow_state"),
+                session_id=session_id,
+                delivery_source="http_fallback",
+                data=status,
             )
-            await recorder.record("post_session_enrichment", complete=complete)
-            if complete:
+            if status.get("status") == "complete":
                 return
+            if status.get("status") == "failed":
+                raise RuntimeError(f"Post-session update failed: {status}")
             await trio.sleep(2)
     if scope.cancelled_caught:
-        raise RuntimeError("Timed out waiting for post-session enrichment")
+        raise RuntimeError(
+            f"Timed out waiting for post-session update: {last_status}"
+        )
+
+
+def _needs_post_session_follow_up(events: list[dict]) -> bool:
+    """Post-session jobs only run after therapy sessions enter plan update."""
+    for event in events:
+        if event.get("kind") != "session_ended":
+            continue
+        data = event.get("data")
+        if (
+            isinstance(data, dict)
+            and data.get("workflow_state") == "plan_update_in_progress"
+        ):
+            return True
+    return False
+
+
+def _post_session_update_session_id(events: list[dict]) -> str | None:
+    for index, event in enumerate(events):
+        if event.get("kind") != "session_ended":
+            continue
+        data = event.get("data")
+        if (
+            isinstance(data, dict)
+            and data.get("workflow_state") == "plan_update_in_progress"
+        ):
+            if data.get("session_id"):
+                return data.get("session_id")
+            for previous in reversed(events[:index]):
+                session_id = previous.get("session_id")
+                if session_id:
+                    return session_id
+                previous_data = previous.get("data")
+                if isinstance(previous_data, dict) and previous_data.get("session_id"):
+                    return previous_data.get("session_id")
+    return None
+
+
+def _latest_job_status(events: list[dict], job_id: str) -> dict | None:
+    for event in reversed(events):
+        if event.get("kind") != "job_status" or event.get("job_id") != job_id:
+            continue
+        data = event.get("data")
+        return data if isinstance(data, dict) else None
+    return None
 
 
 def build_parser() -> argparse.ArgumentParser:

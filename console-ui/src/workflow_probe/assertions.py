@@ -77,6 +77,12 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
             event["kind"] == "post_session_state_summary"
             and event.get("workflow_state") == "plan_update_complete"
             for event in recorder.events
+        )
+        or any(
+            event["kind"] in {"post_session_job_status_summary", "job_status"}
+            and event.get("job_type") == "post_session_update"
+            and event.get("status") == "complete"
+            for event in recorder.events
         ),
     )
     rows = recorder.created_rows

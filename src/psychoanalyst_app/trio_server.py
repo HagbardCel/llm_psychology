@@ -13,6 +13,7 @@ from quart_cors import cors
 from quart_trio import QuartTrio
 
 from psychoanalyst_app.api.cache_utils import CACHE_PRESETS, add_cache_headers
+from psychoanalyst_app.api.job_routes import create_job_routes
 from psychoanalyst_app.api.session_routes import create_session_routes
 from psychoanalyst_app.api.therapy_routes import create_therapy_routes
 from psychoanalyst_app.api.user_routes import create_user_routes
@@ -173,6 +174,7 @@ class TrioServer:
         self.app.register_blueprint(create_session_routes(self))
         self.app.register_blueprint(create_therapy_routes(self))
         self.app.register_blueprint(create_workflow_routes(self))
+        self.app.register_blueprint(create_job_routes(self))
         logger.info("HTTP routes configured for Trio server")
 
     async def _health_check(self):

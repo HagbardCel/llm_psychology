@@ -7,6 +7,7 @@ import pytest
 
 from psychoanalyst_app.models.http import RequiredWorkflowAction
 from psychoanalyst_app.orchestration.models import WorkflowState
+from psychoanalyst_app.orchestration.response_handler import AgentResponseHandler
 from psychoanalyst_app.orchestration.stream_dispatch import (
     send_json_message,
     send_stream_chunk,
@@ -120,7 +121,7 @@ async def test_emit_workflow_next_action_suppresses_equivalent_normal_event() ->
         response_handler=SimpleNamespace(),
         send_initial_greeting=MagicMock(),
         get_workflow_next_action=AsyncMock(return_value=action),
-        emitted_signatures={"user_1": "signature_1"},
+        emitted_signatures={"user_1:session_1": "signature_1"},
         emission_source="test_emit",
     )
 
@@ -151,3 +152,32 @@ async def test_stream_dispatch_helpers_emit_ws_payloads() -> None:
     )
 
     assert len(ws.messages) == 3
+
+
+@pytest.mark.trio
+async def test_response_handler_emits_job_status_event() -> None:
+    db_service = SimpleNamespace(
+        get_session=AsyncMock(return_value=None),
+        get_user_profile=AsyncMock(return_value=None),
+    )
+    service_container = SimpleNamespace(get=lambda name: db_service)
+    workflow_engine = SimpleNamespace(
+        get_user_state=AsyncMock(return_value=WorkflowState.ASSESSMENT_IN_PROGRESS)
+    )
+    conversation_manager = SimpleNamespace(send_json_message=AsyncMock())
+    handler = AgentResponseHandler(
+        service_container=service_container,
+        workflow_engine=workflow_engine,
+        conversation_manager=conversation_manager,
+        nursery=SimpleNamespace(),
+        get_agent=AsyncMock(),
+    )
+    handler._assessment_jobs.add("user_1")
+
+    await handler.emit_job_status("assessment:user_1", "user_1", "session_1")
+
+    conversation_manager.send_json_message.assert_awaited_once()
+    args = conversation_manager.send_json_message.await_args.args
+    assert args[0] == "session_1"
+    assert args[1] == "job_status"
+    assert args[2]["status"] == "running"

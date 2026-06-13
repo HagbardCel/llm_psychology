@@ -285,6 +285,7 @@ class SessionLifecycleManager:
             {
                 "reason": reason or "Session ended",
                 "workflow_state": final_state.value,
+                "session_id": session_id,
             },
         )
         self.active_sessions.clear_active_session(user_id, session_id)

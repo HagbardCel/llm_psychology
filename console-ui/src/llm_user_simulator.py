@@ -16,7 +16,12 @@ LOCAL_USER_SIM_MAX_TOKENS = 8192
 class LocalLLMUserSimulatorError(RuntimeError):
     """Raised when the local user simulator cannot produce a valid reply."""
 
-    def __init__(self, reason: str, message: str, metadata: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        reason: str,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.reason = reason
         self.metadata = metadata or {}
@@ -53,13 +58,15 @@ class LocalLLMUserSimulator:
         self.recorder = recorder
 
     @classmethod
-    def from_env(cls, recorder: Any | None = None) -> "LocalLLMUserSimulator":
+    def from_env(cls, recorder: Any | None = None) -> LocalLLMUserSimulator:
         base_url = (
             os.getenv("USER_SIM_LLM_BASE_URL")
             or os.getenv("LLM_BASE_URL")
             or "http://host.docker.internal:1234/v1"
         )
-        model = os.getenv("USER_SIM_LLM_MODEL") or os.getenv("MODEL_NAME", "local-model")
+        model = os.getenv("USER_SIM_LLM_MODEL") or os.getenv(
+            "MODEL_NAME", "local-model"
+        )
         api_key = os.getenv("USER_SIM_LLM_API_KEY", "not-needed")
         temperature = float(os.getenv("USER_SIM_LLM_TEMPERATURE", "0"))
         max_tokens = resolve_user_sim_max_tokens()
@@ -331,6 +338,8 @@ class LocalLLMUserSimulator:
                 f"{persona.get('style', 'cooperative, reflective, concise')}",
                 "- Preferred therapy style: "
                 f"{workflow_preferences.get('therapy_style', 'cbt')}",
+                "- Coping attempt: "
+                f"{persona.get('coping_attempt', 'nothing yet')}",
                 "",
                 f"Current phase: {context.simulator_phase}",
                 "",
@@ -341,8 +350,14 @@ class LocalLLMUserSimulator:
                 "",
                 "Rules:",
                 "- Stay in the patient role.",
-                "- Do not ask for recommendations, plans, support, systems, records, backend state, or waiting.",
-                "- If therapy has started, respond about symptoms, thoughts, feelings, or the therapist's last message.",
+                "- Do not ask for recommendations, plans, support, systems, "
+                "records, backend state, or waiting.",
+                "- If asked a practical screening question, answer it directly "
+                "before adding emotional detail.",
+                "- If asked what you have tried, mention the coping attempt above "
+                "or say you have not tried anything yet.",
+                "- If therapy has started, respond about symptoms, thoughts, "
+                "feelings, or the therapist's last message.",
                 "",
                 "Return exactly one patient reply, under 40 words.",
             ]

@@ -18,7 +18,6 @@ from psychoanalyst_app.agents.reflection.session_summary import (
     format_reflection_summary,
     generate_session_briefing,
     generate_session_summary_payload,
-    is_noop_plan_update,
 )
 from psychoanalyst_app.agents.reflection.tier2_pipeline import (
     ensure_recent_sessions_enriched,
@@ -95,7 +94,6 @@ class TrioReflectionAgent:
 
         current_plan = context.therapy_plan
         plan_output = await self.update_plan(session, current_plan)
-        is_noop_update = is_noop_plan_update(current_plan, plan_output)
         updated_plan = build_plan_snapshot(
             current_plan,
             plan_output,
@@ -145,7 +143,22 @@ class TrioReflectionAgent:
                 "status": updated_plan.status,
             }
         )
-        should_persist_plan = (not is_noop_update) or (session_briefing is not None)
+        plan_revision_required = not _is_noop_plan_snapshot(
+            current_plan,
+            updated_plan,
+        )
+        effective_plan_id = (
+            current_plan.plan_id
+            if current_plan is not None and not plan_revision_required
+            else updated_plan.plan_id
+        )
+        effective_plan_version = (
+            current_plan.version
+            if current_plan is not None and not plan_revision_required
+            else current_plan.version + 1
+            if current_plan is not None
+            else updated_plan.version
+        )
 
         content = format_reflection_summary(reflection)
 
@@ -154,14 +167,16 @@ class TrioReflectionAgent:
             next_action="transition",
             workflow_event=WorkflowEvent.COMPLETE_REFLECTION,
             metadata={
-                "plan_id": updated_plan.plan_id,
-                "plan_version": updated_plan.version,
+                "plan_id": effective_plan_id,
+                "plan_version": effective_plan_version,
                 "session_id": session.session_id,
                 "reflection": reflection,
                 "has_briefing": updated_plan.session_briefing is not None,
                 "therapy_plan_output": therapy_plan_payload,
                 "session_briefing": session_briefing,
-                "plan_update_applied": should_persist_plan,
+                "plan_revision_required": plan_revision_required,
+                "session_briefing_generated": session_briefing is not None,
+                "plan_update_applied": plan_revision_required,
                 "user_profile": tier1_profile_output,
                 "tier2_enrichment": tier2_enrichment,
                 "tier3_update": tier3_update,
@@ -328,3 +343,23 @@ class TrioReflectionAgent:
             f"memory_agent={type(self.memory_agent).__name__}, "
             f"planning_agent={type(self.planning_agent).__name__})"
         )
+
+
+def _is_noop_plan_snapshot(
+    current_plan: TherapyPlan | None,
+    updated_plan: TherapyPlan,
+) -> bool:
+    if current_plan is None:
+        return False
+    return (
+        updated_plan.selected_therapy_style == current_plan.selected_therapy_style
+        and updated_plan.focus == current_plan.focus
+        and updated_plan.themes == current_plan.themes
+        and updated_plan.timeline == current_plan.timeline
+        and updated_plan.initial_goals == current_plan.initial_goals
+        and updated_plan.current_progress == current_plan.current_progress
+        and updated_plan.planned_interventions == current_plan.planned_interventions
+        and updated_plan.revision_recommendations
+        == current_plan.revision_recommendations
+        and updated_plan.status == current_plan.status
+    )
