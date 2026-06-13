@@ -35,6 +35,14 @@ class _StubOutput:
         return None
 
 
+class _Sink:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, event: str, **fields: Any) -> None:
+        self.events.append((event, fields))
+
+
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
 
@@ -140,6 +148,97 @@ async def test_console_workflow_event_does_not_complete_pending_chat_response(
     )
 
     assert client.response_complete.is_set() is False
+
+
+async def test_next_workflow_action_prefers_unconsumed_websocket_action(
+    console_client_cls,
+):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    websocket_action = {
+        "required_action": "select_therapy_style",
+        "state_signature": "style-ready",
+    }
+    await client._handle_workflow_next_action(websocket_action)
+
+    async def fail_get_next_action() -> dict[str, Any]:
+        raise AssertionError("HTTP fallback should not be used")
+
+    client._get_next_action = fail_get_next_action  # type: ignore[method-assign]
+
+    action, delivery_source = await client._next_workflow_action(
+        prefer_ws_timeout_seconds=0
+    )
+
+    assert action == websocket_action
+    assert delivery_source == "websocket"
+
+
+async def test_next_workflow_action_falls_back_to_http_when_websocket_absent(
+    console_client_cls,
+):
+    sink = _Sink()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+        event_sink=sink,
+    )
+    http_action = {"required_action": "wait", "state_signature": "wait-1"}
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return http_action
+
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    action, delivery_source = await client._next_workflow_action(
+        prefer_ws_timeout_seconds=0
+    )
+
+    assert action == http_action
+    assert delivery_source == "http_poll"
+    assert sink.events == [
+        (
+            "workflow_action",
+            {"action": http_action, "delivery_source": "http_poll"},
+        )
+    ]
+
+
+async def test_duplicate_websocket_workflow_action_is_not_consumed_twice(
+    console_client_cls,
+):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    websocket_action = {"required_action": "wait", "state_signature": "wait-1"}
+    http_action = {"required_action": "error", "error": "stop"}
+
+    await client._handle_workflow_next_action(websocket_action)
+    first_action, first_source = await client._next_workflow_action(
+        prefer_ws_timeout_seconds=0
+    )
+    await client._handle_workflow_next_action(dict(websocket_action))
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return http_action
+
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    second_action, second_source = await client._next_workflow_action(
+        prefer_ws_timeout_seconds=0
+    )
+
+    assert (first_action, first_source) == (websocket_action, "websocket")
+    assert (second_action, second_source) == (http_action, "http_poll")
 
 
 async def test_console_job_status_event_is_stored_and_emitted(console_client_cls):
@@ -275,6 +374,33 @@ async def test_chat_loop_returns_to_workflow_when_action_not_chat(
     assert called_get_user_input is False
 
 
+async def test_chat_loop_uses_websocket_action_before_polling(console_client_cls):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    client.current_session_id = "session-1"
+    await client._handle_workflow_next_action(
+        {
+            "required_action": "select_therapy_style",
+            "state_signature": "style-ready",
+        }
+    )
+
+    async def fail_get_next_action() -> dict[str, Any]:
+        raise AssertionError("HTTP fallback should not be used")
+
+    async def fake_get_user_input(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("non-chat workflow actions must not prompt for chat")
+
+    client._get_next_action = fail_get_next_action  # type: ignore[method-assign]
+    client._get_user_input = fake_get_user_input  # type: ignore[method-assign]
+
+    assert await client._chat_loop(ws=None) is False
+
+
 async def test_chat_loop_discards_input_when_workflow_advances_before_send(
     console_client_cls,
 ):
@@ -313,6 +439,53 @@ async def test_chat_loop_discards_input_when_workflow_advances_before_send(
             self.messages.append(message)
 
     client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+    client._get_user_input = fake_get_user_input  # type: ignore[method-assign]
+    ws = FakeWebSocket()
+
+    assert await client._chat_loop(ws) is False
+    assert ws.messages == []
+    assert sink.events[-1] == (
+        "discarded_input",
+        {
+            "reason": "workflow_advanced_before_send",
+            "required_action": "wait",
+        },
+    )
+
+
+async def test_chat_loop_discards_input_when_websocket_advances_during_prompt(
+    console_client_cls,
+):
+    sink = _Sink()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+        event_sink=sink,
+    )
+    client.current_session_id = "session-1"
+    await client._handle_workflow_next_action(
+        {"required_action": "start_intake", "state_signature": "chat-1"}
+    )
+
+    async def fail_get_next_action() -> dict[str, Any]:
+        raise AssertionError("fresh WebSocket advancement should be used")
+
+    async def fake_get_user_input(*_args: Any, **_kwargs: Any) -> str:
+        await client._handle_workflow_next_action(
+            {"required_action": "wait", "state_signature": "wait-1"}
+        )
+        return "typed while workflow advanced"
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        async def send_message(self, message: str) -> None:
+            self.messages.append(message)
+
+    client._get_next_action = fail_get_next_action  # type: ignore[method-assign]
     client._get_user_input = fake_get_user_input  # type: ignore[method-assign]
     ws = FakeWebSocket()
 
@@ -474,6 +647,41 @@ async def test_follow_workflow_runs_style_selection_action(console_client_cls):
 
     assert called_select is True
     assert called_chat_loop is False
+
+
+async def test_follow_workflow_consumes_websocket_action_before_http_poll(
+    console_client_cls,
+):
+    output = _StubOutput()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+    )
+    client.current_session_id = "session-1"
+    await client._handle_workflow_next_action(
+        {
+            "required_action": "select_therapy_style",
+            "state_signature": "style-ready",
+        }
+    )
+    calls: list[str] = []
+
+    async def fake_select_therapy_style() -> None:
+        calls.append("select")
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        calls.append("http")
+        return {"required_action": "error", "error": "stop"}
+
+    client._select_therapy_style = fake_select_therapy_style  # type: ignore[method-assign]
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    await client._follow_workflow(ws=None)
+
+    assert calls == ["select", "http"]
+    assert output.system_messages[0].endswith("source=websocket")
 
 
 async def test_follow_workflow_renders_same_wait_signature_once(

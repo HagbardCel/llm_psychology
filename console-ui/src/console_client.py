@@ -83,6 +83,9 @@ class ConsoleClient:
         self.session_ended_event = trio.Event()
         self.pending_recommendations: list[dict[str, Any]] | None = None
         self.latest_workflow_action: dict[str, Any] | None = None
+        self._latest_workflow_action_signature: str | None = None
+        self._unconsumed_workflow_action_signature: str | None = None
+        self._workflow_action_event = trio.Event()
         self.latest_job_statuses: dict[str, dict[str, Any]] = {}
         self.last_recommendations_signature: str | None = None
         self.last_displayed_wait_signature: str | None = None
@@ -295,7 +298,17 @@ class ConsoleClient:
 
     async def _handle_workflow_next_action(self, data: Dict[str, Any]):
         """Store workflow next action updates for display/polling."""
+        signature = self._workflow_action_signature(data)
+        previous_signature = self._latest_workflow_action_signature
         self.latest_workflow_action = data
+        self._latest_workflow_action_signature = signature
+        if (
+            signature != previous_signature
+            or self._unconsumed_workflow_action_signature == signature
+        ):
+            self._unconsumed_workflow_action_signature = signature
+        self._workflow_action_event.set()
+        self._workflow_action_event = trio.Event()
         await self.event_sink.emit(
             "workflow_action", action=data, delivery_source="websocket"
         )
@@ -889,6 +902,54 @@ class ConsoleClient:
             logger.error(f"Error getting workflow next action: {e}")
             return {"required_action": "error", "error": str(e)}
 
+    def _workflow_action_signature(self, action: dict[str, Any]) -> str:
+        """Return a stable action signature for freshness and deduplication."""
+        state_signature = action.get("state_signature")
+        if state_signature:
+            return str(state_signature)
+        return json.dumps(action, sort_keys=True, separators=(",", ":"), default=str)
+
+    async def _next_workflow_action(
+        self,
+        *,
+        prefer_ws_timeout_seconds: float = 0.25,
+        allow_cached_websocket: bool = True,
+        ignored_websocket_signature: str | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        """Prefer a fresh WebSocket workflow action, with HTTP polling fallback."""
+        if (
+            allow_cached_websocket
+            and self.latest_workflow_action
+            and self._unconsumed_workflow_action_signature
+            == self._latest_workflow_action_signature
+            and self._latest_workflow_action_signature != ignored_websocket_signature
+        ):
+            self._unconsumed_workflow_action_signature = None
+            return self.latest_workflow_action, "websocket"
+
+        if prefer_ws_timeout_seconds > 0:
+            with trio.move_on_after(prefer_ws_timeout_seconds):
+                await self._workflow_action_event.wait()
+            if (
+                self.latest_workflow_action
+                and self._unconsumed_workflow_action_signature
+                == self._latest_workflow_action_signature
+                and self._latest_workflow_action_signature != ignored_websocket_signature
+            ):
+                self._unconsumed_workflow_action_signature = None
+                return self.latest_workflow_action, "websocket"
+
+        action = await self._get_next_action()
+        self.latest_workflow_action = action
+        self._latest_workflow_action_signature = self._workflow_action_signature(action)
+        self._unconsumed_workflow_action_signature = None
+        await self.event_sink.emit(
+            "workflow_action",
+            action=action,
+            delivery_source="http_poll",
+        )
+        return action, "http_poll"
+
     async def _get_session_timer(self) -> Dict[str, Any]:
         """Get session timer information from backend API."""
         if not self.current_session_id:
@@ -1006,12 +1067,17 @@ class ConsoleClient:
             while True:
                 if self.session_end_requested:
                     return True
-                next_action = await self._get_next_action()
+                next_action, _delivery_source = await self._next_workflow_action(
+                    prefer_ws_timeout_seconds=0.1,
+                )
                 required_action = next_action.get("required_action")
                 if required_action not in {"start_intake", "continue_therapy"}:
                     # Workflow advanced to a non-chat step (e.g., wait/style selection).
                     return False
                 try:
+                    pre_input_workflow_signature = (
+                        self._latest_workflow_action_signature
+                    )
                     user_message = await self._get_user_input()
 
                     # Slash commands
@@ -1052,8 +1118,10 @@ class ConsoleClient:
                         self.output.user_text("👋 Exiting console client.", flush=True)
                         return True
 
-                    latest_action = await self._get_next_action()
-                    self.latest_workflow_action = latest_action
+                    latest_action, _delivery_source = await self._next_workflow_action(
+                        prefer_ws_timeout_seconds=0.1,
+                        ignored_websocket_signature=pre_input_workflow_signature,
+                    )
                     latest_required_action = latest_action.get("required_action")
                     if latest_required_action not in {
                         "start_intake",
@@ -1102,17 +1170,11 @@ class ConsoleClient:
         next_wait_heartbeat_seconds = 60
 
         while True:
-            next_action = await self._get_next_action()
+            next_action, delivery_source = await self._next_workflow_action()
             action = next_action.get("required_action")
             prompt = next_action.get("prompt")
-            self.latest_workflow_action = next_action
-            await self.event_sink.emit(
-                "workflow_action",
-                action=next_action,
-                delivery_source="http_poll",
-            )
             self.output.system(
-                f"Workflow action: {action} prompt={prompt!r}"
+                f"Workflow action: {action} prompt={prompt!r} source={delivery_source}"
             )
 
             if action == "error":
