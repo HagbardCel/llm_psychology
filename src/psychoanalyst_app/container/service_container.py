@@ -211,6 +211,7 @@ class ServiceContainer:
         if provider == "gemini" and not self.config.GOOGLE_API_KEY:
             raise ConfigurationError("GOOGLE_API_KEY must be configured")
 
+        effective_rate_limit_enabled = self.config.effective_llm_rate_limit_enabled()
         llm_service = LLMService(
             provider=provider,
             api_key=(
@@ -220,7 +221,7 @@ class ServiceContainer:
             ),
             model_name=model_name,
             base_url=base_url,
-            rate_limit_enabled=self.config.LLM_RATE_LIMIT_ENABLED,
+            rate_limit_enabled=effective_rate_limit_enabled,
             requests_per_minute=self.config.LLM_REQUESTS_PER_MINUTE,
             burst_capacity=self.config.LLM_BURST_CAPACITY,
             llm_call_logging_enabled=self.config.LLM_CALL_LOGGING_ENABLED,
@@ -237,11 +238,12 @@ class ServiceContainer:
         self._llm_service_cache[cache_key] = llm_service
         logger.info(
             "Created new LLMService for provider %s model %s (source: %s), "
-            "base_url: %s, rate limiting: %s",
+            "base_url: %s, rate limiting: %s (configured: %s)",
             provider,
             model_name,
             config_key,
             base_url or "<provider-default>",
+            effective_rate_limit_enabled,
             self.config.LLM_RATE_LIMIT_ENABLED,
         )
         return llm_service

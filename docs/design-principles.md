@@ -255,7 +255,7 @@ Session time tracking is derived from `ConversationContext`:
 ### LLMService responsibilities
 `src/psychoanalyst_app/services/llm_service.py` encapsulates:
 - calling Gemini, Ollama, or OpenAI-compatible local providers through LangChain
-- rate limiting via a Trio token bucket (`TrioRateLimiter`)
+- rate limiting via a Trio token bucket (`TrioRateLimiter`) for non-local/cloud endpoints
 - two output modes:
   - free-text streaming (`stream_response(...)`)
   - typed structured outputs (`generate_structured_output(...)` / async variant)
@@ -406,7 +406,7 @@ Important environment variables:
 - All model IDs live in environment files (`.env`, `.env.test`, `.env.usertest`). Code never embeds model names; it only reads `MODEL_NAME` + per-agent overrides.
 - Local defaults (`.env`): `LLM_PROVIDER=openai_compatible`, `LLM_BASE_URL=http://host.docker.internal:8080/v1`, and `MODEL_NAME=local-model` for a host llama.cpp server. Override `MODEL_NAME` to match the model alias served locally.
 - Gemini/usertest defaults (`.env.usertest`): everyone uses `MODEL_NAME=gemini-2.5-flash-light` unless overridden (keeps cost predictable for manual cloud testing).
-- Rate limiting is controlled entirely via env (`LLM_RATE_LIMIT_ENABLED`, `LLM_REQUESTS_PER_MINUTE`, `LLM_BURST_CAPACITY`). The container reads those fields when constructing `LLMService`.
+- Local model endpoints bypass client-side rate limiting by policy. `LLM_RATE_LIMIT_ENABLED`, `LLM_REQUESTS_PER_MINUTE`, and `LLM_BURST_CAPACITY` apply only to Gemini or remote OpenAI-compatible endpoints after local endpoint detection.
 
 ### Logging
 Logging is configured centrally:

@@ -1,6 +1,8 @@
 import logging
 import sys
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -130,6 +132,33 @@ class Settings(BaseSettings):
         if self.LLM_PROVIDER == "openai_compatible":
             return "http://host.docker.internal:8080/v1"
         return None
+
+    def is_local_llm_endpoint(self) -> bool:
+        """Return whether the configured LLM endpoint is local/private."""
+        if self.LLM_PROVIDER in {"ollama", "lmstudio"}:
+            return True
+        if self.LLM_PROVIDER != "openai_compatible":
+            return False
+
+        base_url = self.get_llm_base_url()
+        if not base_url:
+            return False
+        hostname = (urlparse(base_url).hostname or "").strip().lower()
+        if hostname in {
+            "localhost",
+            "host.docker.internal",
+            "host.containers.internal",
+        }:
+            return True
+        try:
+            address = ip_address(hostname)
+        except ValueError:
+            return False
+        return address.is_loopback or address.is_private or address.is_link_local
+
+    def effective_llm_rate_limit_enabled(self) -> bool:
+        """Return effective rate-limit policy after local endpoint override."""
+        return self.LLM_RATE_LIMIT_ENABLED and not self.is_local_llm_endpoint()
 
     def get_model_for_agent(self, agent_type: str) -> str:
         """Resolve the configured model for a given agent."""
