@@ -316,11 +316,15 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
     timings = recorder._load_phase_timings()
     timing_summary = recorder._load_llm_timing_summary()
     for phase in (
-        "assessment_generation_ms",
+        "intake_extraction_ms",
+        "assessment_style_scoring_ms",
         "initial_plan_generation_ms",
         "therapy_opening_ms",
         "therapy_response_ms",
-        "post_session_update_ms",
+        "session_enrichment_ms",
+        "session_summary_ms",
+        "memory_analysis_ms",
+        "tier1_profile_change_detection_ms",
     ):
         await check(f"timing_{phase}", phase in timings)
     await check(

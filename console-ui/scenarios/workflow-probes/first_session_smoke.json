@@ -34,11 +34,20 @@
   },
   "timing_warning_thresholds_ms": {
     "intake_response_ms": 120000,
-    "assessment_generation_ms": 180000,
+    "intake_extraction_ms": 180000,
+    "assessment_style_scoring_ms": 180000,
+    "assessment_initial_formulation_ms": 180000,
     "initial_plan_generation_ms": 180000,
     "therapy_opening_ms": 120000,
     "therapy_response_ms": 120000,
-    "post_session_update_ms": 300000
+    "session_enrichment_ms": 300000,
+    "session_summary_ms": 300000,
+    "memory_analysis_ms": 300000,
+    "plan_reflection_ms": 300000,
+    "tier1_profile_change_detection_ms": 300000,
+    "tier1_profile_update_ms": 300000,
+    "tier3_change_detection_ms": 300000,
+    "tier3_update_ms": 300000
   },
   "milestones": {
     "required_actions": [
