@@ -30,6 +30,10 @@ from .websocket_protocol import (
 logger = logging.getLogger(__name__)
 
 
+class WorkflowActionError(RuntimeError):
+    """Raised when a workflow action fails and should not be retried silently."""
+
+
 class ConsoleClient:
     """Console client that connects to backend therapy service via API and WebSocket.
 
@@ -79,6 +83,7 @@ class ConsoleClient:
         self.session_ended_event = trio.Event()
         self.pending_recommendations: list[dict[str, Any]] | None = None
         self.latest_workflow_action: dict[str, Any] | None = None
+        self.latest_job_statuses: dict[str, dict[str, Any]] = {}
         self.last_recommendations_signature: str | None = None
         self.last_displayed_wait_signature: str | None = None
         self.registered = False
@@ -157,6 +162,8 @@ class ConsoleClient:
             await self._handle_assessment_recommendations(data)
         elif msg_type == ServerMessageTypes.WORKFLOW_NEXT_ACTION:
             await self._handle_workflow_next_action(data)
+        elif msg_type == ServerMessageTypes.JOB_STATUS:
+            await self._handle_job_status(data)
         elif msg_type == ServerMessageTypes.SESSION_ENDED:
             await self._handle_session_ended(data)
         else:
@@ -292,6 +299,13 @@ class ConsoleClient:
         await self.event_sink.emit(
             "workflow_action", action=data, delivery_source="websocket"
         )
+
+    async def _handle_job_status(self, data: Dict[str, Any]):
+        """Store backend job progress updates for probes and diagnostics."""
+        job_id = data.get("job_id")
+        if job_id:
+            self.latest_job_statuses[str(job_id)] = data
+        await self.event_sink.emit("job_status", status=data, delivery_source="websocket")
 
     async def _handle_session_ended(self, data: Dict[str, Any]):
         """Handle server-side session end notification."""
@@ -479,6 +493,7 @@ class ConsoleClient:
                 message="Therapy style selection failed",
                 data={"message": message, "session_id": self.current_session_id},
             )
+            raise WorkflowActionError("Therapy style selection failed") from exc
 
     async def _start_therapy(self, ws) -> bool:
         """Offer seamless continuation into the first plan-linked therapy session."""

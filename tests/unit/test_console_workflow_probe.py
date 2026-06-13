@@ -135,6 +135,34 @@ async def test_simulator_retries_invalid_reply_then_fails_explicitly(probe_modul
         })())
 
 
+async def test_simulator_prompt_instructs_direct_screening_answers(probe_modules):
+    simulator_mod = probe_modules["simulator"]
+    simulator = simulator_mod.LocalLLMUserSimulator("http://unused", "model")
+    context = type(
+        "Context",
+        (),
+        {
+            "transcript_tail": [],
+            "simulator_phase": "You are answering intake questions.",
+            "prompt": "Your response:",
+        },
+    )()
+
+    prompt = simulator._build_prompt(
+        {
+            "persona": {
+                "presenting_problem": "work anxiety",
+                "coping_attempt": "tried breathing exercises",
+            },
+            "workflow_preferences": {"therapy_style": "cbt"},
+        },
+        context,
+    )
+
+    assert "Coping attempt: tried breathing exercises" in prompt
+    assert "answer it directly before adding emotional detail" in prompt
+
+
 def _invalid_completion(simulator_mod):
     calls = 0
 
@@ -165,6 +193,130 @@ async def test_recorder_writes_required_text_artifacts(probe_modules, tmp_path):
     manifest = json.loads((tmp_path / "run_manifest.json").read_text())
     assert metadata["status"] == "PASS"
     assert manifest == metadata
+
+
+async def test_recorder_writes_intake_diagnostics_and_failure_summary(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.created_rows = {
+        "sessions": [
+            {
+                "session_id": "intake-1",
+                "session_type": "intake",
+                "timestamp": "2026-06-12T00:00:00+00:00",
+                "transcript": json.dumps(
+                    [
+                        {
+                            "role": "user",
+                            "content": (
+                                "I have been anxious about work for several "
+                                "months and sleeping badly."
+                            ),
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "Before we continue, I want to check your safety "
+                                "directly. Have you had any thoughts of harming "
+                                "yourself or someone else?"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "No thoughts of harm. I want to sleep better.",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "What would you most want to be different as a "
+                                "result of therapy, and what would feel like the "
+                                "most useful place for us to start?"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "I want to sleep better and feel calmer at work.",
+                        },
+                    ]
+                ),
+            }
+        ],
+        "user_profiles": [{"status": "INTAKE_IN_PROGRESS"}],
+    }
+    await recorder.record_assertion("workflow_action_select_therapy_style", False)
+    await recorder.record_assertion("therapy_plan_persisted", False)
+    await recorder.write_artifacts("FAIL", {"id": "scenario"})
+
+    diagnostics = json.loads(
+        (tmp_path / "intake_completion_diagnostics.json").read_text()
+    )
+    failure_summary = (tmp_path / "failure_summary.md").read_text()
+    summary = (tmp_path / "summary.md").read_text()
+
+    assert diagnostics["workflow_state"] == "intake_in_progress"
+    assert diagnostics["missing_required_slots"] == ["coping_attempts"]
+    assert diagnostics["slot_evidence"]["duration"]["status"] == "covered"
+    assert diagnostics["next_required_follow_up"] == "coping_attempts"
+    assert "Intake did not complete" in failure_summary
+    assert "Cascade failures" in failure_summary
+    assert "Root Cause Summary" in summary
+
+
+async def test_recorder_rejects_vague_duration_evidence(probe_modules, tmp_path):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.created_rows = {
+        "sessions": [
+            {
+                "session_id": "intake-1",
+                "session_type": "intake",
+                "timestamp": "2026-06-12T00:00:00+00:00",
+                "transcript": json.dumps(
+                    [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Recently the anxiety affects work and sleep, "
+                                "and I tried breathing exercises."
+                            ),
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "Before we continue, I want to check your safety "
+                                "directly. Have you had any thoughts of harming "
+                                "yourself or someone else?"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "No thoughts of harm. I feel safe.",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "What would you most want to be different as a "
+                                "result of therapy?"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "I want to sleep better.",
+                        },
+                    ]
+                ),
+            }
+        ],
+        "user_profiles": [{"status": "INTAKE_IN_PROGRESS"}],
+    }
+
+    diagnostics = recorder._intake_completion_diagnostics()
+
+    assert diagnostics is not None
+    assert "duration" not in diagnostics["covered_slots"]
+    assert "duration" in diagnostics["missing_hard_slots"]
+    assert diagnostics["slot_evidence"]["duration"]["status"] == "missing"
+    assert diagnostics["slot_evidence"]["duration"]["evidence_quote"] is None
 
 
 async def test_recorder_omits_slash_commands_from_clinical_transcript(probe_modules, tmp_path):
@@ -283,6 +435,215 @@ async def test_recorder_counts_unphased_finish_events(probe_modules, tmp_path):
     assert summary["llm_finished_count"] == 2
     assert summary["llm_unphased_finish_count"] == 1
     assert summary["llm_unphased_latency_ms"] == 7.25
+
+
+async def test_recorder_prefers_total_wall_latency_when_present(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    metrics_path = tmp_path / "backend_llm_calls.jsonl"
+    metrics_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "stream_response",
+                        "phase": "therapy_response",
+                        "latency_ms": 2000.0,
+                        "total_wall_ms": 57000.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "generate_response",
+                        "phase": None,
+                        "latency_ms": 10.0,
+                        "total_wall_ms": 30.0,
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = recorder._load_llm_timing_summary()
+
+    assert summary["phase_timings_ms"] == {"therapy_response_ms": 57000.0}
+    assert summary["phase_provider_timings_ms"] == {"therapy_response_ms": 2000.0}
+    assert summary["llm_total_latency_ms"] == 57030.0
+    assert summary["llm_provider_latency_ms"] == 2010.0
+    assert summary["llm_unphased_latency_ms"] == 30.0
+
+
+async def test_recorder_computes_user_visible_response_timings(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.events = [
+        {
+            "ts": "2026-06-12T21:00:00+00:00",
+            "kind": "session_started",
+            "data": {"session_type": "intake"},
+        },
+        {
+            "ts": "2026-06-12T21:00:01+00:00",
+            "kind": "user_input",
+            "prompt_kind": "chat",
+            "text": "Hello",
+        },
+        {
+            "ts": "2026-06-12T21:00:01.500000+00:00",
+            "kind": "ws_event",
+            "type": "chat_response_chunk",
+            "is_complete": False,
+        },
+        {
+            "ts": "2026-06-12T21:00:02+00:00",
+            "kind": "ws_event",
+            "type": "chat_response_chunk",
+            "is_complete": True,
+        },
+        {
+            "ts": "2026-06-12T21:00:02.250000+00:00",
+            "kind": "assistant_response",
+            "text": "Hi",
+        },
+        {
+            "ts": "2026-06-12T21:01:00+00:00",
+            "kind": "session_started",
+            "data": {"session_type": "therapy"},
+        },
+        {
+            "ts": "2026-06-12T21:01:01+00:00",
+            "kind": "user_input",
+            "prompt_kind": "chat",
+            "text": "I feel tense",
+        },
+        {
+            "ts": "2026-06-12T21:01:31+00:00",
+            "kind": "ws_event",
+            "type": "chat_response_chunk",
+            "is_complete": False,
+        },
+        {
+            "ts": "2026-06-12T21:01:33+00:00",
+            "kind": "ws_event",
+            "type": "chat_response_chunk",
+            "is_complete": True,
+        },
+        {
+            "ts": "2026-06-12T21:01:33.100000+00:00",
+            "kind": "assistant_response",
+            "text": "Tell me more",
+        },
+    ]
+
+    summary = recorder._response_latency_summary()
+
+    assert summary["overall"]["count"] == 2
+    assert summary["by_session_type"]["intake"]["user_visible_max_ms"] == 1250.0
+    assert summary["by_session_type"]["intake"]["ttft_p95_ms"] == 500.0
+    assert summary["by_session_type"]["therapy"]["user_visible_max_ms"] == 32100.0
+    assert summary["by_session_type"]["therapy"]["ttft_p95_ms"] == 30000.0
+    assert summary["by_session_type"]["therapy"]["stream_p95_ms"] == 2000.0
+
+
+async def test_recorder_separates_raw_and_logical_workflow_actions(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    action = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "workflow_state": "initial_plan_complete",
+        "required_action": "start_therapy",
+        "state_signature": "sig-1",
+    }
+
+    await recorder.emit("workflow_action", action=action, delivery_source="websocket")
+    await recorder.emit("workflow_action", action=action, delivery_source="http_poll")
+
+    raw = [event for event in recorder.events if event["kind"] == "raw_workflow_action"]
+    logical = [event for event in recorder.events if event["kind"] == "workflow_action"]
+
+    assert len(raw) == 2
+    assert len(logical) == 1
+    assert recorder._workflow_action_summary()["duplicate_delivery_count"] == 1
+
+
+async def test_wait_for_post_session_update_uses_job_status(
+    probe_modules, monkeypatch, tmp_path
+):
+    runner = probe_modules["runner"]
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    responses = [
+        {
+            "job_id": "post_session_update:s1",
+            "job_type": "post_session_update",
+            "user_id": "u1",
+            "session_id": "s1",
+            "status": "running",
+            "current_step": "running_reflection",
+            "children": [],
+        },
+        {
+            "job_id": "post_session_update:s1",
+            "job_type": "post_session_update",
+            "user_id": "u1",
+            "session_id": "s1",
+            "status": "complete",
+            "current_step": "post_session_update_complete",
+            "children": [],
+        },
+    ]
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response(responses.pop(0))
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(runner.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(runner.trio, "sleep", fake_sleep)
+
+    await runner.wait_for_post_session_update(
+        "http://backend",
+        "u1",
+        "s1",
+        {"limits": {"plan_update_timeout_seconds": 5}},
+        recorder,
+    )
+
+    assert not responses
+    await recorder._flush_pending_poll()
+    summary = [
+        event
+        for event in recorder.events
+        if event["kind"] == "post_session_job_status_summary"
+    ]
+    assert summary
 
 
 async def test_db_snapshot_uses_backup_integrity_and_attributable_rows(probe_modules, tmp_path):

@@ -142,6 +142,39 @@ async def test_console_workflow_event_does_not_complete_pending_chat_response(
     assert client.response_complete.is_set() is False
 
 
+async def test_console_job_status_event_is_stored_and_emitted(console_client_cls):
+    class Sink:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, **fields: Any) -> None:
+            self.events.append((event, fields))
+
+    sink = Sink()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+        event_sink=sink,
+    )
+    payload = {
+        "job_id": "post_session_update:session-1",
+        "job_type": "post_session_update",
+        "status": "running",
+    }
+
+    await client._handle_job_status(payload)
+
+    assert client.latest_job_statuses["post_session_update:session-1"] == payload
+    assert sink.events == [
+        (
+            "job_status",
+            {"status": payload, "delivery_source": "websocket"},
+        )
+    ]
+
+
 async def test_console_initial_greeting_completion_does_not_complete_pending_chat(
     console_client_cls,
 ):
@@ -352,6 +385,52 @@ async def test_select_therapy_style_posts_and_clears_pending_recommendations(
         "therapy_style_selected",
         {"selected_therapy_style": "cbt", "session_id": "session-1"},
     )
+
+
+async def test_select_therapy_style_backend_failure_is_terminal(console_client_cls):
+    output = _StubOutput()
+
+    class Sink:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, **fields: Any) -> None:
+            self.events.append((event, fields))
+
+    sink = Sink()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=output,
+        event_sink=sink,
+    )
+    client.current_session_id = "session-1"
+    client.pending_recommendations = [
+        {"style_id": "cbt", "explanation": "Test explanation"},
+    ]
+
+    async def fake_get_user_input(_prompt: str = "", _default: str | None = None) -> str:
+        return "1"
+
+    async def fake_api_request(
+        _method: str, _endpoint: str, **_kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError(
+            "POST /workflow/select_therapy_style failed with 502: "
+            '{"code": "initial_plan_generation_failed"}'
+        )
+
+    client._get_user_input = fake_get_user_input  # type: ignore[method-assign]
+    client._api_request = fake_api_request  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Therapy style selection failed"):
+        await client._select_therapy_style()
+
+    assert client.pending_recommendations is not None
+    assert output.errors
+    assert sink.events[-1][0] == "error"
+    assert sink.events[-1][1]["message"] == "Therapy style selection failed"
 
 
 async def test_follow_workflow_runs_style_selection_action(console_client_cls):
