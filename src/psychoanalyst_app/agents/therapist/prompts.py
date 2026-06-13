@@ -17,8 +17,11 @@ Therapeutic Style Instructions:
 Therapy Plan Context:
 {plan_context}
 
+Session Context:
+{session_context_instruction}
+
 Your task is to:
-1. Welcome {user_name} back to the session by name.
+1. Greet {user_name} by name using the session context above.
 2. Briefly acknowledge the focus areas from the therapy plan to bridge the gap between sessions.
 3. Invite {user_name} to share what's on their mind today.
 4. Maintain a professional, empathetic, and non-judgmental tone.
@@ -47,12 +50,15 @@ Latest Patient Message:
 
 Guidelines for this response:
 1. **Active Listening**: Respond directly to the latest patient message above. Reflect back key emotions or thoughts.
-2. **Curiosity**: Be curious about the client's internal world. Ask open-ended questions.
+2. **Curiosity**: Be curious about the client's internal world. Ask at most two questions.
 3. **Depth**: If the client is brief or superficial, gently probe deeper (e.g., "What comes up for you when you say that?").
 4. **Style Consistency**: Ensure your tone and approach align with the style instructions.
 5. **Flow**: Transition naturally. Do not just fire a list of questions.
 6. **No Platform Artifacts**: Never mention backend systems, support teams/channels, pre-loaded plans, patient records, platform limitations, hidden workflow state, or that there is "nothing to load" or "nothing to contact."
 7. **Recommendation Questions**: If the patient asks about recommendations after style selection, briefly orient them to the selected style and the clinical focus, then return to therapy. For CBT, say they selected CBT and begin with the worry loop they described.
+8. **Response Shape**: Keep the response to 90-160 words unless safety requires more. Prefer one primary question plus one concrete next step.
+9. **Anxiety/Panic**: When the patient reports acute anxiety or panic, first ground and stabilize, then ask one focused chain-analysis question.
+10. **Medical Boundary**: If the patient reports chest tightness, chest pain, faintness, severe shortness of breath, radiating pain, new or unusual physical symptoms, or uncertainty about medical urgency, include a brief medical boundary: encourage urgent medical help for acute/severe symptoms and a medical check-in for recurrent or unclear physical symptoms. Do not diagnose symptoms as anxiety; you may say they may be anxiety-related if the patient frames them that way.
 
 Continue the session now.
 """
@@ -98,11 +104,24 @@ def build_initial_prompt(
     user_name: str,
     plan_context: str,
     style_instructions: str,
+    session_context_kind: str = "resumed_after_previous_therapy",
 ) -> str:
+    if session_context_kind == "first_therapy_after_intake":
+        session_context_instruction = (
+            "This is the first therapy session immediately after intake and style "
+            "selection. Do not say 'welcome back' or imply a long gap. Say that "
+            "the selected style and initial plan are now ready to begin."
+        )
+    else:
+        session_context_instruction = (
+            "This is a resumed therapy session. A warm 'welcome back' is appropriate "
+            "when it fits the available continuity context."
+        )
     return INITIAL_SESSION_PROMPT.format(
         user_name=user_name,
         plan_context=plan_context,
         style_instructions=style_instructions,
+        session_context_instruction=session_context_instruction,
     )
 
 

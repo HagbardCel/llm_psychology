@@ -73,7 +73,7 @@ Generate a complete SessionBriefing JSON object with the following structure. Ea
 
   "patient_observations": "<REQUIRED: 2-3 sentences about HOW the patient communicated, not just WHAT they said. Note: communication style, openness level, defensiveness, engagement, any shifts in behavior or presentation compared to previous sessions.>",
 
-  "plan_progression_notes": "<REQUIRED: 2-3 sentences assessing how this session advanced the overall treatment plan. Did it move forward as expected? Were there deviations? Is the plan still appropriate?>",
+  "plan_progression_notes": "<REQUIRED: 2-3 sentences assessing fit with the overall treatment plan. If there is no patient evidence of accepted or completed intervention, describe therapist proposals as proposals and continuity opportunities, not as treatment progress.>",
 
   "relationship_quality": "<One of: 'building', 'developing', 'established', 'strong'>",
 
@@ -151,6 +151,9 @@ CRITICAL REQUIREMENTS:
 10. Use "proposed" unless a later patient turn explicitly supports acceptance
 11. Use "completed" only for explicit patient-reported completion
 12. Avoid agreement or completion language in narrative fields unless supported
+13. Do not describe an intervention as accepted, practiced, implemented, completed, successful, or progress-producing unless a later patient turn explicitly supports it
+14. Use "therapist proposed" or "next session can explore" when no patient response followed an intervention
+15. Distinguish engagement from clinical improvement; willingness to answer questions is not by itself treatment progress
 
 Generate the complete JSON object now:
 """

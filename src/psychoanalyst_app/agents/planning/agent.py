@@ -158,7 +158,7 @@ class TrioPlanningAgent:
             memory = await self.memory_agent.get_therapeutic_memory()
 
             update_needed = force_update or assess_update_necessity(
-                session_context, memory, current_plan
+                session_context, memory, current_plan, session=session
             )
 
             if not update_needed:
@@ -246,7 +246,14 @@ class TrioPlanningAgent:
             )
 
             assessment = generate_effectiveness_assessment(
-                plan, memory, recent_context, effectiveness_score
+                plan,
+                memory,
+                recent_context,
+                effectiveness_score,
+                emotional_trend=patterns.get("emotional_patterns", {}).get(
+                    "recent_trend",
+                    "stable",
+                ),
             )
 
             return {
@@ -256,6 +263,7 @@ class TrioPlanningAgent:
                 "strengths": assessment.get("strengths", []),
                 "improvement_areas": assessment.get("improvement_areas", []),
                 "recommendations": assessment.get("recommendations", []),
+                "emotional_trend": assessment.get("emotional_trend", "stable"),
                 "progress_indicators": recent_context.get("insights", []),
                 "assessment_timestamp": datetime.now().isoformat(),
             }

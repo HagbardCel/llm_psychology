@@ -394,6 +394,10 @@ async def test_process_reflection_updates_plan_with_briefing(
     assert response.workflow_event == WorkflowEvent.COMPLETE_REFLECTION
     assert "has_briefing" in response.metadata
     assert response.metadata["has_briefing"] is True
+    assert response.metadata["plan_revision_required"] is False
+    assert response.metadata["session_briefing_generated"] is True
+    assert response.metadata["plan_id"] == sample_therapy_plan.plan_id
+    assert response.metadata["plan_version"] == sample_therapy_plan.version
     assert response.metadata["session_briefing"] is not None
     assert "narrative_handoff" in response.metadata["session_briefing"]
 

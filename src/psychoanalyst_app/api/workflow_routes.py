@@ -13,6 +13,7 @@ from psychoanalyst_app.api._helpers import (
     validate_session_for_user,
     validation_error_response,
 )
+from psychoanalyst_app.exceptions import PlanningError, ReflectionError
 from psychoanalyst_app.models.http import (
     WorkflowCompleteProfileRequestDTO,
     WorkflowRetryPlanUpdateRequestDTO,
@@ -133,6 +134,26 @@ def create_workflow_routes(server) -> Blueprint:
             logger.error("Validation error selecting therapy style: %s", exc)
             status = 404 if "not found" in str(exc).lower() else 400
             return jsonify({"error": str(exc)}), status
+        except (PlanningError, ReflectionError) as exc:
+            logger.error(
+                "Initial therapy plan generation failed: %s",
+                exc,
+                exc_info=True,
+            )
+            current_state = await server.orchestrator.get_user_state(
+                style_request.user_id
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "Initial therapy plan generation failed",
+                        "code": "initial_plan_generation_failed",
+                        "workflow_state": current_state.value,
+                        "phase": "initial_plan_generation",
+                    }
+                ),
+                502,
+            )
 
         action = await server.orchestrator.get_workflow_next_action(
             style_request.user_id, session_id=style_request.session_id

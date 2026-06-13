@@ -97,6 +97,19 @@ def test_briefing_acceptance_requires_cited_patient_text() -> None:
         )
 
 
+def test_briefing_rejects_unsupported_progress_overclaim() -> None:
+    with pytest.raises(ValueError, match="unsupported agreement"):
+        validate_session_briefing_evidence(
+            _briefing(
+                plan_progression_notes=(
+                    "The session advanced the plan and the patient made progress "
+                    "with the proposed mapping exercise."
+                )
+            ),
+            _sample_session(),
+        )
+
+
 def test_apply_tier2_enrichment_marks_session_enriched() -> None:
     session = _sample_session()
     enriched = apply_tier2_enrichment(
