@@ -25,7 +25,7 @@ implementation checklist. Mark items `[x]` as they are completed.
 - [x] Define canonical LLM phase constants and replace overloaded phase names.
 - [x] Improve LLM timing metrics and user-visible latency undercoverage reporting.
 - [x] Share or parity-test backend and probe intake slot evidence logic.
-- [ ] Tighten duration/onset/frequency evidence detection without rejecting coarse onset.
+- [x] Skipped: Tighten duration/onset/frequency evidence detection without rejecting coarse onset. User has a different option in mind.
 - [ ] Align probe risk-screen evidence keywords with backend logic.
 - [ ] Make console workflow actions WebSocket-first with HTTP polling fallback.
 - [ ] Add idempotency for one-shot side-effect workflow actions.
@@ -74,10 +74,11 @@ Do not add new `slot_evidence` fields; backend and recorder diagnostics already
 emit them. Shared logic lives in
 `src/psychoanalyst_app/shared/intake_slot_evidence.py` and is consumed by
 `agents/intake/slots.py` and the probe recorder. Risk-screen keyword alignment
-is satisfied by that shared module; duration-class tightening remains the next
-checklist item.
+is satisfied by that shared module; duration-class tightening is intentionally
+skipped for now. The next approach will be handled separately.
 
-Replace the broad `since ...` duration regex with explicit evidence classes:
+Skipped for now: replace the broad `since ...` duration regex with explicit
+evidence classes:
 
 - precise or rolling duration, such as `for three months` or `past few days`
 - frequency, such as `daily` or `twice a week`
