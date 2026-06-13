@@ -28,7 +28,9 @@ class TherapyPlanCreationError(DatabaseError):
 class LLMServiceError(PsychoanalystError):
     """Raised when LLM service calls fail."""
 
-    pass
+    def __init__(self, message: str, metadata: dict | None = None):
+        super().__init__(message)
+        self.metadata = metadata or {}
 
 
 class LLMQuotaExhaustedError(LLMServiceError):

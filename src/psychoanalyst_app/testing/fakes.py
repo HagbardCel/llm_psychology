@@ -29,7 +29,7 @@ class DeterministicLLMService:
         logging.getLogger("llm_metrics").info(
             json.dumps(
                 {
-                    "phase": phase,
+                    "phase": phase or "unclassified",
                     "call_type": call_type,
                     "provider": "deterministic",
                     "model": "deterministic",
@@ -45,21 +45,33 @@ class DeterministicLLMService:
         self,
         prompt: str,
         context: list[dict[str, str]] | None = None,
+        *,
+        phase: str | None = None,
     ) -> str:
+        started_at = time.perf_counter()
         prompt_lower = (prompt or "").lower()
         if "therapy session" in prompt_lower:
-            return (
+            response = (
                 "When the Monday deadline pressure hits and your chest tightens, "
-                "let us slow down and identify the thought that is "
+                "let us slow down, notice the thought, and identify what is "
                 "disrupting your sleep."
             )
-        if "intake" in prompt_lower:
-            return (
+        elif "intake" in prompt_lower:
+            response = (
                 "Have you had thoughts of harming yourself or someone else? "
                 "What would you most want to be different?"
             )
-        prompt_preview = (prompt or "").strip().replace("\n", " ")[:80]
-        return f"[deterministic-llm] {prompt_preview}"
+        else:
+            prompt_preview = (prompt or "").strip().replace("\n", " ")[:80]
+            response = f"[deterministic-llm] {prompt_preview}"
+
+        if phase:
+            self._record_metric(
+                phase=phase,
+                call_type="generate_response",
+                started_at=started_at,
+            )
+        return response
 
     async def stream_response(
         self,
@@ -91,9 +103,13 @@ class DeterministicLLMService:
         return chunks
 
     async def generate_response_async(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: str | None = None,
     ) -> str:
-        return self.generate_response(prompt, context)
+        return self.generate_response(prompt, context, phase=phase)
 
     def generate_structured_output(
         self,

@@ -32,6 +32,7 @@ from psychoanalyst_app.orchestration.trio_conversation_manager import (
     TrioConversationManager,
 )
 from psychoanalyst_app.services.session_enrichment import SessionEnrichmentService
+from psychoanalyst_app.testing.fakes import DeterministicLLMService
 
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
@@ -244,3 +245,11 @@ async def test_session_summary_phases_generate_response() -> None:
 
     assert await generate_session_summary(llm, _sample_session()) == "summary"
     assert llm.phases == ["post_session_update"]
+
+
+async def test_deterministic_llm_accepts_phase_for_session_summary() -> None:
+    llm = DeterministicLLMService()
+
+    summary = await generate_session_summary(llm, _sample_session())
+
+    assert summary

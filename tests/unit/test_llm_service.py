@@ -327,7 +327,7 @@ def test_local_structured_output_parses_json(monkeypatch):
     assert "Return only valid JSON" in fake.invoke_calls[0][0].content
 
 
-def test_local_structured_output_invalid_json_raises(monkeypatch):
+def test_local_structured_output_invalid_json_raises_with_diagnostics(monkeypatch):
     from pydantic import BaseModel
 
     import psychoanalyst_app.services.llm_service as llm_module
@@ -345,8 +345,19 @@ def test_local_structured_output_invalid_json_raises(monkeypatch):
         rate_limit_enabled=False,
     )
 
-    with pytest.raises(LLMServiceError, match="structured output parsing failed"):
-        service.generate_structured_output("prompt", _Schema)
+    with pytest.raises(
+        LLMServiceError, match="structured output parsing failed"
+    ) as exc_info:
+        service.generate_structured_output(
+            "prompt", _Schema, phase="initial_plan_generation"
+        )
+
+    assert exc_info.value.metadata["phase"] == "initial_plan_generation"
+    assert exc_info.value.metadata["schema_name"] == "_Schema"
+    assert exc_info.value.metadata["provider"] == "ollama"
+    assert exc_info.value.metadata["model_name"] == "llama3.1"
+    assert exc_info.value.metadata["parse_error_type"] == "ValidationError"
+    assert exc_info.value.metadata["response_preview"] == "not json"
 
 
 def test_trio_rate_limiter_honors_capacity_and_rate():
@@ -364,6 +375,78 @@ def test_trio_rate_limiter_honors_capacity_and_rate():
 
     # Without auto-jumping, MockClock time does not advance and sleeps can hang.
     trio.run(_main, clock=trio.testing.MockClock(autojump_threshold=0.0))
+
+
+def test_stream_response_metrics_include_rate_limit_wait(
+    fake_chat_model,
+):
+    async def _main():
+        service = LLMService(
+            api_key="test",
+            model_name="test-model",
+            requests_per_minute=6000,
+            burst_capacity=1,
+        )
+        metrics_logger = _FakeLogger()
+        service._llm_metrics_logger = metrics_logger
+        fake_chat_model.stream_chunk_contents = ["a", "b"]
+
+        await service._acquire_rate_limit()
+
+        chunks = []
+        async for chunk in service.stream_response("Hello", phase="intake_response"):
+            chunks.append(chunk)
+
+        assert chunks == ["a", "b"]
+        records = [json.loads(message) for message in metrics_logger.messages]
+        finish = next(record for record in records if record["status"] == "finish")
+
+        assert finish["call_id"]
+        assert finish["rate_limit_wait_ms"] >= 5.0
+        assert finish["total_wall_ms"] >= finish["rate_limit_wait_ms"]
+        assert finish["latency_ms"] < finish["total_wall_ms"]
+        assert finish["ttft_ms"] >= finish["rate_limit_wait_ms"]
+        assert finish["stream_ms"] is not None
+
+    trio.run(_main)
+
+
+def test_structured_output_async_metrics_include_rate_limit_wait(
+    fake_chat_model,
+):
+    async def _main():
+        from pydantic import BaseModel
+
+        class _Schema(BaseModel):
+            ok: bool
+
+        fake_chat_model.structured_result = _Schema(ok=True)
+        service = LLMService(
+            api_key="test",
+            model_name="test-model",
+            requests_per_minute=6000,
+            burst_capacity=1,
+        )
+        metrics_logger = _FakeLogger()
+        service._llm_metrics_logger = metrics_logger
+
+        await service._acquire_rate_limit()
+
+        result = await service.generate_structured_output_async(
+            "prompt",
+            _Schema,
+            phase="post_session_update",
+        )
+
+        assert result == _Schema(ok=True)
+        records = [json.loads(message) for message in metrics_logger.messages]
+        finish = next(record for record in records if record["status"] == "finish")
+        assert finish["call_id"]
+        assert finish["rate_limit_wait_ms"] >= 5.0
+        assert finish["total_wall_ms"] >= finish["rate_limit_wait_ms"]
+        assert finish["latency_ms"] < finish["total_wall_ms"]
+
+    trio.run(_main)
 
 
 def test_llm_call_logging_disabled_by_default(
