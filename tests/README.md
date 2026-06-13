@@ -67,5 +67,5 @@ make probe-console-deterministic
 ## Related documentation
 
 - [Architecture overview](../docs/ARCHITECTURE.md)
-- [Foundation stabilization plan](../docs/reference/FOUNDATION_STABILIZATION_PLAN.md)
+- [Design principles](../docs/design-principles.md)
 - [HTTP / WebSocket contracts](../docs/contracts/)

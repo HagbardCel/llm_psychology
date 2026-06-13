@@ -12,7 +12,6 @@
 - `docs/README.md`: Doc index and pointers to deeper references.
 - `docs/ui-scope.md`: Active frontend policy.
 - `docs/design-principles.md`: Non-negotiable architecture rules, layering, and workflow invariants.
-- `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`: Current stabilization priorities.
 - `docs/ARCHITECTURE.md`: System overview, orchestration flow, and component responsibilities.
 - `docs/user_journey.md`: Expected user flow and endpoint usage.
 - `docs/session_lifecycle.md`: Session orchestration details and state transitions.
@@ -62,6 +61,14 @@ Until foundation stabilization is complete, treat the backend, workflow engine, 
 - Do not recreate, repair, test, or optimize removed frontends unless explicitly requested.
 - Do not add multi-frontend orchestration modes.
 - Prefer backend, protocol, workflow-probe, and console-client tests.
+
+## Foundation Failure Policy
+During foundation stabilization, do not hide workflow, LLM, persistence, protocol, or contract failures behind fallback behavior unless explicitly requested.
+
+- Prefer fail-fast, diagnostic errors with preserved workflow state and deterministic tests.
+- Treat fallbacks as product decisions; document and test them when they are intentionally added.
+- Workflow probes may improve artifact generation and observability, but must not convert real backend failures into passes.
+- For LLM structured-output failures, preserve enough bounded diagnostic context to identify the phase, schema, provider, model, and parse failure without leaking full prompts or transcripts by default.
 
 ## Schema and Protocol Generation (Containerized)
 - Generate JSON schemas: `make generate-schemas`

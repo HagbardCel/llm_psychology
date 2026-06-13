@@ -14,7 +14,7 @@ Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 
 If you need deeper detail on a specific area, this document links to the canonical deep-dives:
 - Architecture: `docs/ARCHITECTURE.md`
-- Foundation stabilization priorities: `docs/reference/FOUNDATION_STABILIZATION_PLAN.md`
+- Foundation stabilization priorities: this document and `docs/ui-scope.md`
 - Type system pipeline: `docs/TYPE_SYSTEM.md`
 - WebSocket contract: `docs/WEBSOCKET_PROTOCOL.md`
 - Session lifecycle: `docs/session_lifecycle.md`
@@ -96,7 +96,7 @@ Canonical examples:
 
 ## Foundation Stabilization Mode
 
-Until `docs/reference/FOUNDATION_STABILIZATION_PLAN.md` exit criteria are satisfied, the project is operated as a headless backend and protocol-contract project with one maintained reference client.
+Until foundation stabilization exit criteria are satisfied, the project is operated as a headless backend and protocol-contract project with one maintained reference client.
 
 Support tiers:
 - **Tier 0:** backend workflow engine, persistence, HTTP DTOs, WebSocket protocol, schema/type generation, generated protocol constants, LLM abstraction, deterministic fake-provider behavior, backend tests, and architecture/documentation validation.
@@ -557,7 +557,7 @@ class ServiceContainer:
 
 ## Coding Standards
 Detailed coding examples and anti-pattern references moved to:
-- `docs/reference/CODING_STANDARDS_AND_ANTI_PATTERNS.md`
+- Git history for removed historical coding-standard examples
 
 Keep this active doc focused on architecture and runtime invariants. For code style:
 - Follow typed Python conventions used in existing modules.

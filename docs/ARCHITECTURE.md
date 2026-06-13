@@ -10,7 +10,7 @@ source_of_truth_for: Runtime architecture boundaries and component responsibilit
 
 Documentation governance for this file is defined in `DOCS_GOVERNANCE.md`.
 Current stabilization priorities and client support tiers are defined in
-`docs/reference/FOUNDATION_STABILIZATION_PLAN.md`.
+`docs/design-principles.md` and `docs/ui-scope.md`.
 
 ## Overview
 
