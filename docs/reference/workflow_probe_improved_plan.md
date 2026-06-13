@@ -23,7 +23,7 @@ implementation checklist. Mark items `[x]` as they are completed.
 - [x] Confirm intake streaming already uses `phase="intake_response"`.
 - [x] Confirm structured-output call sites already use non-null broad phases.
 - [x] Define canonical LLM phase constants and replace overloaded phase names.
-- [ ] Improve LLM timing metrics and user-visible latency undercoverage reporting.
+- [x] Improve LLM timing metrics and user-visible latency undercoverage reporting.
 - [ ] Share or parity-test backend and probe intake slot evidence logic.
 - [ ] Tighten duration/onset/frequency evidence detection without rejecting coarse onset.
 - [ ] Align probe risk-screen evidence keywords with backend logic.
