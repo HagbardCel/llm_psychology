@@ -162,9 +162,7 @@ def mock_llm_service_natural_flow():
 
     llm.generate_response = mock_generate_sync
 
-    async def mock_structured_output_async(
-        prompt, schema, method="json_schema", phase=None
-    ):
+    async def mock_structured_output_async(prompt, schema, method="json_schema", *, phase):
         from pydantic import BaseModel
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):

@@ -8,6 +8,7 @@ from google.api_core.exceptions import ResourceExhausted
 from psychoanalyst_app.exceptions import LLMQuotaExhaustedError
 from psychoanalyst_app.services import llm_service as llm_module
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import THERAPY_RESPONSE
 
 
 @dataclass
@@ -29,7 +30,7 @@ def test_generate_response_rotates_on_quota(monkeypatch):
     monkeypatch.setattr(llm_module, "ChatGoogleGenerativeAI", _FakeLLM)
     service = LLMService(api_keys=["exhausted", "available"], model_name="test-model")
 
-    response = service.generate_response("hello")
+    response = service.generate_response("hello", phase=THERAPY_RESPONSE)
 
     assert response == "ok:available"
 
@@ -39,4 +40,4 @@ def test_generate_response_all_keys_exhausted(monkeypatch):
     service = LLMService(api_keys=["exhausted"], model_name="test-model")
 
     with pytest.raises(LLMQuotaExhaustedError):
-        service.generate_response("hello")
+        service.generate_response("hello", phase=THERAPY_RESPONSE)

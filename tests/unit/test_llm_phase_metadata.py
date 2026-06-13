@@ -31,6 +31,14 @@ from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.orchestration.trio_conversation_manager import (
     TrioConversationManager,
 )
+from psychoanalyst_app.services.llm_phases import (
+    INTAKE_EXTRACTION,
+    INTAKE_RESPONSE,
+    MEMORY_ANALYSIS,
+    SESSION_ENRICHMENT,
+    SESSION_SUMMARY,
+    THERAPY_DEEP_TOPIC_DETECTION,
+)
 from psychoanalyst_app.services.session_enrichment import SessionEnrichmentService
 from psychoanalyst_app.testing.fakes import DeterministicLLMService
 
@@ -47,7 +55,7 @@ class _PhaseCapturingLLM:
         schema: type,
         *,
         method: str = "json_schema",
-        phase: str | None = None,
+        phase: str,
     ) -> Any:
         _ = method
         self.phases.append(phase)
@@ -81,7 +89,7 @@ class _PhaseCapturingLLM:
         _prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: str,
     ) -> str:
         _ = context
         self.phases.append(phase)
@@ -97,7 +105,7 @@ class _StreamingLLM:
         _prompt: str,
         _context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: str,
     ):
         self.phases.append(phase)
         yield "ok"
@@ -171,7 +179,7 @@ async def test_conversation_manager_phases_intake_streaming() -> None:
     ]
 
     assert chunks == ["ok"]
-    assert llm.phases == ["intake_response"]
+    assert llm.phases == [INTAKE_RESPONSE]
 
 
 async def test_intake_extraction_phases_structured_output() -> None:
@@ -180,7 +188,7 @@ async def test_intake_extraction_phases_structured_output() -> None:
     result = await extract_tier1_data(llm, _sample_session(session_type="intake").transcript)
 
     assert result is not None
-    assert llm.phases == ["assessment_generation"]
+    assert llm.phases == [INTAKE_EXTRACTION]
 
 
 async def test_session_enrichment_phases_structured_output() -> None:
@@ -203,7 +211,7 @@ async def test_session_enrichment_phases_structured_output() -> None:
     service = SessionEnrichmentService(llm, db_service)
 
     assert await service.enrich_session_tier2("session_1") is True
-    assert llm.phases == ["post_session_update"]
+    assert llm.phases == [SESSION_ENRICHMENT]
 
 
 async def test_memory_analysis_phases_structured_output() -> None:
@@ -219,7 +227,7 @@ async def test_memory_analysis_phases_structured_output() -> None:
     context = await agent.analyze_session_context(_sample_session())
 
     assert context.key_themes == ["work"]
-    assert llm.phases == ["post_session_update"]
+    assert llm.phases == [MEMORY_ANALYSIS]
 
 
 async def test_deep_topic_detection_phases_structured_output() -> None:
@@ -237,14 +245,14 @@ async def test_deep_topic_detection_phases_structured_output() -> None:
             ]
         ),
     )
-    assert llm.phases == ["therapy_response"]
+    assert llm.phases == [THERAPY_DEEP_TOPIC_DETECTION]
 
 
 async def test_session_summary_phases_generate_response() -> None:
     llm = _PhaseCapturingLLM()
 
     assert await generate_session_summary(llm, _sample_session()) == "summary"
-    assert llm.phases == ["post_session_update"]
+    assert llm.phases == [SESSION_SUMMARY]
 
 
 async def test_deterministic_llm_accepts_phase_for_session_summary() -> None:

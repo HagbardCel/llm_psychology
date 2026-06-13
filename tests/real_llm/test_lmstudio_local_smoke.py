@@ -8,6 +8,7 @@ import pytest
 
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.services.llm_phases import THERAPY_RESPONSE
 
 pytestmark = [pytest.mark.real_llm]
 
@@ -34,6 +35,8 @@ def test_lmstudio_google_gemma_4_e4b_smoke():
     assert llm.model_name == "google/gemma-4-e4b"
     assert llm.base_url == "http://host.docker.internal:1234/v1"
 
-    response = llm.generate_response("Reply with exactly: local model ok")
+    response = llm.generate_response(
+        "Reply with exactly: local model ok", phase=THERAPY_RESPONSE
+    )
 
     assert "local model ok" in response.lower()

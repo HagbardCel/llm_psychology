@@ -713,10 +713,10 @@ async def test_reflection_agent_session_enrichment(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def _structured_side_effect(prompt, schema, method="json_schema", phase=None):
+    async def _structured_side_effect(prompt, schema, method="json_schema", *, phase):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_enrichment_data)
-        return await original_structured(prompt, schema, method=method)
+        return await original_structured(prompt, schema, method=method, phase=phase)
 
     llm_service.generate_structured_output_async = AsyncMock(
         side_effect=_structured_side_effect
@@ -1225,12 +1225,12 @@ async def test_assessment_agent_creates_tier3_and_tier4(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_tier34(prompt, schema, method="json_schema", phase=None):
+    async def mock_structured_tier34(prompt, schema, method="json_schema", *, phase):
         if schema is PatientAnalysis:
             return PatientAnalysis.model_validate(tier3_data)
         if schema is Tier4Extract:
             return Tier4Extract.model_validate(tier4_data)
-        return await original_structured(prompt, schema, method=method)
+        return await original_structured(prompt, schema, method=method, phase=phase)
 
     llm_service.generate_structured_output_async = AsyncMock(
         side_effect=mock_structured_tier34
@@ -1571,7 +1571,9 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_versioning(prompt, schema, method="json_schema", phase=None):
+    async def mock_structured_versioning(
+        prompt, schema, method="json_schema", *, phase
+    ):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_data)
         if schema is ChangeDetectionDecision:
@@ -1587,7 +1589,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
             )
         if schema is PatientAnalysis:
             return PatientAnalysis.model_validate(updated_tier3)
-        return await original_structured(prompt, schema, method=method)
+        return await original_structured(prompt, schema, method=method, phase=phase)
 
     llm_service.generate_structured_output_async = AsyncMock(
         side_effect=mock_structured_versioning
@@ -1868,14 +1870,14 @@ async def test_reflection_agent_tier3_no_update_when_stable(
 
     original_structured = llm_service.generate_structured_output_async
 
-    async def mock_structured_stable(prompt, schema, method="json_schema", phase=None):
+    async def mock_structured_stable(prompt, schema, method="json_schema", *, phase):
         if schema is Tier2Enrichment:
             return Tier2Enrichment.model_validate(tier2_data)
         if schema is ChangeDetectionDecision:
             return ChangeDetectionDecision.model_validate(
                 {"update_needed": False, "change_summary": None, "confidence": "high"}
             )
-        return await original_structured(prompt, schema, method=method)
+        return await original_structured(prompt, schema, method=method, phase=phase)
 
     llm_service.generate_structured_output_async = AsyncMock(
         side_effect=mock_structured_stable

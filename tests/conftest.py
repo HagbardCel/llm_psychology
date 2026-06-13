@@ -228,15 +228,17 @@ def mock_llm_service():
     llm_service.generate_response_stream = mock_stream_response
 
     # Add async versions that wrap the sync mocks
-    async def mock_generate_response_async(prompt, context=None, phase=None):
-        return llm_service.generate_response(prompt, context)
+    async def mock_generate_response_async(prompt, context=None, *, phase):
+        return llm_service.generate_response(prompt, context, phase=phase)
 
     llm_service.generate_response_async = mock_generate_response_async
 
     async def mock_generate_structured_output_async(
-        prompt, schema, method="json_schema", phase=None
+        prompt, schema, method="json_schema", *, phase
     ):
-        return llm_service.generate_structured_output(prompt, schema, method=method)
+        return llm_service.generate_structured_output(
+            prompt, schema, method=method, phase=phase
+        )
 
     llm_service.generate_structured_output_async = mock_generate_structured_output_async
 

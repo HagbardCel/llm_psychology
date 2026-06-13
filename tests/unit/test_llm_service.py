@@ -8,6 +8,12 @@ import trio.testing
 
 from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.services.llm_service import LLMService, TrioRateLimiter
+from psychoanalyst_app.services.llm_phases import (
+    INITIAL_PLAN_GENERATION,
+    INTAKE_RESPONSE,
+    SESSION_ENRICHMENT,
+    THERAPY_RESPONSE,
+)
 
 
 class _FakeChatModel:
@@ -91,7 +97,7 @@ def test_generate_response_without_context_uses_human_message(fake_chat_model):
     )
     fake_chat_model.response_content = "ok"
 
-    result = service.generate_response("Hello")
+    result = service.generate_response("Hello", phase=THERAPY_RESPONSE)
     assert result == "ok"
 
     assert len(fake_chat_model.invoke_calls) == 1
@@ -117,7 +123,9 @@ def test_generate_response_with_context_maps_roles(fake_chat_model):
         {"role": "assistant", "content": "Hello"},
     ]
 
-    result = service.generate_response("How are you?", context=context)
+    result = service.generate_response(
+        "How are you?", context=context, phase=THERAPY_RESPONSE
+    )
     assert result == "ok"
 
     assert len(fake_chat_model.invoke_calls) == 1
@@ -141,12 +149,38 @@ def test_generate_response_wraps_exceptions(fake_chat_model):
     fake_chat_model.raise_on_invoke = RuntimeError("boom")
 
     with pytest.raises(LLMServiceError) as exc_info:
-        service.generate_response("Hello")
+        service.generate_response("Hello", phase=THERAPY_RESPONSE)
 
     msg = str(exc_info.value)
     assert "LLM generation failed" in msg
     assert "STACKTRACE" in msg
     assert "RuntimeError" in msg
+
+
+def test_generate_response_requires_phase(fake_chat_model):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
+
+    with pytest.raises(TypeError):
+        service.generate_response("Hello")
+
+    assert fake_chat_model.invoke_calls == []
+
+
+def test_generate_response_rejects_unknown_phase(fake_chat_model):
+    service = LLMService(
+        api_key="test",
+        model_name="test-model",
+        rate_limit_enabled=False,
+    )
+
+    with pytest.raises(ValueError, match="Unknown LLM phase"):
+        service.generate_response("Hello", phase="not_a_phase")  # type: ignore[arg-type]
+
+    assert fake_chat_model.invoke_calls == []
 
 
 @pytest.mark.trio
@@ -159,7 +193,9 @@ async def test_stream_response_yields_non_empty_chunks(fake_chat_model):
     fake_chat_model.stream_chunk_contents = ["a", "", "b"]
 
     chunks: list[str] = []
-    async for chunk in service.stream_response("Hello", context=None):
+    async for chunk in service.stream_response(
+        "Hello", context=None, phase=INTAKE_RESPONSE
+    ):
         chunks.append(chunk)
 
     assert chunks == ["a", "b"]
@@ -175,7 +211,9 @@ async def test_generate_response_stream_collects_chunks(fake_chat_model):
     )
     fake_chat_model.stream_chunk_contents = ["x", "y"]
 
-    chunks = await service.generate_response_stream("Hello", context=None)
+    chunks = await service.generate_response_stream(
+        "Hello", context=None, phase=INTAKE_RESPONSE
+    )
     assert chunks == ["x", "y"]
 
 
@@ -193,7 +231,9 @@ def test_generate_structured_output_uses_with_structured_output(fake_chat_model)
         model_name="test-model",
         rate_limit_enabled=False,
     )
-    result = service.generate_structured_output("prompt", _Schema)
+    result = service.generate_structured_output(
+        "prompt", _Schema, phase=INITIAL_PLAN_GENERATION
+    )
 
     assert result == expected
     assert fake_chat_model.with_structured_output_calls == [(_Schema, "json_schema")]
@@ -319,7 +359,9 @@ def test_local_structured_output_parses_json(monkeypatch):
         rate_limit_enabled=False,
     )
 
-    result = service.generate_structured_output("prompt", _Schema)
+    result = service.generate_structured_output(
+        "prompt", _Schema, phase=INITIAL_PLAN_GENERATION
+    )
 
     assert result == _Schema(ok=True)
     assert fake.with_structured_output_calls == []
@@ -349,7 +391,7 @@ def test_local_structured_output_invalid_json_raises_with_diagnostics(monkeypatc
         LLMServiceError, match="structured output parsing failed"
     ) as exc_info:
         service.generate_structured_output(
-            "prompt", _Schema, phase="initial_plan_generation"
+            "prompt", _Schema, phase=INITIAL_PLAN_GENERATION
         )
 
     assert exc_info.value.metadata["phase"] == "initial_plan_generation"
@@ -394,7 +436,7 @@ def test_stream_response_metrics_include_rate_limit_wait(
         await service._acquire_rate_limit()
 
         chunks = []
-        async for chunk in service.stream_response("Hello", phase="intake_response"):
+        async for chunk in service.stream_response("Hello", phase=INTAKE_RESPONSE):
             chunks.append(chunk)
 
         assert chunks == ["a", "b"]
@@ -435,7 +477,7 @@ def test_structured_output_async_metrics_include_rate_limit_wait(
         result = await service.generate_structured_output_async(
             "prompt",
             _Schema,
-            phase="post_session_update",
+            phase=SESSION_ENRICHMENT,
         )
 
         assert result == _Schema(ok=True)

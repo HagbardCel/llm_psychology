@@ -1,5 +1,7 @@
 import pytest
 
+from psychoanalyst_app.services.llm_phases import INITIAL_PLAN_GENERATION
+
 pytestmark = [pytest.mark.trio, pytest.mark.unit]
 
 
@@ -21,16 +23,27 @@ async def test_generate_structured_output_async_passes_method_to_target_callable
 
     calls: dict[str, str] = {}
 
-    def _generate_structured_output(prompt, schema, *, method="json_schema"):
+    def _generate_structured_output(
+        prompt,
+        schema,
+        *,
+        method="json_schema",
+        phase,
+        **_kwargs,
+    ):
         calls["method"] = method
+        calls["phase"] = phase
         return {"ok": True}
 
     llm_service.generate_structured_output = _generate_structured_output  # type: ignore[assignment]
 
     result = await llm_service.generate_structured_output_async(
-        "prompt", {"type": "object"}, method="json_mode"
+        "prompt",
+        {"type": "object"},
+        method="json_mode",
+        phase=INITIAL_PLAN_GENERATION,
     )
 
     assert result == {"ok": True}
     assert calls["method"] == "json_mode"
-
+    assert calls["phase"] == INITIAL_PLAN_GENERATION
