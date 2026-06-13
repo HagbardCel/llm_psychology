@@ -166,8 +166,10 @@ Request to end the active session.
 **Behavior**:
 - Server updates workflow state as needed (e.g., `therapy_in_progress` → `plan_update_in_progress`).
 - Server emits `session_ended` to confirm shutdown and client should exit.
-- Post-session reflection continues in the background. Clients can poll
-  `GET /api/user/status?user_id=...` after closure to observe completion.
+- Post-session reflection continues in the background. Clients can observe
+  `job_status` events or poll
+  `GET /api/jobs/post_session_update:{session_id}?user_id=...` after closure
+  to observe aggregate completion.
 
 **Example**:
 ```json
@@ -417,7 +419,8 @@ Indicates the server has ended the active session.
   "type": "session_ended",
   "data": {
     "reason": "User ended session",
-    "workflow_state": "plan_update_in_progress"
+    "workflow_state": "plan_update_in_progress",
+    "session_id": "session-456"
   }
 }
 ```
@@ -425,6 +428,61 @@ Indicates the server has ended the active session.
 **Client Handling**:
 - Exit the chat UI (console should terminate its loop).
 - Optionally show the final workflow state to the user.
+
+---
+
+### `job_status`
+
+Progress event for backend work such as assessment, reflection/plan update,
+session enrichment, and aggregate post-session update completion.
+
+**Payload**: `JobStatusDTO`
+
+```json
+{
+  "type": "job_status",
+  "data": {
+    "job_id": "post_session_update:session-456",
+    "job_type": "post_session_update",
+    "user_id": "user-123",
+    "session_id": "session-456",
+    "status": "running",
+    "current_step": "running_reflection",
+    "workflow_state": "plan_update_in_progress",
+    "attempt": 1,
+    "correlation_id": "post_session_update:session-456",
+    "updated_at": "2025-12-22T14:30:00Z",
+    "last_error": null,
+    "children": [
+      {
+        "job_id": "plan_update:session-456",
+        "job_type": "plan_update",
+        "status": "running"
+      },
+      {
+        "job_id": "session_enrichment:session-456",
+        "job_type": "session_enrichment",
+        "status": "queued"
+      }
+    ]
+  }
+}
+```
+
+**Behavior**:
+- Reports backend progress only; it does not instruct the client to perform an action.
+- Status values are `not_started`, `queued`, `running`, `complete`, and `failed`.
+- `post_session_update:{session_id}` is complete only when the plan/reflection
+  update is complete, session enrichment is complete, and workflow state is
+  `plan_update_complete`.
+- Assessment and reflection running-state details use in-memory state and are
+  authoritative only in the single-process probe backend. Multi-worker
+  deployments must use DB-observable state or a persistent job table.
+
+**Client Handling**:
+- Use this for progress displays and probe waits.
+- Continue to use `workflow_next_action` for navigation and user actions.
+- If a required event is missed, poll `GET /api/jobs/{job_id}?user_id=...` as a fallback.
 
 ---
 

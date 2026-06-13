@@ -14,6 +14,10 @@ from psychoanalyst_app.models.llm_outputs import (
     StructuredUserProfileOutput,
 )
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
+from psychoanalyst_app.orchestration.job_status import (
+    JobStatusNotFound,
+    resolve_job_status,
+)
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     WorkflowEvent,
@@ -225,6 +229,12 @@ class AgentResponseHandler:
     async def run_reflection(self, user_id: str, session_id: str) -> None:
         """Run reflection automatically after a therapy session completes."""
         try:
+            await self.emit_job_status(
+                f"plan_update:{session_id}", user_id, session_id
+            )
+            await self.emit_job_status(
+                f"post_session_update:{session_id}", user_id, session_id
+            )
             state = await self.workflow_engine.get_user_state(user_id)
             if state not in (
                 WorkflowState.PLAN_UPDATE_IN_PROGRESS,
@@ -263,22 +273,28 @@ class AgentResponseHandler:
             if isinstance(plan_output, dict):
                 plan_output = StructuredTherapyPlanOutput.model_validate(plan_output)
             session_briefing = metadata.get("session_briefing")
-            plan_update_applied = metadata.get("plan_update_applied", True)
+            plan_revision_required = bool(
+                metadata.get(
+                    "plan_revision_required",
+                    metadata.get("plan_update_applied", True),
+                )
+            )
             if not isinstance(plan_output, StructuredTherapyPlanOutput):
                 raise RuntimeError("Reflection did not produce a therapy plan update")
-            if not plan_update_applied:
-                raise RuntimeError("Reflection therapy plan update was not applied")
             if not isinstance(session_briefing, dict):
                 raise RuntimeError("Reflection did not produce a session briefing")
-            previous_plan = await trio_db_service.get_current_therapy_plan(user_id)
-            persisted_plan = await persist_therapy_plan_from_output(
-                trio_db_service=trio_db_service,
-                user_id=user_id,
-                plan_output=plan_output,
-                session_briefing=session_briefing,
-            )
-            if previous_plan and persisted_plan.version <= previous_plan.version:
-                raise RuntimeError("Reflection did not increment therapy plan version")
+            if plan_revision_required:
+                previous_plan = await trio_db_service.get_current_therapy_plan(user_id)
+                persisted_plan = await persist_therapy_plan_from_output(
+                    trio_db_service=trio_db_service,
+                    user_id=user_id,
+                    plan_output=plan_output,
+                    session_briefing=session_briefing,
+                )
+                if previous_plan and persisted_plan.version <= previous_plan.version:
+                    raise RuntimeError(
+                        "Reflection did not increment therapy plan version"
+                    )
 
             user_profile_output = metadata.get("user_profile")
             if isinstance(user_profile_output, (dict, StructuredUserProfileOutput)):
@@ -346,6 +362,12 @@ class AgentResponseHandler:
                 user_id,
                 (await self.workflow_engine.get_user_state(user_id)).value,
             )
+            await self.emit_job_status(
+                f"plan_update:{session_id}", user_id, session_id
+            )
+            await self.emit_job_status(
+                f"post_session_update:{session_id}", user_id, session_id
+            )
         except Exception as exc:
             logger.error(
                 "reflection_failed session_id=%s",
@@ -397,6 +419,12 @@ class AgentResponseHandler:
                 user_id,
                 detail,
             )
+            await self.emit_job_status(
+                f"plan_update:{session_id}", user_id, session_id
+            )
+            await self.emit_job_status(
+                f"post_session_update:{session_id}", user_id, session_id
+            )
         except Exception:
             logger.warning(
                 "Failed to advance workflow after reflection failure "
@@ -425,6 +453,9 @@ class AgentResponseHandler:
         self, user_id: str, intake_session_id: str, emit_session_id: str | None = None
     ) -> None:
         """Run backend assessment and emit recommendations + next actions."""
+        await self.emit_job_status(
+            f"assessment:{user_id}", user_id, emit_session_id or intake_session_id
+        )
         await run_assessment_job(
             workflow_engine=self.workflow_engine,
             conversation_manager=self.conversation_manager,
@@ -436,26 +467,36 @@ class AgentResponseHandler:
             intake_session_id=intake_session_id,
             emit_session_id=emit_session_id,
         )
+        await self.emit_job_status(
+            f"assessment:{user_id}", user_id, emit_session_id or intake_session_id
+        )
 
     async def ensure_assessment_job(self, user_id: str, session_id: str) -> None:
         """Ensure a single assessment job is running for the user."""
-        queue_assessment_job(
+        queued = queue_assessment_job(
             user_id=user_id,
             session_id=session_id,
             assessment_jobs=self._assessment_jobs,
             nursery=self.nursery,
             runner=self._run_assessment_job,
         )
+        if queued:
+            await self.emit_job_status(f"assessment:{user_id}", user_id, session_id)
 
     async def ensure_reflection_job(self, user_id: str, session_id: str) -> None:
         """Ensure a single reflection job is running for the session."""
-        queue_reflection_job(
+        queued = queue_reflection_job(
             user_id=user_id,
             session_id=session_id,
             reflection_jobs=self._reflection_jobs,
             nursery=self.nursery,
             runner=self._run_reflection_job,
         )
+        if queued:
+            await self.emit_job_status(f"plan_update:{session_id}", user_id, session_id)
+            await self.emit_job_status(
+                f"post_session_update:{session_id}", user_id, session_id
+            )
 
     async def emit_assessment_recommendations(
         self, session_id: str, user_id: str
@@ -467,6 +508,36 @@ class AgentResponseHandler:
             session_id=session_id,
             user_id=user_id,
             cache=self._assessment_recommendations,
+        )
+
+    async def emit_job_status(
+        self, job_id: str, user_id: str, session_id: str
+    ) -> None:
+        """Emit a best-effort job status event to the session websocket."""
+        try:
+            trio_db_service = self.service_container.get("trio_db_service")
+            status = await resolve_job_status(
+                job_id=job_id,
+                user_id=user_id,
+                db_service=trio_db_service,
+                workflow_engine=self.workflow_engine,
+                response_handler=self,
+            )
+        except JobStatusNotFound:
+            return
+        except Exception:
+            logger.warning(
+                "Failed to resolve job status for %s (user=%s, session=%s)",
+                job_id,
+                user_id,
+                session_id,
+                exc_info=True,
+            )
+            return
+        await self.conversation_manager.send_json_message(
+            session_id,
+            ServerMessageTypes.JOB_STATUS,
+            status.model_dump(mode="json"),
         )
 
 

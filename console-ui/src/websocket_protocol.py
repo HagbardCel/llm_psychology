@@ -29,6 +29,7 @@ class ServerMessageTypes:
     TYPING_START: Final[str] = "typing_start"
     TYPING_STOP: Final[str] = "typing_stop"
     ASSESSMENT_RECOMMENDATIONS: Final[str] = "assessment_recommendations"
+    JOB_STATUS: Final[str] = "job_status"
     SESSION_ENDED: Final[str] = "session_ended"
     ERROR: Final[str] = "error"
 

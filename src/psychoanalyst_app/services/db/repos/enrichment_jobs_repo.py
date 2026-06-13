@@ -160,3 +160,35 @@ def _sync_mark_job_failed(
         logger.error("Error marking job failed: %s", exc, exc_info=True)
         conn.rollback()
         return False
+
+
+async def get_job(
+    executor: TrioSQLiteExecutor, session_id: str
+) -> dict[str, Any] | None:
+    """Return an enrichment job row by session id."""
+    async with executor.connection() as conn:
+        return await executor.run_sync(_sync_get_job, conn, session_id)
+
+
+def _sync_get_job(conn: sqlite3.Connection, session_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT session_id, user_id, status, attempts, last_error, created_at, updated_at
+        FROM session_enrichment_jobs
+        WHERE session_id = ?
+        """,
+        (session_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "session_id": row[0],
+        "user_id": row[1],
+        "status": row[2],
+        "attempts": row[3],
+        "last_error": row[4],
+        "created_at": row[5],
+        "updated_at": row[6],
+    }

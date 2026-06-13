@@ -127,6 +127,28 @@ These shapes are what all clients should assume on the wire.
 - `state_signature`: `string` (stable across equivalent reevaluations)
 - `emission_source`: `string | null` (set for pushed workflow events)
 
+### `JobStatusDTO`
+
+- `job_id`: `string` (`assessment:{user_id}`, `plan_update:{session_id}`, `session_enrichment:{session_id}`, or `post_session_update:{session_id}`)
+- `job_type`: `"assessment" | "plan_update" | "session_enrichment" | "post_session_update"`
+- `user_id`: `string`
+- `session_id`: `string | null`
+- `status`: `"not_started" | "queued" | "running" | "complete" | "failed"`
+- `current_step`: `string | null`
+- `workflow_state`: `string | null`
+- `attempt`: `number | null`
+- `correlation_id`: `string`
+- `updated_at`: `string` (ISO 8601)
+- `last_error`: `string | null`
+- `children`: `JobStatusDTO[]`
+
+`404` means the job id is invalid or not visible to the supplied user. A valid
+semantic job that has not begun returns `200` with `status="not_started"`.
+Assessment and reflection running-state details use in-memory state and are
+authoritative only for the single-process probe backend. Multi-worker
+deployments must use DB-observable state or a persistent job table before
+treating in-memory job state as authoritative.
+
 ### `WorkflowCompleteProfileRequestDTO`
 
 - `user_id`: `string`
@@ -331,8 +353,9 @@ These shapes are what all clients should assume on the wire.
 - Request: `EndSessionRequestDTO`
 - **200**: `EndSessionResponseDTO`
 - Therapy closure returns `workflow_state = "plan_update_in_progress"` while
-  reflection continues in the background. Poll `GET /api/user/status?user_id=...`
-  to observe completion.
+  reflection continues in the background. Poll
+  `GET /api/jobs/post_session_update:{session_id}?user_id=...` to observe
+  aggregate post-session completion.
 
 ### `GET /api/version`
 
@@ -351,6 +374,24 @@ These shapes are what all clients should assume on the wire.
 - Query: `user_id`, `session_id` (required)
 - **200**: `WorkflowNextActionDTO`
 - **400**: `{ "error": "User ID is required" }`
+
+### `GET /api/jobs/{job_id}`
+
+- Query: `user_id` (required)
+- Supported job ids:
+  - `assessment:{user_id}`
+  - `plan_update:{session_id}`
+  - `session_enrichment:{session_id}`
+  - `post_session_update:{session_id}`
+- **200**: `JobStatusDTO`
+- **400**: `{ "error": "User ID is required" }`
+- **404**: `{ "error": "Job not found" }`
+
+`post_session_update:{session_id}` is an aggregate job. It reaches
+`complete` only when reflection/plan update is complete, the session enrichment
+job is complete, and the user's workflow state is `plan_update_complete`.
+If any child job fails, the aggregate status is `failed` and `children` exposes
+the blocking child status.
 
 ### `POST /api/workflow/complete_profile`
 

@@ -403,6 +403,12 @@ class TrioDatabaseService:
             self.executor, session_id, error
         )
 
+    async def get_session_enrichment_job(
+        self, session_id: str
+    ) -> dict[str, Any] | None:
+        """Return the Tier 2 enrichment job row for a session, if present."""
+        return await enrichment_jobs_repo.get_job(self.executor, session_id)
+
     async def get_session_count(self, user_id: str) -> int:
         """
         Get total session count for user (for milestone tracking).
