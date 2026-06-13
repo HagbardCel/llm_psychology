@@ -8,6 +8,7 @@ import trio
 
 from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import SESSION_ENRICHMENT
 from psychoanalyst_app.services.session_enrichment_prompts import (
     build_tier2_enrichment_prompt,
 )
@@ -38,7 +39,7 @@ class SessionEnrichmentService:
             enrichment_prompt,
             Tier2Enrichment,
             method="json_schema",
-            phase="post_session_update",
+            phase=SESSION_ENRICHMENT,
         )
         if not isinstance(tier2, Tier2Enrichment):
             logger.error(

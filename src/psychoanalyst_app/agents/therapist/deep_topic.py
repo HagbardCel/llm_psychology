@@ -9,6 +9,7 @@ from psychoanalyst_app.agents.therapist.session_policy import is_in_deep_topic
 from psychoanalyst_app.models.llm_outputs import DeepTopicSignalOutput
 from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import THERAPY_DEEP_TOPIC_DETECTION
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def detect_deep_topic_via_llm(
             prompt,
             DeepTopicSignalOutput,
             method="json_schema",
-            phase="therapy_response",
+            phase=THERAPY_DEEP_TOPIC_DETECTION,
         )
         if not isinstance(signal_output, DeepTopicSignalOutput):
             signal_output = DeepTopicSignalOutput.model_validate(signal_output)

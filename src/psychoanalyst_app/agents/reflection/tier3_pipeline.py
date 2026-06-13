@@ -16,6 +16,10 @@ from psychoanalyst_app.models.domain import (
 )
 from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import (
+    TIER3_CHANGE_DETECTION,
+    TIER3_UPDATE,
+)
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -29,7 +33,7 @@ async def extract_tier3_change_decision(
         prompt,
         ChangeDetectionDecision,
         method="json_schema",
-        phase="post_session_update",
+        phase=TIER3_CHANGE_DETECTION,
     )
     if not isinstance(decision, ChangeDetectionDecision):
         logger.error(
@@ -47,7 +51,7 @@ async def extract_updated_tier3_analysis(
         prompt,
         PatientAnalysis,
         method="json_schema",
-        phase="post_session_update",
+        phase=TIER3_UPDATE,
     )
     if not isinstance(analysis, PatientAnalysis):
         logger.error("Tier 3 update returned unexpected type %s", type(analysis))

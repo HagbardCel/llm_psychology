@@ -17,6 +17,10 @@ from psychoanalyst_app.models.domain import (
 )
 from psychoanalyst_app.models.llm_outputs import Tier4Extract
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import (
+    ASSESSMENT_INITIAL_FORMULATION,
+    INITIAL_PLAN_GENERATION,
+)
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -93,7 +97,7 @@ async def extract_tier3_initial_formulation(
             extraction_prompt,
             PatientAnalysis,
             method="json_schema",
-            phase="assessment_generation",
+            phase=ASSESSMENT_INITIAL_FORMULATION,
         )
         if not isinstance(analysis, PatientAnalysis):
             logger.error("Tier 3 extraction returned unexpected type")
@@ -149,7 +153,7 @@ async def extract_tier4_initial_plan(
             extraction_prompt,
             Tier4Extract,
             method="json_schema",
-            phase="initial_plan_generation",
+            phase=INITIAL_PLAN_GENERATION,
         )
         if not isinstance(tier4, Tier4Extract):
             logger.error("Tier 4 extraction returned unexpected type")

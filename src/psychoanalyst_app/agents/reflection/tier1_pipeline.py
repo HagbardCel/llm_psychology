@@ -17,6 +17,10 @@ from psychoanalyst_app.models.llm_outputs import (
     Tier1ProfilePatch,
 )
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import (
+    TIER1_PROFILE_CHANGE_DETECTION,
+    TIER1_PROFILE_UPDATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +80,7 @@ async def maybe_update_tier1_profile(
             detection_prompt,
             ChangeDetectionDecision,
             method="json_schema",
-            phase="post_session_update",
+            phase=TIER1_PROFILE_CHANGE_DETECTION,
         )
         if not isinstance(decision, ChangeDetectionDecision):
             return None
@@ -93,7 +97,7 @@ async def maybe_update_tier1_profile(
             update_prompt,
             Tier1ProfilePatch,
             method="json_schema",
-            phase="post_session_update",
+            phase=TIER1_PROFILE_UPDATE,
         )
         if not isinstance(patch, Tier1ProfilePatch):
             return None

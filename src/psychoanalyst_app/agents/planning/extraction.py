@@ -20,6 +20,10 @@ from psychoanalyst_app.exceptions import PlanningError
 from psychoanalyst_app.models.domain import Session, TherapyPlan
 from psychoanalyst_app.models.llm_outputs import PlanUpdate
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import (
+    INITIAL_PLAN_GENERATION,
+    PLAN_REFLECTION,
+)
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.style_service import StyleService
 
@@ -106,7 +110,7 @@ async def generate_initial_plan_update(
         plan_prompt,
         PlanUpdate,
         method="json_schema",
-        phase="initial_plan_generation",
+        phase=INITIAL_PLAN_GENERATION,
     )
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Initial plan generation returned unexpected type")
@@ -180,7 +184,7 @@ async def generate_updated_plan_update(
         update_prompt,
         PlanUpdate,
         method="json_schema",
-        phase="post_session_update",
+        phase=PLAN_REFLECTION,
     )
     if not isinstance(plan_update, PlanUpdate):
         raise PlanningError("Plan update generation returned unexpected type")

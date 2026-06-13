@@ -10,6 +10,8 @@ from typing import Any
 import trio
 from pydantic import BaseModel
 
+from psychoanalyst_app.services.llm_phases import LLMPhase, require_llm_phase
+
 
 class DeterministicLLMService:
     """
@@ -22,14 +24,14 @@ class DeterministicLLMService:
     def _record_metric(
         self,
         *,
-        phase: str | None,
+        phase: LLMPhase,
         call_type: str,
         started_at: float,
     ) -> None:
         logging.getLogger("llm_metrics").info(
             json.dumps(
                 {
-                    "phase": phase or "unclassified",
+                    "phase": phase,
                     "call_type": call_type,
                     "provider": "deterministic",
                     "model": "deterministic",
@@ -46,42 +48,44 @@ class DeterministicLLMService:
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> str:
+        phase = require_llm_phase(phase)
         started_at = time.perf_counter()
+        response = self._response_for_prompt(prompt)
+        self._record_metric(
+            phase=phase,
+            call_type="generate_response",
+            started_at=started_at,
+        )
+        return response
+
+    def _response_for_prompt(self, prompt: str) -> str:
         prompt_lower = (prompt or "").lower()
         if "therapy session" in prompt_lower:
-            response = (
+            return (
                 "When the Monday deadline pressure hits and your chest tightens, "
                 "let us slow down, notice the thought, and identify what is "
                 "disrupting your sleep."
             )
-        elif "intake" in prompt_lower:
-            response = (
+        if "intake" in prompt_lower:
+            return (
                 "Have you had thoughts of harming yourself or someone else? "
                 "What would you most want to be different?"
             )
-        else:
-            prompt_preview = (prompt or "").strip().replace("\n", " ")[:80]
-            response = f"[deterministic-llm] {prompt_preview}"
-
-        if phase:
-            self._record_metric(
-                phase=phase,
-                call_type="generate_response",
-                started_at=started_at,
-            )
-        return response
+        prompt_preview = (prompt or "").strip().replace("\n", " ")[:80]
+        return f"[deterministic-llm] {prompt_preview}"
 
     async def stream_response(
         self,
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> AsyncIterator[str]:
+        phase = require_llm_phase(phase)
         started_at = time.perf_counter()
-        text = self.generate_response(prompt, context)
+        text = self._response_for_prompt(prompt)
         chunks = [text[:20], text[20:40], text[40:]]
         for chunk in chunks:
             if not chunk:
@@ -95,10 +99,14 @@ class DeterministicLLMService:
         )
 
     async def generate_response_stream(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: LLMPhase,
     ) -> list[str]:
         chunks: list[str] = []
-        async for chunk in self.stream_response(prompt, context):
+        async for chunk in self.stream_response(prompt, context, phase=phase):
             chunks.append(chunk)
         return chunks
 
@@ -107,7 +115,7 @@ class DeterministicLLMService:
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> str:
         return self.generate_response(prompt, context, phase=phase)
 
@@ -117,8 +125,9 @@ class DeterministicLLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> Any:
+        phase = require_llm_phase(phase)
         started_at = time.perf_counter()
 
         if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
@@ -139,7 +148,7 @@ class DeterministicLLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> Any:
         return self.generate_structured_output(
             prompt,

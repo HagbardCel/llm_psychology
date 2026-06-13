@@ -33,6 +33,7 @@ from psychoanalyst_app.orchestration.models import (
     continue_agent_response,
 )
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import ASSESSMENT_STYLE_SCORING
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.style_service import StyleService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
@@ -223,7 +224,7 @@ recommended approaches (e.g., Psychoanalysis, CBT)?",
                 evaluation_prompt,
                 StyleAssessmentOutput,
                 method="json_schema",
-                phase="assessment_generation",
+                phase=ASSESSMENT_STYLE_SCORING,
             )
             if not isinstance(assessment_output, StyleAssessmentOutput):
                 assessment_output = StyleAssessmentOutput.model_validate(

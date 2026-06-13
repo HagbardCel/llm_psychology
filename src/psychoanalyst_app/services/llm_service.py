@@ -14,6 +14,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
 from psychoanalyst_app.exceptions import LLMQuotaExhaustedError, LLMServiceError
+from psychoanalyst_app.services.llm_phases import LLMPhase, require_llm_phase
 from psychoanalyst_app.utils.trio_streaming import iter_in_thread
 
 logger = logging.getLogger(__name__)
@@ -362,7 +363,7 @@ class LLMService:
         self,
         status: str,
         call_type: str,
-        phase: str | None,
+        phase: LLMPhase,
         *,
         started_at: float | None = None,
         lifecycle_started_at: float | None = None,
@@ -427,7 +428,7 @@ class LLMService:
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
         call_id: str | None = None,
         lifecycle_started_at: float | None = None,
         rate_limit_wait_ms: float | None = None,
@@ -442,6 +443,7 @@ class LLMService:
         Returns:
             str: The LLM's response.
         """
+        phase = require_llm_phase(phase)
         call_id = call_id or uuid.uuid4().hex
         lifecycle_started_at = lifecycle_started_at or time.perf_counter()
         started_at = time.perf_counter()
@@ -553,11 +555,15 @@ class LLMService:
             raise LLMServiceError(f"{error_message}\n\nSTACKTRACE:\n{tb_str}") from e
 
     async def generate_response_stream(
-        self, prompt: str, context: list[dict[str, str]] | None = None
+        self,
+        prompt: str,
+        context: list[dict[str, str]] | None = None,
+        *,
+        phase: LLMPhase,
     ) -> list[str]:
         """Compatibility helper that returns collected chunks."""
         chunks: list[str] = []
-        async for chunk in self.stream_response(prompt, context):
+        async for chunk in self.stream_response(prompt, context, phase=phase):
             chunks.append(chunk)
         logger.info(
             "Streamed LLM response: %s chunks, %s chars",
@@ -571,7 +577,7 @@ class LLMService:
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> AsyncIterator[str]:
         """
         Stream response chunks from the LLM in real time.
@@ -579,6 +585,7 @@ class LLMService:
         This bridges LangChain's blocking stream iterator into Trio so callers can
         `async for` chunks and emit them as they arrive.
         """
+        phase = require_llm_phase(phase)
         call_id = uuid.uuid4().hex
         lifecycle_started_at = time.perf_counter()
         rate_limit_wait_ms = await self._acquire_rate_limit()
@@ -667,12 +674,13 @@ class LLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
-        phase: str | None = None,
+        phase: LLMPhase,
         call_id: str | None = None,
         lifecycle_started_at: float | None = None,
         rate_limit_wait_ms: float | None = None,
     ) -> Any:
         """Generate a structured output and normalize it to the requested schema."""
+        phase = require_llm_phase(phase)
         call_id = call_id or uuid.uuid4().hex
         lifecycle_started_at = lifecycle_started_at or time.perf_counter()
         started_at = time.perf_counter()
@@ -780,7 +788,7 @@ class LLMService:
         prompt: str,
         schema: dict | type[BaseModel],
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> Any:
         """Use prompt-constrained JSON for providers without native schema support."""
         schema_payload: dict[str, Any]
@@ -878,7 +886,7 @@ class LLMService:
         prompt: str,
         context: list[dict[str, str]] | None = None,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> str:
         """Generate a response from the LLM asynchronously with rate limiting.
 
@@ -893,16 +901,6 @@ class LLMService:
         lifecycle_started_at = time.perf_counter()
         rate_limit_wait_ms = await self._acquire_rate_limit()
 
-        if phase is None:
-            return await trio.to_thread.run_sync(
-                lambda: self.generate_response(
-                    prompt,
-                    context,
-                    call_id=call_id,
-                    lifecycle_started_at=lifecycle_started_at,
-                    rate_limit_wait_ms=rate_limit_wait_ms,
-                )
-            )
         return await trio.to_thread.run_sync(
             lambda: self.generate_response(
                 prompt,
@@ -920,7 +918,7 @@ class LLMService:
         schema: dict | type[BaseModel],
         *,
         method: str = "json_schema",
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> Any:
         """Async wrapper for generate_structured_output with rate limiting."""
         call_id = uuid.uuid4().hex
@@ -928,17 +926,6 @@ class LLMService:
         rate_limit_wait_ms = await self._acquire_rate_limit()
         # trio.to_thread.run_sync doesn't forward arbitrary kwargs to the target
         # callable, so pass keyword-only args via a closure.
-        if phase is None:
-            return await trio.to_thread.run_sync(
-                lambda: self.generate_structured_output(
-                    prompt,
-                    schema,
-                    method=method,
-                    call_id=call_id,
-                    lifecycle_started_at=lifecycle_started_at,
-                    rate_limit_wait_ms=rate_limit_wait_ms,
-                )
-            )
         return await trio.to_thread.run_sync(
             lambda: self.generate_structured_output(
                 prompt,

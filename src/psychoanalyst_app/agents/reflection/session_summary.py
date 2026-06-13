@@ -21,6 +21,7 @@ from psychoanalyst_app.models.llm_outputs import (
     StructuredTherapyPlanOutput,
 )
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import SESSION_ENRICHMENT, SESSION_SUMMARY
 
 logger = logging.getLogger(__name__)
 OVERCLAIM_PHRASES = (
@@ -136,7 +137,7 @@ async def generate_session_summary(llm_service: LLMService, session: Session) ->
     return await trio.to_thread.run_sync(
         lambda: llm_service.generate_response(
             summary_prompt,
-            phase="post_session_update",
+            phase=SESSION_SUMMARY,
         )
     )
 
@@ -198,7 +199,7 @@ async def extract_session_briefing(
         prompt,
         SessionBriefing,
         method="json_schema",
-        phase="post_session_update",
+        phase=SESSION_ENRICHMENT,
     )
     if not isinstance(briefing, SessionBriefing):
         raise TypeError("Unexpected SessionBriefing type")

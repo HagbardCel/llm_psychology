@@ -22,6 +22,12 @@ from psychoanalyst_app.orchestration.stream_dispatch import (
     send_typing_indicator,
 )
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import (
+    INTAKE_RESPONSE,
+    LLMPhase,
+    THERAPY_OPENING,
+    THERAPY_RESPONSE,
+)
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
@@ -34,6 +40,16 @@ LLM_RETRY_ERROR_MESSAGE = (
 LLM_TERMINAL_ERROR_MESSAGE = (
     "I am unable to generate a response right now. Please pause and try again later."
 )
+
+
+def _resolve_streaming_phase(agent: str, context: ConversationContext) -> LLMPhase:
+    if agent == "INTAKE":
+        return INTAKE_RESPONSE
+    if agent == "THERAPIST":
+        if not any(message.role == "user" for message in context.message_history):
+            return THERAPY_OPENING
+        return THERAPY_RESPONSE
+    raise ValueError(f"Unsupported LLM streaming agent: {agent!r}")
 
 
 class TrioConversationManager:
@@ -272,18 +288,7 @@ class TrioConversationManager:
                 augmented_prompt,
                 conversation_history,
                 service,
-                phase=(
-                    "therapy_opening"
-                    if agent == "THERAPIST"
-                    and not any(
-                        message.role == "user" for message in context.message_history
-                    )
-                    else "therapy_response"
-                    if agent == "THERAPIST"
-                    else "intake_response"
-                    if agent == "INTAKE"
-                    else None
-                ),
+                phase=_resolve_streaming_phase(agent, context),
             ):
                 full_response += chunk
                 chunk_count += 1
@@ -400,7 +405,7 @@ class TrioConversationManager:
         conversation_history: list,
         llm_service: LLMService,
         *,
-        phase: str | None = None,
+        phase: LLMPhase,
     ) -> AsyncIterator[str]:
         """
         Stream response from LLM service using Trio.
@@ -417,14 +422,9 @@ class TrioConversationManager:
             Response chunks from LLM
         """
         try:
-            stream = (
-                llm_service.stream_response(prompt, conversation_history)
-                if phase is None
-                else llm_service.stream_response(
-                    prompt, conversation_history, phase=phase
-                )
-            )
-            async for chunk in stream:
+            async for chunk in llm_service.stream_response(
+                prompt, conversation_history, phase=phase
+            ):
                 yield chunk
 
         except Exception as e:

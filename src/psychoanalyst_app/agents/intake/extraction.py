@@ -8,6 +8,7 @@ from psychoanalyst_app.agents.intake.prompts import TIER1_EXTRACTION_PROMPT
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.llm_outputs import PatientProfileExtract
 from psychoanalyst_app.services.llm_service import LLMService
+from psychoanalyst_app.services.llm_phases import INTAKE_EXTRACTION
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ async def extract_tier1_data(
             extraction_prompt,
             PatientProfileExtract,
             method="json_schema",
-            phase="assessment_generation",
+            phase=INTAKE_EXTRACTION,
         )
         if not isinstance(extracted, PatientProfileExtract):
             logger.error("Tier 1 extraction returned unexpected type")
