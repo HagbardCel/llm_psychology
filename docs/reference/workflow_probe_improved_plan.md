@@ -24,7 +24,7 @@ implementation checklist. Mark items `[x]` as they are completed.
 - [x] Confirm structured-output call sites already use non-null broad phases.
 - [x] Define canonical LLM phase constants and replace overloaded phase names.
 - [x] Improve LLM timing metrics and user-visible latency undercoverage reporting.
-- [ ] Share or parity-test backend and probe intake slot evidence logic.
+- [x] Share or parity-test backend and probe intake slot evidence logic.
 - [ ] Tighten duration/onset/frequency evidence detection without rejecting coarse onset.
 - [ ] Align probe risk-screen evidence keywords with backend logic.
 - [ ] Make console workflow actions WebSocket-first with HTTP polling fallback.
@@ -71,8 +71,11 @@ scenario when that scenario defines an explicit threshold.
 ### Intake Evidence Parity
 
 Do not add new `slot_evidence` fields; backend and recorder diagnostics already
-emit them. Instead, remove drift by sharing the backend slot-evidence logic with
-the probe recorder, or by adding strict parity tests over identical transcripts.
+emit them. Shared logic lives in
+`src/psychoanalyst_app/shared/intake_slot_evidence.py` and is consumed by
+`agents/intake/slots.py` and the probe recorder. Risk-screen keyword alignment
+is satisfied by that shared module; duration-class tightening remains the next
+checklist item.
 
 Replace the broad `since ...` duration regex with explicit evidence classes:
 
