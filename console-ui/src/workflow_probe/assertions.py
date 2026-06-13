@@ -315,6 +315,18 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
     )
     timings = recorder._load_phase_timings()
     timing_summary = recorder._load_llm_timing_summary()
+    undercoverage_thresholds = scenario.get("timing_undercoverage_thresholds", {})
+    if undercoverage_thresholds:
+        undercoverage = recorder._latency_undercoverage_summary(
+            recorder._response_latency_summary(),
+            timing_summary,
+            scenario,
+        )
+        await check(
+            "timing_latency_undercoverage_within_threshold",
+            not undercoverage["failures"],
+            f"failures={undercoverage['failures']}",
+        )
     for phase in (
         "intake_extraction_ms",
         "assessment_style_scoring_ms",

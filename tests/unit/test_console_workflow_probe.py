@@ -477,6 +477,63 @@ async def test_recorder_prefers_total_wall_latency_when_present(
     assert summary["llm_unphased_latency_ms"] == 30.0
 
 
+async def test_recorder_aggregates_extended_llm_timing_fields(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    metrics_path = tmp_path / "backend_llm_calls.jsonl"
+    metrics_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "stream_response",
+                        "phase": "intake_response",
+                        "latency_ms": 120.0,
+                        "provider_latency_ms": 100.0,
+                        "total_wall_ms": 150.0,
+                        "request_boundary_ms": 90.0,
+                        "prompt_eval_ms": 30.0,
+                        "generation_ms": 60.0,
+                        "chunk_count": 3,
+                        "completion_chars": 42,
+                        "token_count_status": "complete",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "status": "finish",
+                        "call_type": "generate_response",
+                        "phase": "assessment_style_scoring",
+                        "latency_ms": 20.0,
+                        "completion_chars": 12,
+                        "token_count_status": "unavailable",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = recorder._load_llm_timing_summary()
+
+    assert summary["phase_provider_boundary_timings_ms"] == {
+        "intake_response_ms": 90.0,
+        "assessment_style_scoring_ms": 0.0,
+    }
+    assert summary["phase_prompt_eval_timings_ms"]["intake_response_ms"] == 30.0
+    assert summary["phase_generation_timings_ms"]["intake_response_ms"] == 60.0
+    assert summary["llm_stream_chunk_count"] == 3
+    assert summary["phase_stream_chunk_counts"]["intake_response_ms"] == 3
+    assert summary["llm_completion_chars"] == 54
+    assert summary["phase_completion_chars"]["assessment_style_scoring_ms"] == 12
+    assert summary["token_count_status_counts"] == {
+        "complete": 1,
+        "unavailable": 1,
+    }
+
+
 async def test_recorder_computes_user_visible_response_timings(
     probe_modules, tmp_path
 ):
@@ -548,6 +605,109 @@ async def test_recorder_computes_user_visible_response_timings(
     assert summary["by_session_type"]["therapy"]["user_visible_max_ms"] == 32100.0
     assert summary["by_session_type"]["therapy"]["ttft_p95_ms"] == 30000.0
     assert summary["by_session_type"]["therapy"]["stream_p95_ms"] == 2000.0
+
+
+async def test_recorder_reports_latency_undercoverage_without_failing_by_default(
+    probe_modules, tmp_path
+):
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.events = [
+        {
+            "ts": "2026-06-12T21:00:00+00:00",
+            "kind": "session_started",
+            "data": {"session_type": "intake"},
+        },
+        {
+            "ts": "2026-06-12T21:00:01+00:00",
+            "kind": "user_input",
+            "prompt_kind": "chat",
+            "text": "Hello",
+        },
+        {
+            "ts": "2026-06-12T21:00:03+00:00",
+            "kind": "assistant_response",
+            "text": "Hi",
+        },
+    ]
+    metrics_path = tmp_path / "backend_llm_calls.jsonl"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "finish",
+                "call_type": "stream_response",
+                "phase": "intake_response",
+                "latency_ms": 100.0,
+                "total_wall_ms": 200.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    await recorder.write_artifacts("PASS", {"id": "scenario"})
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    undercoverage = metadata["timing"]["latency_undercoverage"]
+    assert undercoverage["scopes"]["intake"]["coverage_ratio"] == 0.1
+    assert undercoverage["warnings"]
+    assert undercoverage["failures"] == []
+    assert "Latency Undercoverage" in (tmp_path / "summary.md").read_text()
+
+
+async def test_probe_assertions_fail_undercoverage_only_with_scenario_threshold(
+    probe_modules, tmp_path
+):
+    assertions = probe_modules["assertions"]
+    recorder = probe_modules["recorder"].ProbeRecorder(tmp_path, "scenario")
+    recorder.events = [
+        {
+            "ts": "2026-06-12T21:00:00+00:00",
+            "kind": "session_started",
+            "data": {"session_type": "intake"},
+        },
+        {
+            "ts": "2026-06-12T21:00:01+00:00",
+            "kind": "user_input",
+            "prompt_kind": "chat",
+            "text": "Hello",
+        },
+        {
+            "ts": "2026-06-12T21:00:03+00:00",
+            "kind": "assistant_response",
+            "text": "Hi",
+        },
+    ]
+    metrics_path = tmp_path / "backend_llm_calls.jsonl"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "finish",
+                "call_type": "stream_response",
+                "phase": "intake_response",
+                "latency_ms": 100.0,
+                "total_wall_ms": 200.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    await assertions.run_assertions(
+        recorder,
+        {
+            "timing_undercoverage_thresholds": {
+                "intake_min_coverage_ratio": 0.8,
+            },
+            "milestones": {"required_actions": []},
+        },
+    )
+
+    failed = [
+        assertion
+        for assertion in recorder.assertions
+        if assertion["name"] == "timing_latency_undercoverage_within_threshold"
+    ][0]
+    assert failed["passed"] is False
 
 
 async def test_recorder_separates_raw_and_logical_workflow_actions(

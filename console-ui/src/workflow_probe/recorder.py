@@ -188,6 +188,11 @@ class ProbeRecorder:
         timing.update(self._post_session_poll_timing())
         timing.update(self._job_status_timing())
         timing["response_latency_summary"] = self._response_latency_summary()
+        timing["latency_undercoverage"] = self._latency_undercoverage_summary(
+            timing["response_latency_summary"],
+            timing,
+            scenario,
+        )
         thresholds = scenario.get("timing_warning_thresholds_ms", {})
         overruns = {
             phase: {"actual_ms": value, "threshold_ms": thresholds[phase]}
@@ -269,6 +274,10 @@ class ProbeRecorder:
             + self._render_response_latency_summary(
                 timing["response_latency_summary"]
             )
+            + "\n\n## Latency Undercoverage\n\n"
+            + self._render_latency_undercoverage_summary(
+                timing["latency_undercoverage"]
+            )
             + "\n\n## Workflow Action Deliveries\n\n"
             + self._render_workflow_action_summary()
             + "\n\n## Job Status\n\n"
@@ -293,8 +302,19 @@ class ProbeRecorder:
         metrics_path = self.output_dir / "backend_llm_calls.jsonl"
         totals: dict[str, float] = {}
         provider_totals: dict[str, float] = {}
+        provider_boundary_totals: dict[str, float] = {}
+        prompt_eval_totals: dict[str, float] = {}
+        generation_totals: dict[str, float] = {}
+        phase_chunk_counts: dict[str, int] = {}
+        phase_completion_chars: dict[str, int] = {}
+        token_status_counts: dict[str, int] = {}
         total_latency = 0.0
         provider_total_latency = 0.0
+        provider_boundary_total = 0.0
+        prompt_eval_total = 0.0
+        generation_total = 0.0
+        stream_chunk_count = 0
+        completion_chars = 0
         unphased_latency = 0.0
         unphased_count = 0
         finished_count = 0
@@ -304,6 +324,17 @@ class ProbeRecorder:
                 "llm_total_latency_ms": total_latency,
                 "llm_provider_latency_ms": provider_total_latency,
                 "phase_provider_timings_ms": provider_totals,
+                "llm_provider_boundary_ms": provider_boundary_total,
+                "phase_provider_boundary_timings_ms": provider_boundary_totals,
+                "llm_prompt_eval_ms": prompt_eval_total,
+                "phase_prompt_eval_timings_ms": prompt_eval_totals,
+                "llm_generation_ms": generation_total,
+                "phase_generation_timings_ms": generation_totals,
+                "llm_stream_chunk_count": stream_chunk_count,
+                "phase_stream_chunk_counts": phase_chunk_counts,
+                "llm_completion_chars": completion_chars,
+                "phase_completion_chars": phase_completion_chars,
+                "token_count_status_counts": token_status_counts,
                 "llm_finished_count": finished_count,
                 "llm_unphased_latency_ms": unphased_latency,
                 "llm_unphased_finish_count": unphased_count,
@@ -313,10 +344,27 @@ class ProbeRecorder:
             if record.get("status") != "finish":
                 continue
             finished_count += 1
-            provider_latency = float(record.get("latency_ms") or 0.0)
+            token_status = str(record.get("token_count_status") or "unknown")
+            token_status_counts[token_status] = (
+                token_status_counts.get(token_status, 0) + 1
+            )
+            provider_latency = _float_value(
+                record.get("provider_latency_ms"),
+                record.get("latency_ms"),
+            )
             latency = float(record.get("total_wall_ms") or provider_latency)
+            provider_boundary = _float_value(record.get("request_boundary_ms"))
+            prompt_eval = _float_value(record.get("prompt_eval_ms"))
+            generation = _float_value(record.get("generation_ms"))
+            chunks = int(record.get("chunk_count") or 0)
+            chars = int(record.get("completion_chars") or 0)
             total_latency += latency
             provider_total_latency += provider_latency
+            provider_boundary_total += provider_boundary
+            prompt_eval_total += prompt_eval
+            generation_total += generation
+            stream_chunk_count += chunks
+            completion_chars += chars
             if not record.get("phase"):
                 unphased_latency += latency
                 unphased_count += 1
@@ -324,11 +372,31 @@ class ProbeRecorder:
             phase = f"{record['phase']}_ms"
             totals[phase] = totals.get(phase, 0.0) + latency
             provider_totals[phase] = provider_totals.get(phase, 0.0) + provider_latency
+            provider_boundary_totals[phase] = (
+                provider_boundary_totals.get(phase, 0.0) + provider_boundary
+            )
+            prompt_eval_totals[phase] = prompt_eval_totals.get(phase, 0.0) + prompt_eval
+            generation_totals[phase] = generation_totals.get(phase, 0.0) + generation
+            phase_chunk_counts[phase] = phase_chunk_counts.get(phase, 0) + chunks
+            phase_completion_chars[phase] = (
+                phase_completion_chars.get(phase, 0) + chars
+            )
         return {
             "phase_timings_ms": totals,
             "llm_total_latency_ms": round(total_latency, 3),
             "llm_provider_latency_ms": round(provider_total_latency, 3),
             "phase_provider_timings_ms": provider_totals,
+            "llm_provider_boundary_ms": round(provider_boundary_total, 3),
+            "phase_provider_boundary_timings_ms": provider_boundary_totals,
+            "llm_prompt_eval_ms": round(prompt_eval_total, 3),
+            "phase_prompt_eval_timings_ms": prompt_eval_totals,
+            "llm_generation_ms": round(generation_total, 3),
+            "phase_generation_timings_ms": generation_totals,
+            "llm_stream_chunk_count": stream_chunk_count,
+            "phase_stream_chunk_counts": phase_chunk_counts,
+            "llm_completion_chars": completion_chars,
+            "phase_completion_chars": phase_completion_chars,
+            "token_count_status_counts": token_status_counts,
             "llm_finished_count": finished_count,
             "llm_unphased_latency_ms": round(unphased_latency, 3),
             "llm_unphased_finish_count": unphased_count,
@@ -461,6 +529,151 @@ class ProbeRecorder:
                 f"{float(stats.get('ttft_p95_ms') or 0):.3f} | "
                 f"{float(stats.get('stream_p95_ms') or 0):.3f} |"
             )
+        return "\n".join(rows)
+
+    def _latency_undercoverage_summary(
+        self,
+        response_summary: dict[str, Any],
+        timing: dict[str, Any],
+        scenario: dict[str, Any],
+    ) -> dict[str, Any]:
+        warning_min_coverage = float(
+            scenario.get("timing_undercoverage_warning_min_coverage_ratio", 0.8)
+        )
+        thresholds = scenario.get("timing_undercoverage_thresholds", {})
+        scopes = {
+            "overall": self._latency_undercoverage_scope(
+                response_summary.get("samples") or [],
+                timing,
+                [
+                    "intake_response_ms",
+                    "therapy_opening_ms",
+                    "therapy_response_ms",
+                ],
+            ),
+            "intake": self._latency_undercoverage_scope(
+                [
+                    sample
+                    for sample in response_summary.get("samples") or []
+                    if sample.get("session_type") == "intake"
+                ],
+                timing,
+                ["intake_response_ms"],
+            ),
+            "therapy": self._latency_undercoverage_scope(
+                [
+                    sample
+                    for sample in response_summary.get("samples") or []
+                    if sample.get("session_type") == "therapy"
+                ],
+                timing,
+                ["therapy_opening_ms", "therapy_response_ms"],
+            ),
+        }
+        warnings = []
+        failures = []
+        for name, detail in scopes.items():
+            coverage_ratio = detail.get("coverage_ratio")
+            if coverage_ratio is None:
+                if detail.get("user_visible_total_ms"):
+                    warnings.append(
+                        {
+                            "scope": name,
+                            "reason": "No matching backend user-visible LLM timing",
+                        }
+                    )
+                continue
+            if coverage_ratio < warning_min_coverage:
+                warnings.append(
+                    {
+                        "scope": name,
+                        "coverage_ratio": coverage_ratio,
+                        "threshold": warning_min_coverage,
+                    }
+                )
+            threshold_key = f"{name}_min_coverage_ratio"
+            if threshold_key in thresholds and coverage_ratio < float(
+                thresholds[threshold_key]
+            ):
+                failures.append(
+                    {
+                        "scope": name,
+                        "coverage_ratio": coverage_ratio,
+                        "threshold": float(thresholds[threshold_key]),
+                    }
+                )
+        return {
+            "approximate": True,
+            "warning_min_coverage_ratio": warning_min_coverage,
+            "scopes": scopes,
+            "warnings": warnings,
+            "failures": failures,
+        }
+
+    def _latency_undercoverage_scope(
+        self,
+        samples: list[dict[str, Any]],
+        timing: dict[str, Any],
+        phase_keys: list[str],
+    ) -> dict[str, Any]:
+        phase_timings = timing.get("phase_timings_ms") or {}
+        user_visible_total = round(
+            sum(
+                float(sample.get("user_visible_ms") or 0.0)
+                for sample in samples
+                if sample.get("user_visible_ms") is not None
+            ),
+            3,
+        )
+        backend_total = round(
+            sum(float(phase_timings.get(phase) or 0.0) for phase in phase_keys),
+            3,
+        )
+        if user_visible_total <= 0:
+            coverage_ratio = None
+            undercoverage_ratio = None
+        elif backend_total <= 0:
+            coverage_ratio = None
+            undercoverage_ratio = None
+        else:
+            coverage_ratio = round(min(backend_total / user_visible_total, 1.0), 3)
+            undercoverage_ratio = round(user_visible_total / backend_total, 3)
+        return {
+            "sample_count": len(samples),
+            "phase_keys": phase_keys,
+            "user_visible_total_ms": user_visible_total,
+            "backend_phase_total_ms": backend_total,
+            "coverage_ratio": coverage_ratio,
+            "undercoverage_ratio": undercoverage_ratio,
+        }
+
+    def _render_latency_undercoverage_summary(self, summary: dict[str, Any]) -> str:
+        rows = [
+            "| Scope | Samples | User Visible | Backend Timed | Coverage | User/Backend |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for name, detail in (summary.get("scopes") or {}).items():
+            rows.append(
+                f"| {name} | {int(detail.get('sample_count') or 0)} | "
+                f"{float(detail.get('user_visible_total_ms') or 0):.3f} | "
+                f"{float(detail.get('backend_phase_total_ms') or 0):.3f} | "
+                f"{_format_optional_float(detail.get('coverage_ratio'))} | "
+                f"{_format_optional_float(detail.get('undercoverage_ratio'))} |"
+            )
+        warnings = summary.get("warnings") or []
+        if warnings:
+            rows.extend(["", "Warnings:"])
+            for warning in warnings:
+                if "reason" in warning:
+                    rows.append(f"- `{warning['scope']}`: {warning['reason']}")
+                else:
+                    rows.append(
+                        f"- `{warning['scope']}` coverage "
+                        f"{float(warning['coverage_ratio']):.3f} below "
+                        f"{float(warning['threshold']):.3f}"
+                    )
+        else:
+            rows.extend(["", "Warnings: None"])
         return "\n".join(rows)
 
     def _manifest_sessions(self) -> list[dict[str, Any]]:
@@ -980,6 +1193,26 @@ def _elapsed_ms(
     if started_at is None or finished_at is None:
         return None
     return round((finished_at - started_at).total_seconds() * 1000, 3)
+
+
+def _float_value(*values: Any) -> float:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _format_optional_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def _latency_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
