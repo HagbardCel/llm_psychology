@@ -684,6 +684,196 @@ async def test_follow_workflow_consumes_websocket_action_before_http_poll(
     assert output.system_messages[0].endswith("source=websocket")
 
 
+@pytest.mark.parametrize(
+    ("required_action", "method_name"),
+    [
+        ("complete_profile", "_complete_profile"),
+        ("select_therapy_style", "_select_therapy_style"),
+        ("start_therapy", "_start_therapy"),
+        ("retry_plan_update", "_retry_plan_update"),
+    ],
+)
+async def test_follow_workflow_skips_duplicate_completed_one_shot_actions(
+    console_client_cls,
+    monkeypatch,
+    required_action,
+    method_name,
+):
+    sink = _Sink()
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+        event_sink=sink,
+    )
+    client.current_session_id = "session-1"
+    actions = [
+        {
+            "required_action": required_action,
+            "state_signature": f"{required_action}-ready",
+            "session_id": "session-1",
+        },
+        {
+            "required_action": required_action,
+            "state_signature": f"{required_action}-ready",
+            "session_id": "session-1",
+        },
+        {"required_action": "error", "error": "stop"},
+    ]
+    calls: list[str] = []
+
+    async def fake_action(*_args: Any, **_kwargs: Any) -> bool:
+        calls.append(required_action)
+        return True
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return actions.pop(0)
+
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    setattr(client, method_name, fake_action)
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+    monkeypatch.setattr(trio, "sleep", fake_sleep)
+
+    await client._follow_workflow(ws=None)
+
+    assert calls == [required_action]
+    assert (
+        "workflow_action_skipped",
+        {
+            "action": required_action,
+            "session_id": "session-1",
+            "state_signature": f"{required_action}-ready",
+            "reason": "duplicate_one_shot_action",
+        },
+    ) in sink.events
+
+
+async def test_follow_workflow_retries_one_shot_action_after_deferred_attempt(
+    console_client_cls,
+):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    client.current_session_id = "session-1"
+    actions = [
+        {
+            "required_action": "select_therapy_style",
+            "state_signature": "style-ready",
+            "session_id": "session-1",
+        },
+        {
+            "required_action": "select_therapy_style",
+            "state_signature": "style-ready",
+            "session_id": "session-1",
+        },
+        {"required_action": "error", "error": "stop"},
+    ]
+    results = [False, True]
+    calls: list[str] = []
+
+    async def fake_select_therapy_style() -> bool:
+        calls.append("select")
+        return results.pop(0)
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return actions.pop(0)
+
+    client._select_therapy_style = fake_select_therapy_style  # type: ignore[method-assign]
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    await client._follow_workflow(ws=None)
+
+    assert calls == ["select", "select"]
+
+
+async def test_follow_workflow_clears_one_shot_guard_on_state_signature_change(
+    console_client_cls,
+):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    client.current_session_id = "session-1"
+    actions = [
+        {
+            "required_action": "retry_plan_update",
+            "state_signature": "retry-1",
+            "session_id": "session-1",
+        },
+        {
+            "required_action": "retry_plan_update",
+            "state_signature": "retry-2",
+            "session_id": "session-1",
+        },
+        {"required_action": "error", "error": "stop"},
+    ]
+    calls: list[str] = []
+
+    async def fake_retry_plan_update() -> bool:
+        calls.append("retry")
+        return True
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return actions.pop(0)
+
+    client._retry_plan_update = fake_retry_plan_update  # type: ignore[method-assign]
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    await client._follow_workflow(ws=None)
+
+    assert calls == ["retry", "retry"]
+
+
+async def test_follow_workflow_does_not_deduplicate_chat_actions(
+    console_client_cls,
+):
+    client = console_client_cls(
+        backend_url="http://localhost:8000",
+        websocket_url="ws://localhost:8000",
+        user_id="user-1",
+        output=_StubOutput(),
+    )
+    client.current_session_id = "session-1"
+    client.connected = True
+    client.session_ready.set()
+    actions = [
+        {
+            "required_action": "start_intake",
+            "state_signature": "intake-turn",
+            "session_id": "session-1",
+        },
+        {
+            "required_action": "start_intake",
+            "state_signature": "intake-turn",
+            "session_id": "session-1",
+        },
+        {"required_action": "error", "error": "stop"},
+    ]
+    calls: list[str] = []
+
+    async def fake_chat_loop(_ws: Any) -> bool:
+        calls.append("chat")
+        return False
+
+    async def fake_get_next_action() -> dict[str, Any]:
+        return actions.pop(0)
+
+    client._chat_loop = fake_chat_loop  # type: ignore[method-assign]
+    client._get_next_action = fake_get_next_action  # type: ignore[method-assign]
+
+    await client._follow_workflow(ws=None)
+
+    assert calls == ["chat", "chat"]
+
+
 async def test_follow_workflow_renders_same_wait_signature_once(
     console_client_cls, monkeypatch
 ):

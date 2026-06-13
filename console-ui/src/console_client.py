@@ -29,6 +29,13 @@ from .websocket_protocol import (
 
 logger = logging.getLogger(__name__)
 
+ONE_SHOT_WORKFLOW_ACTIONS = {
+    "complete_profile",
+    "select_therapy_style",
+    "start_therapy",
+    "retry_plan_update",
+}
+
 
 class WorkflowActionError(RuntimeError):
     """Raised when a workflow action fails and should not be retried silently."""
@@ -86,6 +93,10 @@ class ConsoleClient:
         self._latest_workflow_action_signature: str | None = None
         self._unconsumed_workflow_action_signature: str | None = None
         self._workflow_action_event = trio.Event()
+        self._completed_one_shot_workflow_action_keys: set[
+            tuple[str, str, str | None]
+        ] = set()
+        self._current_workflow_action_guard_signature: str | None = None
         self.latest_job_statuses: dict[str, dict[str, Any]] = {}
         self.last_recommendations_signature: str | None = None
         self.last_displayed_wait_signature: str | None = None
@@ -377,7 +388,7 @@ class ConsoleClient:
         self,
         required_fields: list[str] | None = None,
         defaults: dict[str, Any] | None = None,
-    ):
+    ) -> bool:
         """Prompt the user for required profile details and submit them via the API."""
         self.output.user_text("\n📝 Profile required to continue.", flush=True)
         required_fields = required_fields or ["name"]
@@ -407,15 +418,17 @@ class ConsoleClient:
                 self.output.user_text(
                     "⚠️  No active session. Please reconnect.", flush=True
                 )
-                return
+                return False
             await self._api_request("POST", "/workflow/complete_profile", json=payload)
             self.output.user_text(
                 "✅ Profile saved. Re-checking workflow...", flush=True
             )
+            return True
         except Exception as e:
             self.output.error(f"❌ Failed to save profile: {e}")
+            return False
 
-    async def _select_therapy_style(self):
+    async def _select_therapy_style(self) -> bool:
         """Prompt the user to select a therapy style and submit it."""
         recommendations = self.pending_recommendations
         options: list[dict[str, Any]] = []
@@ -426,7 +439,7 @@ class ConsoleClient:
                 flush=True,
             )
             await trio.sleep(2)
-            return
+            return False
 
         for rec in recommendations:
             options.append(
@@ -441,7 +454,7 @@ class ConsoleClient:
                 "⚠️  No therapy styles available yet. Try again later.",
                 flush=True,
             )
-            return
+            return False
 
         self.output.user_text("\n🧭 Select a therapy style:", flush=True)
         for idx, option in enumerate(options, start=1):
@@ -468,7 +481,7 @@ class ConsoleClient:
             await self.event_sink.emit(
                 "error", message="Invalid therapy style selection"
             )
-            return
+            return False
 
         try:
             if not self.current_session_id:
@@ -479,7 +492,7 @@ class ConsoleClient:
                     "error",
                     message="No active session during therapy style selection",
                 )
-                return
+                return False
             await self._api_request(
                 "POST",
                 "/workflow/select_therapy_style",
@@ -498,6 +511,7 @@ class ConsoleClient:
                 session_id=self.current_session_id,
             )
             self.pending_recommendations = None
+            return True
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.output.error(f"❌ Failed to save therapy style: {message}")
@@ -537,21 +551,22 @@ class ConsoleClient:
         self.output.user_text("✅ Starting your therapy session...", flush=True)
         return True
 
-    async def _retry_plan_update(self) -> None:
+    async def _retry_plan_update(self) -> bool:
         """Offer an explicit retry for a failed post-session reflection."""
         choice = await self._get_user_input("Retry plan update now? [Y/n]: ", default="y")
         if choice.strip().lower() not in {"", "y", "yes"}:
             self.output.user_text("Plan update retry deferred.", flush=True)
-            return
+            return False
         if not self.current_session_id:
             self.output.error("❌ No therapy session is available to retry.")
-            return
+            return False
         await self._api_request(
             "POST",
             "/workflow/retry_plan_update",
             json={"user_id": self.user_id, "session_id": self.current_session_id},
         )
         self.output.user_text("⏳ Retrying session reflection...", flush=True)
+        return True
 
     async def _get_user_input(
         self,
@@ -909,6 +924,52 @@ class ConsoleClient:
             return str(state_signature)
         return json.dumps(action, sort_keys=True, separators=(",", ":"), default=str)
 
+    def _workflow_action_execution_key(
+        self, action: dict[str, Any]
+    ) -> tuple[str, str, str | None] | None:
+        """Return the idempotency key for one-shot workflow actions."""
+        required_action = action.get("required_action")
+        if required_action not in ONE_SHOT_WORKFLOW_ACTIONS:
+            return None
+        session_id = action.get("session_id") or self.current_session_id
+        return (
+            str(required_action),
+            self._workflow_action_signature(action),
+            str(session_id) if session_id else None,
+        )
+
+    def _refresh_workflow_action_execution_guard(
+        self, action: dict[str, Any]
+    ) -> None:
+        """Clear one-shot completions when the workflow instruction advances."""
+        signature = self._workflow_action_signature(action)
+        if signature == self._current_workflow_action_guard_signature:
+            return
+        self._completed_one_shot_workflow_action_keys.clear()
+        self._current_workflow_action_guard_signature = signature
+
+    async def _skip_completed_one_shot_action(
+        self, action: dict[str, Any]
+    ) -> bool:
+        """Skip duplicate one-shot actions that already completed locally."""
+        key = self._workflow_action_execution_key(action)
+        if key is None or key not in self._completed_one_shot_workflow_action_keys:
+            return False
+        await self.event_sink.emit(
+            "workflow_action_skipped",
+            action=action.get("required_action"),
+            session_id=key[2],
+            state_signature=key[1],
+            reason="duplicate_one_shot_action",
+        )
+        return True
+
+    def _mark_one_shot_action_completed(self, action: dict[str, Any]) -> None:
+        """Remember a successfully completed one-shot workflow action."""
+        key = self._workflow_action_execution_key(action)
+        if key is not None:
+            self._completed_one_shot_workflow_action_keys.add(key)
+
     async def _next_workflow_action(
         self,
         *,
@@ -1173,6 +1234,7 @@ class ConsoleClient:
             next_action, delivery_source = await self._next_workflow_action()
             action = next_action.get("required_action")
             prompt = next_action.get("prompt")
+            self._refresh_workflow_action_execution_guard(next_action)
             self.output.system(
                 f"Workflow action: {action} prompt={prompt!r} source={delivery_source}"
             )
@@ -1223,24 +1285,33 @@ class ConsoleClient:
                 await trio.sleep(2)
                 continue
 
+            if await self._skip_completed_one_shot_action(next_action):
+                await trio.sleep(0.25)
+                continue
+
             if action == "complete_profile":
-                await self._complete_profile(
+                if await self._complete_profile(
                     next_action.get("required_fields"),
                     next_action.get("defaults"),
-                )
+                ):
+                    self._mark_one_shot_action_completed(next_action)
                 continue
 
             if action == "select_therapy_style":
-                await self._select_therapy_style()
+                if await self._select_therapy_style():
+                    self._mark_one_shot_action_completed(next_action)
                 continue
 
             if action == "start_therapy":
-                if not await self._start_therapy(ws):
+                if await self._start_therapy(ws):
+                    self._mark_one_shot_action_completed(next_action)
+                else:
                     break
                 continue
 
             if action == "retry_plan_update":
-                await self._retry_plan_update()
+                if await self._retry_plan_update():
+                    self._mark_one_shot_action_completed(next_action)
                 continue
 
             if action in {"start_intake", "continue_therapy"}:

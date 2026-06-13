@@ -28,7 +28,7 @@ implementation checklist. Mark items `[x]` as they are completed.
 - [x] Skipped: Tighten duration/onset/frequency evidence detection without rejecting coarse onset. User has a different option in mind.
 - [x] Align probe risk-screen evidence keywords with backend logic.
 - [x] Make console workflow actions WebSocket-first with HTTP polling fallback.
-- [ ] Add idempotency for one-shot side-effect workflow actions.
+- [x] Add idempotency for one-shot side-effect workflow actions.
 - [ ] Add intake conversation-quality metrics and warnings.
 - [ ] Add minimal intake prompt constraints after metrics exist.
 - [ ] Add separate LLM-user-simulator diagnostic scenarios.
