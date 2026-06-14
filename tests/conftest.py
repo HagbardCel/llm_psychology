@@ -212,7 +212,7 @@ def mock_llm_service():
         # Default: minimal safe payload for schemas we don't explicitly handle.
         return {}
 
-    def mock_structured_output(prompt, schema, method="json_schema"):
+    def mock_structured_output(prompt, schema, method="json_schema", **_kwargs):
         if isinstance(schema, type) and issubclass(schema, BaseModel):
             payload = _mock_structured_payload(prompt, schema)
             return schema.model_validate(payload)

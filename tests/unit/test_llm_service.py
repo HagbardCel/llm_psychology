@@ -7,13 +7,13 @@ import trio
 import trio.testing
 
 from psychoanalyst_app.exceptions import LLMServiceError
-from psychoanalyst_app.services.llm_service import LLMService, TrioRateLimiter
 from psychoanalyst_app.services.llm_phases import (
     INITIAL_PLAN_GENERATION,
     INTAKE_RESPONSE,
     SESSION_ENRICHMENT,
     THERAPY_RESPONSE,
 )
+from psychoanalyst_app.services.llm_service import LLMService, TrioRateLimiter
 
 
 class _FakeChatModel:

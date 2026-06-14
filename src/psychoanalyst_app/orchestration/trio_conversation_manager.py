@@ -21,13 +21,13 @@ from psychoanalyst_app.orchestration.stream_dispatch import (
     send_stream_chunk,
     send_typing_indicator,
 )
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     INTAKE_RESPONSE,
-    LLMPhase,
     THERAPY_OPENING,
     THERAPY_RESPONSE,
+    LLMPhase,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from psychoanalyst_app.shared.intake_slot_evidence import (
-    EvidenceMessage,
-    RISK_SCREEN_PROMPT,
     GOAL_PREFERENCE_PROMPT,
+    RISK_SCREEN_PROMPT,
+    EvidenceMessage,
     intake_slot_evidence_from_messages,
     intake_slot_evidence_from_transcript,
 )

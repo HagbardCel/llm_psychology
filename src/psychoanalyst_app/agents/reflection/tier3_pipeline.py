@@ -15,11 +15,11 @@ from psychoanalyst_app.models.domain import (
     Session,
 )
 from psychoanalyst_app.models.llm_outputs import ChangeDetectionDecision
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     TIER3_CHANGE_DETECTION,
     TIER3_UPDATE,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)

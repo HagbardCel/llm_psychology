@@ -7,6 +7,7 @@ from typing import Literal, TypeAlias
 LLMPhase: TypeAlias = Literal[
     "intake_response",
     "intake_extraction",
+    "intake_note_tracking",
     "assessment_style_scoring",
     "assessment_initial_formulation",
     "initial_plan_generation",
@@ -25,6 +26,7 @@ LLMPhase: TypeAlias = Literal[
 
 INTAKE_RESPONSE: LLMPhase = "intake_response"
 INTAKE_EXTRACTION: LLMPhase = "intake_extraction"
+INTAKE_NOTE_TRACKING: LLMPhase = "intake_note_tracking"
 ASSESSMENT_STYLE_SCORING: LLMPhase = "assessment_style_scoring"
 ASSESSMENT_INITIAL_FORMULATION: LLMPhase = "assessment_initial_formulation"
 INITIAL_PLAN_GENERATION: LLMPhase = "initial_plan_generation"
@@ -44,6 +46,7 @@ VALID_LLM_PHASES: frozenset[str] = frozenset(
     [
         INTAKE_RESPONSE,
         INTAKE_EXTRACTION,
+        INTAKE_NOTE_TRACKING,
         ASSESSMENT_STYLE_SCORING,
         ASSESSMENT_INITIAL_FORMULATION,
         INITIAL_PLAN_GENERATION,

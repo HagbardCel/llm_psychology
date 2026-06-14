@@ -212,6 +212,24 @@ class Settings(BaseSettings):
         "Support System",
         "Goals for Therapy",
     ]
+    INTAKE_NOTE_TRACKING_ENABLED: bool = Field(
+        default=False,
+        description="Enable structured incremental intake record extraction.",
+    )
+    INTAKE_RECORD_COMPLETION_GATE_ENABLED: bool = Field(
+        default=False,
+        description="Use the structured intake record as the workflow completion gate.",
+    )
+    INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION: bool = Field(
+        default=True,
+        description="Require intake record evidence quotes to match patient messages.",
+    )
+    INTAKE_RECORD_DIRECT_ASK_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Use structured missing items to directly ask late-intake follow-ups."
+        ),
+    )
 
     CORS_ALLOWED_ORIGINS: list[str] = Field(
         default=["http://localhost"],

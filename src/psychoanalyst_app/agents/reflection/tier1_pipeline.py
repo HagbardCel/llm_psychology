@@ -16,11 +16,11 @@ from psychoanalyst_app.models.llm_outputs import (
     StructuredUserProfileOutput,
     Tier1ProfilePatch,
 )
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     TIER1_PROFILE_CHANGE_DETECTION,
     TIER1_PROFILE_UPDATE,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 

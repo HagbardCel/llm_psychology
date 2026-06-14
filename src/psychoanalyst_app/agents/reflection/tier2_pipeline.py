@@ -9,8 +9,8 @@ from pydantic import ValidationError
 
 from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.models.llm_outputs import Tier2Enrichment
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import SESSION_ENRICHMENT
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.session_enrichment_prompts import (
     build_tier2_enrichment_prompt,
 )

@@ -8,8 +8,8 @@ from psychoanalyst_app.agents.therapist.prompts import DEEP_TOPIC_DETECTION_PROM
 from psychoanalyst_app.agents.therapist.session_policy import is_in_deep_topic
 from psychoanalyst_app.models.llm_outputs import DeepTopicSignalOutput
 from psychoanalyst_app.orchestration.models import ConversationContext
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import THERAPY_DEEP_TOPIC_DETECTION
+from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
