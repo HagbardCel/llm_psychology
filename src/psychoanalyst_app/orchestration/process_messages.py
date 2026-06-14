@@ -125,13 +125,18 @@ async def finalize_agent_response(
             type(user_profile_output),
         )
 
+    persistence = metadata.get("intake_record_persistence")
+    should_persist_intake_record = not isinstance(persistence, dict) or bool(
+        persistence.get("should_persist", True)
+    )
     intake_record = metadata.get("intake_record")
     if isinstance(intake_record, IntakeRecord | dict):
-        await update_intake_record(
-            response_handler.conversation_manager,
-            session_id,
-            intake_record,
-        )
+        if should_persist_intake_record:
+            await update_intake_record(
+                response_handler.conversation_manager,
+                session_id,
+                intake_record,
+            )
     elif intake_record is not None:
         logger.warning(
             "Ignoring unexpected intake_record payload type: %s",

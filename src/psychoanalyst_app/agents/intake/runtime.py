@@ -177,7 +177,9 @@ def intake_record_metadata(
     merge_result = state.merge_result
     status = tracking.status if tracking else "not_run"
     if tracking and tracking.status == "success":
-        if merge_result and merge_result.status == "empty_after_validation":
+        if merge_result and merge_result.status == "empty_patch":
+            status = "empty_patch"
+        elif merge_result and merge_result.status == "empty_after_validation":
             status = "validation_failure"
         elif merge_result and merge_result.status == "merge_failure":
             status = "merge_failure"
@@ -200,6 +202,7 @@ def intake_record_metadata(
                 "raw_evidence_count": merge_result.raw_evidence_count,
                 "retained_evidence_count": merge_result.retained_evidence_count,
                 "dropped_evidence_count": merge_result.dropped_evidence_count,
+                "record_changed": merge_result.record_changed,
             }
         )
         if merge_result.error_message:
@@ -209,6 +212,10 @@ def intake_record_metadata(
 
     return {
         "intake_record": state.record.model_dump(mode="json"),
+        "intake_record_persistence": {
+            "should_persist": bool(merge_result and merge_result.record_changed),
+            "record_changed": bool(merge_result and merge_result.record_changed),
+        },
         "intake_record_completeness": state.completeness.model_dump(mode="json"),
         "intake_note_tracking": tracking_metadata,
         "legacy_intake_completion_diagnostics": legacy_diagnostics,

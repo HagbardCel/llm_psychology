@@ -127,6 +127,22 @@ def test_diagnostics_report_empty_after_validation_for_bad_quote() -> None:
     assert result.dropped_evidence_count == 1
 
 
+def test_diagnostics_report_empty_patch_for_no_evidence() -> None:
+    result = merge_intake_record_patch_with_diagnostics(
+        IntakeRecord(),
+        IntakeRecordPatch(),
+        latest_user_message=_message(),
+        source_message_index=0,
+    )
+
+    assert result.status == "empty_patch"
+    assert result.applied is False
+    assert result.record_changed is False
+    assert result.raw_evidence_count == 0
+    assert result.retained_evidence_count == 0
+    assert result.dropped_evidence_count == 0
+
+
 def test_accepts_normalized_quote_match() -> None:
     patch = IntakeRecordPatch(
         presenting_problem=PresentingProblemRecord(
@@ -160,10 +176,36 @@ def test_diagnostics_report_applied_for_valid_evidence() -> None:
 
     assert result.status == "applied"
     assert result.applied is True
+    assert result.record_changed is True
     assert result.raw_evidence_count == 1
     assert result.retained_evidence_count == 1
     assert result.dropped_evidence_count == 0
     assert result.record.presenting_problem.main_concern.is_present()
+
+
+def test_diagnostics_report_no_record_change_for_duplicate_evidence() -> None:
+    current = IntakeRecord()
+    current.presenting_problem.symptoms = [_evidence("racing thoughts")]
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            symptoms=[_evidence("racing thoughts")]
+        )
+    )
+
+    result = merge_intake_record_patch_with_diagnostics(
+        current,
+        patch,
+        latest_user_message=_message(),
+        source_message_index=0,
+    )
+
+    assert result.status == "applied"
+    assert result.applied is True
+    assert result.record_changed is False
+    assert result.raw_evidence_count == 1
+    assert result.retained_evidence_count == 1
+    assert result.dropped_evidence_count == 0
+    assert result.record == current
 
 
 def test_non_strict_quote_validation_keeps_role_and_index_checks() -> None:

@@ -19,6 +19,7 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 IntakePatchMergeStatus = Literal[
     "applied",
+    "empty_patch",
     "empty_after_validation",
     "merge_failure",
 ]
@@ -34,6 +35,7 @@ class IntakePatchMergeResult:
     raw_evidence_count: int
     retained_evidence_count: int
     dropped_evidence_count: int
+    record_changed: bool
     error_message: str | None = None
     error_code: str | None = None
 
@@ -274,6 +276,17 @@ def merge_intake_record_patch_with_diagnostics(
 ) -> IntakePatchMergeResult:
     """Merge a patch and report whether validation retained usable evidence."""
     raw_evidence_count = _count_evidence(patch)
+    if raw_evidence_count == 0:
+        return IntakePatchMergeResult(
+            record=current,
+            status="empty_patch",
+            applied=False,
+            raw_evidence_count=0,
+            retained_evidence_count=0,
+            dropped_evidence_count=0,
+            record_changed=False,
+        )
+
     try:
         validated_patch = validate_intake_record_patch(
             patch,
@@ -291,6 +304,7 @@ def merge_intake_record_patch_with_diagnostics(
                 raw_evidence_count=raw_evidence_count,
                 retained_evidence_count=retained_evidence_count,
                 dropped_evidence_count=dropped_evidence_count,
+                record_changed=False,
             )
 
         merged = merge_intake_record_patch(
@@ -308,9 +322,11 @@ def merge_intake_record_patch_with_diagnostics(
             raw_evidence_count=raw_evidence_count,
             retained_evidence_count=0,
             dropped_evidence_count=raw_evidence_count,
+            record_changed=False,
             error_message=str(exc),
             error_code=type(exc).__name__,
         )
+    record_changed = merged != current
 
     return IntakePatchMergeResult(
         record=merged,
@@ -319,4 +335,5 @@ def merge_intake_record_patch_with_diagnostics(
         raw_evidence_count=raw_evidence_count,
         retained_evidence_count=retained_evidence_count,
         dropped_evidence_count=dropped_evidence_count,
+        record_changed=record_changed,
     )
