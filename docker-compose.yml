@@ -17,6 +17,7 @@ x-api-base: &api-base
     - PYTHONUNBUFFERED=1
     - SERVER_HOST=0.0.0.0
     - SERVER_PORT=8000
+    - RUFF_CACHE_DIR=/tmp/ruff_cache
   networks:
     - app-network
   command: python -m psychoanalyst_app.server

@@ -14,7 +14,9 @@ from psychoanalyst_app.orchestration.models import (
     WorkflowEvent,
     WorkflowState,
 )
-from psychoanalyst_app.orchestration.response_reflection import run_reflection_transition
+from psychoanalyst_app.orchestration.response_reflection import (
+    run_reflection_transition,
+)
 
 
 @pytest.mark.trio
