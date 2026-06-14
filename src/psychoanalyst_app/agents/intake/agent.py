@@ -11,6 +11,13 @@ from psychoanalyst_app.agents.intake.prompts import (
     GUEST_WELCOME_PROMPT,
     INITIAL_GREETING_PROMPT,
 )
+from psychoanalyst_app.agents.intake.runtime import (
+    IntakeRecordState,
+    build_continuation_prompt_context,
+    intake_record_metadata,
+    intake_response_metadata,
+    prepare_intake_record_state,
+)
 from psychoanalyst_app.agents.intake.slots import (
     identify_covered_topics,
     identify_required_slots,
@@ -48,6 +55,14 @@ class TrioIntakeAgent:
         self.user_context = user_context
         self.session_duration = config.SESSION_DURATION_MINUTES
         self.intake_topics = config.INTAKE_TOPICS
+        self.intake_note_tracking_enabled = config.INTAKE_NOTE_TRACKING_ENABLED
+        self.intake_record_completion_gate_enabled = (
+            config.INTAKE_RECORD_COMPLETION_GATE_ENABLED
+        )
+        self.intake_record_direct_ask_enabled = config.INTAKE_RECORD_DIRECT_ASK_ENABLED
+        self.strict_quote_validation = (
+            config.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION
+        )
 
     async def process_message(
         self, message: str, context: ConversationContext
@@ -67,6 +82,23 @@ class TrioIntakeAgent:
             completion_diagnostics = intake_completion_diagnostics(
                 context, intake_slot_coverage
             )
+            is_guest = (
+                context.user_profile.name == "Guest"
+                or context.user_profile.status == UserStatus.PROFILE_ONLY
+                or context.user_profile.name == context.user_profile.user_id
+            )
+            record_state = await prepare_intake_record_state(
+                message=message,
+                context=context,
+                llm_service=self.llm_service,
+                note_tracking_enabled=self.intake_note_tracking_enabled,
+                strict_quote_validation=self.strict_quote_validation,
+                is_guest=is_guest,
+            )
+            record_metadata = intake_record_metadata(
+                record_state,
+                legacy_diagnostics=completion_diagnostics,
+            )
 
             for topic in covered_topics:
                 if topic not in context.topics_covered:
@@ -79,66 +111,58 @@ class TrioIntakeAgent:
                 len(self.intake_topics),
             )
 
-            is_complete = is_intake_complete(context, intake_slot_coverage)
+            is_complete = (
+                record_state.completeness.complete
+                if self.intake_record_completion_gate_enabled
+                else is_intake_complete(context, intake_slot_coverage)
+            )
 
             next_action = "continue"
             workflow_event = None
             prompt = ""
             structured_profile = None
 
-            is_guest = (
-                context.user_profile.name == "Guest"
-                or context.user_profile.status == UserStatus.PROFILE_ONLY
-                or context.user_profile.name == context.user_profile.user_id
-            )
-
             if is_guest:
                 if not message.strip():
                     prompt = GUEST_WELCOME_PROMPT
-                    next_action = "continue"
-                    workflow_event = None
                     return direct_agent_response(
                         content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata={
-                            "topics_covered": context.topics_covered,
-                            "intake_slot_coverage": sorted(intake_slot_coverage),
-                            "intake_completion_diagnostics": completion_diagnostics,
-                            "time_remaining_minutes": context.time_remaining_minutes,
-                            "can_extend": context.can_extend,
-                            "is_time_up": context.is_time_up,
-                        },
+                        next_action="continue",
+                        workflow_event=None,
+                        metadata=intake_response_metadata(
+                            context=context,
+                            intake_slot_coverage=intake_slot_coverage,
+                            completion_diagnostics=completion_diagnostics,
+                            record_metadata=record_metadata,
+                        ),
                     )
-                else:
-                    new_name = message.strip()
-                    context.user_profile.name = new_name
-                    structured_profile = build_user_profile_output({"name": new_name})
-
-                    prompt = self._build_initial_prompt(context)
-                    next_action = "transition"
-                    workflow_event = WorkflowEvent.START_INTAKE
-                    return AgentResponse(
-                        content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata={
-                            "topics_covered": context.topics_covered,
-                            "intake_slot_coverage": sorted(intake_slot_coverage),
-                            "intake_completion_diagnostics": completion_diagnostics,
-                            "time_remaining_minutes": context.time_remaining_minutes,
-                            "can_extend": context.can_extend,
-                            "is_time_up": context.is_time_up,
-                            "user_profile": structured_profile,
-                        },
-                    )
+                new_name = message.strip()
+                context.user_profile.name = new_name
+                structured_profile = build_user_profile_output({"name": new_name})
+                prompt = self._build_initial_prompt(context)
+                return AgentResponse(
+                    content=prompt,
+                    next_action="transition",
+                    workflow_event=WorkflowEvent.START_INTAKE,
+                    metadata=intake_response_metadata(
+                        context=context,
+                        intake_slot_coverage=intake_slot_coverage,
+                        completion_diagnostics=completion_diagnostics,
+                        record_metadata=record_metadata,
+                        user_profile=structured_profile,
+                    ),
+                )
 
             elif len(context.message_history) == 0:
                 prompt = self._build_initial_prompt(context)
                 next_action = "continue"
                 workflow_event = None
             else:
-                prompt = self._build_continuation_prompt(message, context)
+                prompt = self._build_continuation_prompt(
+                    message,
+                    context,
+                    record_state=record_state,
+                )
                 required_follow_up = next_required_follow_up(intake_slot_coverage)
 
                 if is_complete:
@@ -167,51 +191,43 @@ class TrioIntakeAgent:
                         content=prompt,
                         next_action=next_action,
                         workflow_event=workflow_event,
-                        metadata={
-                            "topics_covered": context.topics_covered,
-                            "intake_slot_coverage": sorted(intake_slot_coverage),
-                            "intake_completion_diagnostics": completion_diagnostics,
-                            "time_remaining_minutes": context.time_remaining_minutes,
-                            "can_extend": context.can_extend,
-                            "is_time_up": context.is_time_up,
-                            "user_profile": structured_profile,
-                            "intake_complete": is_complete,
-                        },
+                        metadata=intake_response_metadata(
+                            context=context,
+                            intake_slot_coverage=intake_slot_coverage,
+                            completion_diagnostics=completion_diagnostics,
+                            record_metadata=record_metadata,
+                            user_profile=structured_profile,
+                            intake_complete=is_complete,
+                        ),
                     )
                 elif context.is_time_up:
-                    next_action = "continue"
-                    workflow_event = None
                     prompt = (
                         "Our time is up for today. We will continue this intake "
                         "in our next session."
                     )
                     return direct_agent_response(
                         content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata={
-                            "topics_covered": context.topics_covered,
-                            "intake_slot_coverage": sorted(intake_slot_coverage),
-                            "intake_completion_diagnostics": completion_diagnostics,
-                            "time_remaining_minutes": context.time_remaining_minutes,
-                            "can_extend": context.can_extend,
-                            "is_time_up": context.is_time_up,
-                            "user_profile": structured_profile,
-                            "intake_complete": is_complete,
-                        },
+                        next_action="continue",
+                        workflow_event=None,
+                        metadata=intake_response_metadata(
+                            context=context,
+                            intake_slot_coverage=intake_slot_coverage,
+                            completion_diagnostics=completion_diagnostics,
+                            record_metadata=record_metadata,
+                            user_profile=structured_profile,
+                            intake_complete=is_complete,
+                        ),
                     )
                 elif required_follow_up:
                     return direct_agent_response(
                         content=required_follow_up,
-                        metadata={
-                            "topics_covered": context.topics_covered,
-                            "intake_slot_coverage": sorted(intake_slot_coverage),
-                            "intake_completion_diagnostics": completion_diagnostics,
-                            "time_remaining_minutes": context.time_remaining_minutes,
-                            "can_extend": context.can_extend,
-                            "is_time_up": context.is_time_up,
-                            "intake_complete": is_complete,
-                        },
+                        metadata=intake_response_metadata(
+                            context=context,
+                            intake_slot_coverage=intake_slot_coverage,
+                            completion_diagnostics=completion_diagnostics,
+                            record_metadata=record_metadata,
+                            intake_complete=is_complete,
+                        ),
                     )
                 else:
                     next_action = "continue"
@@ -225,16 +241,14 @@ class TrioIntakeAgent:
                 content=prompt,
                 next_action=next_action,
                 workflow_event=workflow_event,
-                metadata={
-                    "topics_covered": context.topics_covered,
-                    "intake_slot_coverage": sorted(intake_slot_coverage),
-                    "intake_completion_diagnostics": completion_diagnostics,
-                    "time_remaining_minutes": context.time_remaining_minutes,
-                    "can_extend": context.can_extend,
-                    "is_time_up": context.is_time_up,
-                    "user_profile": structured_profile,
-                    "intake_complete": is_complete,
-                },
+                metadata=intake_response_metadata(
+                    context=context,
+                    intake_slot_coverage=intake_slot_coverage,
+                    completion_diagnostics=completion_diagnostics,
+                    record_metadata=record_metadata,
+                    user_profile=structured_profile,
+                    intake_complete=is_complete,
+                ),
             )
 
         except Exception as exc:
@@ -257,9 +271,14 @@ class TrioIntakeAgent:
         )
 
     def _build_continuation_prompt(
-        self, message: str, context: ConversationContext
+        self,
+        message: str,
+        context: ConversationContext,
+        *,
+        record_state: IntakeRecordState,
     ) -> str:
         """Build continuation prompt with time and topic awareness."""
+        _ = message
         remaining_minutes = max(0, int(context.time_remaining_minutes))
 
         covered = context.topics_covered
@@ -270,6 +289,11 @@ class TrioIntakeAgent:
             session_duration=context.duration_minutes,
             covered_topics=", ".join(covered) if covered else "None",
             pending_topics=", ".join(pending),
+            structured_intake_context=build_continuation_prompt_context(
+                record_state=record_state,
+                include_structured_guidance=record_state.should_emit_metadata,
+                direct_ask_enabled=self.intake_record_direct_ask_enabled,
+            ),
         )
 
         return prompt

@@ -173,6 +173,7 @@ class ConversationContext:
     duration_minutes: int
     extensions_used: int = 0
     max_extensions: int = 2
+    intake_record: dict[str, Any] | None = None
 
     @property
     def time_elapsed_minutes(self) -> float:

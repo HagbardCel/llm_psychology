@@ -53,7 +53,8 @@ def load_json(payload: str | None, *, default: T) -> T:
 
 SESSION_COLUMNS = (
     "session_id, user_id, session_type, plan_id, timestamp, transcript, topics, "
-    "session_summary, session_briefing, psychological_summary, "
+    "session_summary, session_briefing, intake_record, intake_record_updated_at, "
+    "psychological_summary, "
     "dominant_affects, key_themes, notable_interactions, "
     "interpretations, patient_reactions, enriched"
 )
@@ -89,6 +90,12 @@ def session_from_row(
         topics=topics,
         session_summary=row["session_summary"],
         session_briefing=load_json(row["session_briefing"], default=None),
+        intake_record=load_json(row["intake_record"], default=None),
+        intake_record_updated_at=(
+            iso_to_datetime(row["intake_record_updated_at"])
+            if row["intake_record_updated_at"]
+            else None
+        ),
         psychological_summary=row["psychological_summary"],
         dominant_affects=load_json(row["dominant_affects"], default=[]),
         key_themes=load_json(row["key_themes"], default=[]),
