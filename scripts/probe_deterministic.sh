@@ -56,10 +56,12 @@ cleanup() {
 trap cleanup EXIT
 
 "${compose[@]}" up --build --remove-orphans -d --wait api-probe
-"${compose[@]}" run --rm --build --no-deps console-probe-runner
-exit_code=$?
+exit_code=0
+"${compose[@]}" run --rm --build --no-deps console-probe-runner || exit_code=$?
+
 if [ "$exit_code" -ne 0 ] && [ -f "$run_dir/failure_summary.md" ]; then
   printf '\nProbe failure summary:\n'
   sed -n '1,80p' "$run_dir/failure_summary.md"
 fi
+
 exit "$exit_code"
