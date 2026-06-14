@@ -418,19 +418,23 @@ def build_continuation_prompt_context(
     use_structured_gate: bool = False,
 ) -> str:
     """Return structured intake context for the response-generation prompt."""
-    if not include_structured_guidance:
+    if not include_structured_guidance and not use_structured_gate:
         return ""
 
-    summary = summarize_intake_record_for_prompt(
-        record_state.record,
-        record_state.completeness,
-    )
-    parts = [
-        "\nStructured intake state:\n",
-        summary,
-        "\n\nOpen required intake items: ",
-        ", ".join(record_state.completeness.missing_required_items) or "None",
-    ]
+    parts: list[str] = []
+    if include_structured_guidance or use_structured_gate:
+        summary = summarize_intake_record_for_prompt(
+            record_state.record,
+            record_state.completeness,
+        )
+        parts.extend(
+            [
+                "\nStructured intake state:\n",
+                summary,
+                "\n\nOpen required intake items: ",
+                ", ".join(record_state.completeness.missing_required_items) or "None",
+            ]
+        )
 
     if use_structured_gate:
         parts.extend(
@@ -447,7 +451,7 @@ def build_continuation_prompt_context(
             "(ask directly; if the patient cannot answer, note that explicitly)"
         )
         parts.append(f"\nRecommended next item: {recommended_next_item}\n")
-    else:
+    elif include_structured_guidance:
         recommended_next_item = record_state.completeness.next_required_item or "None"
         parts.append(f"\nRecommended next item: {recommended_next_item}\n")
 

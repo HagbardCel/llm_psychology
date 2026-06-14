@@ -339,6 +339,30 @@ def test_build_continuation_prompt_context_invalid_manual_config() -> None:
     assert "harming themselves" in context
 
 
+def test_build_continuation_prompt_context_gate_active_without_metadata_still_authoritative() -> (
+    None
+):
+    state = IntakeRecordState(
+        record=IntakeRecord(),
+        completeness=IntakeCompleteness(
+            complete=False,
+            next_required_item="risk_screen",
+            missing_required_items=["risk_screen"],
+        ),
+        should_emit_metadata=False,
+    )
+    context = build_continuation_prompt_context(
+        record_state=state,
+        include_structured_guidance=False,
+        direct_ask_enabled=False,
+        use_structured_gate=True,
+    )
+
+    assert "Structured direct-ask instruction:" in context
+    assert "harming themselves" in context
+    assert "Structured intake state:" in context
+
+
 def test_build_continuation_prompt_context_gate_active_no_next_item() -> None:
     state = IntakeRecordState(
         record=IntakeRecord(),
