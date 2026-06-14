@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from psychoanalyst_app.models.intake_record import IntakeRecord
+
 
 class UserStatus(str, Enum):
     """User status enum for workflow progression."""
@@ -117,6 +119,11 @@ class Session(BaseModel):
     session_briefing: dict[str, Any] | None = Field(
         None, description="Structured briefing generated for the next session"
     )
+    intake_record: IntakeRecord | None = Field(
+        default=None,
+        description="Structured incremental intake record for intake sessions",
+    )
+    intake_record_updated_at: datetime | None = None
 
     # Tier 2 enrichment fields (added by Reflection Agent)
     psychological_summary: str | None = Field(

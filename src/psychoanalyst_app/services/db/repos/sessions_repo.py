@@ -12,6 +12,7 @@ from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     SESSION_COLUMNS,
+    dump_intake_record,
     dump_json,
     dump_messages,
     dump_topics,
@@ -41,20 +42,28 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
         session_briefing_json = (
             dump_json(session.session_briefing) if session.session_briefing else None
         )
+        intake_record_json = dump_intake_record(session.intake_record)
+        intake_record_updated_at = (
+            datetime_to_iso(session.intake_record_updated_at)
+            if session.intake_record_updated_at
+            else None
+        )
 
         cursor.execute(
             """
             INSERT INTO sessions
             (session_id, user_id, session_type, plan_id, timestamp, transcript, topics,
-             session_summary, session_briefing)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             session_summary, session_briefing, intake_record, intake_record_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 timestamp = excluded.timestamp,
                 transcript = excluded.transcript,
                 topics = excluded.topics,
                 session_summary = excluded.session_summary,
-                session_briefing = excluded.session_briefing
+                session_briefing = excluded.session_briefing,
+                intake_record = excluded.intake_record,
+                intake_record_updated_at = excluded.intake_record_updated_at
             WHERE sessions.enriched = 0
         """,
             (
@@ -67,6 +76,8 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
                 topics_json,
                 session.session_summary,
                 session_briefing_json,
+                intake_record_json,
+                intake_record_updated_at,
             ),
         )
 

@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from psychoanalyst_app.models.domain import Message, TherapyPlan, UserProfile
+from psychoanalyst_app.models.intake_record import IntakeRecord
 
 
 class WorkflowState(Enum):
@@ -173,6 +174,8 @@ class ConversationContext:
     duration_minutes: int
     extensions_used: int = 0
     max_extensions: int = 2
+    intake_record: IntakeRecord | None = None
+    intake_record_updated_at: datetime | None = None
 
     @property
     def time_elapsed_minutes(self) -> float:

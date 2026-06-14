@@ -15,6 +15,11 @@ from psychoanalyst_app.models.domain import (
     TherapyPlan,
     UserProfile,
 )
+from psychoanalyst_app.models.intake_record import (
+    IntakeEvidence,
+    IntakeRecord,
+    PresentingProblemRecord,
+)
 
 
 @pytest.fixture
@@ -75,6 +80,200 @@ async def _save_profile(db, user_id: str) -> None:
     assert await db.save_user_profile(
         UserProfile(user_id=user_id, name="Test User", created_at=now, updated_at=now)
     )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_save_and_load_session_with_intake_record(test_db_service):
+    user_id = "test_user_intake_record"
+    await _save_profile(test_db_service, user_id)
+    now = datetime.now()
+    intake_record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="work anxiety",
+                evidence_quote="I feel anxious at work",
+                source_message_index=0,
+                source_role="user",
+                confidence="high",
+            )
+        )
+    )
+    session = Session(
+        session_id="intake-record-session",
+        user_id=user_id,
+        session_type="intake",
+        timestamp=now,
+        transcript=[],
+        intake_record=intake_record,
+        intake_record_updated_at=now,
+    )
+
+    assert await test_db_service.save_session(session)
+
+    loaded = await test_db_service.get_session(session.session_id)
+
+    assert loaded is not None
+    assert loaded.intake_record == intake_record
+    assert loaded.intake_record_updated_at == now
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_migration_adds_intake_record_columns_to_v1_sessions_table(tmp_path):
+    """Existing v1 sessions tables gain nullable intake record columns on migrate."""
+    import sqlite3
+
+    from psychoanalyst_app.services.migration_service import MigrationService
+    from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    db_path = str(tmp_path / "v1_sessions_schema.db")
+    now = datetime.now()
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)",
+            (now.isoformat(),),
+        )
+        cursor.execute(
+            """
+            CREATE TABLE user_profiles (
+                user_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                alias TEXT,
+                date_of_birth TEXT,
+                gender TEXT,
+                cultural_background TEXT,
+                primary_language TEXT NOT NULL DEFAULT 'English',
+                profession TEXT,
+                status TEXT NOT NULL,
+                plan_id TEXT,
+                parents TEXT,
+                siblings TEXT,
+                family_atmosphere TEXT,
+                significant_events TEXT,
+                education TEXT,
+                work_history TEXT,
+                relationship_to_work TEXT,
+                relationships TEXT,
+                social_context TEXT,
+                current_situation TEXT,
+                preferred_school TEXT,
+                boundary_notes TEXT,
+                frame_notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_type TEXT NOT NULL DEFAULT 'intake'
+                    CHECK(session_type IN ('intake', 'therapy')),
+                plan_id TEXT,
+                timestamp TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                topics TEXT,
+                session_summary TEXT,
+                session_briefing TEXT,
+                psychological_summary TEXT,
+                dominant_affects TEXT,
+                key_themes TEXT,
+                notable_interactions TEXT,
+                interpretations TEXT,
+                patient_reactions TEXT,
+                enriched INTEGER DEFAULT 0
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE therapy_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                focus TEXT NOT NULL,
+                themes TEXT NOT NULL DEFAULT '[]',
+                timeline TEXT,
+                initial_goals TEXT,
+                current_progress TEXT,
+                planned_interventions TEXT,
+                revision_recommendations TEXT NOT NULL DEFAULT '[]',
+                status TEXT DEFAULT 'active',
+                version INTEGER NOT NULL,
+                selected_therapy_style TEXT,
+                session_briefing TEXT,
+                supersedes_plan_id TEXT,
+                superseded_by_plan_id TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO user_profiles (
+                user_id, name, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("legacy_user", "Legacy User", "PROFILE_ONLY", now.isoformat(), now.isoformat()),
+        )
+        cursor.execute(
+            """
+            INSERT INTO sessions (
+                session_id, user_id, session_type, timestamp, transcript, enriched
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-session",
+                "legacy_user",
+                "intake",
+                now.isoformat(),
+                "[]",
+                0,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migration_service = MigrationService(db_path)
+    await migration_service.run_migrations()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert "intake_record" in columns
+    assert "intake_record_updated_at" in columns
+
+    db = TrioDatabaseService(db_path, migration_service=migration_service)
+    await db.initialize()
+    try:
+        loaded = await db.get_session("legacy-session")
+    finally:
+        await db.clear_all_data()
+
+    assert loaded is not None
+    assert loaded.user_id == "legacy_user"
+    assert loaded.session_type == "intake"
+    assert loaded.intake_record is None
+    assert loaded.intake_record_updated_at is None
 
 
 @pytest.mark.trio
