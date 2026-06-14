@@ -68,7 +68,6 @@ class TrioReflectionAgent:
         self.memory_agent = memory_agent
         self.planning_agent = planning_agent
         self.config = config
-
         logger.info(f"TrioReflectionAgent initialized for user {user_context.user_id}")
 
     async def process_message(
@@ -119,7 +118,6 @@ class TrioReflectionAgent:
 
         if session_briefing:
             updated_plan.session_briefing = session_briefing
-
             logger.info(
                 "Successfully generated session briefing for session %s",
                 session.session_id,
@@ -191,12 +189,10 @@ class TrioReflectionAgent:
             "Coordinating initial plan creation for user %s",
             self.user_context.user_id,
         )
-
         try:
             plan_output = await self.planning_agent.create_initial_plan(
                 intake_session, selected_style
             )
-
             logger.info(
                 "Initial therapy plan output created for %s",
                 self.user_context.user_id,
@@ -227,7 +223,6 @@ class TrioReflectionAgent:
             "Coordinating plan update for user %s",
             self.user_context.user_id,
         )
-
         try:
             if current_plan is None:
                 current_plan = await self.db_service.get_current_therapy_plan(
