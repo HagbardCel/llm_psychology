@@ -12,6 +12,7 @@ from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     SESSION_COLUMNS,
+    dump_intake_record,
     dump_json,
     dump_messages,
     dump_topics,
@@ -41,9 +42,7 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
         session_briefing_json = (
             dump_json(session.session_briefing) if session.session_briefing else None
         )
-        intake_record_json = (
-            dump_json(session.intake_record) if session.intake_record else None
-        )
+        intake_record_json = dump_intake_record(session.intake_record)
         intake_record_updated_at = (
             datetime_to_iso(session.intake_record_updated_at)
             if session.intake_record_updated_at

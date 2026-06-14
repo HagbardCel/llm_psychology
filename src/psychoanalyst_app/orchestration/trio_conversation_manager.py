@@ -543,6 +543,7 @@ class TrioConversationManager:
                 session_start_time=session.timestamp,
                 duration_minutes=self.config.SESSION_DURATION_MINUTES,
                 intake_record=session.intake_record,
+                intake_record_updated_at=session.intake_record_updated_at,
             )
 
             self.active_contexts[session_id] = context

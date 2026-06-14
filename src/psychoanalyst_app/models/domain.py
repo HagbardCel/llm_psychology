@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from psychoanalyst_app.models.intake_record import IntakeRecord
+
 
 class UserStatus(str, Enum):
     """User status enum for workflow progression."""
@@ -117,7 +119,7 @@ class Session(BaseModel):
     session_briefing: dict[str, Any] | None = Field(
         None, description="Structured briefing generated for the next session"
     )
-    intake_record: dict[str, Any] | None = Field(
+    intake_record: IntakeRecord | None = Field(
         default=None,
         description="Structured incremental intake record for intake sessions",
     )

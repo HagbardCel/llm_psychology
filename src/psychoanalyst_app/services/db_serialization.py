@@ -15,6 +15,7 @@ from psychoanalyst_app.models.domain import (
     TherapyPlan,
     Topic,
 )
+from psychoanalyst_app.models.intake_record import IntakeRecord
 
 T = TypeVar("T")
 
@@ -49,6 +50,18 @@ def load_json(payload: str | None, *, default: T) -> T:
     if not payload:
         return default
     return json.loads(payload)
+
+
+def dump_intake_record(record: IntakeRecord | None) -> str | None:
+    if record is None:
+        return None
+    return dump_json(record.model_dump(mode="json"))
+
+
+def load_intake_record(payload: str | None) -> IntakeRecord | None:
+    if not payload:
+        return None
+    return IntakeRecord.model_validate(load_json(payload, default={}))
 
 
 SESSION_COLUMNS = (
@@ -90,7 +103,7 @@ def session_from_row(
         topics=topics,
         session_summary=row["session_summary"],
         session_briefing=load_json(row["session_briefing"], default=None),
-        intake_record=load_json(row["intake_record"], default=None),
+        intake_record=load_intake_record(row["intake_record"]),
         intake_record_updated_at=(
             iso_to_datetime(row["intake_record_updated_at"])
             if row["intake_record_updated_at"]
