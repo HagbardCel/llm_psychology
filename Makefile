@@ -124,7 +124,7 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) probe-console-deterministic
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
-test-real-llm:
+test-real-llm: prepare-runtime-dirs
 	$(MAKE) check-usertest-key
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
@@ -147,7 +147,7 @@ test-validate: prepare-runtime-dirs
 	docker compose --profile test run --rm test
 
 # Full isolated Docker tests without mocks (uses real services)
-test-validate-no-mocks:
+test-validate-no-mocks: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
 	@echo "⚠️  Requires valid API keys in .env.test and .env.usertest"
 	@echo ""
@@ -186,7 +186,7 @@ clean-testdb:
 	@echo "✓ Test databases cleaned"
 
 # Reset usertest DB and containers
-reset-foundation-db:
+reset-foundation-db: prepare-runtime-dirs
 	@echo "Resetting incompatible foundation databases..."
 	@docker compose down --remove-orphans
 	docker compose run --rm -v "$(PWD)/data:/app/data" api python scripts/purge_databases.py
@@ -224,7 +224,7 @@ validate-schemas: prepare-runtime-dirs generate-schemas
 		env PYTHONPATH=/app/src python scripts/validate_schemas.py
 
 # Generate committed WebSocket protocol constants.
-generate-ws-protocol:
+generate-ws-protocol: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" api \
 		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py
 
