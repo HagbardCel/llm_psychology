@@ -339,9 +339,7 @@ def test_build_continuation_prompt_context_invalid_manual_config() -> None:
     assert "harming themselves" in context
 
 
-def test_build_continuation_prompt_context_gate_active_without_metadata_still_authoritative() -> (
-    None
-):
+def test_build_continuation_prompt_context_gate_active_without_metadata_still_authoritative() -> None:
     state = IntakeRecordState(
         record=IntakeRecord(),
         completeness=IntakeCompleteness(
