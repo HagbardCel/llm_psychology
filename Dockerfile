@@ -41,7 +41,7 @@ COPY pyproject.toml pytest.ini ./
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY tests/ ./tests/
-COPY data/ ./data/
+RUN mkdir -p /app/data
 
 # Install the backend package in editable mode for live reload
 RUN uv pip install --system -e .

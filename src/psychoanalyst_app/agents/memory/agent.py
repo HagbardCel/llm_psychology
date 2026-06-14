@@ -22,8 +22,8 @@ from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.exceptions import MemoryError
 from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.models.llm_outputs import SessionAnalysis
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import MEMORY_ANALYSIS
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 

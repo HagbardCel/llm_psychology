@@ -20,8 +20,8 @@ from psychoanalyst_app.models.llm_outputs import (
     SessionBriefing,
     StructuredTherapyPlanOutput,
 )
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import SESSION_ENRICHMENT, SESSION_SUMMARY
+from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 OVERCLAIM_PHRASES = (

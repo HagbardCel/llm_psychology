@@ -21,18 +21,17 @@ from psychoanalyst_app.orchestration.stream_dispatch import (
     send_stream_chunk,
     send_typing_indicator,
 )
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     INTAKE_RESPONSE,
-    LLMPhase,
     THERAPY_OPENING,
     THERAPY_RESPONSE,
+    LLMPhase,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)
-
 MAX_CONSECUTIVE_LLM_FAILURES = 2
 LLM_RETRY_ERROR_MESSAGE = (
     "I ran into a problem while generating that response. Let's try again."
@@ -40,7 +39,6 @@ LLM_RETRY_ERROR_MESSAGE = (
 LLM_TERMINAL_ERROR_MESSAGE = (
     "I am unable to generate a response right now. Please pause and try again later."
 )
-
 
 def _resolve_streaming_phase(agent: str, context: ConversationContext) -> LLMPhase:
     if agent == "INTAKE":

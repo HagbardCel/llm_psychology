@@ -16,11 +16,11 @@ from psychoanalyst_app.models.domain import (
     Session,
 )
 from psychoanalyst_app.models.llm_outputs import Tier4Extract
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     ASSESSMENT_INITIAL_FORMULATION,
     INITIAL_PLAN_GENERATION,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
 
 logger = logging.getLogger(__name__)

@@ -21,6 +21,8 @@ jobs:
   contracts:
     name: Validate Backend And Console Contracts
     runs-on: ubuntu-latest
+    env:
+      ENV_FILE: .env.example
 
     steps:
       - name: Checkout code

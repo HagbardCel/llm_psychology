@@ -4,8 +4,11 @@
 .PHONY: probe probe-console-deterministic probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check
+.PHONY: prepare-runtime-dirs
 
 export PYTHONPATH := src
+export HOST_UID ?= $(shell id -u)
+export HOST_GID ?= $(shell id -g)
 CONSOLE_UI_LOG ?= logs/console-ui.log
 CONSOLE_UI_LOG_TEST ?= logs/console-ui-usertest.log
 
@@ -68,6 +71,15 @@ help:
 	@echo "  devcontainer-test    - Test devcontainer configuration"
 	@echo "  devcontainer-open    - Open project in VSCode devcontainer"
 
+# Prepare run-time dirs
+prepare-runtime-dirs:
+	@mkdir -p data logs logs/workflow-probes
+	@if [ "$${CI:-}" = "true" ]; then \
+		chmod -R a+rwX data logs; \
+	else \
+		chmod -R u+rwX,g+rwX data logs; \
+	fi
+
 # Install UV package manager
 install-uv:
 	@echo "⚠️  install-uv is deprecated in Docker-only workflow."
@@ -82,11 +94,11 @@ dev-install:
 	docker compose build api console-ui
 
 # Format code with black (Docker)
-format:
+format: prepare-runtime-dirs
 	docker compose run --rm api black .
 
 # Lint code with ruff (Docker)
-lint:
+lint: prepare-runtime-dirs
 	docker compose run --rm api ruff check .
 
 # Run all tests (Docker)
@@ -102,7 +114,7 @@ test-integration:
 	docker compose --profile test run --rm test pytest -m integration
 
 # Full release-candidate validation path.
-finalization-check:
+finalization-check: prepare-runtime-dirs
 	$(MAKE) lint
 	$(MAKE) validate-docs
 	$(MAKE) validate-schemas
@@ -112,7 +124,7 @@ finalization-check:
 	$(MAKE) probe-console-deterministic
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
-test-real-llm:
+test-real-llm: prepare-runtime-dirs
 	$(MAKE) check-usertest-key
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
@@ -128,14 +140,14 @@ test-dev:
 	docker compose --profile test run --rm test pytest -m "not real_llm" -x --tb=short -q
 
 # Full isolated Docker tests (pre-commit validation)
-test-validate:
+test-validate: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment..."
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
 	docker compose --profile test run --rm test
 
 # Full isolated Docker tests without mocks (uses real services)
-test-validate-no-mocks:
+test-validate-no-mocks: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
 	@echo "⚠️  Requires valid API keys in .env.test and .env.usertest"
 	@echo ""
@@ -174,7 +186,7 @@ clean-testdb:
 	@echo "✓ Test databases cleaned"
 
 # Reset usertest DB and containers
-reset-foundation-db:
+reset-foundation-db: prepare-runtime-dirs
 	@echo "Resetting incompatible foundation databases..."
 	@docker compose down --remove-orphans
 	docker compose run --rm -v "$(PWD)/data:/app/data" api python scripts/purge_databases.py
@@ -188,7 +200,7 @@ reset-usertest:
 	@echo "✓ Usertest environment reset"
 
 # Generate locked requirements from .in files with UV
-requirements:
+requirements: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements.in -o requirements.txt
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-dev.in -o requirements-dev.txt
 
@@ -196,38 +208,38 @@ requirements:
 sync: dev-install
 	@echo "Docker images rebuilt using locked requirements."
 
-run-server:
+run-server: prepare-runtime-dirs
 	docker compose run --rm api python -m psychoanalyst_app.server
 
 # Generate JSON Schemas from Pydantic models (Docker)
-generate-schemas:
+generate-schemas: prepare-runtime-dirs
 	@echo "🔧 Generating JSON schemas from Pydantic models (Docker)..."
 	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" api \
 		env PYTHONPATH=/app/src python -m psychoanalyst_app.schemas.generate_schemas \
 		--output-dir /app/schemas
 
 # Validate generated schemas (comprehensive validation, Docker)
-validate-schemas: generate-schemas
+validate-schemas: prepare-runtime-dirs generate-schemas
 	docker compose run --rm -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/validate_schemas.py
 
 # Generate committed WebSocket protocol constants.
-generate-ws-protocol:
+generate-ws-protocol: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" api \
 		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py
 
 # Validate generated backend and console WebSocket constants without rewriting files.
-validate-generated-contracts:
+validate-generated-contracts: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/schemas:/app/schemas" -v "$(PWD)/src:/app/src" -v "$(PWD)/console-ui/src:/app/console-ui/src" api \
 		env PYTHONPATH=/app/src python scripts/generate_ws_protocol.py --check
 
 # Validate docs metadata and canonical docs index (Docker)
-validate-docs:
+validate-docs: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/docs:/app/docs" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/validate_docs_metadata.py
 
 # Validate architecture budgets and layering boundaries (Docker)
-validate-architecture:
+validate-architecture: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/src:/app/src" -v "$(PWD)/scripts:/app/scripts" api \
 		env PYTHONPATH=/app/src python scripts/check_architecture_budgets.py
 
@@ -236,7 +248,7 @@ validate-architecture:
 # ============================================
 
 # Start the backend API service.
-docker-up:
+docker-up: prepare-runtime-dirs
 	docker compose up --build --remove-orphans api
 
 # Stop all Docker containers
@@ -356,25 +368,23 @@ docker-clean:
 # ============================================
 
 # Console UI Service (WebSocket client)
-ui-console:
-	@mkdir -p logs
+ui-console: prepare-runtime-dirs
 	@printf "\n[%s] make ui-console\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG)
 	@docker compose up --build --remove-orphans -d api >> $(CONSOLE_UI_LOG) 2>&1
 	@docker compose run --rm -it console-ui 2>> $(CONSOLE_UI_LOG)
 
 # Console UI Service (usertest mode)
-ui-console-test:
+ui-console-test: prepare-runtime-dirs
 	$(MAKE) check-usertest-key
-	@mkdir -p logs
 	@printf "\n[%s] make ui-console-test\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG_TEST)
 	@docker compose --profile usertest-console up --build --remove-orphans -d api-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
 	@docker compose --profile usertest-console run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
 # Local full-stack diagnostic probe. This is intentionally not a CI gate.
-probe:
+probe: prepare-runtime-dirs
 	@./scripts/probe_local_llm.sh
 
-probe-console-deterministic:
+probe-console-deterministic: prepare-runtime-dirs
 	@./scripts/probe_deterministic.sh
 
 probe-logs:

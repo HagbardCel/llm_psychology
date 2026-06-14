@@ -7,8 +7,8 @@ from google.api_core.exceptions import ResourceExhausted
 
 from psychoanalyst_app.exceptions import LLMQuotaExhaustedError
 from psychoanalyst_app.services import llm_service as llm_module
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import THERAPY_RESPONSE
+from psychoanalyst_app.services.llm_service import LLMService
 
 
 @dataclass

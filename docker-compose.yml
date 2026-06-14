@@ -4,6 +4,7 @@ x-api-base: &api-base
     context: .
     dockerfile: Dockerfile
     target: development
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
   volumes:
     - ./src:/app/src:delegated
     - ./tests:/app/tests:delegated
@@ -11,12 +12,15 @@ x-api-base: &api-base
     - ./pyproject.toml:/app/pyproject.toml:ro
     - ./data:/app/data
     - ./logs:/app/logs
-    - pip-cache:/root/.cache/pip
   environment:
     - APP_ENV=development
     - PYTHONUNBUFFERED=1
     - SERVER_HOST=0.0.0.0
     - SERVER_PORT=8000
+    - RUFF_CACHE_DIR=/tmp/ruff_cache
+    - BLACK_CACHE_DIR=/tmp/black_cache
+    - UV_CACHE_DIR=/tmp/uv_cache
+    - XDG_CACHE_HOME=/tmp/.cache
   networks:
     - app-network
   command: python -m psychoanalyst_app.server
@@ -36,6 +40,7 @@ x-console-base: &console-base
   build:
     context: ./console-ui
     dockerfile: Dockerfile
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
   volumes:
     - ./console-ui/src:/app/src:delegated
     - ./console-ui/main.py:/app/main.py:delegated
@@ -164,8 +169,6 @@ services:
       - .:/app
 
 volumes:
-  pip-cache:
-    driver: local
   test-data:
     driver: local
 

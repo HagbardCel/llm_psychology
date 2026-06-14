@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Mapping, Sequence, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, TypedDict
 
 REQUIRED_INTAKE_SLOTS = {
     "presenting_problem",

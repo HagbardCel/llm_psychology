@@ -19,11 +19,11 @@ from psychoanalyst_app.agents.planning.prompts import (
 from psychoanalyst_app.exceptions import PlanningError
 from psychoanalyst_app.models.domain import Session, TherapyPlan
 from psychoanalyst_app.models.llm_outputs import PlanUpdate
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import (
     INITIAL_PLAN_GENERATION,
     PLAN_REFLECTION,
 )
+from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.rag import RAGServiceProtocol
 from psychoanalyst_app.services.style_service import StyleService
 

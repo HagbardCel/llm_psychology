@@ -7,8 +7,8 @@ import logging
 from psychoanalyst_app.agents.intake.prompts import TIER1_EXTRACTION_PROMPT
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.llm_outputs import PatientProfileExtract
-from psychoanalyst_app.services.llm_service import LLMService
 from psychoanalyst_app.services.llm_phases import INTAKE_EXTRACTION
+from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
