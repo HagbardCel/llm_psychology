@@ -16,6 +16,10 @@ from psychoanalyst_app.agents.intake import (
     TrioIntakeAgent,
 )
 from psychoanalyst_app.agents.intake.prompts import CLOSING_PROMPT
+from psychoanalyst_app.agents.intake.record_completeness import (
+    missing_items_from_record,
+)
+from psychoanalyst_app.agents.intake.runtime import IntakeRecordState
 from psychoanalyst_app.agents.intake.slots import (
     identify_covered_topics,
     identify_required_slots,
@@ -26,6 +30,7 @@ from psychoanalyst_app.agents.intake.slots import (
 )
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
+from psychoanalyst_app.models.intake_record import IntakeEvidence, IntakeRecord
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
 
 
@@ -110,6 +115,177 @@ async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
     assert response.next_action == "transition"
     assert response.metadata["is_direct_response"] is True
     assert "?" not in response.content
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_intake_note_tracking_metadata_when_enabled(mock_llm_service, app_config):
+    app_config.INTAKE_NOTE_TRACKING_ENABLED = True
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=app_config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I feel anxious at work.",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious at work.", context)
+
+    assert "intake_record" in response.metadata
+    assert "intake_record_completeness" in response.metadata
+    assert "legacy_intake_completion_diagnostics" in response.metadata
+    assert response.metadata["intake_complete"] is False
+
+
+def test_direct_ask_prompt_guidance_when_enabled(intake_agent):
+    intake_agent.intake_record_direct_ask_enabled = True
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    record = IntakeRecord()
+    record.safety.self_harm = IntakeEvidence(
+        value="denied",
+        evidence_quote="No thoughts of harming myself",
+        source_role="user",
+        source_message_index=1,
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+
+    prompt = intake_agent._build_continuation_prompt(
+        "I am not sure.",
+        context,
+        record_state=IntakeRecordState(
+            record=record,
+            completeness=missing_items_from_record(record),
+            should_emit_metadata=True,
+        ),
+    )
+
+    assert "Recommended next item: risk_screen" in prompt
+    assert "ask directly" in prompt
+
+
+def test_disabled_flag_continuation_prompt_has_no_structured_guidance(intake_agent):
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+
+    prompt = intake_agent._build_continuation_prompt(
+        "I feel anxious.",
+        context,
+        record_state=IntakeRecordState(
+            record=IntakeRecord(),
+            completeness=missing_items_from_record(IntakeRecord()),
+            should_emit_metadata=False,
+        ),
+    )
+
+    assert "Structured intake" not in prompt
+    assert "Open required intake items" not in prompt
+    assert "Recommended next item" not in prompt
+
+
+def test_existing_record_continuation_prompt_includes_structured_guidance(intake_agent):
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    record = IntakeRecord()
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+
+    prompt = intake_agent._build_continuation_prompt(
+        "I feel anxious.",
+        context,
+        record_state=IntakeRecordState(
+            record=record,
+            completeness=missing_items_from_record(record),
+            should_emit_metadata=True,
+        ),
+    )
+
+    assert "Structured intake state" in prompt
+    assert "Open required intake items" in prompt
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_missing_current_message_is_nonfatal(
+    mock_llm_service,
+    app_config,
+):
+    app_config.INTAKE_NOTE_TRACKING_ENABLED = True
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=app_config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now())
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious at work.", context)
+
+    assert response.metadata["note_tracking_error"] == "latest_user_message_not_found"
+    assert response.metadata["intake_complete"] is False
 
 
 def test_intake_topic_coverage_ignores_assistant_prompts():

@@ -116,6 +116,9 @@ def mock_llm_service():
                 },
             }
 
+        if schema_name == "IntakeRecordPatch":
+            return {"no_new_information": True}
+
         if schema_name == "PatientAnalysis":
             return {
                 "current_focus": {
