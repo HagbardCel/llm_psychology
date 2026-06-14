@@ -5,6 +5,7 @@ import pytest
 from psychoanalyst_app.agents.intake.note_tracker import (
     extract_intake_record_patch,
 )
+from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import (
     IntakeEvidence,
@@ -142,3 +143,71 @@ async def test_note_tracker_reports_llm_failure() -> None:
 
     assert result.status == "llm_failure"
     assert result.error_code == "RuntimeError"
+
+
+async def test_note_tracker_reports_invalid_dict_output() -> None:
+    result = await extract_intake_record_patch(
+        llm_service=_LLM({"presenting_problem": {"main_concern": {"value": 123}}}),
+        current_record=IntakeRecord(),
+        latest_user_message=Message(
+            role="user",
+            content="I feel anxious every day",
+            timestamp=datetime.now(),
+        ),
+        previous_assistant_message=None,
+        source_message_index=2,
+    )
+
+    assert result.status == "invalid_patch"
+    assert result.error_code == "ValidationError"
+    assert result.error_message
+
+
+async def test_note_tracker_forwards_llm_service_error_diagnostics() -> None:
+    result = await extract_intake_record_patch(
+        llm_service=_LLM(
+            LLMServiceError(
+                "parse failed",
+                metadata={
+                    "phase": "intake_note_tracking",
+                    "schema_name": "IntakeRecordPatch",
+                    "provider": "local",
+                    "model_name": "fake",
+                    "parse_error_type": "JSONDecodeError",
+                    "parse_error": "Expecting value",
+                },
+            )
+        ),
+        current_record=IntakeRecord(),
+        latest_user_message=Message(
+            role="user",
+            content="I feel anxious every day",
+            timestamp=datetime.now(),
+        ),
+        previous_assistant_message=None,
+        source_message_index=2,
+    )
+
+    assert result.status == "llm_failure"
+    assert result.error_code == "LLMServiceError"
+    assert "phase=intake_note_tracking" in result.error_message
+    assert "parse_error=Expecting value" in result.error_message
+
+
+async def test_note_tracker_reports_timeout() -> None:
+    import trio
+
+    result = await extract_intake_record_patch(
+        llm_service=_LLM(trio.TooSlowError("deadline exceeded")),
+        current_record=IntakeRecord(),
+        latest_user_message=Message(
+            role="user",
+            content="I feel anxious every day",
+            timestamp=datetime.now(),
+        ),
+        previous_assistant_message=None,
+        source_message_index=2,
+    )
+
+    assert result.status == "timeout"
+    assert result.error_code == "TooSlowError"

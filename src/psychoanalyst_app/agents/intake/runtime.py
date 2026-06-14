@@ -47,6 +47,24 @@ def should_use_structured_completion_gate(
     return note_tracking_enabled and completion_gate_enabled
 
 
+_FAILURE_TRACKING_STATUSES = frozenset(
+    {
+        "llm_failure",
+        "invalid_patch",
+        "timeout",
+        "merge_failure",
+        "validation_failure",
+    }
+)
+
+
+@dataclass(frozen=True)
+class IntakeGateOutcome:
+    gate_complete: bool
+    stale_record_used: bool
+    gate_blocked_by_failure: bool
+
+
 @dataclass(frozen=True)
 class IntakeRecordState:
     record: IntakeRecord
@@ -55,6 +73,67 @@ class IntakeRecordState:
     note_tracking: IntakePatchExtractionResult | None = None
     merge_result: IntakePatchMergeResult | None = None
     should_emit_metadata: bool = False
+    gate_complete: bool = False
+    stale_record_used: bool = False
+    gate_blocked_by_failure: bool = False
+
+
+def _tracking_metadata_status(
+    tracking: IntakePatchExtractionResult | None,
+    merge_result: IntakePatchMergeResult | None,
+) -> str:
+    status = tracking.status if tracking else "not_run"
+    if tracking and tracking.status == "success":
+        if merge_result is None:
+            return "merge_not_run"
+        if merge_result.status == "empty_patch":
+            return "empty_patch"
+        if merge_result.status == "empty_after_validation":
+            return "validation_failure"
+        if merge_result.status == "merge_failure":
+            return "merge_failure"
+    return status
+
+
+def note_tracking_failed(state: IntakeRecordState) -> bool:
+    """Return whether this turn had a note-tracking failure relevant to gating."""
+    return _tracking_metadata_status(state.note_tracking, state.merge_result) in (
+        _FAILURE_TRACKING_STATUSES
+    )
+
+
+def compute_intake_gate_outcome(
+    completeness: IntakeCompleteness,
+    *,
+    tracking_failed: bool,
+) -> IntakeGateOutcome:
+    """Derive structured completion-gate behavior for the current turn."""
+    if not tracking_failed:
+        return IntakeGateOutcome(
+            gate_complete=completeness.complete,
+            stale_record_used=False,
+            gate_blocked_by_failure=False,
+        )
+
+    stale_record_used = True
+    genuinely_complete = completeness.complete and not completeness.max_turn_completion
+    if genuinely_complete:
+        return IntakeGateOutcome(
+            gate_complete=True,
+            stale_record_used=stale_record_used,
+            gate_blocked_by_failure=False,
+        )
+    if completeness.complete and completeness.max_turn_completion:
+        return IntakeGateOutcome(
+            gate_complete=False,
+            stale_record_used=stale_record_used,
+            gate_blocked_by_failure=True,
+        )
+    return IntakeGateOutcome(
+        gate_complete=False,
+        stale_record_used=stale_record_used,
+        gate_blocked_by_failure=False,
+    )
 
 
 async def prepare_intake_record_state(
@@ -85,13 +164,28 @@ async def prepare_intake_record_state(
         record,
         patient_turn_count=len(patient_messages("", context.message_history)),
     )
-    return IntakeRecordState(
+    state = IntakeRecordState(
         record=record,
         completeness=completeness,
         note_tracking_enabled=note_tracking_enabled,
         note_tracking=note_tracking,
         merge_result=merge_result,
         should_emit_metadata=note_tracking is not None or has_existing_record,
+    )
+    gate_outcome = compute_intake_gate_outcome(
+        completeness,
+        tracking_failed=note_tracking_failed(state),
+    )
+    return IntakeRecordState(
+        record=state.record,
+        completeness=state.completeness,
+        note_tracking_enabled=state.note_tracking_enabled,
+        note_tracking=state.note_tracking,
+        merge_result=state.merge_result,
+        should_emit_metadata=state.should_emit_metadata,
+        gate_complete=gate_outcome.gate_complete,
+        stale_record_used=gate_outcome.stale_record_used,
+        gate_blocked_by_failure=gate_outcome.gate_blocked_by_failure,
     )
 
 
@@ -175,20 +269,13 @@ def intake_record_metadata(
 
     tracking = state.note_tracking
     merge_result = state.merge_result
-    status = tracking.status if tracking else "not_run"
-    if tracking and tracking.status == "success":
-        if merge_result is None:
-            status = "merge_not_run"
-        elif merge_result.status == "empty_patch":
-            status = "empty_patch"
-        elif merge_result.status == "empty_after_validation":
-            status = "validation_failure"
-        elif merge_result.status == "merge_failure":
-            status = "merge_failure"
+    status = _tracking_metadata_status(tracking, merge_result)
     tracking_metadata: dict[str, object] = {
         "status": status,
         "configured_enabled": state.note_tracking_enabled,
         "attempted": tracking is not None,
+        "stale_record_used": state.stale_record_used,
+        "gate_blocked_by_failure": state.gate_blocked_by_failure,
     }
     if tracking:
         tracking_metadata["raw_extraction_status"] = tracking.status

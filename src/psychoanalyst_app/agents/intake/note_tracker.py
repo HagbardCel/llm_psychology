@@ -7,9 +7,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+import trio
 from pydantic import ValidationError
 
 from psychoanalyst_app.agents.intake.prompts import INTAKE_NOTE_TRACKING_PROMPT
+from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
 from psychoanalyst_app.services.llm_phases import INTAKE_NOTE_TRACKING
@@ -24,6 +26,7 @@ IntakePatchExtractionStatus = Literal[
     "no_new_information",
     "invalid_patch",
     "llm_failure",
+    "timeout",
 ]
 
 
@@ -41,7 +44,7 @@ class IntakePatchExtractionResult:
             raise ValueError("success extraction requires a patch")
         if self.status != "success" and self.patch is not None:
             raise ValueError("non-success extraction must not include a patch")
-        if self.status in {"invalid_patch", "llm_failure"} and not (
+        if self.status in {"invalid_patch", "llm_failure", "timeout"} and not (
             self.error_message or self.error_code
         ):
             raise ValueError("failure extraction requires error diagnostics")
@@ -75,12 +78,27 @@ async def extract_intake_record_patch(
             method="json_schema",
             phase=INTAKE_NOTE_TRACKING,
         )
-    except Exception as exc:
-        logger.warning("Intake note tracking failed", exc_info=True)
+    except trio.TooSlowError as exc:
+        logger.warning("Intake note tracking timed out", exc_info=True)
         return IntakePatchExtractionResult(
-            status="llm_failure",
+            status="timeout",
             error_message=str(exc),
             error_code=type(exc).__name__,
+        )
+    except trio.Cancelled as exc:
+        logger.warning("Intake note tracking cancelled", exc_info=True)
+        return IntakePatchExtractionResult(
+            status="timeout",
+            error_message=str(exc),
+            error_code=type(exc).__name__,
+        )
+    except Exception as exc:
+        logger.warning("Intake note tracking failed", exc_info=True)
+        error_message, error_code = _extraction_error_diagnostics(exc)
+        return IntakePatchExtractionResult(
+            status="llm_failure",
+            error_message=error_message,
+            error_code=error_code,
         )
 
     patch: IntakeRecordPatch
@@ -113,3 +131,25 @@ async def extract_intake_record_patch(
     if patch.no_new_information:
         return IntakePatchExtractionResult(status="no_new_information")
     return IntakePatchExtractionResult(status="success", patch=patch)
+
+
+def _extraction_error_diagnostics(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, LLMServiceError):
+        metadata = exc.metadata or {}
+        parts: list[str] = []
+        for key in (
+            "phase",
+            "schema_name",
+            "provider",
+            "model_name",
+            "parse_error_type",
+            "parse_error",
+        ):
+            value = metadata.get(key)
+            if value:
+                parts.append(f"{key}={value}")
+        return (
+            "; ".join(parts) if parts else str(exc),
+            type(exc).__name__,
+        )
+    return str(exc), type(exc).__name__

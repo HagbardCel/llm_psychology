@@ -107,7 +107,7 @@ class TrioIntakeAgent:
                 completion_gate_enabled=self.intake_record_completion_gate_enabled,
             )
             is_complete = (
-                record_state.completeness.complete
+                record_state.gate_complete
                 if use_structured_gate
                 else is_intake_complete(context, intake_slot_coverage)
             )

@@ -12,10 +12,14 @@ from psychoanalyst_app.agents.intake import (
     COPING_ATTEMPTS_PROMPT,
     GOAL_PREFERENCE_PROMPT,
     MAX_INTAKE_PATIENT_TURNS,
+    MIN_INTAKE_PATIENT_TURNS,
     RISK_SCREEN_PROMPT,
     TrioIntakeAgent,
 )
 from psychoanalyst_app.agents.intake.prompts import CLOSING_PROMPT
+from psychoanalyst_app.agents.intake.record_completeness import (
+    intake_record_completion_decision,
+)
 from psychoanalyst_app.agents.intake.slots import (
     identify_covered_topics,
     identify_required_slots,
@@ -33,6 +37,7 @@ from psychoanalyst_app.models.intake_record import (
     PresentingProblemRecord,
 )
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
+from psychoanalyst_app.services.llm_phases import INTAKE_NOTE_TRACKING
 
 
 def _make_context(
@@ -945,3 +950,237 @@ async def test_note_tracking_skips_guest_name_collection(mock_llm_service, app_c
     assert structured_calls == 0
     assert "intake_note_tracking" not in response.metadata
     assert "intake_record" not in response.metadata
+
+
+def _record_evidence(value: str, *, status: str = "informative") -> IntakeEvidence:
+    return IntakeEvidence(
+        value=value,
+        evidence_quote=value,
+        source_role="user",
+        source_message_index=1,
+        response_status=status,  # type: ignore[arg-type]
+        direct_ask=status != "informative",
+    )
+
+
+def _max_turn_soft_incomplete_record() -> IntakeRecord:
+    record = IntakeRecord()
+    record.presenting_problem.main_concern = _record_evidence("anxiety")
+    record.presenting_problem.time_course.duration_or_onset = _record_evidence(
+        "I do not know",
+        status="unknown",
+    )
+    record.presenting_problem.functional_impairment = _record_evidence("work impact")
+    record.goals.therapy_goals = [_record_evidence("sleep better")]
+    record.safety.self_harm = _record_evidence("denied")
+    record.safety.harm_to_others = _record_evidence("denied")
+    record.safety.medical_urgency = _record_evidence("denied")
+    return record
+
+
+def _genuinely_complete_record() -> IntakeRecord:
+    record = _max_turn_soft_incomplete_record()
+    record.presenting_problem.time_course.duration_or_onset = _record_evidence("months")
+    record.presenting_problem.sleep_impact = _record_evidence("poor sleep")
+    record.coping.attempted_strategies = [_record_evidence("exercise")]
+    return record
+
+
+def _max_turn_history(*extra: Message) -> list[Message]:
+    return [
+        Message(role="assistant", content="Previous prompt", timestamp=datetime.now()),
+        *[
+            Message(
+                role="user",
+                content=f"Turn {index}: anxiety affects work.",
+                timestamp=datetime.now(),
+            )
+            for index in range(MAX_INTAKE_PATIENT_TURNS)
+        ],
+        *extra,
+    ]
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(
+        update={
+            "INTAKE_NOTE_TRACKING_ENABLED": True,
+            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
+        }
+    )
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        raise RuntimeError("boom")
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    record = _max_turn_soft_incomplete_record()
+    completeness = intake_record_completion_decision(
+        record,
+        patient_turn_count=MAX_INTAKE_PATIENT_TURNS,
+    )
+    assert completeness.complete
+    assert completeness.max_turn_completion
+
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=_max_turn_history(
+            Message(
+                role="user",
+                content="Turn final: still unsure about coping.",
+                timestamp=datetime.now(),
+            ),
+        ),
+    )
+    context.intake_record = record
+
+    response = await agent.process_message(
+        "Turn final: still unsure about coping.",
+        context,
+    )
+
+    assert response.workflow_event != WorkflowEvent.COMPLETE_INTAKE
+    assert response.content != CLOSING_PROMPT
+    metadata = response.metadata["intake_note_tracking"]
+    assert metadata["status"] == "llm_failure"
+    assert metadata["stale_record_used"] is True
+    assert metadata["gate_blocked_by_failure"] is True
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_allows_genuinely_complete_record_despite_extraction_failure(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(
+        update={
+            "INTAKE_NOTE_TRACKING_ENABLED": True,
+            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
+        }
+    )
+    original_structured = mock_llm_service.generate_structured_output_async
+
+    async def _generate_structured_output_async(
+        prompt, schema, method="json_schema", *, phase
+    ):
+        if phase == INTAKE_NOTE_TRACKING:
+            raise RuntimeError("boom")
+        return await original_structured(
+            prompt, schema, method=method, phase=phase
+        )
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    record = _genuinely_complete_record()
+    completeness = intake_record_completion_decision(
+        record,
+        patient_turn_count=MIN_INTAKE_PATIENT_TURNS,
+    )
+    assert completeness.complete
+    assert not completeness.max_turn_completion
+
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=_max_turn_history(),
+    )
+    context.intake_record = record
+
+    response = await agent.process_message("Thanks, that covers everything.", context)
+
+    assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
+    assert response.content == CLOSING_PROMPT
+    metadata = response.metadata["intake_note_tracking"]
+    assert metadata["stale_record_used"] is True
+    assert metadata["gate_blocked_by_failure"] is False
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_diagnostics_only_mode_continues_on_extraction_failure(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        raise RuntimeError("boom")
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I feel anxious every day",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert response.workflow_event != WorkflowEvent.COMPLETE_INTAKE
+    metadata = response.metadata["intake_note_tracking"]
+    assert metadata["status"] == "llm_failure"
+    assert metadata["stale_record_used"] is True
+    assert metadata["gate_blocked_by_failure"] is False
+    assert response.content
