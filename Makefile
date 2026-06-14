@@ -7,6 +7,8 @@
 .PHONY: prepare-runtime-dirs
 
 export PYTHONPATH := src
+export HOST_UID ?= $(shell id -u)
+export HOST_GID ?= $(shell id -g)
 CONSOLE_UI_LOG ?= logs/console-ui.log
 CONSOLE_UI_LOG_TEST ?= logs/console-ui-usertest.log
 
@@ -92,7 +94,7 @@ dev-install:
 	docker compose build api console-ui
 
 # Format code with black (Docker)
-format:
+format: prepare-runtime-dirs
 	docker compose run --rm api black .
 
 # Lint code with ruff (Docker)
@@ -198,7 +200,7 @@ reset-usertest:
 	@echo "✓ Usertest environment reset"
 
 # Generate locked requirements from .in files with UV
-requirements:
+requirements: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements.in -o requirements.txt
 	docker compose run --rm -v "$(PWD):/app" api uv pip compile requirements-dev.in -o requirements-dev.txt
 
@@ -206,7 +208,7 @@ requirements:
 sync: dev-install
 	@echo "Docker images rebuilt using locked requirements."
 
-run-server:
+run-server: prepare-runtime-dirs
 	docker compose run --rm api python -m psychoanalyst_app.server
 
 # Generate JSON Schemas from Pydantic models (Docker)
@@ -246,7 +248,7 @@ validate-architecture: prepare-runtime-dirs
 # ============================================
 
 # Start the backend API service.
-docker-up:
+docker-up: prepare-runtime-dirs
 	docker compose up --build --remove-orphans api
 
 # Stop all Docker containers
@@ -366,22 +368,20 @@ docker-clean:
 # ============================================
 
 # Console UI Service (WebSocket client)
-ui-console:
-	@mkdir -p logs
+ui-console: prepare-runtime-dirs
 	@printf "\n[%s] make ui-console\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG)
 	@docker compose up --build --remove-orphans -d api >> $(CONSOLE_UI_LOG) 2>&1
 	@docker compose run --rm -it console-ui 2>> $(CONSOLE_UI_LOG)
 
 # Console UI Service (usertest mode)
-ui-console-test:
+ui-console-test: prepare-runtime-dirs
 	$(MAKE) check-usertest-key
-	@mkdir -p logs
 	@printf "\n[%s] make ui-console-test\n" "$$(date -Iseconds)" >> $(CONSOLE_UI_LOG_TEST)
 	@docker compose --profile usertest-console up --build --remove-orphans -d api-usertest >> $(CONSOLE_UI_LOG_TEST) 2>&1
 	@docker compose --profile usertest-console run --rm -it console-ui-usertest 2>> $(CONSOLE_UI_LOG_TEST)
 
 # Local full-stack diagnostic probe. This is intentionally not a CI gate.
-probe:
+probe: prepare-runtime-dirs
 	@./scripts/probe_local_llm.sh
 
 probe-console-deterministic: prepare-runtime-dirs
