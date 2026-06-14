@@ -120,6 +120,38 @@ class Settings(BaseSettings):
             object.__setattr__(self, "GOOGLE_API_KEY", self.GEMINI_API_KEY)
         normalized_provider = self.LLM_PROVIDER.strip().lower()
         object.__setattr__(self, "LLM_PROVIDER", normalized_provider)
+        self._validate_intake_note_tracking_flags()
+
+    def _validate_intake_note_tracking_flags(self) -> None:
+        errors: list[str] = []
+        if (
+            self.INTAKE_RECORD_COMPLETION_GATE_ENABLED
+            and not self.INTAKE_NOTE_TRACKING_ENABLED
+        ):
+            errors.append(
+                "INTAKE_RECORD_COMPLETION_GATE_ENABLED requires "
+                "INTAKE_NOTE_TRACKING_ENABLED=true."
+            )
+        if (
+            self.INTAKE_RECORD_DIRECT_ASK_ENABLED
+            and not self.INTAKE_NOTE_TRACKING_ENABLED
+        ):
+            errors.append(
+                "INTAKE_RECORD_DIRECT_ASK_ENABLED requires "
+                "INTAKE_NOTE_TRACKING_ENABLED=true."
+            )
+        if (
+            self.INTAKE_RECORD_COMPLETION_GATE_ENABLED
+            and not self.INTAKE_RECORD_DIRECT_ASK_ENABLED
+        ):
+            errors.append(
+                "INTAKE_RECORD_COMPLETION_GATE_ENABLED requires "
+                "INTAKE_RECORD_DIRECT_ASK_ENABLED=true."
+            )
+        if errors:
+            raise ValueError(
+                "Invalid intake note-tracking flag combination: " + " ".join(errors)
+            )
 
     def get_llm_base_url(self) -> str | None:
         """Resolve the configured/default base URL for the selected LLM provider."""
