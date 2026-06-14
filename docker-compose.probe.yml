@@ -4,6 +4,7 @@ services:
       file: docker-compose.yml
       service: api
     container_name: therapist_api_probe
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       - APP_ENV=development
       - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
@@ -12,7 +13,7 @@ services:
       - REFLECTION_TIMEOUT_SECONDS=${PROBE_REFLECTION_TIMEOUT_SECONDS:-300}
       - LLM_METRICS_LOG_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/backend_llm_calls.jsonl
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     ports: []
 
   console-probe-runner:
@@ -20,6 +21,7 @@ services:
       context: ./console-ui
       dockerfile: Dockerfile
     container_name: therapist_console_probe
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ./console-ui/src:/app/src:delegated
       - ./console-ui/scenarios:/app/scenarios:ro
@@ -33,7 +35,7 @@ services:
       - WEBSOCKET_ORIGIN=http://localhost
       - DATABASE_PATH=/app/logs/workflow-probes/${PROBE_RUN_NAME}/runtime.sqlite
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     depends_on:
       api-probe:
         condition: service_healthy

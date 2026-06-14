@@ -140,8 +140,7 @@ Thumbs.db
 
 # Data directories
 # Ignore legacy local retrieval artifacts if they still exist on a workstation.
-data/vector_db*/
-data/psychoanalyst.db
+data/
 src/data/psychoanalyst.db
 src/data/psychoanalyst_test.db
 
@@ -152,9 +151,6 @@ out_test_*
 
 # Cache directories
 .root/.cache/
-
-data/psychoanalyst.db-shm
-data/psychoanalyst.db-wal
 
 # Generated schemas (auto-generated from backend models)
 schemas/*.json
