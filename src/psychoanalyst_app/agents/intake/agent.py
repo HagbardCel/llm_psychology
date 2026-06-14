@@ -16,7 +16,9 @@ from psychoanalyst_app.agents.intake.runtime import (
     build_continuation_prompt_context,
     intake_record_metadata,
     intake_response_metadata,
+    is_guest_intake_context,
     prepare_intake_record_state,
+    should_use_structured_completion_gate,
 )
 from psychoanalyst_app.agents.intake.slots import (
     identify_covered_topics,
@@ -27,7 +29,6 @@ from psychoanalyst_app.agents.intake.slots import (
 )
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.context.user_context import UserContext
-from psychoanalyst_app.models.domain import UserStatus
 from psychoanalyst_app.orchestration.agent_output_validators import (
     build_user_profile_output,
 )
@@ -70,9 +71,8 @@ class TrioIntakeAgent:
         """Process user message during intake (orchestrator interface)."""
         try:
             logger.info(
-                "Processing message for user %s. Name: '%s'",
+                "Processing intake message for user %s",
                 context.user_profile.user_id,
-                context.user_profile.name,
             )
 
             covered_topics = identify_covered_topics(message, context.message_history)
@@ -82,11 +82,7 @@ class TrioIntakeAgent:
             completion_diagnostics = intake_completion_diagnostics(
                 context, intake_slot_coverage
             )
-            is_guest = (
-                context.user_profile.name == "Guest"
-                or context.user_profile.status == UserStatus.PROFILE_ONLY
-                or context.user_profile.name == context.user_profile.user_id
-            )
+            is_guest = is_guest_intake_context(context)
             record_state = await prepare_intake_record_state(
                 message=message,
                 context=context,
@@ -104,16 +100,15 @@ class TrioIntakeAgent:
                 if topic not in context.topics_covered:
                     context.topics_covered.append(topic)
 
-            logger.info(
-                "Topics covered so far: %s (%s/%s)",
-                context.topics_covered,
-                len(context.topics_covered),
-                len(self.intake_topics),
-            )
+            logger.info("Topics covered so far: %s", context.topics_covered)
 
+            use_structured_gate = should_use_structured_completion_gate(
+                note_tracking_enabled=self.intake_note_tracking_enabled,
+                completion_gate_enabled=self.intake_record_completion_gate_enabled,
+            )
             is_complete = (
                 record_state.completeness.complete
-                if self.intake_record_completion_gate_enabled
+                if use_structured_gate
                 else is_intake_complete(context, intake_slot_coverage)
             )
 
@@ -125,12 +120,8 @@ class TrioIntakeAgent:
             if is_guest:
                 if not message.strip():
                     prompt = GUEST_WELCOME_PROMPT
-                    next_action = "continue"
-                    workflow_event = None
                     return direct_agent_response(
                         content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
                         metadata=intake_response_metadata(
                             context=context,
                             intake_slot_coverage=intake_slot_coverage,

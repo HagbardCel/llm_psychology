@@ -459,6 +459,53 @@ async def test_note_tracking_disabled_preserves_current_metadata(
 
 @pytest.mark.trio
 @pytest.mark.unit
+async def test_existing_record_metadata_marks_disabled_not_attempted(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(role="user", content="I am stressed", timestamp=datetime.now()),
+        ],
+    )
+    context.intake_record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="stress",
+                evidence_quote="I am stressed",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+
+    response = await agent.process_message("I am stressed", context)
+    metadata = response.metadata["intake_note_tracking"]
+
+    assert metadata["status"] == "not_run"
+    assert metadata["configured_enabled"] is False
+    assert metadata["attempted"] is False
+
+
+@pytest.mark.trio
+@pytest.mark.unit
 async def test_note_tracking_merges_patch_into_typed_metadata(
     mock_llm_service, app_config
 ):
@@ -513,12 +560,15 @@ async def test_note_tracking_merges_patch_into_typed_metadata(
 
     response = await agent.process_message("I feel anxious every day", context)
 
-    assert isinstance(context.intake_record, IntakeRecord)
-    assert context.intake_record.presenting_problem.main_concern.value == "anxiety"
+    assert context.intake_record is None
     assert response.metadata["intake_record"]["presenting_problem"]["main_concern"][
         "value"
     ] == "anxiety"
     assert response.metadata["intake_note_tracking"]["status"] == "success"
+    assert response.metadata["intake_note_tracking"]["configured_enabled"] is True
+    assert response.metadata["intake_note_tracking"]["attempted"] is True
+    assert response.metadata["intake_note_tracking"]["merge_status"] == "applied"
+    assert response.metadata["intake_note_tracking"]["applied"] is True
     assert "intake_record_completeness" in response.metadata
 
 
@@ -579,6 +629,131 @@ async def test_note_tracking_no_new_information_keeps_current_record(
     assert response.metadata["intake_record"]["presenting_problem"]["main_concern"][
         "value"
     ] == "stress"
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_invalid_evidence_reports_validation_failure(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="anxiety",
+                evidence_quote="not in the latest message",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return patch
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(role="user", content="I feel anxious every day", timestamp=datetime.now()),
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious every day", context)
+    metadata = response.metadata["intake_note_tracking"]
+
+    assert context.intake_record is None
+    assert metadata["status"] == "validation_failure"
+    assert metadata["raw_extraction_status"] == "success"
+    assert metadata["merge_status"] == "empty_after_validation"
+    assert metadata["applied"] is False
+    assert metadata["dropped_evidence_count"] == 1
+    assert not response.metadata["intake_record"]["presenting_problem"][
+        "main_concern"
+    ]["value"]
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_completion_gate_without_note_tracking_uses_legacy_completion(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(
+        update={
+            "INTAKE_NOTE_TRACKING_ENABLED": False,
+            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
+        }
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(
+                role="user",
+                content=(
+                    f"Turn {index}: anxiety for several months affects "
+                    "work and sleep."
+                ),
+                timestamp=datetime.now(),
+            )
+            for index in range(MAX_INTAKE_PATIENT_TURNS)
+        ]
+        + [
+            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="No thoughts of harm and I feel safe.",
+                timestamp=datetime.now(),
+            ),
+            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I want to feel better at work.",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message("I want to keep going.", context)
+
+    assert response.content == CLOSING_PROMPT
+    assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
+    assert "intake_note_tracking" not in response.metadata
 
 
 @pytest.mark.trio

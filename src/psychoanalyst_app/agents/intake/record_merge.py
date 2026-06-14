@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -15,6 +16,26 @@ from psychoanalyst_app.models.intake_record import (
 )
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+IntakePatchMergeStatus = Literal[
+    "applied",
+    "empty_after_validation",
+    "merge_failure",
+]
+
+
+@dataclass(frozen=True)
+class IntakePatchMergeResult:
+    """Result of validating and merging a structured intake patch."""
+
+    record: IntakeRecord
+    status: IntakePatchMergeStatus
+    applied: bool
+    raw_evidence_count: int
+    retained_evidence_count: int
+    dropped_evidence_count: int
+    error_message: str | None = None
+    error_code: str | None = None
 
 
 def _normalize(value: str) -> str:
@@ -126,6 +147,18 @@ def _validated_patch_dump(
     }
 
 
+def _count_evidence(value: Any) -> int:
+    if isinstance(value, IntakeEvidence):
+        return 1 if value.value or value.evidence_quote else 0
+    if isinstance(value, BaseModel):
+        return sum(_count_evidence(item) for item in value.__dict__.values())
+    if isinstance(value, dict):
+        return sum(_count_evidence(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_count_evidence(item) for item in value)
+    return 0
+
+
 def validate_intake_record_patch(
     patch: IntakeRecordPatch,
     *,
@@ -229,3 +262,61 @@ def merge_intake_record_patch(
         )
 
     return merged
+
+
+def merge_intake_record_patch_with_diagnostics(
+    current: IntakeRecord,
+    patch: IntakeRecordPatch,
+    *,
+    latest_user_message: Message,
+    source_message_index: int,
+    strict_quote_validation: bool = True,
+) -> IntakePatchMergeResult:
+    """Merge a patch and report whether validation retained usable evidence."""
+    raw_evidence_count = _count_evidence(patch)
+    try:
+        validated_patch = validate_intake_record_patch(
+            patch,
+            latest_user_message=latest_user_message,
+            source_message_index=source_message_index,
+            strict_quote_validation=strict_quote_validation,
+        )
+        retained_evidence_count = _count_evidence(validated_patch)
+        dropped_evidence_count = raw_evidence_count - retained_evidence_count
+        if raw_evidence_count > 0 and retained_evidence_count == 0:
+            return IntakePatchMergeResult(
+                record=current,
+                status="empty_after_validation",
+                applied=False,
+                raw_evidence_count=raw_evidence_count,
+                retained_evidence_count=retained_evidence_count,
+                dropped_evidence_count=dropped_evidence_count,
+            )
+
+        merged = merge_intake_record_patch(
+            current,
+            validated_patch,
+            latest_user_message=latest_user_message,
+            source_message_index=source_message_index,
+            strict_quote_validation=strict_quote_validation,
+        )
+    except Exception as exc:
+        return IntakePatchMergeResult(
+            record=current,
+            status="merge_failure",
+            applied=False,
+            raw_evidence_count=raw_evidence_count,
+            retained_evidence_count=0,
+            dropped_evidence_count=raw_evidence_count,
+            error_message=str(exc),
+            error_code=type(exc).__name__,
+        )
+
+    return IntakePatchMergeResult(
+        record=merged,
+        status="applied",
+        applied=True,
+        raw_evidence_count=raw_evidence_count,
+        retained_evidence_count=retained_evidence_count,
+        dropped_evidence_count=dropped_evidence_count,
+    )

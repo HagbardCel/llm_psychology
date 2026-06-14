@@ -36,6 +36,16 @@ class IntakePatchExtractionResult:
     error_message: str | None = None
     error_code: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.status == "success" and self.patch is None:
+            raise ValueError("success extraction requires a patch")
+        if self.status != "success" and self.patch is not None:
+            raise ValueError("non-success extraction must not include a patch")
+        if self.status in {"invalid_patch", "llm_failure"} and not (
+            self.error_message or self.error_code
+        ):
+            raise ValueError("failure extraction requires error diagnostics")
+
 
 async def extract_intake_record_patch(
     *,

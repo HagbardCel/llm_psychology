@@ -13,12 +13,15 @@ from psychoanalyst_app.agents.intake.record_completeness import (
     IntakeCompleteness,
     intake_record_completion_decision,
 )
-from psychoanalyst_app.agents.intake.record_merge import merge_intake_record_patch
+from psychoanalyst_app.agents.intake.record_merge import (
+    IntakePatchMergeResult,
+    merge_intake_record_patch_with_diagnostics,
+)
 from psychoanalyst_app.agents.intake.record_summary import (
     summarize_intake_record_for_prompt,
 )
 from psychoanalyst_app.agents.intake.slots import patient_messages
-from psychoanalyst_app.models.domain import Message
+from psychoanalyst_app.models.domain import Message, UserStatus
 from psychoanalyst_app.models.intake_record import IntakeRecord
 from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.services.llm_service import LLMService
@@ -26,12 +29,31 @@ from psychoanalyst_app.services.llm_service import LLMService
 logger = logging.getLogger(__name__)
 
 
+def is_guest_intake_context(context: ConversationContext) -> bool:
+    """Return whether intake is still collecting a usable patient name."""
+    return (
+        context.user_profile.name == "Guest"
+        or context.user_profile.status == UserStatus.PROFILE_ONLY
+        or context.user_profile.name == context.user_profile.user_id
+    )
+
+
+def should_use_structured_completion_gate(
+    *,
+    note_tracking_enabled: bool,
+    completion_gate_enabled: bool,
+) -> bool:
+    """Temporarily guard structured gate until config invariants are enforced."""
+    return note_tracking_enabled and completion_gate_enabled
+
+
 @dataclass(frozen=True)
 class IntakeRecordState:
     record: IntakeRecord
     completeness: IntakeCompleteness
+    note_tracking_enabled: bool = False
     note_tracking: IntakePatchExtractionResult | None = None
-    merge_error: str | None = None
+    merge_result: IntakePatchMergeResult | None = None
     should_emit_metadata: bool = False
 
 
@@ -48,10 +70,10 @@ async def prepare_intake_record_state(
     record = context.intake_record or IntakeRecord()
     has_existing_record = context.intake_record is not None
     note_tracking: IntakePatchExtractionResult | None = None
-    merge_error: str | None = None
+    merge_result: IntakePatchMergeResult | None = None
 
     if note_tracking_enabled and not is_guest and message.strip():
-        record, note_tracking, merge_error = await _update_intake_record(
+        record, note_tracking, merge_result = await _update_intake_record(
             message=message,
             context=context,
             current_record=record,
@@ -66,8 +88,9 @@ async def prepare_intake_record_state(
     return IntakeRecordState(
         record=record,
         completeness=completeness,
+        note_tracking_enabled=note_tracking_enabled,
         note_tracking=note_tracking,
-        merge_error=merge_error,
+        merge_result=merge_result,
         should_emit_metadata=note_tracking is not None or has_existing_record,
     )
 
@@ -79,7 +102,7 @@ async def _update_intake_record(
     current_record: IntakeRecord,
     llm_service: LLMService,
     strict_quote_validation: bool,
-) -> tuple[IntakeRecord, IntakePatchExtractionResult, str | None]:
+) -> tuple[IntakeRecord, IntakePatchExtractionResult, IntakePatchMergeResult | None]:
     latest_index = _latest_user_message_index(context, message)
     if latest_index is None:
         result = IntakePatchExtractionResult(
@@ -103,20 +126,19 @@ async def _update_intake_record(
     if result.status != "success" or result.patch is None:
         return current_record, result, None
 
-    try:
-        updated = merge_intake_record_patch(
-            current_record,
-            result.patch,
-            latest_user_message=latest_message,
-            source_message_index=latest_index,
-            strict_quote_validation=strict_quote_validation,
+    merge_result = merge_intake_record_patch_with_diagnostics(
+        current_record,
+        result.patch,
+        latest_user_message=latest_message,
+        source_message_index=latest_index,
+        strict_quote_validation=strict_quote_validation,
+    )
+    if merge_result.status == "merge_failure":
+        logger.warning(
+            "Failed to merge intake record patch: %s",
+            merge_result.error_code,
         )
-    except Exception as exc:
-        logger.warning("Failed to merge intake record patch", exc_info=True)
-        return current_record, result, f"record_merge_failed:{type(exc).__name__}"
-
-    context.intake_record = updated
-    return updated, result, None
+    return merge_result.record, result, merge_result
 
 
 def _latest_user_message_index(
@@ -152,16 +174,38 @@ def intake_record_metadata(
         return {}
 
     tracking = state.note_tracking
+    merge_result = state.merge_result
+    status = tracking.status if tracking else "not_run"
+    if tracking and tracking.status == "success":
+        if merge_result and merge_result.status == "empty_after_validation":
+            status = "validation_failure"
+        elif merge_result and merge_result.status == "merge_failure":
+            status = "merge_failure"
     tracking_metadata: dict[str, object] = {
-        "status": tracking.status if tracking else "not_run",
-        "enabled": tracking is not None,
+        "status": status,
+        "configured_enabled": state.note_tracking_enabled,
+        "attempted": tracking is not None,
     }
+    if tracking:
+        tracking_metadata["raw_extraction_status"] = tracking.status
     if tracking and tracking.error_message:
         tracking_metadata["error_message"] = tracking.error_message
     if tracking and tracking.error_code:
         tracking_metadata["error_code"] = tracking.error_code
-    if state.merge_error:
-        tracking_metadata["merge_error"] = state.merge_error
+    if merge_result:
+        tracking_metadata.update(
+            {
+                "merge_status": merge_result.status,
+                "applied": merge_result.applied,
+                "raw_evidence_count": merge_result.raw_evidence_count,
+                "retained_evidence_count": merge_result.retained_evidence_count,
+                "dropped_evidence_count": merge_result.dropped_evidence_count,
+            }
+        )
+        if merge_result.error_message:
+            tracking_metadata["merge_error_message"] = merge_result.error_message
+        if merge_result.error_code:
+            tracking_metadata["merge_error_code"] = merge_result.error_code
 
     return {
         "intake_record": state.record.model_dump(mode="json"),
