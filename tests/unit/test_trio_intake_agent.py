@@ -1184,3 +1184,360 @@ async def test_diagnostics_only_mode_continues_on_extraction_failure(
     assert metadata["stale_record_used"] is False
     assert metadata["max_turn_completion_blocked_by_failure"] is False
     assert response.content
+
+
+def _gate_mode_config(app_config):
+    return app_config.model_copy(
+        update={
+            "INTAKE_NOTE_TRACKING_ENABLED": True,
+            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
+            "INTAKE_RECORD_DIRECT_ASK_ENABLED": True,
+        }
+    )
+
+
+def _gate_agent(mock_llm_service, app_config):
+    return TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=_gate_mode_config(app_config),
+    )
+
+
+def _incomplete_intake_context(*, message: str = "I feel anxious every day") -> ConversationContext:
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    return _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(role="user", content=message, timestamp=datetime.now()),
+        ],
+    )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_bypasses_legacy_follow_up(mock_llm_service, app_config, monkeypatch):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    monkeypatch.setattr(
+        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
+        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
+    )
+    context = _incomplete_intake_context()
+    context.intake_record = IntakeRecord()
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+    assert response.metadata["selected_direct_ask_item"] == "risk_screen"
+    assert "Structured direct-ask instruction:" in response.content
+    assert response.content != RISK_SCREEN_PROMPT
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_missing_risk_screen_uses_authoritative_llm_prompt(
+    mock_llm_service, app_config
+):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    context = _incomplete_intake_context()
+    context.intake_record = IntakeRecord()
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+    assert response.metadata["selected_direct_ask_item"] == "risk_screen"
+    assert "harming themselves" in response.content
+    assert "harming someone else" in response.content
+    assert response.content != RISK_SCREEN_PROMPT
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_missing_non_safety_item_uses_authoritative_llm_prompt(
+    mock_llm_service, app_config
+):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    record = IntakeRecord()
+    record.safety.self_harm = _record_evidence("denied")
+    record.safety.harm_to_others = _record_evidence("denied")
+    record.safety.medical_urgency = _record_evidence("denied")
+    context = _incomplete_intake_context(message="Still figuring things out.")
+    context.intake_record = record
+
+    response = await agent.process_message("Still figuring things out.", context)
+
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+    assert response.metadata["selected_direct_ask_item"] == "presenting_problem"
+    assert "presenting_problem" in response.content
+    assert "Do not switch to another intake topic" in response.content
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_disabled_still_uses_legacy_follow_up(mock_llm_service, app_config):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    context = _incomplete_intake_context()
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert response.metadata["intake_next_action_source"] == "legacy_follow_up"
+    assert response.metadata["selected_direct_ask_item"] is None
+    assert response.content == RISK_SCREEN_PROMPT
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_disabled_legacy_llm_continuation_metadata(mock_llm_service, app_config):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="No thoughts of harm and I feel safe.",
+                timestamp=datetime.now(),
+            ),
+            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I want to feel better at work.",
+                timestamp=datetime.now(),
+            ),
+            Message(role="assistant", content=COPING_ATTEMPTS_PROMPT, timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I tried breathing exercises before meetings.",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message(
+        "I tried breathing exercises before meetings.",
+        context,
+    )
+
+    assert response.metadata["intake_next_action_source"] == "legacy_llm_continuation"
+    assert response.metadata["selected_direct_ask_item"] is None
+    assert "Structured direct-ask instruction:" not in response.content
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_completion_metadata(mock_llm_service, app_config):
+    agent = _gate_agent(mock_llm_service, app_config)
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=_max_turn_history(),
+    )
+    context.intake_record = _genuinely_complete_record()
+
+    response = await agent.process_message("Thanks, that covers everything.", context)
+
+    assert response.metadata["intake_next_action_source"] == "complete"
+    assert response.metadata["selected_direct_ask_item"] is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_time_up_metadata(intake_agent):
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now() - timedelta(minutes=90),
+        duration_minutes=30,
+    )
+
+    response = await intake_agent.process_message("Answering a question.", context)
+
+    assert response.metadata["intake_next_action_source"] == "time_up"
+    assert response.metadata["selected_direct_ask_item"] is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_initial_prompt_metadata(intake_agent):
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = ConversationContext(
+        session_id="session-123",
+        user_profile=profile,
+        therapy_plan=None,
+        message_history=[],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+
+    response = await intake_agent.process_message("", context)
+
+    assert response.metadata["intake_next_action_source"] == "initial_prompt"
+    assert response.metadata["selected_direct_ask_item"] is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_generic_clarification_when_next_item_missing(
+    mock_llm_service, app_config, monkeypatch
+):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    monkeypatch.setattr(
+        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
+        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    record = _genuinely_complete_record()
+    completeness = intake_record_completion_decision(record, patient_turn_count=1)
+    assert not completeness.complete
+    assert completeness.next_required_item is None
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="Thanks, that covers everything for now.",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+    context.intake_record = record
+
+    response = await agent.process_message(
+        "Thanks, that covers everything for now.",
+        context,
+    )
+
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+    assert response.metadata["selected_direct_ask_item"] is None
+    assert "no specific missing item is available" in response.content
+    assert response.content != RISK_SCREEN_PROMPT
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_invalid_manual_config_still_authoritative(
+    mock_llm_service, app_config, monkeypatch
+):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    agent.intake_record_direct_ask_enabled = False
+    monkeypatch.setattr(
+        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
+        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
+    )
+    context = _incomplete_intake_context()
+    context.intake_record = IntakeRecord()
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+    assert response.metadata["selected_direct_ask_item"] == "risk_screen"
+    assert "Structured direct-ask instruction:" in response.content
+    assert "harming themselves" in response.content

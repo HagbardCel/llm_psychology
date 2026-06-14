@@ -4,20 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from psychoanalyst_app.agents.intake.extraction import extract_tier1_data
-from psychoanalyst_app.agents.intake.prompts import (
-    CLOSING_PROMPT,
-    CONTINUE_CONVERSATION_PROMPT,
-    GUEST_WELCOME_PROMPT,
-    INITIAL_GREETING_PROMPT,
-)
+from psychoanalyst_app.agents.intake.prompts import GUEST_WELCOME_PROMPT
 from psychoanalyst_app.agents.intake.runtime import (
-    IntakeRecordState,
-    build_continuation_prompt_context,
+    IntakeContinuationPlan,
+    build_initial_intake_prompt,
     intake_record_metadata,
     intake_response_metadata,
     is_guest_intake_context,
     prepare_intake_record_state,
+    resolve_intake_continuation_turn,
     should_use_structured_completion_gate,
 )
 from psychoanalyst_app.agents.intake.slots import (
@@ -25,7 +20,6 @@ from psychoanalyst_app.agents.intake.slots import (
     identify_required_slots,
     intake_completion_diagnostics,
     is_intake_complete,
-    next_required_follow_up,
 )
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.context.user_context import UserContext
@@ -113,142 +107,48 @@ class TrioIntakeAgent:
                 else is_intake_complete(context, intake_slot_coverage)
             )
 
-            next_action = "continue"
-            workflow_event = None
-            prompt = ""
-            structured_profile = None
-
             if is_guest:
-                if not message.strip():
-                    prompt = GUEST_WELCOME_PROMPT
-                    return direct_agent_response(
-                        content=prompt,
-                        metadata=intake_response_metadata(
-                            context=context,
-                            intake_slot_coverage=intake_slot_coverage,
-                            completion_diagnostics=completion_diagnostics,
-                            record_metadata=record_metadata,
-                        ),
-                    )
-                else:
-                    new_name = message.strip()
-                    context.user_profile.name = new_name
-                    structured_profile = build_user_profile_output({"name": new_name})
-
-                    prompt = self._build_initial_prompt(context)
-                    next_action = "transition"
-                    workflow_event = WorkflowEvent.START_INTAKE
-                    return AgentResponse(
-                        content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata=intake_response_metadata(
-                            context=context,
-                            intake_slot_coverage=intake_slot_coverage,
-                            completion_diagnostics=completion_diagnostics,
-                            record_metadata=record_metadata,
-                            user_profile=structured_profile,
-                        ),
-                    )
-
-            elif len(context.message_history) == 0:
-                prompt = self._build_initial_prompt(context)
-                next_action = "continue"
-                workflow_event = None
-            else:
-                prompt = self._build_continuation_prompt(
-                    message,
-                    context,
-                    record_state=record_state,
-                )
-                required_follow_up = next_required_follow_up(intake_slot_coverage)
-
-                if is_complete:
-                    prompt = CLOSING_PROMPT
-
-                    logger.info("Intake complete - extracting Tier 1 data...")
-                    tier1_updates = await extract_tier1_data(
-                        self.llm_service, context.message_history
-                    )
-
-                    if tier1_updates:
-                        structured_profile = build_user_profile_output(tier1_updates)
-                        logger.info(
-                            "Extracted Tier 1 user profile details for %s",
-                            context.user_profile.user_id,
-                        )
-                    else:
-                        structured_profile = None
-                        logger.warning(
-                            "Failed to extract Tier 1 data from intake conversation"
-                        )
-
-                    next_action = "transition"
-                    workflow_event = WorkflowEvent.COMPLETE_INTAKE
-                    return direct_agent_response(
-                        content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata=intake_response_metadata(
-                            context=context,
-                            intake_slot_coverage=intake_slot_coverage,
-                            completion_diagnostics=completion_diagnostics,
-                            record_metadata=record_metadata,
-                            user_profile=structured_profile,
-                            intake_complete=is_complete,
-                        ),
-                    )
-                elif context.is_time_up:
-                    next_action = "continue"
-                    workflow_event = None
-                    prompt = (
-                        "Our time is up for today. We will continue this intake "
-                        "in our next session."
-                    )
-                    return direct_agent_response(
-                        content=prompt,
-                        next_action=next_action,
-                        workflow_event=workflow_event,
-                        metadata=intake_response_metadata(
-                            context=context,
-                            intake_slot_coverage=intake_slot_coverage,
-                            completion_diagnostics=completion_diagnostics,
-                            record_metadata=record_metadata,
-                            user_profile=structured_profile,
-                            intake_complete=is_complete,
-                        ),
-                    )
-                elif required_follow_up:
-                    return direct_agent_response(
-                        content=required_follow_up,
-                        metadata=intake_response_metadata(
-                            context=context,
-                            intake_slot_coverage=intake_slot_coverage,
-                            completion_diagnostics=completion_diagnostics,
-                            record_metadata=record_metadata,
-                            intake_complete=is_complete,
-                        ),
-                    )
-                else:
-                    next_action = "continue"
-                    workflow_event = None
-
-            logger.info(
-                f"Intake Agent returning: action={next_action}, event={workflow_event}"
-            )
-
-            return AgentResponse(
-                content=prompt,
-                next_action=next_action,
-                workflow_event=workflow_event,
-                metadata=intake_response_metadata(
+                return self._handle_guest_turn(
+                    message=message,
                     context=context,
                     intake_slot_coverage=intake_slot_coverage,
                     completion_diagnostics=completion_diagnostics,
                     record_metadata=record_metadata,
-                    user_profile=structured_profile,
+                )
+
+            if len(context.message_history) == 0:
+                return self._initial_prompt_response(
+                    context=context,
+                    intake_slot_coverage=intake_slot_coverage,
+                    completion_diagnostics=completion_diagnostics,
+                    record_metadata=record_metadata,
                     intake_complete=is_complete,
-                ),
+                )
+
+            continuation = await resolve_intake_continuation_turn(
+                message=message,
+                context=context,
+                record_state=record_state,
+                is_complete=is_complete,
+                use_structured_gate=use_structured_gate,
+                intake_slot_coverage=intake_slot_coverage,
+                intake_topics=self.intake_topics,
+                direct_ask_enabled=self.intake_record_direct_ask_enabled,
+                llm_service=self.llm_service,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+            )
+            if isinstance(continuation, AgentResponse):
+                return continuation
+
+            logger.info("Intake Agent returning: action=continue, event=None")
+            return self._continuation_response(
+                plan=continuation,
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                intake_complete=is_complete,
             )
 
         except Exception as exc:
@@ -263,37 +163,86 @@ class TrioIntakeAgent:
                 metadata={"error": str(exc)},
             )
 
-    def _build_initial_prompt(self, context: ConversationContext) -> str:
-        """Build initial greeting prompt."""
-        return INITIAL_GREETING_PROMPT.format(
-            user_name=context.user_profile.name,
-            session_duration=context.duration_minutes,
-        )
-
-    def _build_continuation_prompt(
+    def _handle_guest_turn(
         self,
+        *,
         message: str,
         context: ConversationContext,
-        *,
-        record_state: IntakeRecordState,
-    ) -> str:
-        """Build continuation prompt with time and topic awareness."""
-        _ = message
-        remaining_minutes = max(0, int(context.time_remaining_minutes))
+        intake_slot_coverage: set[str],
+        completion_diagnostics: dict[str, object],
+        record_metadata: dict[str, object],
+    ) -> AgentResponse:
+        if not message.strip():
+            return direct_agent_response(
+                content=GUEST_WELCOME_PROMPT,
+                metadata=intake_response_metadata(
+                    context=context,
+                    intake_slot_coverage=intake_slot_coverage,
+                    completion_diagnostics=completion_diagnostics,
+                    record_metadata=record_metadata,
+                ),
+            )
 
-        covered = context.topics_covered
-        pending = [t for t in self.intake_topics if t not in covered]
-
-        prompt = CONTINUE_CONVERSATION_PROMPT.format(
-            remaining_minutes=remaining_minutes,
-            session_duration=context.duration_minutes,
-            covered_topics=", ".join(covered) if covered else "None",
-            pending_topics=", ".join(pending),
-            structured_intake_context=build_continuation_prompt_context(
-                record_state=record_state,
-                include_structured_guidance=record_state.should_emit_metadata,
-                direct_ask_enabled=self.intake_record_direct_ask_enabled,
+        context.user_profile.name = message.strip()
+        structured_profile = build_user_profile_output({"name": message.strip()})
+        return AgentResponse(
+            content=build_initial_intake_prompt(context),
+            next_action="transition",
+            workflow_event=WorkflowEvent.START_INTAKE,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                user_profile=structured_profile,
             ),
         )
 
-        return prompt
+    def _initial_prompt_response(
+        self,
+        *,
+        context: ConversationContext,
+        intake_slot_coverage: set[str],
+        completion_diagnostics: dict[str, object],
+        record_metadata: dict[str, object],
+        intake_complete: bool,
+    ) -> AgentResponse:
+        return AgentResponse(
+            content=build_initial_intake_prompt(context),
+            next_action="continue",
+            workflow_event=None,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                intake_complete=intake_complete,
+                intake_next_action_source="initial_prompt",
+                selected_direct_ask_item=None,
+            ),
+        )
+
+    def _continuation_response(
+        self,
+        *,
+        plan: IntakeContinuationPlan,
+        context: ConversationContext,
+        intake_slot_coverage: set[str],
+        completion_diagnostics: dict[str, object],
+        record_metadata: dict[str, object],
+        intake_complete: bool,
+    ) -> AgentResponse:
+        return AgentResponse(
+            content=plan.prompt,
+            next_action="continue",
+            workflow_event=None,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                intake_complete=intake_complete,
+                intake_next_action_source=plan.intake_next_action_source,
+                selected_direct_ask_item=plan.selected_direct_ask_item,
+            ),
+        )

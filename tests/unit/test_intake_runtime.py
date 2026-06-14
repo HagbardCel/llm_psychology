@@ -9,11 +9,14 @@ from psychoanalyst_app.agents.intake.record_completeness import IntakeCompletene
 from psychoanalyst_app.agents.intake.record_merge import IntakePatchMergeResult
 from psychoanalyst_app.agents.intake.runtime import (
     IntakeRecordState,
+    build_continuation_prompt_context,
+    build_structured_direct_ask_instruction,
     compute_intake_gate_outcome,
     intake_record_metadata,
     note_tracking_failed,
     prepare_intake_record_state,
 )
+from psychoanalyst_app.agents.intake.slots import RISK_SCREEN_PROMPT
 from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
 from psychoanalyst_app.orchestration.models import ConversationContext
@@ -213,7 +216,11 @@ async def test_prepare_state_without_gate_omits_gate_diagnostics_on_failure() ->
         user_profile=profile,
         therapy_plan=None,
         message_history=[
-            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="assistant",
+                content="What brings you in?",
+                timestamp=datetime.now(),
+            ),
             Message(role="user", content=message, timestamp=datetime.now()),
         ],
         topics_covered=[],
@@ -238,3 +245,112 @@ async def test_prepare_state_without_gate_omits_gate_diagnostics_on_failure() ->
     assert tracking["status"] == "llm_failure"
     assert tracking["stale_record_used"] is False
     assert tracking["max_turn_completion_blocked_by_failure"] is False
+
+
+def test_build_structured_direct_ask_instruction_risk_screen() -> None:
+    instruction = build_structured_direct_ask_instruction("risk_screen")
+
+    assert "harming themselves" in instruction
+    assert "harming someone else" in instruction
+    assert "urgent medical" in instruction
+    assert "You must ask" in instruction or "ask directly" in instruction
+    assert "urgent safety or medical issue" in instruction
+
+
+def test_build_structured_direct_ask_instruction_presenting_problem() -> None:
+    instruction = build_structured_direct_ask_instruction("presenting_problem")
+
+    assert "presenting_problem" in instruction
+    assert "Do not switch to another intake topic" in instruction
+    assert "Ask only one main question" in instruction
+    assert "You must ask" in instruction
+
+
+def test_build_structured_direct_ask_instruction_generic_clarification() -> None:
+    instruction = build_structured_direct_ask_instruction(None)
+
+    assert "no specific missing item is available" in instruction
+    assert "You must ask one concise clarification question" in instruction
+    assert "without switching topics" in instruction
+
+
+def test_build_continuation_prompt_context_gate_active_risk_screen() -> None:
+    state = IntakeRecordState(
+        record=IntakeRecord(),
+        completeness=IntakeCompleteness(
+            complete=False,
+            next_required_item="risk_screen",
+            missing_required_items=["risk_screen"],
+        ),
+        should_emit_metadata=True,
+    )
+    context = build_continuation_prompt_context(
+        record_state=state,
+        include_structured_guidance=True,
+        direct_ask_enabled=True,
+        use_structured_gate=True,
+    )
+
+    assert "Structured direct-ask instruction:" in context
+    assert "harming themselves" in context
+    assert "Recommended next item:" not in context
+
+
+def test_build_continuation_prompt_context_gate_inactive() -> None:
+    state = IntakeRecordState(
+        record=IntakeRecord(),
+        completeness=IntakeCompleteness(
+            complete=False,
+            next_required_item="risk_screen",
+            missing_required_items=["risk_screen"],
+        ),
+        should_emit_metadata=True,
+    )
+    context = build_continuation_prompt_context(
+        record_state=state,
+        include_structured_guidance=True,
+        direct_ask_enabled=True,
+        use_structured_gate=False,
+    )
+
+    assert "Structured direct-ask instruction:" not in context
+    assert "Structured intake state:" in context
+    assert "Recommended next item:" in context
+
+
+def test_build_continuation_prompt_context_invalid_manual_config() -> None:
+    state = IntakeRecordState(
+        record=IntakeRecord(),
+        completeness=IntakeCompleteness(
+            complete=False,
+            next_required_item="risk_screen",
+            missing_required_items=["risk_screen"],
+        ),
+        should_emit_metadata=True,
+    )
+    context = build_continuation_prompt_context(
+        record_state=state,
+        include_structured_guidance=True,
+        direct_ask_enabled=False,
+        use_structured_gate=True,
+    )
+
+    assert "Structured direct-ask instruction:" in context
+    assert "harming themselves" in context
+
+
+def test_build_continuation_prompt_context_gate_active_no_next_item() -> None:
+    state = IntakeRecordState(
+        record=IntakeRecord(),
+        completeness=IntakeCompleteness(complete=False, next_required_item=None),
+        should_emit_metadata=True,
+    )
+    context = build_continuation_prompt_context(
+        record_state=state,
+        include_structured_guidance=True,
+        direct_ask_enabled=True,
+        use_structured_gate=True,
+    )
+
+    assert "no specific missing item is available" in context
+    assert RISK_SCREEN_PROMPT not in context

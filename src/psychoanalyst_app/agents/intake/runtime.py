@@ -5,9 +5,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from psychoanalyst_app.agents.intake.extraction import extract_tier1_data
 from psychoanalyst_app.agents.intake.note_tracker import (
     IntakePatchExtractionResult,
     extract_intake_record_patch,
+)
+from psychoanalyst_app.agents.intake.prompts import (
+    CLOSING_PROMPT,
+    CONTINUE_CONVERSATION_PROMPT,
+    INITIAL_GREETING_PROMPT,
 )
 from psychoanalyst_app.agents.intake.record_completeness import (
     IntakeCompleteness,
@@ -20,13 +26,28 @@ from psychoanalyst_app.agents.intake.record_merge import (
 from psychoanalyst_app.agents.intake.record_summary import (
     summarize_intake_record_for_prompt,
 )
-from psychoanalyst_app.agents.intake.slots import patient_messages
+from psychoanalyst_app.agents.intake.slots import (
+    next_required_follow_up,
+    patient_messages,
+)
 from psychoanalyst_app.models.domain import Message, UserStatus
 from psychoanalyst_app.models.intake_record import IntakeRecord
-from psychoanalyst_app.orchestration.models import ConversationContext
+from psychoanalyst_app.orchestration.agent_output_validators import (
+    build_user_profile_output,
+)
+from psychoanalyst_app.orchestration.models import (
+    AgentResponse,
+    ConversationContext,
+    WorkflowEvent,
+    direct_agent_response,
+)
 from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
+
+TIME_UP_INTAKE_PROMPT = (
+    "Our time is up for today. We will continue this intake in our next session."
+)
 
 
 def is_guest_intake_context(context: ConversationContext) -> bool:
@@ -330,6 +351,8 @@ def intake_response_metadata(
     record_metadata: dict[str, object],
     user_profile: object | None = None,
     intake_complete: bool | None = None,
+    intake_next_action_source: str | None = None,
+    selected_direct_ask_item: str | None = None,
 ) -> dict[str, object]:
     """Build common intake response metadata."""
     metadata: dict[str, object] = {
@@ -340,6 +363,8 @@ def intake_response_metadata(
         "time_remaining_minutes": context.time_remaining_minutes,
         "can_extend": context.can_extend,
         "is_time_up": context.is_time_up,
+        "intake_next_action_source": intake_next_action_source,
+        "selected_direct_ask_item": selected_direct_ask_item,
     }
     if user_profile is not None:
         metadata["user_profile"] = user_profile
@@ -348,30 +373,220 @@ def intake_response_metadata(
     return metadata
 
 
+def build_structured_direct_ask_instruction(next_item: str | None) -> str:
+    """Return mandatory structured direct-ask guidance for the response agent."""
+    if next_item is None:
+        return (
+            "The structured intake record is not safe to complete yet, but no "
+            "specific missing item is available. You must ask one concise "
+            "clarification question (about the current problem, goals, coping "
+            "attempts, or safety) that helps complete the record without "
+            "switching topics. Ask only one main question. If the patient says "
+            "they do not know or cannot answer, acknowledge that directly.\n\n"
+            "Exception: if the patient has just raised an urgent safety or "
+            "medical issue, respond to that first."
+        )
+
+    if next_item == "risk_screen":
+        item_guidance = (
+            "For risk_screen, ask directly whether the patient is having "
+            "thoughts of harming themselves, thoughts of harming someone else, "
+            "or any urgent medical or psychiatric safety concern."
+        )
+    else:
+        item_guidance = (
+            f"You must ask a direct, concise intake question about the required "
+            f"structured item: {next_item}."
+        )
+
+    return (
+        f"{item_guidance}\n"
+        "Do not switch to another intake topic.\n"
+        "Ask only one main question.\n"
+        "If the patient says they do not know or cannot answer, acknowledge "
+        "that directly.\n\n"
+        "Exception: if the patient has just raised an urgent safety or medical "
+        "issue, respond to that first."
+    )
+
+
 def build_continuation_prompt_context(
     *,
     record_state: IntakeRecordState,
     include_structured_guidance: bool,
     direct_ask_enabled: bool,
+    use_structured_gate: bool = False,
 ) -> str:
     """Return structured intake context for the response-generation prompt."""
     if not include_structured_guidance:
         return ""
 
-    recommended_next_item = record_state.completeness.next_required_item or "None"
-    if direct_ask_enabled and record_state.completeness.next_required_item:
-        recommended_next_item = (
-            f"{record_state.completeness.next_required_item} "
-            "(ask directly; if the patient cannot answer, note that explicitly)"
-        )
     summary = summarize_intake_record_for_prompt(
         record_state.record,
         record_state.completeness,
     )
-    return (
-        "\nStructured intake state:\n"
-        f"{summary}"
-        "\n\nOpen required intake items: "
-        f"{', '.join(record_state.completeness.missing_required_items) or 'None'}"
-        f"\nRecommended next item: {recommended_next_item}\n"
+    parts = [
+        "\nStructured intake state:\n",
+        summary,
+        "\n\nOpen required intake items: ",
+        ", ".join(record_state.completeness.missing_required_items) or "None",
+    ]
+
+    if use_structured_gate:
+        parts.extend(
+            [
+                "\n\nStructured direct-ask instruction:\n",
+                build_structured_direct_ask_instruction(
+                    record_state.completeness.next_required_item
+                ),
+            ]
+        )
+    elif direct_ask_enabled and record_state.completeness.next_required_item:
+        recommended_next_item = (
+            f"{record_state.completeness.next_required_item} "
+            "(ask directly; if the patient cannot answer, note that explicitly)"
+        )
+        parts.append(f"\nRecommended next item: {recommended_next_item}\n")
+    else:
+        recommended_next_item = record_state.completeness.next_required_item or "None"
+        parts.append(f"\nRecommended next item: {recommended_next_item}\n")
+
+    return "".join(parts)
+
+
+def build_initial_intake_prompt(context: ConversationContext) -> str:
+    """Build initial greeting prompt."""
+    return INITIAL_GREETING_PROMPT.format(
+        user_name=context.user_profile.name,
+        session_duration=context.duration_minutes,
+    )
+
+
+def build_intake_continuation_prompt(
+    *,
+    context: ConversationContext,
+    record_state: IntakeRecordState,
+    intake_topics: list[str],
+    direct_ask_enabled: bool,
+    use_structured_gate: bool,
+) -> str:
+    """Build continuation prompt with time, topic, and structured intake context."""
+    remaining_minutes = max(0, int(context.time_remaining_minutes))
+    covered = context.topics_covered
+    pending = [topic for topic in intake_topics if topic not in covered]
+    return CONTINUE_CONVERSATION_PROMPT.format(
+        remaining_minutes=remaining_minutes,
+        session_duration=context.duration_minutes,
+        covered_topics=", ".join(covered) if covered else "None",
+        pending_topics=", ".join(pending),
+        structured_intake_context=build_continuation_prompt_context(
+            record_state=record_state,
+            include_structured_guidance=record_state.should_emit_metadata,
+            direct_ask_enabled=direct_ask_enabled,
+            use_structured_gate=use_structured_gate,
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class IntakeContinuationPlan:
+    prompt: str
+    intake_next_action_source: str
+    selected_direct_ask_item: str | None = None
+
+
+async def resolve_intake_continuation_turn(
+    *,
+    message: str,
+    context: ConversationContext,
+    record_state: IntakeRecordState,
+    is_complete: bool,
+    use_structured_gate: bool,
+    intake_slot_coverage: set[str],
+    intake_topics: list[str],
+    direct_ask_enabled: bool,
+    llm_service: LLMService,
+    completion_diagnostics: dict[str, object],
+    record_metadata: dict[str, object],
+) -> AgentResponse | IntakeContinuationPlan:
+    """Resolve continuation turns that may complete, time out, or continue intake."""
+    _ = message
+    if is_complete:
+        logger.info("Intake complete - extracting Tier 1 data...")
+        tier1_updates = await extract_tier1_data(llm_service, context.message_history)
+        structured_profile = (
+            build_user_profile_output(tier1_updates) if tier1_updates else None
+        )
+        if tier1_updates:
+            logger.info(
+                "Extracted Tier 1 user profile details for %s",
+                context.user_profile.user_id,
+            )
+        else:
+            logger.warning("Failed to extract Tier 1 data from intake conversation")
+        return direct_agent_response(
+            content=CLOSING_PROMPT,
+            next_action="transition",
+            workflow_event=WorkflowEvent.COMPLETE_INTAKE,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                user_profile=structured_profile,
+                intake_complete=is_complete,
+                intake_next_action_source="complete",
+                selected_direct_ask_item=None,
+            ),
+        )
+    if context.is_time_up:
+        return direct_agent_response(
+            content=TIME_UP_INTAKE_PROMPT,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                intake_complete=is_complete,
+                intake_next_action_source="time_up",
+                selected_direct_ask_item=None,
+            ),
+        )
+    if use_structured_gate:
+        selected_item = record_state.completeness.next_required_item
+        return IntakeContinuationPlan(
+            prompt=build_intake_continuation_prompt(
+                context=context,
+                record_state=record_state,
+                intake_topics=intake_topics,
+                direct_ask_enabled=direct_ask_enabled,
+                use_structured_gate=True,
+            ),
+            intake_next_action_source="structured_direct_ask_llm",
+            selected_direct_ask_item=selected_item,
+        )
+    required_follow_up = next_required_follow_up(intake_slot_coverage)
+    if required_follow_up:
+        return direct_agent_response(
+            content=required_follow_up,
+            metadata=intake_response_metadata(
+                context=context,
+                intake_slot_coverage=intake_slot_coverage,
+                completion_diagnostics=completion_diagnostics,
+                record_metadata=record_metadata,
+                intake_complete=is_complete,
+                intake_next_action_source="legacy_follow_up",
+                selected_direct_ask_item=None,
+            ),
+        )
+    return IntakeContinuationPlan(
+        prompt=build_intake_continuation_prompt(
+            context=context,
+            record_state=record_state,
+            intake_topics=intake_topics,
+            direct_ask_enabled=direct_ask_enabled,
+            use_structured_gate=False,
+        ),
+        intake_next_action_source="legacy_llm_continuation",
+        selected_direct_ask_item=None,
     )
