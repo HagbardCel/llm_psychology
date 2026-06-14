@@ -18,6 +18,9 @@ x-api-base: &api-base
     - SERVER_HOST=0.0.0.0
     - SERVER_PORT=8000
     - RUFF_CACHE_DIR=/tmp/ruff_cache
+    - BLACK_CACHE_DIR=/tmp/black_cache
+    - UV_CACHE_DIR=/tmp/uv_cache
+    - XDG_CACHE_HOME=/tmp/.cache
   networks:
     - app-network
   command: python -m psychoanalyst_app.server
