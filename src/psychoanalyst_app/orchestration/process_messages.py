@@ -6,7 +6,11 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+from psychoanalyst_app.models.intake_record import IntakeRecord
 from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
+from psychoanalyst_app.orchestration.intake_record_persistence import (
+    update_intake_record,
+)
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 from psychoanalyst_app.orchestration.profile_helpers import (
     persist_structured_user_profile_output,
@@ -119,6 +123,19 @@ async def finalize_agent_response(
         logger.warning(
             "Ignoring unexpected user_profile payload type: %s",
             type(user_profile_output),
+        )
+
+    intake_record = metadata.get("intake_record")
+    if isinstance(intake_record, IntakeRecord | dict):
+        await update_intake_record(
+            response_handler.conversation_manager,
+            session_id,
+            intake_record,
+        )
+    elif intake_record is not None:
+        logger.warning(
+            "Ignoring unexpected intake_record payload type: %s",
+            type(intake_record),
         )
 
     await response_handler.handle(user_id, session_id, agent_response)

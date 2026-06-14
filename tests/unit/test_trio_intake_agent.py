@@ -26,6 +26,12 @@ from psychoanalyst_app.agents.intake.slots import (
 )
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
+from psychoanalyst_app.models.intake_record import (
+    IntakeEvidence,
+    IntakeRecord,
+    IntakeRecordPatch,
+    PresentingProblemRecord,
+)
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
 
 
@@ -410,3 +416,213 @@ async def test_time_up_without_completion_ends_with_notice(intake_agent):
     assert response.workflow_event is None
     assert response.next_action == "continue"
     assert response.metadata["is_direct_response"] is True
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_disabled_preserves_current_metadata(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I feel anxious every day.",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious every day.", context)
+
+    assert "intake_record" not in response.metadata
+    assert "intake_note_tracking" not in response.metadata
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_merges_patch_into_typed_metadata(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="anxiety",
+                evidence_quote="I feel anxious every day",
+                source_message_index=1,
+                source_role="user",
+                confidence="high",
+            )
+        )
+    )
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return patch
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(
+                role="user",
+                content="I feel anxious every day",
+                timestamp=datetime.now(),
+            ),
+        ],
+    )
+
+    response = await agent.process_message("I feel anxious every day", context)
+
+    assert isinstance(context.intake_record, IntakeRecord)
+    assert context.intake_record.presenting_problem.main_concern.value == "anxiety"
+    assert response.metadata["intake_record"]["presenting_problem"]["main_concern"][
+        "value"
+    ] == "anxiety"
+    assert response.metadata["intake_note_tracking"]["status"] == "success"
+    assert "intake_record_completeness" in response.metadata
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_no_new_information_keeps_current_record(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    existing = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="stress",
+                evidence_quote="I am stressed",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="Anything else?", timestamp=datetime.now()),
+            Message(role="user", content="No, nothing else.", timestamp=datetime.now()),
+        ],
+    )
+    context.intake_record = existing
+
+    response = await agent.process_message("No, nothing else.", context)
+
+    assert context.intake_record == existing
+    assert response.metadata["intake_note_tracking"]["status"] == "no_new_information"
+    assert response.metadata["intake_record"]["presenting_problem"]["main_concern"][
+        "value"
+    ] == "stress"
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_note_tracking_skips_guest_name_collection(mock_llm_service, app_config):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+    structured_calls = 0
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        nonlocal structured_calls
+        _ = method, phase
+        structured_calls += 1
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("guest_user"),
+        config=config,
+    )
+    profile = UserProfile(
+        user_id="guest_user",
+        name="Guest",
+        status=UserStatus.PROFILE_ONLY,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="May I have your name?", timestamp=datetime.now()),
+            Message(role="user", content="Alex", timestamp=datetime.now()),
+        ],
+    )
+
+    response = await agent.process_message("Alex", context)
+
+    assert structured_calls == 0
+    assert "intake_note_tracking" not in response.metadata
+    assert "intake_record" not in response.metadata
