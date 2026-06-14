@@ -536,6 +536,14 @@ async def test_intake_agent_tier1_extraction(service_container):
             timestamp=datetime.now(),
         ),
         Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
+        Message(
+            role="user",
+            content=(
+                "My goal is to manage my anxiety "
+                "and find better work-life balance."
+            ),
+            timestamp=datetime.now(),
+        ),
     ]
 
     # Create session with conversation
