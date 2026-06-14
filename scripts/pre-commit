@@ -27,7 +27,7 @@ else
     echo "To fix:"
     echo "  1. Review the test failures above"
     echo "  2. Fix the issues in your code"
-    echo "  3. Run 'make test' in devContainer to verify fixes"
+    echo "  3. Run 'make docker-test' to verify fixes"
     echo "  4. Try committing again"
     echo ""
     echo "To skip this hook (not recommended):"

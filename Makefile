@@ -155,7 +155,7 @@ test-validate-no-mocks: prepare-runtime-dirs
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
 
-# Install git hooks for automated testing
+# Install git pre-commit and pre-push hooks for automated validation
 install-hooks:
 	@echo "🔧 Installing git hooks..."
 	@./scripts/install-hooks.sh

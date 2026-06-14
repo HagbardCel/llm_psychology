@@ -4,6 +4,19 @@
 
 set -e  # Exit on any error
 
+should_run=false
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+    case "$local_ref" in
+        refs/heads/*) should_run=true ;;
+    esac
+done
+
+if [ "$should_run" != "true" ]; then
+    echo "No branch updates detected; skipping finalization-check."
+    exit 0
+fi
+
 echo "🔍 Pre-push hook: Running finalization-check..."
 echo ""
 
@@ -12,9 +25,10 @@ cd "$REPO_ROOT" || exit 1
 
 echo "Running release-candidate validation in Docker..."
 echo "This includes lint, contract validation, tests, and the deterministic probe."
+echo "Using ENV_FILE=${ENV_FILE:-.env.example} (override by exporting ENV_FILE)."
 echo ""
 
-if make finalization-check; then
+if ENV_FILE="${ENV_FILE:-.env.example}" make finalization-check; then
     echo ""
     echo "✅ Finalization check passed! Proceeding with push."
     echo ""
@@ -26,7 +40,7 @@ else
     echo "To fix:"
     echo "  1. Review the failures above"
     echo "  2. Fix the issues in your code"
-    echo "  3. Run 'make finalization-check' to verify fixes"
+    echo "  3. Run 'ENV_FILE=\${ENV_FILE:-.env.example} make finalization-check' to verify fixes"
     echo "  4. Try pushing again"
     echo ""
     echo "To skip this hook (not recommended):"
