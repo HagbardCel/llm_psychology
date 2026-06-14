@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install git hooks for the project
-# Run this script to set up pre-commit testing
+# Run this script to set up pre-commit and pre-push validation
 
 set -e
 
@@ -22,38 +22,60 @@ mkdir -p "$HOOKS_DIR"
 # Get the script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Install pre-commit hook
-PRE_COMMIT_SOURCE="$SCRIPT_DIR/pre-commit"
-PRE_COMMIT_TARGET="$HOOKS_DIR/pre-commit"
+HOOKS=(pre-commit pre-push)
 
-if [ -f "$PRE_COMMIT_TARGET" ]; then
-    echo "⚠️  Pre-commit hook already exists at: $PRE_COMMIT_TARGET"
+confirm_overwrite() {
+    local hook_name="$1"
+    local target="$2"
+
+    echo "⚠️  $hook_name hook already exists at: $target"
     echo ""
     read -p "Do you want to overwrite it? (y/N) " -n 1 -r
     echo ""
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "❌ Installation cancelled"
+        echo "❌ Installation cancelled; no hooks were changed."
         exit 1
     fi
-    echo "Overwriting existing hook..."
-fi
+    echo "Will overwrite existing $hook_name hook..."
+}
 
-# Copy and make executable
-cp "$PRE_COMMIT_SOURCE" "$PRE_COMMIT_TARGET"
-chmod +x "$PRE_COMMIT_TARGET"
+# Pass 1: validate sources and collect overwrite confirmations
+for hook_name in "${HOOKS[@]}"; do
+    source="$SCRIPT_DIR/$hook_name"
+    target="$HOOKS_DIR/$hook_name"
+
+    if [ ! -f "$source" ]; then
+        echo "❌ Error: Hook source not found at $source"
+        exit 1
+    fi
+
+    if [ -f "$target" ]; then
+        confirm_overwrite "$hook_name" "$target"
+    fi
+done
+
+# Pass 2: install all hooks
+for hook_name in "${HOOKS[@]}"; do
+    source="$SCRIPT_DIR/$hook_name"
+    target="$HOOKS_DIR/$hook_name"
+
+    cp "$source" "$target"
+    chmod +x "$target"
+    echo "Installed $hook_name hook at: $target"
+done
 
 echo ""
 echo "✅ Git hooks installed successfully!"
 echo ""
-echo "Pre-commit hook location: $PRE_COMMIT_TARGET"
-echo ""
 echo "What happens now:"
-echo "  • Every time you commit, tests will run automatically"
-echo "  • Tests run in isolated Docker environment"
+echo "  • Every time you commit, tests will run automatically (make docker-test)"
+echo "  • Every time you push branch updates, finalization-check will run automatically"
 echo "  • Commit will be blocked if tests fail"
-echo "  • You can skip with: git commit --no-verify (not recommended)"
+echo "  • Push will be blocked if finalization-check fails"
+echo "  • You can skip commit hook with: git commit --no-verify (not recommended)"
+echo "  • You can skip push hook with: git push --no-verify (not recommended)"
 echo ""
 echo "To uninstall:"
-echo "  rm $PRE_COMMIT_TARGET"
+echo "  rm $HOOKS_DIR/pre-commit $HOOKS_DIR/pre-push"
 echo ""
 echo "Happy coding! 🚀"

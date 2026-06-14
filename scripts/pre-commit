@@ -7,8 +7,8 @@ set -e  # Exit on any error
 echo "🔍 Pre-commit hook: Running tests..."
 echo ""
 
-# Change to the project directory (psychoanalyst_app)
-cd "$(dirname "$0")/../../psychoanalyst_app" || exit 1
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT" || exit 1
 
 # Run tests in isolated Docker environment
 echo "Running tests in isolated Docker environment..."
@@ -27,7 +27,7 @@ else
     echo "To fix:"
     echo "  1. Review the test failures above"
     echo "  2. Fix the issues in your code"
-    echo "  3. Run 'make test' in devContainer to verify fixes"
+    echo "  3. Run 'make docker-test' to verify fixes"
     echo "  4. Try committing again"
     echo ""
     echo "To skip this hook (not recommended):"

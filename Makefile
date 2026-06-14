@@ -29,7 +29,7 @@ help:
 	@echo "  test-integration  - Run integration tests only"
 	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
-	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
+	@echo "  install-hooks     - Install git pre-commit and pre-push hooks for automated validation"
 	@echo "  clean             - Clean up generated files and caches"
 	@echo "  clean-testdb      - Clean test databases only"
 	@echo "  requirements      - Generate locked requirements from .in files"
@@ -155,7 +155,7 @@ test-validate-no-mocks: prepare-runtime-dirs
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
 	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
 
-# Install git hooks for automated testing
+# Install git pre-commit and pre-push hooks for automated validation
 install-hooks:
 	@echo "🔧 Installing git hooks..."
 	@./scripts/install-hooks.sh
