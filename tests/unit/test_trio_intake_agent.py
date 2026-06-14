@@ -1067,7 +1067,7 @@ async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
     metadata = response.metadata["intake_note_tracking"]
     assert metadata["status"] == "llm_failure"
     assert metadata["stale_record_used"] is True
-    assert metadata["gate_blocked_by_failure"] is True
+    assert metadata["max_turn_completion_blocked_by_failure"] is True
 
 
 @pytest.mark.trio
@@ -1130,7 +1130,7 @@ async def test_gate_mode_allows_genuinely_complete_record_despite_extraction_fai
     assert response.content == CLOSING_PROMPT
     metadata = response.metadata["intake_note_tracking"]
     assert metadata["stale_record_used"] is True
-    assert metadata["gate_blocked_by_failure"] is False
+    assert metadata["max_turn_completion_blocked_by_failure"] is False
 
 
 @pytest.mark.trio
@@ -1182,5 +1182,5 @@ async def test_diagnostics_only_mode_continues_on_extraction_failure(
     metadata = response.metadata["intake_note_tracking"]
     assert metadata["status"] == "llm_failure"
     assert metadata["stale_record_used"] is False
-    assert metadata["gate_blocked_by_failure"] is False
+    assert metadata["max_turn_completion_blocked_by_failure"] is False
     assert response.content

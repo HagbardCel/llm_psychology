@@ -62,8 +62,7 @@ _FAILURE_TRACKING_STATUSES = frozenset(
 class IntakeGateOutcome:
     gate_complete: bool
     stale_record_used: bool
-    # True only when a tracking failure blocked max-turn completion this turn.
-    gate_blocked_by_failure: bool
+    max_turn_completion_blocked_by_failure: bool
 
 
 @dataclass(frozen=True)
@@ -76,7 +75,7 @@ class IntakeRecordState:
     should_emit_metadata: bool = False
     gate_complete: bool = False
     stale_record_used: bool = False
-    gate_blocked_by_failure: bool = False
+    max_turn_completion_blocked_by_failure: bool = False
 
 
 def _tracking_metadata_status(
@@ -113,7 +112,7 @@ def compute_intake_gate_outcome(
         return IntakeGateOutcome(
             gate_complete=completeness.complete,
             stale_record_used=False,
-            gate_blocked_by_failure=False,
+            max_turn_completion_blocked_by_failure=False,
         )
 
     stale_record_used = True
@@ -122,18 +121,18 @@ def compute_intake_gate_outcome(
         return IntakeGateOutcome(
             gate_complete=True,
             stale_record_used=stale_record_used,
-            gate_blocked_by_failure=False,
+            max_turn_completion_blocked_by_failure=False,
         )
     if completeness.complete and completeness.max_turn_completion:
         return IntakeGateOutcome(
             gate_complete=False,
             stale_record_used=stale_record_used,
-            gate_blocked_by_failure=True,
+            max_turn_completion_blocked_by_failure=True,
         )
     return IntakeGateOutcome(
         gate_complete=False,
         stale_record_used=stale_record_used,
-        gate_blocked_by_failure=False,
+        max_turn_completion_blocked_by_failure=False,
     )
 
 
@@ -183,7 +182,7 @@ async def prepare_intake_record_state(
         else IntakeGateOutcome(
             gate_complete=completeness.complete,
             stale_record_used=False,
-            gate_blocked_by_failure=False,
+            max_turn_completion_blocked_by_failure=False,
         )
     )
     return IntakeRecordState(
@@ -195,7 +194,7 @@ async def prepare_intake_record_state(
         should_emit_metadata=state.should_emit_metadata,
         gate_complete=gate_outcome.gate_complete,
         stale_record_used=gate_outcome.stale_record_used,
-        gate_blocked_by_failure=gate_outcome.gate_blocked_by_failure,
+        max_turn_completion_blocked_by_failure=gate_outcome.max_turn_completion_blocked_by_failure,
     )
 
 
@@ -285,7 +284,9 @@ def intake_record_metadata(
         "configured_enabled": state.note_tracking_enabled,
         "attempted": tracking is not None,
         "stale_record_used": state.stale_record_used,
-        "gate_blocked_by_failure": state.gate_blocked_by_failure,
+        "max_turn_completion_blocked_by_failure": (
+            state.max_turn_completion_blocked_by_failure
+        ),
     }
     if tracking:
         tracking_metadata["raw_extraction_status"] = tracking.status

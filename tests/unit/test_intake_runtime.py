@@ -136,7 +136,7 @@ def test_gate_outcome_allows_genuinely_complete_record_on_failure() -> None:
 
     assert outcome.gate_complete is True
     assert outcome.stale_record_used is True
-    assert outcome.gate_blocked_by_failure is False
+    assert outcome.max_turn_completion_blocked_by_failure is False
 
 
 def test_gate_outcome_blocks_max_turn_completion_on_failure() -> None:
@@ -145,7 +145,7 @@ def test_gate_outcome_blocks_max_turn_completion_on_failure() -> None:
 
     assert outcome.gate_complete is False
     assert outcome.stale_record_used is True
-    assert outcome.gate_blocked_by_failure is True
+    assert outcome.max_turn_completion_blocked_by_failure is True
 
 
 def test_gate_outcome_keeps_incomplete_record_blocked_on_failure() -> None:
@@ -154,7 +154,7 @@ def test_gate_outcome_keeps_incomplete_record_blocked_on_failure() -> None:
 
     assert outcome.gate_complete is False
     assert outcome.stale_record_used is True
-    assert outcome.gate_blocked_by_failure is False
+    assert outcome.max_turn_completion_blocked_by_failure is False
 
 
 def test_failure_metadata_includes_gate_flags() -> None:
@@ -171,7 +171,7 @@ def test_failure_metadata_includes_gate_flags() -> None:
             should_emit_metadata=True,
             gate_complete=False,
             stale_record_used=True,
-            gate_blocked_by_failure=True,
+            max_turn_completion_blocked_by_failure=True,
         ),
         legacy_diagnostics={},
     )
@@ -179,7 +179,7 @@ def test_failure_metadata_includes_gate_flags() -> None:
     tracking = metadata["intake_note_tracking"]
     assert tracking["status"] == "llm_failure"
     assert tracking["stale_record_used"] is True
-    assert tracking["gate_blocked_by_failure"] is True
+    assert tracking["max_turn_completion_blocked_by_failure"] is True
     assert tracking["error_message"] == "boom"
     assert tracking["error_code"] == "RuntimeError"
 
@@ -233,8 +233,8 @@ async def test_prepare_state_without_gate_omits_gate_diagnostics_on_failure() ->
     metadata = intake_record_metadata(state, legacy_diagnostics={})
 
     assert state.stale_record_used is False
-    assert state.gate_blocked_by_failure is False
+    assert state.max_turn_completion_blocked_by_failure is False
     tracking = metadata["intake_note_tracking"]
     assert tracking["status"] == "llm_failure"
     assert tracking["stale_record_used"] is False
-    assert tracking["gate_blocked_by_failure"] is False
+    assert tracking["max_turn_completion_blocked_by_failure"] is False
