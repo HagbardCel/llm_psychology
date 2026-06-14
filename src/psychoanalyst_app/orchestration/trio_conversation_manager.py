@@ -542,6 +542,7 @@ class TrioConversationManager:
                 topics_covered=[topic.name for topic in session.topics],
                 session_start_time=session.timestamp,
                 duration_minutes=self.config.SESSION_DURATION_MINUTES,
+                intake_record=session.intake_record,
             )
 
             self.active_contexts[session_id] = context

@@ -117,6 +117,11 @@ class Session(BaseModel):
     session_briefing: dict[str, Any] | None = Field(
         None, description="Structured briefing generated for the next session"
     )
+    intake_record: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured incremental intake record for intake sessions",
+    )
+    intake_record_updated_at: datetime | None = None
 
     # Tier 2 enrichment fields (added by Reflection Agent)
     psychological_summary: str | None = Field(

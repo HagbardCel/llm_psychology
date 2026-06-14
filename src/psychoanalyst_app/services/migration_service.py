@@ -19,7 +19,7 @@ from psychoanalyst_app.services.db.sqlite_config import configure_connection
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 _FOUNDATION_PLAN_COLUMNS = {
     "supersedes_plan_id",
@@ -28,6 +28,11 @@ _FOUNDATION_PLAN_COLUMNS = {
     "focus",
     "themes",
     "timeline",
+}
+
+_SESSION_ADDITIVE_COLUMNS = {
+    "intake_record": "TEXT",
+    "intake_record_updated_at": "TEXT",
 }
 
 _TABLE_DDL: list[str] = [
@@ -72,6 +77,8 @@ _TABLE_DDL: list[str] = [
         topics TEXT,
         session_summary TEXT,
         session_briefing TEXT,
+        intake_record TEXT,
+        intake_record_updated_at TEXT,
         psychological_summary TEXT,
         dominant_affects TEXT,
         key_themes TEXT,
@@ -252,6 +259,7 @@ class MigrationService:
             self._ensure_schema_version_table(conn)
             self._validate_foundation_schema(conn)
             self._create_current_schema(conn)
+            self._ensure_sessions_additive_columns(conn)
             self._record_schema_version(conn)
         finally:
             conn.close()
@@ -292,6 +300,15 @@ class MigrationService:
             cursor.execute(statement)
         for statement in _INDEX_DDL:
             cursor.execute(statement)
+        conn.commit()
+
+    @staticmethod
+    def _ensure_sessions_additive_columns(conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        existing = {row[1] for row in cursor.fetchall()}
+        for column, ddl_type in _SESSION_ADDITIVE_COLUMNS.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {ddl_type}")
         conn.commit()
 
     @staticmethod

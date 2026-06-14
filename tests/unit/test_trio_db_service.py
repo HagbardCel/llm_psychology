@@ -79,6 +79,43 @@ async def _save_profile(db, user_id: str) -> None:
 
 @pytest.mark.trio
 @pytest.mark.unit
+async def test_save_and_load_session_with_intake_record(test_db_service):
+    user_id = "test_user_intake_record"
+    await _save_profile(test_db_service, user_id)
+    now = datetime.now()
+    intake_record = {
+        "schema_version": 1,
+        "presenting_problem": {
+            "main_concern": {
+                "value": "work anxiety",
+                "evidence_quote": "I feel anxious at work",
+                "source_message_index": 0,
+                "source_role": "user",
+                "confidence": "high",
+            }
+        },
+    }
+    session = Session(
+        session_id="intake-record-session",
+        user_id=user_id,
+        session_type="intake",
+        timestamp=now,
+        transcript=[],
+        intake_record=intake_record,
+        intake_record_updated_at=now,
+    )
+
+    assert await test_db_service.save_session(session)
+
+    loaded = await test_db_service.get_session(session.session_id)
+
+    assert loaded is not None
+    assert loaded.intake_record == intake_record
+    assert loaded.intake_record_updated_at is not None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
 async def test_save_and_load_therapy_plan_with_briefing(
     test_db_service, sample_therapy_plan, sample_session_briefing
 ):
