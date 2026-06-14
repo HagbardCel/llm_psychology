@@ -1,0 +1,36 @@
+#!/bin/bash
+# Pre-push hook to run release-candidate validation before pushing
+# This ensures finalization-check passes before code is shared
+
+set -e  # Exit on any error
+
+echo "🔍 Pre-push hook: Running finalization-check..."
+echo ""
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT" || exit 1
+
+echo "Running release-candidate validation in Docker..."
+echo "This includes lint, contract validation, tests, and the deterministic probe."
+echo ""
+
+if make finalization-check; then
+    echo ""
+    echo "✅ Finalization check passed! Proceeding with push."
+    echo ""
+    exit 0
+else
+    echo ""
+    echo "❌ Finalization check failed! Push aborted."
+    echo ""
+    echo "To fix:"
+    echo "  1. Review the failures above"
+    echo "  2. Fix the issues in your code"
+    echo "  3. Run 'make finalization-check' to verify fixes"
+    echo "  4. Try pushing again"
+    echo ""
+    echo "To skip this hook (not recommended):"
+    echo "  git push --no-verify"
+    echo ""
+    exit 1
+fi

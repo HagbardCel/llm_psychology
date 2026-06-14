@@ -29,7 +29,7 @@ help:
 	@echo "  test-integration  - Run integration tests only"
 	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
-	@echo "  install-hooks     - Install git pre-commit hook for automated testing"
+	@echo "  install-hooks     - Install git pre-commit and pre-push hooks for automated validation"
 	@echo "  clean             - Clean up generated files and caches"
 	@echo "  clean-testdb      - Clean test databases only"
 	@echo "  requirements      - Generate locked requirements from .in files"
