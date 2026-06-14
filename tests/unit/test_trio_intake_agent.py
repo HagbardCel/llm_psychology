@@ -642,6 +642,80 @@ async def test_note_tracking_no_new_information_keeps_current_record(
 
 @pytest.mark.trio
 @pytest.mark.unit
+async def test_note_tracking_duplicate_evidence_applies_without_persistence(
+    mock_llm_service, app_config
+):
+    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            symptoms=[
+                IntakeEvidence(
+                    value="racing thoughts",
+                    evidence_quote="I have racing thoughts.",
+                    source_message_index=1,
+                    source_role="user",
+                )
+            ]
+        )
+    )
+
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase
+    ):
+        _ = method, phase
+        return patch
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext("user-123"),
+        config=config,
+    )
+    existing = IntakeRecord()
+    existing.presenting_problem.symptoms = [
+        IntakeEvidence(
+            value="racing thoughts",
+            evidence_quote="I have racing thoughts.",
+            source_message_index=1,
+            source_role="user",
+        )
+    ]
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(role="assistant", content="What symptoms show up?", timestamp=datetime.now()),
+            Message(role="user", content="I have racing thoughts.", timestamp=datetime.now()),
+        ],
+    )
+    context.intake_record = existing
+
+    response = await agent.process_message("I have racing thoughts.", context)
+    metadata = response.metadata["intake_note_tracking"]
+
+    assert metadata["status"] == "success"
+    assert metadata["merge_status"] == "applied"
+    assert metadata["applied"] is True
+    assert metadata["record_changed"] is False
+    assert response.metadata["intake_record_persistence"] == {
+        "should_persist": False,
+        "record_changed": False,
+    }
+
+
+@pytest.mark.trio
+@pytest.mark.unit
 async def test_note_tracking_empty_patch_reports_noop_metadata(
     mock_llm_service, app_config
 ):

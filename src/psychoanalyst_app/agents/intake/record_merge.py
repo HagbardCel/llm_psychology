@@ -27,7 +27,11 @@ IntakePatchMergeStatus = Literal[
 
 @dataclass(frozen=True)
 class IntakePatchMergeResult:
-    """Result of validating and merging a structured intake patch."""
+    """Result of validating and merging a structured intake patch.
+
+    ``applied`` means validated evidence reached the deterministic merge path.
+    ``record_changed`` is the persistence-relevant signal.
+    """
 
     record: IntakeRecord
     status: IntakePatchMergeStatus
@@ -193,6 +197,14 @@ def merge_intake_record_patch(
         source_message_index=source_message_index,
         strict_quote_validation=strict_quote_validation,
     )
+    return _merge_validated_patch(current, patch)
+
+
+def _merge_validated_patch(
+    current: IntakeRecord,
+    patch: IntakeRecordPatch,
+) -> IntakeRecord:
+    """Return a new intake record with an already validated patch applied."""
     merged = current.model_copy(deep=True)
 
     if patch.presenting_problem:
@@ -307,13 +319,7 @@ def merge_intake_record_patch_with_diagnostics(
                 record_changed=False,
             )
 
-        merged = merge_intake_record_patch(
-            current,
-            validated_patch,
-            latest_user_message=latest_user_message,
-            source_message_index=source_message_index,
-            strict_quote_validation=strict_quote_validation,
-        )
+        merged = _merge_validated_patch(current, validated_patch)
     except Exception as exc:
         return IntakePatchMergeResult(
             record=current,

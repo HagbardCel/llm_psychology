@@ -177,11 +177,13 @@ def intake_record_metadata(
     merge_result = state.merge_result
     status = tracking.status if tracking else "not_run"
     if tracking and tracking.status == "success":
-        if merge_result and merge_result.status == "empty_patch":
+        if merge_result is None:
+            status = "merge_not_run"
+        elif merge_result.status == "empty_patch":
             status = "empty_patch"
-        elif merge_result and merge_result.status == "empty_after_validation":
+        elif merge_result.status == "empty_after_validation":
             status = "validation_failure"
-        elif merge_result and merge_result.status == "merge_failure":
+        elif merge_result.status == "merge_failure":
             status = "merge_failure"
     tracking_metadata: dict[str, object] = {
         "status": status,
