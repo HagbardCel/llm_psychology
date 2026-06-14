@@ -5,6 +5,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from psychoanalyst_app.agents.intake.policy import (
+    MAX_INTAKE_PATIENT_TURNS,
+    MIN_INTAKE_PATIENT_TURNS,
+)
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.orchestration.models import ConversationContext
 from psychoanalyst_app.shared.intake_slot_evidence import (
@@ -19,11 +23,6 @@ from psychoanalyst_app.shared.intake_slot_evidence import (
     covered_slots_from_evidence,
     intake_slot_evidence_from_messages,
     next_required_follow_up_slot,
-)
-
-from psychoanalyst_app.agents.intake.policy import (
-    MAX_INTAKE_PATIENT_TURNS,
-    MIN_INTAKE_PATIENT_TURNS,
 )
 
 logger = logging.getLogger(__name__)
