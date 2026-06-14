@@ -8,6 +8,17 @@ from psychoanalyst_app.config import Settings
 pytestmark = [pytest.mark.unit]
 
 
+@pytest.fixture(autouse=True)
+def clear_intake_flag_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "INTAKE_NOTE_TRACKING_ENABLED",
+        "INTAKE_RECORD_COMPLETION_GATE_ENABLED",
+        "INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION",
+        "INTAKE_RECORD_DIRECT_ASK_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_intake_flag_defaults_are_valid() -> None:
     settings = Settings(_env_file=None)
     assert settings.INTAKE_NOTE_TRACKING_ENABLED is False
