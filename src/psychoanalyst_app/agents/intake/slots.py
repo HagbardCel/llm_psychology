@@ -21,10 +21,12 @@ from psychoanalyst_app.shared.intake_slot_evidence import (
     next_required_follow_up_slot,
 )
 
-logger = logging.getLogger(__name__)
+from psychoanalyst_app.agents.intake.policy import (
+    MAX_INTAKE_PATIENT_TURNS,
+    MIN_INTAKE_PATIENT_TURNS,
+)
 
-MIN_INTAKE_PATIENT_TURNS = 3
-MAX_INTAKE_PATIENT_TURNS = 12
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "COPING_ATTEMPTS_PROMPT",

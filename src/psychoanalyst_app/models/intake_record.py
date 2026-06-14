@@ -17,7 +17,7 @@ class IntakeEvidence(BaseModel):
 
     value: str | None = Field(default=None, max_length=500)
     evidence_quote: str | None = Field(default=None, max_length=500)
-    source_message_index: int | None = None
+    source_message_index: int | None = Field(default=None, ge=0)
     source_role: Literal["user"] | None = None
     confidence: Confidence = "medium"
     response_status: EvidenceResponseStatus = "informative"
@@ -31,8 +31,11 @@ class IntakeEvidence(BaseModel):
             )
         return self
 
+    def has_patient_source(self) -> bool:
+        return self.source_role == "user" and self.source_message_index is not None
+
     def is_addressed(self) -> bool:
-        return bool(self.value and self.evidence_quote)
+        return bool(self.value and self.evidence_quote and self.has_patient_source())
 
     def is_present(self) -> bool:
         return self.is_addressed() and self.response_status == "informative"

@@ -22,6 +22,13 @@ def test_evidence_presence_requires_value_and_quote() -> None:
     ).is_present()
 
 
+def test_evidence_presence_requires_patient_source() -> None:
+    assert not IntakeEvidence(
+        value="anxiety",
+        evidence_quote="I feel anxious",
+    ).is_present()
+
+
 def test_unknown_evidence_is_addressed_but_not_informative() -> None:
     evidence = IntakeEvidence(
         value="unknown",

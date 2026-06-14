@@ -23,7 +23,7 @@ def test_empty_record_misses_all_hard_items() -> None:
     assert diagnostics.missing_hard_items == [
         "risk_screen",
         "presenting_problem",
-        "time_course",
+        "duration",
         "functional_impairment",
         "goal_preference",
     ]
@@ -39,9 +39,9 @@ def test_unknown_after_direct_ask_is_addressed_not_informative() -> None:
 
     diagnostics = missing_items_from_record(record)
 
-    assert "time_course" in diagnostics.missing_hard_items
-    assert "time_course" in diagnostics.addressed_hard_items
-    assert "time_course" in diagnostics.unable_to_answer_items
+    assert "duration" in diagnostics.missing_hard_items
+    assert "duration" in diagnostics.addressed_hard_items
+    assert "duration" in diagnostics.unable_to_answer_items
 
 
 def test_max_turn_completion_allows_addressed_hard_items_with_missing_soft() -> None:
@@ -64,7 +64,7 @@ def test_max_turn_completion_allows_addressed_hard_items_with_missing_soft() -> 
 
     assert diagnostics.complete
     assert diagnostics.max_turn_completion
-    assert "time_course" in diagnostics.missing_hard_items
+    assert "duration" in diagnostics.missing_hard_items
 
 
 def test_max_turn_completion_rejects_unasked_missing_hard_items() -> None:

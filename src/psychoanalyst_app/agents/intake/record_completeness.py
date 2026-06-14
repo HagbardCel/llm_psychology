@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from psychoanalyst_app.agents.intake.slots import (
+from psychoanalyst_app.agents.intake.policy import (
     MAX_INTAKE_PATIENT_TURNS,
     MIN_INTAKE_PATIENT_TURNS,
 )
@@ -13,7 +13,7 @@ from psychoanalyst_app.models.intake_record import IntakeEvidence, IntakeRecord
 HARD_ITEM_ORDER = [
     "risk_screen",
     "presenting_problem",
-    "time_course",
+    "duration",
     "functional_impairment",
     "goal_preference",
 ]
@@ -42,7 +42,7 @@ def _item_evidence(record: IntakeRecord, item: str) -> list[IntakeEvidence]:
         ]
     if item == "presenting_problem":
         return [record.presenting_problem.main_concern]
-    if item == "time_course":
+    if item == "duration":
         return [
             record.presenting_problem.time_course.duration_or_onset,
             record.presenting_problem.time_course.frequency,
@@ -67,7 +67,7 @@ def _item_evidence(record: IntakeRecord, item: str) -> list[IntakeEvidence]:
 def _has_informative(record: IntakeRecord, item: str) -> bool:
     if item == "risk_screen":
         return record.safety.is_complete()
-    if item == "time_course":
+    if item == "duration":
         return record.presenting_problem.time_course.has_required_time_course()
     if item == "goal_preference":
         return record.goals.is_present()
@@ -79,7 +79,7 @@ def _has_informative(record: IntakeRecord, item: str) -> bool:
 def _has_addressed(record: IntakeRecord, item: str) -> bool:
     if item == "risk_screen":
         return record.safety.is_addressed()
-    if item == "time_course":
+    if item == "duration":
         return record.presenting_problem.time_course.has_addressed_time_course()
     if item == "goal_preference":
         return record.goals.is_addressed()
@@ -138,10 +138,10 @@ def intake_record_completion_decision(
     hard_items = set(HARD_ITEM_ORDER)
 
     all_hard_informative = not missing_hard
-    hard_addressed_after_direct_ask = hard_items <= addressed_hard
+    all_hard_items_addressed = hard_items <= addressed_hard
     max_turn_completion = (
         patient_turn_count >= MAX_INTAKE_PATIENT_TURNS
-        and hard_addressed_after_direct_ask
+        and all_hard_items_addressed
         and bool(missing_soft or missing_hard)
     )
     complete = (
