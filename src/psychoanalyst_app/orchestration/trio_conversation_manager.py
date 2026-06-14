@@ -39,7 +39,6 @@ LLM_RETRY_ERROR_MESSAGE = (
 LLM_TERMINAL_ERROR_MESSAGE = (
     "I am unable to generate a response right now. Please pause and try again later."
 )
-
 def _resolve_streaming_phase(agent: str, context: ConversationContext) -> LLMPhase:
     if agent == "INTAKE":
         return INTAKE_RESPONSE
@@ -387,10 +386,6 @@ class TrioConversationManager:
                 await trio.sleep(0.01)  # Small delay for effect
 
             # Save assistant message to database
-            logger.info(
-                "DEBUG: stream_static_response add_message for session %s",
-                context.session_id,
-            )
             await self.add_message(context.session_id, "assistant", content, agent)
 
         except Exception as e:
@@ -457,9 +452,6 @@ class TrioConversationManager:
             agent: Name of the agent that generated this message (optional)
         """
         try:
-            logger.info(
-                f"DEBUG: add_message called for {session_id} role={role} agent={agent}"
-            )
             # Create message
             message = Message(
                 role=role, content=content, timestamp=datetime.now(), agent=agent
