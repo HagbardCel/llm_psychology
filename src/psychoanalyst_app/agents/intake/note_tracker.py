@@ -85,13 +85,8 @@ async def extract_intake_record_patch(
             error_message=str(exc),
             error_code=type(exc).__name__,
         )
-    except trio.Cancelled as exc:
-        logger.warning("Intake note tracking cancelled", exc_info=True)
-        return IntakePatchExtractionResult(
-            status="timeout",
-            error_message=str(exc),
-            error_code=type(exc).__name__,
-        )
+    except trio.Cancelled:
+        raise
     except Exception as exc:
         logger.warning("Intake note tracking failed", exc_info=True)
         error_message, error_code = _extraction_error_diagnostics(exc)

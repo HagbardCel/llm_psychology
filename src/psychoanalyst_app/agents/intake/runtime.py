@@ -62,6 +62,7 @@ _FAILURE_TRACKING_STATUSES = frozenset(
 class IntakeGateOutcome:
     gate_complete: bool
     stale_record_used: bool
+    # True only when a tracking failure blocked max-turn completion this turn.
     gate_blocked_by_failure: bool
 
 
@@ -144,6 +145,7 @@ async def prepare_intake_record_state(
     note_tracking_enabled: bool,
     strict_quote_validation: bool,
     is_guest: bool,
+    structured_gate_enabled: bool,
 ) -> IntakeRecordState:
     """Prepare typed intake record state and optional note-tracking diagnostics."""
     record = context.intake_record or IntakeRecord()
@@ -172,9 +174,17 @@ async def prepare_intake_record_state(
         merge_result=merge_result,
         should_emit_metadata=note_tracking is not None or has_existing_record,
     )
-    gate_outcome = compute_intake_gate_outcome(
-        completeness,
-        tracking_failed=note_tracking_failed(state),
+    gate_outcome = (
+        compute_intake_gate_outcome(
+            completeness,
+            tracking_failed=note_tracking_failed(state),
+        )
+        if structured_gate_enabled
+        else IntakeGateOutcome(
+            gate_complete=completeness.complete,
+            stale_record_used=False,
+            gate_blocked_by_failure=False,
+        )
     )
     return IntakeRecordState(
         record=state.record,

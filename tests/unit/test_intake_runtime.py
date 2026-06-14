@@ -1,3 +1,7 @@
+from datetime import datetime
+
+import pytest
+
 from psychoanalyst_app.agents.intake.note_tracker import (
     IntakePatchExtractionResult,
 )
@@ -8,8 +12,11 @@ from psychoanalyst_app.agents.intake.runtime import (
     compute_intake_gate_outcome,
     intake_record_metadata,
     note_tracking_failed,
+    prepare_intake_record_state,
 )
+from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
+from psychoanalyst_app.orchestration.models import ConversationContext
 
 
 def test_successful_note_tracking_without_merge_result_is_not_plain_success() -> None:
@@ -175,3 +182,59 @@ def test_failure_metadata_includes_gate_flags() -> None:
     assert tracking["gate_blocked_by_failure"] is True
     assert tracking["error_message"] == "boom"
     assert tracking["error_code"] == "RuntimeError"
+
+
+class _FailingLLM:
+    async def generate_structured_output_async(
+        self,
+        _prompt,
+        _schema,
+        method="json_schema",
+        *,
+        phase,
+    ):
+        _ = method, phase
+        raise RuntimeError("boom")
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_prepare_state_without_gate_omits_gate_diagnostics_on_failure() -> None:
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    message = "I feel anxious every day"
+    context = ConversationContext(
+        session_id="session-123",
+        user_profile=profile,
+        therapy_plan=None,
+        message_history=[
+            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
+            Message(role="user", content=message, timestamp=datetime.now()),
+        ],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+    )
+
+    state = await prepare_intake_record_state(
+        message=message,
+        context=context,
+        llm_service=_FailingLLM(),
+        note_tracking_enabled=True,
+        strict_quote_validation=True,
+        is_guest=False,
+        structured_gate_enabled=False,
+    )
+    metadata = intake_record_metadata(state, legacy_diagnostics={})
+
+    assert state.stale_record_used is False
+    assert state.gate_blocked_by_failure is False
+    tracking = metadata["intake_note_tracking"]
+    assert tracking["status"] == "llm_failure"
+    assert tracking["stale_record_used"] is False
+    assert tracking["gate_blocked_by_failure"] is False

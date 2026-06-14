@@ -211,3 +211,40 @@ async def test_note_tracker_reports_timeout() -> None:
 
     assert result.status == "timeout"
     assert result.error_code == "TooSlowError"
+
+
+async def test_note_tracker_propagates_cancellation() -> None:
+    import trio
+
+    class _WaitingLLM:
+        async def generate_structured_output_async(
+            self,
+            _prompt,
+            _schema,
+            method="json_schema",
+            *,
+            phase,
+        ):
+            _ = method, phase
+            await trio.sleep_forever()
+
+    with trio.CancelScope() as cancel_scope:
+        async with trio.open_nursery() as nursery:
+
+            async def cancel_soon() -> None:
+                await trio.sleep(0)
+                cancel_scope.cancel()
+
+            nursery.start_soon(cancel_soon)
+            with pytest.raises(trio.Cancelled):
+                await extract_intake_record_patch(
+                    llm_service=_WaitingLLM(),
+                    current_record=IntakeRecord(),
+                    latest_user_message=Message(
+                        role="user",
+                        content="I feel anxious every day",
+                        timestamp=datetime.now(),
+                    ),
+                    previous_assistant_message=None,
+                    source_message_index=2,
+                )

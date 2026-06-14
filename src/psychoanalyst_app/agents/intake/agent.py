@@ -83,6 +83,10 @@ class TrioIntakeAgent:
                 context, intake_slot_coverage
             )
             is_guest = is_guest_intake_context(context)
+            use_structured_gate = should_use_structured_completion_gate(
+                note_tracking_enabled=self.intake_note_tracking_enabled,
+                completion_gate_enabled=self.intake_record_completion_gate_enabled,
+            )
             record_state = await prepare_intake_record_state(
                 message=message,
                 context=context,
@@ -90,6 +94,7 @@ class TrioIntakeAgent:
                 note_tracking_enabled=self.intake_note_tracking_enabled,
                 strict_quote_validation=self.strict_quote_validation,
                 is_guest=is_guest,
+                structured_gate_enabled=use_structured_gate,
             )
             record_metadata = intake_record_metadata(
                 record_state,
@@ -102,10 +107,6 @@ class TrioIntakeAgent:
 
             logger.info("Topics covered so far: %s", context.topics_covered)
 
-            use_structured_gate = should_use_structured_completion_gate(
-                note_tracking_enabled=self.intake_note_tracking_enabled,
-                completion_gate_enabled=self.intake_record_completion_gate_enabled,
-            )
             is_complete = (
                 record_state.gate_complete
                 if use_structured_gate

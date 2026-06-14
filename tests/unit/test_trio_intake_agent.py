@@ -1181,6 +1181,6 @@ async def test_diagnostics_only_mode_continues_on_extraction_failure(
     assert response.workflow_event != WorkflowEvent.COMPLETE_INTAKE
     metadata = response.metadata["intake_note_tracking"]
     assert metadata["status"] == "llm_failure"
-    assert metadata["stale_record_used"] is True
+    assert metadata["stale_record_used"] is False
     assert metadata["gate_blocked_by_failure"] is False
     assert response.content
