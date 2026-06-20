@@ -5,9 +5,11 @@ Tests database operations including session_briefing storage and retrieval.
 """
 
 from datetime import datetime
+import json
 
 import pytest
 import trio
+from pydantic import ValidationError
 
 from psychoanalyst_app.models.domain import (
     Message,
@@ -116,6 +118,136 @@ async def test_save_and_load_session_with_intake_record(test_db_service):
     assert loaded is not None
     assert loaded.intake_record == intake_record
     assert loaded.intake_record_updated_at == now
+
+
+
+
+INVALID_PERSISTED_INTAKE_RECORD_JSON = json.dumps(
+    {
+        "presenting_problem": {
+            "main_concern": {
+                "source_message_index": -1,
+            }
+        }
+    }
+)
+
+
+def _corrupt_persisted_intake_record(db, session_id: str, payload: str) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db.db_path)
+    try:
+        conn.execute(
+            "UPDATE sessions SET intake_record = ? WHERE session_id = ?",
+            (payload, session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _save_intake_session(db, *, session_id: str, user_id: str) -> datetime:
+    await _save_profile(db, user_id)
+    now = datetime.now()
+    intake_record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="work anxiety",
+                evidence_quote="I feel anxious at work",
+                source_message_index=0,
+                source_role="user",
+                confidence="high",
+            )
+        )
+    )
+    session = Session(
+        session_id=session_id,
+        user_id=user_id,
+        session_type="intake",
+        timestamp=now,
+        transcript=[],
+        intake_record=intake_record,
+        intake_record_updated_at=now,
+    )
+    assert await db.save_session(session)
+    return now
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "corrupt_payload,expected_error",
+    [
+        ("{not json", json.JSONDecodeError),
+        ("", json.JSONDecodeError),
+        (INVALID_PERSISTED_INTAKE_RECORD_JSON, ValidationError),
+    ],
+)
+async def test_invalid_persisted_intake_record_fails_loudly_on_get_session(
+    test_db_service, corrupt_payload, expected_error
+):
+    session_id = "corrupt-intake-get-session"
+    user_id = "corrupt_intake_get_user"
+    await _save_intake_session(
+        test_db_service, session_id=session_id, user_id=user_id
+    )
+    _corrupt_persisted_intake_record(test_db_service, session_id, corrupt_payload)
+
+    with pytest.raises(expected_error):
+        await test_db_service.get_session(session_id)
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_get_session_missing_id_preserves_soft_none_behavior(test_db_service):
+    assert await test_db_service.get_session("missing-session-id") is None
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "list_read_method",
+    [
+        "get_user_sessions",
+        "get_all_sessions_for_user",
+        "get_recent_sessions",
+    ],
+)
+async def test_invalid_persisted_intake_record_fails_loudly_on_list_reads(
+    test_db_service, list_read_method
+):
+    session_id = f"corrupt-intake-{list_read_method}"
+    user_id = f"corrupt_intake_{list_read_method}"
+    await _save_intake_session(
+        test_db_service, session_id=session_id, user_id=user_id
+    )
+    _corrupt_persisted_intake_record(
+        test_db_service, session_id, INVALID_PERSISTED_INTAKE_RECORD_JSON
+    )
+
+    with pytest.raises(ValidationError):
+        if list_read_method == "get_user_sessions":
+            await test_db_service.get_user_sessions(user_id, limit=10)
+        elif list_read_method == "get_all_sessions_for_user":
+            await test_db_service.get_all_sessions_for_user(user_id)
+        else:
+            await test_db_service.get_recent_sessions(
+                user_id, limit=10, enriched_only=False
+            )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_list_reads_missing_user_preserves_soft_empty_behavior(test_db_service):
+    assert await test_db_service.get_user_sessions("missing-user", limit=10) == []
+    assert await test_db_service.get_all_sessions_for_user("missing-user") == []
+    assert (
+        await test_db_service.get_recent_sessions(
+            "missing-user", limit=10, enriched_only=False
+        )
+        == []
+    )
 
 
 @pytest.mark.trio
@@ -256,9 +388,13 @@ async def test_migration_adds_intake_record_columns_to_v1_sessions_table(tmp_pat
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
         }
+        version = conn.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0]
     finally:
         conn.close()
 
+    assert version == 2
     assert "intake_record" in columns
     assert "intake_record_updated_at" in columns
 

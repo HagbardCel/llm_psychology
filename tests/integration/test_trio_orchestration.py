@@ -211,6 +211,54 @@ async def test_conversation_manager_claims_initial_greeting_once(
 
 @pytest.mark.trio
 @pytest.mark.integration
+async def test_conversation_manager_hydrates_intake_record_from_session(
+    conversation_manager, service_container, test_user
+):
+    """Persisted intake record and timestamp survive DB load into ConversationContext."""
+    from psychoanalyst_app.models.domain import Session
+    from psychoanalyst_app.models.intake_record import (
+        IntakeEvidence,
+        IntakeRecord,
+        PresentingProblemRecord,
+    )
+
+    trio_db_service = service_container.get("trio_db_service")
+    session_id = "intake-hydration-session"
+    now = datetime.now()
+    intake_record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="work anxiety",
+                evidence_quote="I feel anxious at work",
+                source_message_index=0,
+                source_role="user",
+                confidence="high",
+            )
+        )
+    )
+    session = Session(
+        session_id=session_id,
+        user_id=test_user.user_id,
+        session_type="intake",
+        timestamp=now,
+        transcript=[],
+        intake_record=intake_record,
+        intake_record_updated_at=now,
+    )
+    assert await trio_db_service.save_session(session)
+
+    context = await conversation_manager.get_context(session_id)
+
+    assert context.intake_record == intake_record
+    assert context.intake_record_updated_at == now
+
+    cached = await conversation_manager.get_context(session_id)
+    assert cached.intake_record == intake_record
+    assert cached.intake_record_updated_at == now
+
+
+@pytest.mark.trio
+@pytest.mark.integration
 async def test_conversation_manager_add_message(
     conversation_manager, service_container
 ):

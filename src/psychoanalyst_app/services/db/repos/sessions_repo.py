@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
+
+from pydantic import ValidationError
 
 from psychoanalyst_app.models.domain import Session
 from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
@@ -20,6 +23,18 @@ from psychoanalyst_app.services.db_serialization import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CORRUPT_SESSION_DATA_ERRORS = (json.JSONDecodeError, TypeError, ValidationError)
+
+
+def _reraise_if_corrupt_session_data(exc: Exception, log_context: str) -> None:
+    if isinstance(exc, _CORRUPT_SESSION_DATA_ERRORS):
+        logger.error(
+            "Invalid persisted session data (%s)",
+            log_context,
+            exc_info=True,
+        )
+        raise
 
 
 async def save_session(
@@ -128,6 +143,8 @@ def _sync_get_session(conn, session_id: str, iso_to_datetime) -> Session | None:
         conn.commit()
         return session_from_row(row, iso_to_datetime)
     except Exception as exc:  # pragma: no cover - defensive logging
+        _reraise_if_corrupt_session_data(exc, f"session_id={session_id}")
+        reraise_locked_database_error(exc)
         logger.error("Error retrieving session %s: %s", session_id, exc, exc_info=True)
         return None
 
@@ -167,6 +184,8 @@ def _sync_get_user_sessions(
         conn.commit()
         return sessions
     except Exception as exc:  # pragma: no cover
+        _reraise_if_corrupt_session_data(exc, f"user_id={user_id} list-read")
+        reraise_locked_database_error(exc)
         logger.error("Error retrieving sessions for user %s: %s", user_id, exc)
         return []
 
@@ -202,6 +221,8 @@ def _sync_get_all_sessions(conn, user_id: str, iso_to_datetime) -> list[Session]
         conn.commit()
         return sessions
     except Exception as exc:  # pragma: no cover
+        _reraise_if_corrupt_session_data(exc, f"user_id={user_id} all-sessions-read")
+        reraise_locked_database_error(exc)
         logger.error("Error retrieving all sessions for %s: %s", user_id, exc)
         return []
 
@@ -252,6 +273,8 @@ def _sync_get_recent_sessions(
         conn.commit()
         return sessions
     except Exception as exc:  # pragma: no cover
+        _reraise_if_corrupt_session_data(exc, f"user_id={user_id} recent-sessions-read")
+        reraise_locked_database_error(exc)
         logger.error("Error retrieving recent sessions for %s: %s", user_id, exc)
         return []
 

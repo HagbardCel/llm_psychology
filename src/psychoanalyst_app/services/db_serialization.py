@@ -59,9 +59,9 @@ def dump_intake_record(record: IntakeRecord | None) -> str | None:
 
 
 def load_intake_record(payload: str | None) -> IntakeRecord | None:
-    if not payload:
+    if payload is None:
         return None
-    return IntakeRecord.model_validate(load_json(payload, default={}))
+    return IntakeRecord.model_validate(json.loads(payload))
 
 
 SESSION_COLUMNS = (
