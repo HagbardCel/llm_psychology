@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 
 import pytest
+from pydantic import BaseModel
 
 from psychoanalyst_app.agents.intake.note_tracking_contract import (
     FIELD_GUIDANCE_BY_PATH,
@@ -22,6 +24,27 @@ from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
 
 pytestmark = pytest.mark.unit
+
+
+def _unwrap_annotation(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is Union or origin is UnionType:
+        non_none = [arg for arg in args if arg is not type(None)]
+        if len(non_none) == 1:
+            return _unwrap_annotation(non_none[0])
+        return annotation
+
+    if origin is list and args:
+        return list[_unwrap_annotation(args[0])]  # type: ignore[misc, valid-type]
+
+    return annotation
+
+
+def _is_nested_model_field(annotation: Any) -> bool:
+    unwrapped = _unwrap_annotation(annotation)
+    return isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel)
 
 
 def _rendered_prompt(
@@ -74,6 +97,26 @@ def test_inventory_walker_covers_known_paths() -> None:
     assert "goals.therapy_goals" in paths
 
 
+def test_evidence_paths_are_discovered_from_intake_record_patch_root() -> None:
+    evidence_paths = intake_patch_evidence_paths()
+
+    section_prefixes = {path.split(".", 1)[0] for path in evidence_paths}
+
+    patch_model_sections = {
+        name
+        for name, field in IntakeRecordPatch.model_fields.items()
+        if _is_nested_model_field(field.annotation)
+    }
+
+    assert section_prefixes <= patch_model_sections
+    assert {
+        "presenting_problem",
+        "safety",
+        "coping",
+        "goals",
+    } <= section_prefixes
+
+
 def test_rendered_prompt_mentions_all_top_level_patch_fields() -> None:
     prompt = _rendered_prompt()
     for field_name in intake_patch_top_level_fields():
@@ -82,6 +125,8 @@ def test_rendered_prompt_mentions_all_top_level_patch_fields() -> None:
 
 def test_rendered_prompt_mentions_all_evidence_paths() -> None:
     prompt = _rendered_prompt()
+    assert "FIELD GUIDANCE:" in prompt
+    assert "EXAMPLES:" in prompt
     for path in intake_patch_evidence_paths():
         assert path in prompt
 
@@ -102,15 +147,22 @@ def test_format_replaces_runtime_slots() -> None:
     )
     assert "Latest patient text here." in prompt
     assert "7" in prompt
+    assert '"schema_version": 1' in prompt
     assert "{current_record_json}" not in prompt
     assert "{latest_user_message}" not in prompt
     assert "{source_message_index}" not in prompt
+    assert "{previous_assistant_message}" not in prompt
     assert "{patch_shape}" not in prompt
     assert "{examples}" not in prompt
     assert "{field_guidance}" not in prompt
     assert "None" not in prompt.split("PREVIOUS THERAPIST MESSAGE:")[1].split(
         "LATEST PATIENT MESSAGE:"
     )[0]
+
+    prompt_with_prev = _rendered_prompt(
+        previous_assistant_message="How long has this been going on?",
+    )
+    assert "How long has this been going on?" in prompt_with_prev
 
 
 def test_format_prompt_does_not_raise_with_json_like_inputs() -> None:

@@ -441,12 +441,12 @@ The extraction prompt should require:
 - [x] Remove any stale fields from older branch versions.
 - [x] Add a prompt/schema contract test that compares prompt-declared field names with the actual `IntakeRecordPatch` schema.
 - [x] Add examples for:
-  - presenting problem
-  - time course
-  - goals
-  - coping attempts
-  - current blockers
-  - relevant context
+  - presenting problem (`presenting_problem.main_concern`)
+  - time course (`presenting_problem.time_course.duration_or_onset`)
+  - goals (`goals.therapy_goals`)
+  - coping attempts (`coping.attempted_strategies`)
+  - functional impairment / avoidance (`presenting_problem.functional_impairment`)
+  - relevant clinical context via existing schema paths such as `presenting_problem.main_concern`, `presenting_problem.symptoms`, or `presenting_problem.functional_impairment`
   - unable/unknown answers
   - no-new-information turns
 - [x] Ensure source-message and quote fields match validation expectations.
@@ -493,7 +493,7 @@ The current fake extraction path only returns minimal “no new information” o
 | “I struggle with procrastination and anxiety” | Update presenting problem. |
 | “This has been going on for years” | Update time course. |
 | “I want more confidence and agency” | Update goals. |
-| “I avoid letters and admin tasks” | Update current blockers / avoidance pattern. |
+| “I avoid letters and admin tasks” | Update `presenting_problem.functional_impairment` (avoidance pattern). |
 | “I usually distract myself” | Update coping attempts. |
 | “I have no thoughts of harming myself or anyone else, and nothing medically urgent.” | Populate `safety.self_harm`, `safety.harm_to_others`, and `safety.medical_urgency`. |
 | “I don’t want to answer that.” after a risk ask | Mark the relevant safety field as `unable_to_answer` with `direct_ask=True`. |

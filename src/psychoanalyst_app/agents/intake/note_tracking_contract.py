@@ -11,13 +11,9 @@ from pydantic import BaseModel
 
 from psychoanalyst_app.agents.intake.prompts import INTAKE_NOTE_TRACKING_PROMPT
 from psychoanalyst_app.models.intake_record import (
-    CopingRecord,
-    GoalsRecord,
     IntakeEvidence,
     IntakeRecord,
     IntakeRecordPatch,
-    PresentingProblemRecord,
-    SafetyRecord,
 )
 
 FORBIDDEN_PROMPT_FIELD_NAMES = frozenset({"current_blockers", "relevant_context"})
@@ -252,18 +248,12 @@ def intake_evidence_required_for_informative() -> frozenset[str]:
 def intake_patch_evidence_paths() -> frozenset[str]:
     paths: set[str] = set()
     list_paths: set[str] = set()
-    for section_name, model in (
-        ("presenting_problem", PresentingProblemRecord),
-        ("safety", SafetyRecord),
-        ("coping", CopingRecord),
-        ("goals", GoalsRecord),
-    ):
-        _collect_evidence_paths(
-            model,
-            prefix=section_name,
-            paths=paths,
-            list_paths=list_paths,
-        )
+    _collect_evidence_paths(
+        IntakeRecordPatch,
+        prefix="",
+        paths=paths,
+        list_paths=list_paths,
+    )
     global _LIST_EVIDENCE_PATHS
     _LIST_EVIDENCE_PATHS = frozenset(list_paths)
     return frozenset(paths)
@@ -284,8 +274,11 @@ def render_patch_shape_block() -> str:
 
 def render_field_guidance_block() -> str:
     lines = [
-        f"- {path}: {guidance}"
-        for path, guidance in sorted(FIELD_GUIDANCE_BY_PATH.items())
+        "FIELD GUIDANCE:",
+        *[
+            f"- {path}: {guidance}"
+            for path, guidance in sorted(FIELD_GUIDANCE_BY_PATH.items())
+        ],
     ]
     return "\n".join(lines)
 
@@ -309,7 +302,7 @@ def render_prompt_examples() -> str:
                 ]
             )
         )
-    return "\n\n".join(blocks)
+    return "EXAMPLES:\n\n" + "\n\n".join(blocks)
 
 
 def format_intake_note_tracking_prompt(
@@ -362,7 +355,7 @@ def _collect_evidence_paths(
 ) -> None:
     for field_name, field_info in model.model_fields.items():
         annotation = _unwrap_annotation(field_info.annotation)
-        path = f"{prefix}.{field_name}"
+        path = f"{prefix}.{field_name}" if prefix else field_name
 
         if annotation is IntakeEvidence:
             paths.add(path)
