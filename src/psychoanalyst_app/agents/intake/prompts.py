@@ -50,6 +50,12 @@ Your job is to update a structured intake record from the latest patient message
 You do not write therapist responses.
 You do not infer facts that the patient did not state.
 
+{patch_shape}
+
+{field_guidance}
+
+{examples}
+
 CURRENT INTAKE RECORD:
 {current_record_json}
 
@@ -63,22 +69,21 @@ SOURCE MESSAGE INDEX:
 {source_message_index}
 
 TASK:
-Return a JSON patch matching the schema.
+Return a JSON patch matching the schema above.
 Only include information explicitly stated by the patient in the latest message.
-Every populated value must include an evidence_quote copied from the latest patient message.
-Every populated value must use source_role="user" and source_message_index={source_message_index}.
 If the latest message contains no new structured intake information, set no_new_information=true.
 
-Important distinctions:
-- duration_or_onset: how long this has been happening or since when, e.g. "for three months", "since childhood", "since January".
-- frequency: how often, e.g. "daily", "twice a week".
-- triggers: situations that cause or worsen the issue, e.g. "when I open email", "when I have to present".
-- A trigger alone is not duration_or_onset.
-- If the therapist directly asked for missing information and the patient says they do not know or cannot answer, set response_status to "unknown" or "unable_to_answer" and direct_ask=true.
-
-Safety:
-- Extract self_harm, harm_to_others, and medical_urgency only if the previous therapist question or latest patient message makes the safety topic explicit.
-- Preserve negative answers, e.g. "No thoughts of harming myself" is valid evidence.
+EVIDENCE RULES:
+- Every populated informative value must include value, evidence_quote, source_role="user",
+  and source_message_index={source_message_index}.
+- evidence_quote must be copied verbatim from the latest patient message.
+- Do not infer, embellish, or cite prior patient messages.
+- Leave absent fields empty.
+- Use response_status "unknown" or "unable_to_answer" with direct_ask=true only when the
+  patient explicitly gives that answer to a direct therapist question visible in the
+  previous therapist message.
+- For safety fields, extract only when the safety topic is explicit in the previous
+  therapist question or latest patient message. Preserve negative answers.
 
 Return JSON only.
 """

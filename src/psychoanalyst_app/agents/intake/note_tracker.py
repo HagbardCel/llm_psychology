@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -10,7 +9,9 @@ from typing import TYPE_CHECKING, Literal
 import trio
 from pydantic import ValidationError
 
-from psychoanalyst_app.agents.intake.prompts import INTAKE_NOTE_TRACKING_PROMPT
+from psychoanalyst_app.agents.intake.note_tracking_contract import (
+    format_intake_note_tracking_prompt,
+)
 from psychoanalyst_app.agents.intake.record_merge import count_patch_evidence
 from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.models.domain import Message
@@ -61,16 +62,14 @@ async def extract_intake_record_patch(
     timeout_seconds: float = 20.0,
 ) -> IntakePatchExtractionResult:
     """Extract a structured patch from the latest patient message."""
-    prompt = INTAKE_NOTE_TRACKING_PROMPT.format(
-        current_record_json=json.dumps(
-            current_record.model_dump(mode="json"),
-            sort_keys=True,
-            ensure_ascii=True,
-        ),
-        previous_assistant_message=(
-            previous_assistant_message.content if previous_assistant_message else ""
-        ),
+    prompt = format_intake_note_tracking_prompt(
+        current_record=current_record,
         latest_user_message=latest_user_message.content,
+        previous_assistant_message=(
+            previous_assistant_message.content
+            if previous_assistant_message is not None
+            else None
+        ),
         source_message_index=source_message_index,
     )
     try:
