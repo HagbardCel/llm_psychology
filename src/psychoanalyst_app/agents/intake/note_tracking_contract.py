@@ -158,7 +158,9 @@ NOTE_TRACKING_PROMPT_EXAMPLES: tuple[PromptExample, ...] = (
             "No thoughts of harming myself or anyone else, and nothing medically urgent"
         ),
         source_message_index=8,
-        previous_assistant_message="Are you having thoughts of harming yourself or others?",
+        previous_assistant_message=(
+            "Are you having thoughts of harming yourself or others?"
+        ),
         patch={
             "safety": {
                 "self_harm": {
