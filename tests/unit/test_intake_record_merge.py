@@ -10,6 +10,7 @@ from psychoanalyst_app.models.intake_record import (
     IntakeRecord,
     IntakeRecordPatch,
     PresentingProblemRecord,
+    TimeCourseRecord,
 )
 
 
@@ -276,3 +277,71 @@ def test_retains_unknown_direct_ask_without_value() -> None:
     assert evidence.is_unable_or_unknown()
     assert not evidence.is_present()
 
+
+
+def _unknown_evidence(
+    quote: str = "I don't know",
+    *,
+    confidence: str = "medium",
+) -> IntakeEvidence:
+    return IntakeEvidence(
+        value="I don't know",
+        evidence_quote=quote,
+        source_role="user",
+        source_message_index=0,
+        confidence=confidence,  # type: ignore[arg-type]
+        response_status="unknown",
+        direct_ask=True,
+    )
+
+
+def test_informative_existing_not_overwritten_by_unknown_patch() -> None:
+    current = IntakeRecord()
+    current.presenting_problem.time_course.duration_or_onset = IntakeEvidence(
+        value="three months",
+        evidence_quote="about three months",
+        source_role="user",
+        source_message_index=0,
+        confidence="low",
+    )
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            time_course=TimeCourseRecord(
+                duration_or_onset=_unknown_evidence(confidence="medium"),
+            )
+        )
+    )
+
+    merged = merge_intake_record_patch(
+        current,
+        patch,
+        latest_user_message=_message("I don't know"),
+        source_message_index=0,
+    )
+
+    evidence = merged.presenting_problem.time_course.duration_or_onset
+    assert evidence.value == "three months"
+    assert evidence.is_present()
+
+
+def test_unknown_existing_replaced_by_informative_patch() -> None:
+    current = IntakeRecord()
+    current.presenting_problem.time_course.duration_or_onset = _unknown_evidence()
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            time_course=TimeCourseRecord(
+                duration_or_onset=_evidence("three months", quote="about three months"),
+            )
+        )
+    )
+
+    merged = merge_intake_record_patch(
+        current,
+        patch,
+        latest_user_message=_message("about three months"),
+        source_message_index=0,
+    )
+
+    evidence = merged.presenting_problem.time_course.duration_or_onset
+    assert evidence.value == "three months"
+    assert evidence.is_present()

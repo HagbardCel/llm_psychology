@@ -86,6 +86,10 @@ def _merge_evidence(
         return existing
     if not existing.is_addressed():
         return patch
+    if existing.is_present() and patch.is_unable_or_unknown():
+        return existing
+    if existing.is_unable_or_unknown() and patch.is_present():
+        return patch
     existing_rank = _CONFIDENCE_RANK[existing.confidence]
     patch_rank = _CONFIDENCE_RANK[patch.confidence]
     if patch_rank > existing_rank:
