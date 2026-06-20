@@ -4,8 +4,8 @@ Unit tests for TrioDatabaseService.
 Tests database operations including session_briefing storage and retrieval.
 """
 
-from datetime import datetime
 import json
+from datetime import datetime
 
 import pytest
 import trio
