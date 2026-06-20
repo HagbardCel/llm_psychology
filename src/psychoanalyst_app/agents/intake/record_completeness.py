@@ -98,6 +98,15 @@ def _has_unable_or_unknown(record: IntakeRecord, item: str) -> bool:
     )
 
 
+def _still_needs_direct_ask(record: IntakeRecord, item: str) -> bool:
+    """Whether structured gate should still target this item."""
+    if _has_informative(record, item):
+        return False
+    if _was_directly_asked(record, item) and _has_addressed(record, item):
+        return False
+    return True
+
+
 def missing_items_from_record(record: IntakeRecord) -> IntakeCompleteness:
     """Return missing-item diagnostics without applying turn-count policy."""
     missing_hard = [
@@ -111,7 +120,7 @@ def missing_items_from_record(record: IntakeRecord) -> IntakeCompleteness:
     addressed_hard = [item for item in HARD_ITEM_ORDER if _has_addressed(record, item)]
     missing_required = missing_hard + missing_soft
     next_required_item = next(
-        (item for item in ITEM_ORDER if item in missing_required),
+        (item for item in ITEM_ORDER if _still_needs_direct_ask(record, item)),
         None,
     )
     return IntakeCompleteness(

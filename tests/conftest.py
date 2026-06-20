@@ -234,8 +234,9 @@ def mock_llm_service():
     llm_service.generate_response_async = mock_generate_response_async
 
     async def mock_generate_structured_output_async(
-        prompt, schema, method="json_schema", *, phase
+        prompt, schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         return llm_service.generate_structured_output(
             prompt, schema, method=method, phase=phase
         )

@@ -6,7 +6,13 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+from pydantic import ValidationError
+
+from psychoanalyst_app.models.intake_record import IntakeRecord
 from psychoanalyst_app.models.llm_outputs import StructuredUserProfileOutput
+from psychoanalyst_app.orchestration.intake_record_persistence import (
+    update_intake_record,
+)
 from psychoanalyst_app.orchestration.models import AgentResponse, WorkflowState
 from psychoanalyst_app.orchestration.profile_helpers import (
     persist_structured_user_profile_output,
@@ -120,5 +126,39 @@ async def finalize_agent_response(
             "Ignoring unexpected user_profile payload type: %s",
             type(user_profile_output),
         )
+
+    persistence = metadata.get("intake_record_persistence")
+    should_persist_intake_record = not isinstance(persistence, dict) or bool(
+        persistence.get("should_persist", True)
+    )
+    intake_record = metadata.get("intake_record")
+    if intake_record is not None and should_persist_intake_record:
+        typed_record: IntakeRecord | None = None
+        if isinstance(intake_record, IntakeRecord):
+            typed_record = intake_record
+        elif isinstance(intake_record, dict):
+            try:
+                typed_record = IntakeRecord.model_validate(intake_record)
+            except ValidationError:
+                logger.warning(
+                    "Ignoring invalid intake_record metadata payload",
+                    exc_info=True,
+                )
+        else:
+            logger.warning(
+                "Ignoring unexpected intake_record payload type: %s",
+                type(intake_record),
+            )
+        if typed_record is not None:
+            persisted = await update_intake_record(
+                response_handler.conversation_manager,
+                session_id,
+                typed_record,
+            )
+            if not persisted:
+                logger.warning(
+                    "Failed to persist intake record for session %s",
+                    session_id,
+                )
 
     await response_handler.handle(user_id, session_id, agent_response)

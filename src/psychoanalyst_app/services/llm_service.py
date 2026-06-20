@@ -1020,6 +1020,7 @@ class LLMService:
         *,
         method: str = "json_schema",
         phase: LLMPhase,
+        abandon_on_cancel: bool = False,
     ) -> Any:
         """Async wrapper for generate_structured_output with rate limiting."""
         call_id = uuid.uuid4().hex
@@ -1036,5 +1037,6 @@ class LLMService:
                 call_id=call_id,
                 lifecycle_started_at=lifecycle_started_at,
                 rate_limit_wait_ms=rate_limit_wait_ms,
-            )
+            ),
+            abandon_on_cancel=abandon_on_cancel,
         )

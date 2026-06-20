@@ -68,3 +68,30 @@ def test_time_course_requires_duration_or_frequency_not_trigger() -> None:
     ]
 
     assert not record.presenting_problem.time_course.has_required_time_course()
+
+def test_unknown_quote_only_is_addressed_but_not_present() -> None:
+    evidence = IntakeEvidence(
+        evidence_quote="I don't know",
+        source_role="user",
+        source_message_index=2,
+        response_status="unknown",
+        direct_ask=True,
+    )
+
+    assert evidence.is_addressed()
+    assert evidence.is_unable_or_unknown()
+    assert not evidence.is_present()
+
+
+def test_informative_evidence_remains_present_and_addressed() -> None:
+    evidence = IntakeEvidence(
+        value="anxiety",
+        evidence_quote="I feel anxious every day",
+        source_role="user",
+        source_message_index=2,
+        response_status="informative",
+    )
+
+    assert evidence.is_addressed()
+    assert evidence.is_present()
+

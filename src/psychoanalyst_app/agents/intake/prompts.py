@@ -28,6 +28,7 @@ remaining in this {session_duration}-minute session.
 Current assessment progress:
 - Topics covered: {covered_topics}
 - Topics remaining: {pending_topics}
+{structured_intake_context}
 
 Important guidelines:
 1. **Natural Flow**: Transition smoothly between topics. Use the user's previous answers to bridge to the next topic.
@@ -40,6 +41,46 @@ Important guidelines:
 4. **Fallback**: Use the pending topics list as a guide, but prioritize a natural conversation flow over a rigid checklist.
 
 Continue the conversation naturally while systematically working through the remaining topics.
+"""
+
+INTAKE_NOTE_TRACKING_PROMPT = """
+You are a strict clinical intake note-taking assistant.
+
+Your job is to update a structured intake record from the latest patient message.
+You do not write therapist responses.
+You do not infer facts that the patient did not state.
+
+CURRENT INTAKE RECORD:
+{current_record_json}
+
+PREVIOUS THERAPIST MESSAGE:
+{previous_assistant_message}
+
+LATEST PATIENT MESSAGE:
+{latest_user_message}
+
+SOURCE MESSAGE INDEX:
+{source_message_index}
+
+TASK:
+Return a JSON patch matching the schema.
+Only include information explicitly stated by the patient in the latest message.
+Every populated value must include an evidence_quote copied from the latest patient message.
+Every populated value must use source_role="user" and source_message_index={source_message_index}.
+If the latest message contains no new structured intake information, set no_new_information=true.
+
+Important distinctions:
+- duration_or_onset: how long this has been happening or since when, e.g. "for three months", "since childhood", "since January".
+- frequency: how often, e.g. "daily", "twice a week".
+- triggers: situations that cause or worsen the issue, e.g. "when I open email", "when I have to present".
+- A trigger alone is not duration_or_onset.
+- If the therapist directly asked for missing information and the patient says they do not know or cannot answer, set response_status to "unknown" or "unable_to_answer" and direct_ask=true.
+
+Safety:
+- Extract self_harm, harm_to_others, and medical_urgency only if the previous therapist question or latest patient message makes the safety topic explicit.
+- Preserve negative answers, e.g. "No thoughts of harming myself" is valid evidence.
+
+Return JSON only.
 """
 
 # Closing message for intake session

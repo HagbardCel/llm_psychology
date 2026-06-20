@@ -35,7 +35,11 @@ class IntakeEvidence(BaseModel):
         return self.source_role == "user" and self.source_message_index is not None
 
     def is_addressed(self) -> bool:
-        return bool(self.value and self.evidence_quote and self.has_patient_source())
+        if not self.evidence_quote or not self.has_patient_source():
+            return False
+        if self.response_status in {"unknown", "unable_to_answer"}:
+            return self.direct_ask
+        return bool(self.value)
 
     def is_present(self) -> bool:
         return self.is_addressed() and self.response_status == "informative"
