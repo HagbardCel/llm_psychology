@@ -43,6 +43,33 @@ class _LLM:
         return self.output
 
 
+async def test_extract_intake_record_patch_uses_prompt_formatter(monkeypatch) -> None:
+    sentinel = "FORMATTED_PROMPT_SENTINEL"
+
+    def _fake_formatter(**_kwargs):
+        return sentinel
+
+    monkeypatch.setattr(
+        "psychoanalyst_app.agents.intake.note_tracker.format_intake_note_tracking_prompt",
+        _fake_formatter,
+    )
+    llm = _LLM(IntakeRecordPatch(no_new_information=True))
+
+    await extract_intake_record_patch(
+        llm_service=llm,
+        current_record=IntakeRecord(),
+        latest_user_message=Message(
+            role="user",
+            content="No, I do not know.",
+            timestamp=datetime.now(),
+        ),
+        previous_assistant_message=None,
+        source_message_index=3,
+    )
+
+    assert llm.prompt == sentinel
+
+
 async def test_note_tracker_uses_patch_schema_phase_and_messages() -> None:
     llm = _LLM(IntakeRecordPatch(no_new_information=True))
 
