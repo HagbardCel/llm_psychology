@@ -11,6 +11,7 @@ import trio
 from pydantic import ValidationError
 
 from psychoanalyst_app.agents.intake.prompts import INTAKE_NOTE_TRACKING_PROMPT
+from psychoanalyst_app.agents.intake.record_merge import count_patch_evidence
 from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
@@ -57,6 +58,7 @@ async def extract_intake_record_patch(
     latest_user_message: Message,
     previous_assistant_message: Message | None,
     source_message_index: int,
+    timeout_seconds: float = 20.0,
 ) -> IntakePatchExtractionResult:
     """Extract a structured patch from the latest patient message."""
     prompt = INTAKE_NOTE_TRACKING_PROMPT.format(
@@ -72,18 +74,20 @@ async def extract_intake_record_patch(
         source_message_index=source_message_index,
     )
     try:
-        output = await llm_service.generate_structured_output_async(
-            prompt,
-            IntakeRecordPatch,
-            method="json_schema",
-            phase=INTAKE_NOTE_TRACKING,
-        )
-    except trio.TooSlowError as exc:
+        with trio.fail_after(timeout_seconds):
+            output = await llm_service.generate_structured_output_async(
+                prompt,
+                IntakeRecordPatch,
+                method="json_schema",
+                phase=INTAKE_NOTE_TRACKING,
+                abandon_on_cancel=True,
+            )
+    except trio.TooSlowError:
         logger.warning("Intake note tracking timed out", exc_info=True)
         return IntakePatchExtractionResult(
             status="timeout",
-            error_message=str(exc),
-            error_code=type(exc).__name__,
+            error_message="Intake note extraction timed out",
+            error_code="timeout",
         )
     except trio.Cancelled:
         raise
@@ -123,6 +127,12 @@ async def extract_intake_record_patch(
             error_code="unexpected_output_type",
         )
 
+    if patch.no_new_information and count_patch_evidence(patch) > 0:
+        return IntakePatchExtractionResult(
+            status="invalid_patch",
+            error_message="no_new_information=true with populated evidence",
+            error_code="conflicting_no_new_information",
+        )
     if patch.no_new_information:
         return IntakePatchExtractionResult(status="no_new_information")
     return IntakePatchExtractionResult(status="success", patch=patch)

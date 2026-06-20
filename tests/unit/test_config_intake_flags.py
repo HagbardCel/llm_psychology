@@ -15,6 +15,7 @@ def clear_intake_flag_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "INTAKE_RECORD_COMPLETION_GATE_ENABLED",
         "INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION",
         "INTAKE_RECORD_DIRECT_ASK_ENABLED",
+        "INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -25,6 +26,7 @@ def test_intake_flag_defaults_are_valid() -> None:
     assert settings.INTAKE_RECORD_COMPLETION_GATE_ENABLED is False
     assert settings.INTAKE_RECORD_DIRECT_ASK_ENABLED is False
     assert settings.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION is True
+    assert settings.INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS == 20.0
 
 
 def test_note_tracking_enabled_alone_is_valid() -> None:
@@ -58,6 +60,7 @@ def test_strict_quote_validation_without_note_tracking_is_valid() -> None:
         INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION=True,
     )
     assert settings.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION is True
+    assert settings.INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS == 20.0
 
 
 def test_completion_gate_without_note_tracking_raises() -> None:

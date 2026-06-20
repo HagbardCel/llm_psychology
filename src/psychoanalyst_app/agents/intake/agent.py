@@ -58,6 +58,9 @@ class TrioIntakeAgent:
         self.strict_quote_validation = (
             config.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION
         )
+        self.note_tracking_timeout_seconds = (
+            config.INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS
+        )
 
     async def process_message(
         self, message: str, context: ConversationContext
@@ -89,6 +92,7 @@ class TrioIntakeAgent:
                 strict_quote_validation=self.strict_quote_validation,
                 is_guest=is_guest,
                 structured_gate_enabled=use_structured_gate,
+                note_tracking_timeout_seconds=self.note_tracking_timeout_seconds,
             )
             record_metadata = intake_record_metadata(
                 record_state,

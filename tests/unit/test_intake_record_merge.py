@@ -249,3 +249,30 @@ def test_appends_unique_list_evidence() -> None:
         "racing thoughts",
         "sleep disruption",
     ]
+
+
+def test_retains_unknown_direct_ask_without_value() -> None:
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                evidence_quote="I don't know",
+                source_role="user",
+                source_message_index=0,
+                response_status="unknown",
+                direct_ask=True,
+            )
+        )
+    )
+
+    merged = merge_intake_record_patch(
+        IntakeRecord(),
+        patch,
+        latest_user_message=_message("I don't know"),
+        source_message_index=0,
+    )
+
+    evidence = merged.presenting_problem.main_concern
+    assert evidence.is_addressed()
+    assert evidence.is_unable_or_unknown()
+    assert not evidence.is_present()
+

@@ -35,6 +35,7 @@ from psychoanalyst_app.models.intake_record import (
     IntakeRecord,
     IntakeRecordPatch,
     PresentingProblemRecord,
+    TimeCourseRecord,
 )
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
 from psychoanalyst_app.services.llm_phases import INTAKE_NOTE_TRACKING
@@ -528,8 +529,9 @@ async def test_note_tracking_merges_patch_into_typed_metadata(
     )
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return patch
 
@@ -590,8 +592,9 @@ async def test_note_tracking_no_new_information_keeps_current_record(
     config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -665,8 +668,9 @@ async def test_note_tracking_duplicate_evidence_applies_without_persistence(
     )
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return patch
 
@@ -727,8 +731,9 @@ async def test_note_tracking_empty_patch_reports_noop_metadata(
     config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch()
 
@@ -793,8 +798,9 @@ async def test_note_tracking_invalid_evidence_reports_validation_failure(
     )
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return patch
 
@@ -912,8 +918,9 @@ async def test_note_tracking_skips_guest_name_collection(mock_llm_service, app_c
     structured_calls = 0
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         nonlocal structured_calls
         _ = method, phase
         structured_calls += 1
@@ -1014,8 +1021,9 @@ async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
     )
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         raise RuntimeError("boom")
 
@@ -1141,8 +1149,9 @@ async def test_diagnostics_only_mode_continues_on_extraction_failure(
     config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
 
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         raise RuntimeError("boom")
 
@@ -1228,8 +1237,9 @@ def _incomplete_intake_context(*, message: str = "I feel anxious every day") -> 
 @pytest.mark.unit
 async def test_gate_mode_bypasses_legacy_follow_up(mock_llm_service, app_config, monkeypatch):
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -1258,8 +1268,9 @@ async def test_gate_mode_missing_risk_screen_uses_authoritative_llm_prompt(
     mock_llm_service, app_config
 ):
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -1285,8 +1296,9 @@ async def test_gate_mode_missing_non_safety_item_uses_authoritative_llm_prompt(
     mock_llm_service, app_config
 ):
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -1461,8 +1473,9 @@ async def test_gate_mode_generic_clarification_when_next_item_missing(
     mock_llm_service, app_config, monkeypatch
 ):
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -1518,8 +1531,9 @@ async def test_gate_mode_invalid_manual_config_still_authoritative(
     mock_llm_service, app_config, monkeypatch
 ):
     async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
+        _ = kwargs
         _ = method, phase
         return IntakeRecordPatch(no_new_information=True)
 
@@ -1541,3 +1555,79 @@ async def test_gate_mode_invalid_manual_config_still_authoritative(
     assert response.metadata["selected_direct_ask_item"] == "risk_screen"
     assert "Structured direct-ask instruction:" in response.content
     assert "harming themselves" in response.content
+
+
+def _record_ready_for_duration_unknown() -> IntakeRecord:
+    record = IntakeRecord()
+    record.presenting_problem.main_concern = _record_evidence("anxiety")
+    record.safety.self_harm = _record_evidence("denied")
+    record.safety.harm_to_others = _record_evidence("denied")
+    record.safety.medical_urgency = _record_evidence("denied")
+    return record
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_gate_mode_advances_direct_ask_after_unknown_duration_answer(
+    mock_llm_service, app_config
+):
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
+    ):
+        _ = method, kwargs
+        if phase == INTAKE_NOTE_TRACKING:
+            return IntakeRecordPatch(
+                presenting_problem=PresentingProblemRecord(
+                    time_course=TimeCourseRecord(
+                        duration_or_onset=IntakeEvidence(
+                            evidence_quote="I don't know",
+                            source_role="user",
+                            source_message_index=2,
+                            response_status="unknown",
+                            direct_ask=True,
+                        )
+                    )
+                )
+            )
+        return "Continue intake conversation."
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _gate_agent(mock_llm_service, app_config)
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    context = _make_context(
+        user_profile=profile,
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        message_history=[
+            Message(
+                role="assistant",
+                content="What brings you in?",
+                timestamp=datetime.now(),
+            ),
+            Message(
+                role="assistant",
+                content="How long has this been happening?",
+                timestamp=datetime.now(),
+            ),
+            Message(role="user", content="I don't know", timestamp=datetime.now()),
+        ],
+    )
+    context.intake_record = _record_ready_for_duration_unknown()
+
+    response = await agent.process_message("I don't know", context)
+
+    completeness = response.metadata["intake_record_completeness"]
+    assert "duration" in completeness["addressed_hard_items"]
+    assert "duration" in completeness["unable_to_answer_items"]
+    assert response.metadata["selected_direct_ask_item"] == "functional_impairment"
+    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
+

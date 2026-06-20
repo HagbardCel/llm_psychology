@@ -166,6 +166,7 @@ async def prepare_intake_record_state(
     strict_quote_validation: bool,
     is_guest: bool,
     structured_gate_enabled: bool,
+    note_tracking_timeout_seconds: float = 20.0,
 ) -> IntakeRecordState:
     """Prepare typed intake record state and optional note-tracking diagnostics."""
     record = context.intake_record or IntakeRecord()
@@ -180,6 +181,7 @@ async def prepare_intake_record_state(
             current_record=record,
             llm_service=llm_service,
             strict_quote_validation=strict_quote_validation,
+            timeout_seconds=note_tracking_timeout_seconds,
         )
 
     completeness = intake_record_completion_decision(
@@ -226,6 +228,7 @@ async def _update_intake_record(
     current_record: IntakeRecord,
     llm_service: LLMService,
     strict_quote_validation: bool,
+    timeout_seconds: float = 20.0,
 ) -> tuple[IntakeRecord, IntakePatchExtractionResult, IntakePatchMergeResult | None]:
     latest_index = _latest_user_message_index(context, message)
     if latest_index is None:
@@ -246,6 +249,7 @@ async def _update_intake_record(
             before_index=latest_index,
         ),
         source_message_index=latest_index,
+        timeout_seconds=timeout_seconds,
     )
     if result.status != "success" or result.patch is None:
         return current_record, result, None

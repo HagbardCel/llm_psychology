@@ -32,8 +32,9 @@ class _LLM:
         *,
         method="json_schema",
         phase,
+        **kwargs,
     ):
-        _ = method
+        _ = method, kwargs
         self.prompt = prompt
         self.phase = phase
         self.schema = schema
@@ -163,6 +164,39 @@ async def test_note_tracker_reports_invalid_dict_output() -> None:
     assert result.error_message
 
 
+
+
+async def test_note_tracker_rejects_conflicting_no_new_information() -> None:
+    llm = _LLM(
+        IntakeRecordPatch(
+            no_new_information=True,
+            presenting_problem=PresentingProblemRecord(
+                main_concern=IntakeEvidence(
+                    value="anxiety",
+                    evidence_quote="I feel anxious every day",
+                    source_role="user",
+                    source_message_index=2,
+                )
+            ),
+        )
+    )
+
+    result = await extract_intake_record_patch(
+        llm_service=llm,
+        current_record=IntakeRecord(),
+        latest_user_message=Message(
+            role="user",
+            content="I feel anxious every day",
+            timestamp=datetime.now(),
+        ),
+        previous_assistant_message=None,
+        source_message_index=2,
+    )
+
+    assert result.status == "invalid_patch"
+    assert result.error_code == "conflicting_no_new_information"
+
+
 async def test_note_tracker_forwards_llm_service_error_diagnostics() -> None:
     result = await extract_intake_record_patch(
         llm_service=_LLM(
@@ -195,10 +229,23 @@ async def test_note_tracker_forwards_llm_service_error_diagnostics() -> None:
 
 
 async def test_note_tracker_reports_timeout() -> None:
+    import time
+
     import trio
 
+    class _BlockingSlowLLM:
+        def generate_structured_output(self, *_args, **_kwargs):
+            time.sleep(5)
+            return IntakeRecordPatch()
+
+        async def generate_structured_output_async(self, *args, **kwargs):
+            return await trio.to_thread.run_sync(
+                lambda: self.generate_structured_output(*args, **kwargs),
+                abandon_on_cancel=kwargs.get("abandon_on_cancel", False),
+            )
+
     result = await extract_intake_record_patch(
-        llm_service=_LLM(trio.TooSlowError("deadline exceeded")),
+        llm_service=_BlockingSlowLLM(),
         current_record=IntakeRecord(),
         latest_user_message=Message(
             role="user",
@@ -207,10 +254,11 @@ async def test_note_tracker_reports_timeout() -> None:
         ),
         previous_assistant_message=None,
         source_message_index=2,
+        timeout_seconds=0.05,
     )
 
     assert result.status == "timeout"
-    assert result.error_code == "TooSlowError"
+    assert result.error_code == "timeout"
 
 
 async def test_note_tracker_propagates_cancellation() -> None:
@@ -224,8 +272,9 @@ async def test_note_tracker_propagates_cancellation() -> None:
             method="json_schema",
             *,
             phase,
+            **kwargs,
         ):
-            _ = method, phase
+            _ = method, phase, kwargs
             await trio.sleep_forever()
 
     with trio.CancelScope() as cancel_scope:

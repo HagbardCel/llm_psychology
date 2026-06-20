@@ -195,8 +195,9 @@ class _FailingLLM:
         method="json_schema",
         *,
         phase,
+        **kwargs,
     ):
-        _ = method, phase
+        _ = method, phase, kwargs
         raise RuntimeError("boom")
 
 
@@ -376,3 +377,70 @@ def test_build_continuation_prompt_context_gate_active_no_next_item() -> None:
 
     assert "no specific missing item is available" in context
     assert RISK_SCREEN_PROMPT not in context
+
+class _BlockingSlowLLM:
+    def generate_structured_output(self, *_args, **_kwargs):
+        import time
+
+        time.sleep(5)
+        from psychoanalyst_app.models.intake_record import IntakeRecordPatch
+
+        return IntakeRecordPatch()
+
+    async def generate_structured_output_async(self, *args, **kwargs):
+        import trio
+
+        return await trio.to_thread.run_sync(
+            lambda: self.generate_structured_output(*args, **kwargs),
+            abandon_on_cancel=kwargs.get("abandon_on_cancel", False),
+        )
+
+
+@pytest.mark.trio
+@pytest.mark.unit
+async def test_prepare_state_timeout_does_not_mutate_record() -> None:
+    profile = UserProfile(
+        user_id="user-123",
+        name="Test User",
+        status=UserStatus.INTAKE_IN_PROGRESS,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    message = "I feel anxious every day"
+    baseline = IntakeRecord()
+    context = ConversationContext(
+        session_id="session-123",
+        user_profile=profile,
+        therapy_plan=None,
+        message_history=[
+            Message(
+                role="assistant",
+                content="What brings you in?",
+                timestamp=datetime.now(),
+            ),
+            Message(role="user", content=message, timestamp=datetime.now()),
+        ],
+        topics_covered=[],
+        session_start_time=datetime.now(),
+        duration_minutes=50,
+        intake_record=baseline,
+    )
+
+    state = await prepare_intake_record_state(
+        message=message,
+        context=context,
+        llm_service=_BlockingSlowLLM(),
+        note_tracking_enabled=True,
+        strict_quote_validation=True,
+        is_guest=False,
+        structured_gate_enabled=True,
+        note_tracking_timeout_seconds=0.05,
+    )
+    metadata = intake_record_metadata(state, legacy_diagnostics={})
+
+    assert state.record == baseline
+    assert state.note_tracking is not None
+    assert state.note_tracking.status == "timeout"
+    assert metadata["intake_record_persistence"]["should_persist"] is False
+    assert metadata["intake_record_persistence"]["record_changed"] is False
+

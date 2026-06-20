@@ -262,6 +262,12 @@ class Settings(BaseSettings):
             "Use structured missing items to directly ask late-intake follow-ups."
         ),
     )
+    INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=120.0,
+        description="Timeout for structured intake note extraction.",
+    )
 
     CORS_ALLOWED_ORIGINS: list[str] = Field(
         default=["http://localhost"],

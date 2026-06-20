@@ -55,13 +55,19 @@ def _valid_patch_evidence(
     source_message_index: int,
     strict_quote_validation: bool,
 ) -> bool:
-    if not evidence.value and not evidence.evidence_quote:
-        return False
-    if not evidence.value or not evidence.evidence_quote:
-        return False
     if evidence.source_role != "user":
         return False
     if evidence.source_message_index != source_message_index:
+        return False
+    if evidence.response_status in {"unknown", "unable_to_answer"}:
+        if not evidence.direct_ask or not evidence.evidence_quote:
+            return False
+        if not strict_quote_validation:
+            return True
+        return _normalize(evidence.evidence_quote) in _normalize(
+            latest_user_message.content
+        )
+    if not evidence.value or not evidence.evidence_quote:
         return False
     if evidence.response_status != "informative" and not evidence.direct_ask:
         return False
@@ -92,6 +98,14 @@ def _merge_evidence(
     return existing
 
 
+def _evidence_list_key(item: IntakeEvidence) -> str:
+    if item.value:
+        return f"value:{_normalize(item.value)}"
+    if item.evidence_quote:
+        return f"quote:{_normalize(item.evidence_quote)}"
+    return ""
+
+
 def _merge_evidence_list(
     existing: list[IntakeEvidence],
     patches: list[IntakeEvidence],
@@ -99,9 +113,13 @@ def _merge_evidence_list(
     max_length: int,
 ) -> list[IntakeEvidence]:
     merged = list(existing)
-    seen = {_normalize(item.value or "") for item in merged if item.value}
+    seen = {
+        key
+        for item in merged
+        if (key := _evidence_list_key(item))
+    }
     for patch in patches:
-        key = _normalize(patch.value or "")
+        key = _evidence_list_key(patch)
         if not key or key in seen:
             continue
         merged.append(patch)
@@ -151,6 +169,11 @@ def _validated_patch_dump(
         for key, item in patch.__dict__.items()
         if (cleaned := clean(item)) not in (None, [], {})
     }
+
+
+def count_patch_evidence(patch: IntakeRecordPatch) -> int:
+    """Count populated evidence fields on a structured intake patch."""
+    return _count_evidence(patch)
 
 
 def _count_evidence(value: Any) -> int:

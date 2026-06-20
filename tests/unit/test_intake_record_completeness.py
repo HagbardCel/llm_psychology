@@ -96,3 +96,22 @@ def test_combined_safety_denial_completes_risk_screen() -> None:
     diagnostics = missing_items_from_record(record)
 
     assert "risk_screen" not in diagnostics.missing_hard_items
+
+
+def test_unknown_direct_ask_advances_next_required_item() -> None:
+    record = IntakeRecord()
+    record.presenting_problem.main_concern = _evidence("anxiety")
+    record.presenting_problem.time_course.duration_or_onset = _evidence(
+        "I do not know",
+        status="unknown",
+    )
+    record.safety.self_harm = _evidence("denied")
+    record.safety.harm_to_others = _evidence("denied")
+    record.safety.medical_urgency = _evidence("denied")
+
+    diagnostics = missing_items_from_record(record)
+
+    assert "duration" in diagnostics.missing_hard_items
+    assert "duration" in diagnostics.addressed_hard_items
+    assert diagnostics.next_required_item == "functional_impairment"
+
