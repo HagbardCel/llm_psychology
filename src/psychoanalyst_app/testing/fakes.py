@@ -11,6 +11,9 @@ import trio
 from pydantic import BaseModel
 
 from psychoanalyst_app.services.llm_phases import LLMPhase, require_llm_phase
+from psychoanalyst_app.testing.intake_fake_extraction import (
+    build_fake_intake_patch_payload,
+)
 
 
 class DeterministicLLMService:
@@ -126,7 +129,9 @@ class DeterministicLLMService:
         *,
         method: str = "json_schema",
         phase: LLMPhase,
+        **kwargs: Any,
     ) -> Any:
+        _ = kwargs
         phase = require_llm_phase(phase)
         started_at = time.perf_counter()
 
@@ -149,12 +154,14 @@ class DeterministicLLMService:
         *,
         method: str = "json_schema",
         phase: LLMPhase,
+        **kwargs: Any,
     ) -> Any:
         return self.generate_structured_output(
             prompt,
             schema,
             method=method,
             phase=phase,
+            **kwargs,
         )
 
     def _structured_payload(
@@ -278,6 +285,9 @@ class DeterministicLLMService:
 
         if schema_name == "Tier1ProfilePatch":
             return {}
+
+        if schema_name == "IntakeRecordPatch":
+            return build_fake_intake_patch_payload(prompt)
 
         if schema_name == "SessionBriefing":
             today = datetime.now()
