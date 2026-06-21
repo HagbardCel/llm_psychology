@@ -20,9 +20,12 @@
     "therapy_style": "cbt"
   },
   "deterministic_chat_replies": [
-    "I have been anxious about work and sleeping badly for three months.",
+    "I struggle with anxiety about work.",
+    "This has been going on for three months.",
     "I have not had thoughts of harming myself or anyone else. The chest tightness is not medically urgent.",
-    "I tried breathing exercises. I want to sleep better and stop freezing when my manager pressures me about Monday deadlines.",
+    "I tried breathing exercises when Monday deadlines make my chest tight.",
+    "I want to sleep better and feel less anxious about Monday deadlines.",
+    "I freeze when my manager pressures me about Monday deadlines and my chest tightens.",
     "This week the Monday deadline made my chest tighten and I worried that I was failing."
   ],
   "limits": {

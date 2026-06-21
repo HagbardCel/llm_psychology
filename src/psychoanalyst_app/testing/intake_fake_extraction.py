@@ -8,9 +8,6 @@ from typing import Any, Literal
 
 TARGET_GOALS = "goals.therapy_goals"
 TARGET_DURATION = "presenting_problem.time_course.duration_or_onset"
-TARGET_FUNCTIONAL_IMPAIRMENT = "presenting_problem.functional_impairment"
-TARGET_MAIN_CONCERN = "presenting_problem.main_concern"
-TARGET_COPING = "coping.attempted_strategies"
 TARGET_SAFETY_SELF_HARM = "safety.self_harm"
 TARGET_SAFETY_HARM_TO_OTHERS = "safety.harm_to_others"
 TARGET_SAFETY_MEDICAL_URGENCY = "safety.medical_urgency"
