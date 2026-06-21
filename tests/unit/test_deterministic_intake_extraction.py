@@ -278,9 +278,16 @@ def test_first_session_smoke_replies_progressively_populate_record() -> None:
         if merge.applied:
             record = merge.record
 
+    assert record.presenting_problem.main_concern.is_present()
     assert record.presenting_problem.time_course.duration_or_onset.is_present()
     assert record.safety.is_addressed()
     assert record.presenting_problem.functional_impairment.is_present()
+    assert record.goals is not None
+    assert any(goal.is_present() for goal in record.goals.therapy_goals)
+    assert record.coping is not None
+    assert any(
+        strategy.is_present() for strategy in record.coping.attempted_strategies
+    )
 
 
 def test_targets_for_previous_message_constants_are_used_for_safety() -> None:
