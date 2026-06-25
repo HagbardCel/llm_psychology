@@ -8,6 +8,10 @@ from typing import Any, Literal
 
 TARGET_GOALS = "goals.therapy_goals"
 TARGET_DURATION = "presenting_problem.time_course.duration_or_onset"
+TARGET_FUNCTIONAL_IMPAIRMENT = "presenting_problem.functional_impairment"
+TARGET_MAIN_CONCERN = "presenting_problem.main_concern"
+TARGET_COPING = "coping.attempted_strategies"
+TARGET_SLEEP_IMPACT = "presenting_problem.sleep_impact"
 TARGET_SAFETY_SELF_HARM = "safety.self_harm"
 TARGET_SAFETY_HARM_TO_OTHERS = "safety.harm_to_others"
 TARGET_SAFETY_MEDICAL_URGENCY = "safety.medical_urgency"
@@ -38,6 +42,7 @@ _VALUE_DURATION = "reported duration or onset"
 _VALUE_GOALS = "improve confidence / sleep / understanding"
 _VALUE_FUNCTIONAL_IMPAIRMENT = "avoidance or freezing affects functioning"
 _VALUE_COPING = "attempted coping strategy"
+_VALUE_SLEEP_IMPACT = "sleep disrupted by presenting problem"
 _VALUE_SAFETY_NONE = "none reported"
 _VALUE_SAFETY_RISK = "risk content reported"
 
@@ -104,6 +109,8 @@ def build_fake_intake_patch_payload(prompt: str) -> dict[str, Any]:
         return _functional_impairment_patch(quote=message, index=index)
     if _is_goals(message_lower):
         return _goals_patch(quote=message, index=index)
+    if _is_sleep_impact(message_lower):
+        return _sleep_impact_patch(quote=message, index=index)
     if _is_coping(message_lower):
         return _coping_patch(quote=message, index=index)
     if _is_presenting_problem(message_lower):
@@ -186,6 +193,18 @@ def _coping_patch(*, quote: str, index: int) -> dict[str, Any]:
             "attempted_strategies": [
                 _evidence(value=_VALUE_COPING, quote=quote, index=index)
             ]
+        }
+    }
+
+
+def _sleep_impact_patch(*, quote: str, index: int) -> dict[str, Any]:
+    return {
+        "presenting_problem": {
+            "sleep_impact": _evidence(
+                value=_VALUE_SLEEP_IMPACT,
+                quote=quote,
+                index=index,
+            )
         }
     }
 
@@ -306,6 +325,28 @@ def _is_coping(message_lower: str) -> bool:
     return any(
         phrase in message_lower
         for phrase in ("tried", "distract", "breathing", "i usually")
+    )
+
+
+def _is_sleep_impact(message_lower: str) -> bool:
+    return any(
+        phrase in message_lower
+        for phrase in (
+            "sleeping badly",
+            "sleep badly",
+            "sleeping poorly",
+            "poorly slept",
+            "trouble sleeping",
+            "trouble falling asleep",
+            "can't sleep",
+            "cannot sleep",
+            "wake up at night",
+            "waking up at night",
+            "waking at night",
+            "wake at night",
+            "lying awake",
+            "insomnia",
+        )
     )
 
 

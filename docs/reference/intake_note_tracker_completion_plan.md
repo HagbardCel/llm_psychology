@@ -502,9 +502,9 @@ The current fake extraction path only returns minimal “no new information” o
 
 ### Acceptance Criteria
 
-- [ ] Fake extraction produces realistic records in deterministic probes.
-- [ ] Probe can verify structured intake progression without a real model.
-- [ ] Tests cover fake extraction for all required fields.
+- [x] Fake extraction produces realistic records in deterministic probes.
+- [x] Probe can verify structured intake progression without a real model.
+- [x] Tests cover fake extraction for all required fields.
 
 ---
 
@@ -529,17 +529,26 @@ The probe should be able to inspect:
 
 ### Tasks
 
-- [ ] Add structured metadata to assistant responses.
-- [ ] Persist record after finalization.
-- [ ] Add DB snapshot or diagnostics field for final intake record.
-- [ ] Add workflow-probe assertions for:
+- [x] Add structured metadata to assistant responses.
+- [x] Persist record after finalization.
+- [x] Add DB snapshot or diagnostics field for final intake record.
+- [x] Add workflow-probe assertions for:
   - record exists;
   - required fields are populated or explicitly marked unknown/unable;
   - completeness transitions from incomplete to complete;
   - `selected_direct_ask_item` matches the expected missing field when gate mode continues intake;
   - no duplicate/conflicting workflow actions;
   - final workflow state matches expectations.
-- [ ] Add a concise probe summary section for intake note tracking.
+- [x] Add a concise probe summary section for intake note tracking.
+
+> Phase 7 implementation note: per-turn assertions (`selected_direct_ask_item`
+> per turn, per-turn completeness transitions) were intentionally deferred —
+> per-turn intake metadata is not currently sent over WebSocket or persisted
+> per-message. The probe asserts from the final persisted
+> `sessions.intake_record` snapshot using the backend's canonical
+> `intake_record_completion_decision`, plus per-item user-sourced evidence
+> integrity. See `console-ui/scenarios/workflow-probes/intake_note_tracking.json`
+> and `make probe-console-intake-notes`.
 
 ### Suggested Probe Assertions
 
@@ -558,9 +567,9 @@ assert final_workflow_state_expected
 
 ### Acceptance Criteria
 
-- [ ] Probe failure clearly identifies whether the problem is extraction, merge, persistence, direct-ask selection, or gating.
-- [ ] Probe output contains enough evidence to debug without manually reading the database.
-- [ ] The final persisted record matches the expected deterministic transcript.
+- [x] Probe failure clearly identifies whether the problem is extraction, merge, persistence, direct-ask selection, or gating.
+- [x] Probe output contains enough evidence to debug without manually reading the database.
+- [x] The final persisted record matches the expected deterministic transcript.
 
 ---
 
@@ -630,10 +639,10 @@ Add or update unit tests for:
 
 ### Workflow Probe
 
-- [ ] Deterministic probe with fake extraction passes.
+- [x] Deterministic probe with fake extraction passes.
 - [ ] Optional local-LLM probe validates real extraction path.
-- [ ] Probe summary includes intake record diagnostics.
-- [ ] Probe DB snapshot includes final typed intake record.
+- [x] Probe summary includes intake record diagnostics.
+- [x] Probe DB snapshot includes final typed intake record.
 
 ---
 
@@ -694,19 +703,19 @@ Do not open the PR until all of the following are true.
 
 ### Configuration
 
-- [ ] Invalid flag combinations fail fast.
-- [ ] Default local behavior is documented.
-- [ ] Feature can be enabled for deterministic workflow probe.
+- [x] Invalid flag combinations fail fast.
+- [x] Default local behavior is documented.
+- [x] Feature can be enabled for deterministic workflow probe.
 - [ ] Feature can be run with local LLM backend.
 
 ### Tests and Probes
 
-- [ ] Unit tests pass.
+- [x] Unit tests pass.
 - [ ] Integration tests pass.
-- [ ] Architecture validation passes.
-- [ ] Deterministic workflow probe passes.
+- [x] Architecture validation passes.
+- [x] Deterministic workflow probe passes.
 - [ ] Local-LLM probe either passes or has a clearly documented non-blocking reason.
-- [ ] Probe output confirms persisted intake record.
+- [x] Probe output confirms persisted intake record.
 
 ### Documentation
 

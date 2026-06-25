@@ -134,6 +134,7 @@ Start here in code: `src/psychoanalyst_app/trio_server.py` → HTTP blueprints i
 - `make run-server` → HTTP + WebSocket server (Docker)
 - `make ui-console` → maintained HTTP/WebSocket console frontend (Docker)
 - `make probe-console-deterministic` → no-network full-stack console probe (Docker)
+- `make probe-console-intake-notes` → gate-enabled structured intake note tracking deterministic probe (Docker); asserts the final persisted `sessions.intake_record` against the backend's canonical `intake_record_completion_decision` with per-item user-sourced evidence integrity. The existing `first_session_smoke` deterministic probe runs with note-tracking flags **off**; this dedicated probe runs with them **on**. Per-turn gate/direct-ask diagnostics are out of scope for this phase — assertions are against the final persisted record.
 
 Packages are intentionally installed *inside* the Docker images (`docker compose build api` / `make dev-install`). The `test` profile exports `PYTHONPATH=/app/src` so `pytest` imports `psychoanalyst_app` from mounted sources in containers.
 
