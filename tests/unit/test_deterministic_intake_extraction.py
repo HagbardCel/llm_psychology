@@ -313,6 +313,7 @@ def test_targets_for_previous_message_constants_are_used_for_safety() -> None:
         ("I keep waking up at night.", True, False),
         ("I have trouble sleeping and lie awake for hours.", True, False),
         ("My goal is to sleep better because I wake up at night.", False, True),
+        ("I can't sleep.", True, False),
     ],
 )
 def test_sleep_impact_matcher_routing(

@@ -3,7 +3,7 @@
 .PHONY: ui-console ui-console-test
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check
+.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
 .PHONY: prepare-runtime-dirs
 
 export PYTHONPATH := src
@@ -41,6 +41,7 @@ help:
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
+	@echo "  finalization-check-full - finalization-check plus the intake-note workflow probe (Docker)"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
@@ -123,6 +124,11 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
 	$(MAKE) probe-console-deterministic
+
+# Heavier release-candidate path: layers the gate-enabled intake-note probe on
+# top of the default finalization-check. Kept separate so the default path stays
+# fast for local iteration; run before merging an intake-tracking change.
+finalization-check-full: finalization-check
 	$(MAKE) probe-console-intake-notes
 
 # Real LLM smoke tests (Docker, requires secrets / external services)

@@ -532,13 +532,13 @@ The probe should be able to inspect:
 - [x] Add structured metadata to assistant responses.
 - [x] Persist record after finalization.
 - [x] Add DB snapshot or diagnostics field for final intake record.
-- [x] Add workflow-probe assertions for:
-  - record exists;
-  - required fields are populated or explicitly marked unknown/unable;
-  - completeness transitions from incomplete to complete;
-  - `selected_direct_ask_item` matches the expected missing field when gate mode continues intake;
-  - no duplicate/conflicting workflow actions;
-  - final workflow state matches expectations.
+- [x] Add workflow-probe assertions for final persisted record existence.
+- [x] Add workflow-probe assertions for required fields (populated or explicitly marked unknown/unable).
+- [x] Add workflow-probe assertion for final structured completion (canonical completion decision).
+- [x] Add final workflow-state assertion.
+- [ ] Add per-turn completeness-transition assertions (deferred; see note below).
+- [ ] Add per-turn `selected_direct_ask_item` assertions (deferred; see note below).
+- [ ] Add no-duplicate/conflicting-workflow-action assertion (not in this phase).
 - [x] Add a concise probe summary section for intake note tracking.
 
 > Phase 7 implementation note: per-turn assertions (`selected_direct_ask_item`

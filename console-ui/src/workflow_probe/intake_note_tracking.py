@@ -63,7 +63,10 @@ def _load_canonical_completion():
         pass
 
     # Slow path: bypass the heavy package __init__ by locating the source files.
-    backend_src = Path(__import__("psychoanalyst_app").__file__).resolve().parent
+    try:
+        backend_src = Path(__import__("psychoanalyst_app").__file__ or ".").resolve().parent
+    except Exception:
+        return None
     intake_dir = backend_src / "agents" / "intake"
     if not (intake_dir / "record_completeness.py").exists():
         return None

@@ -10,6 +10,9 @@ services:
       - INTAKE_RECORD_COMPLETION_GATE_ENABLED=true
 
   console-probe-runner:
+    build:
+      context: ./console-ui
+      dockerfile: Dockerfile.probe
     environment:
       - PROBE_DETERMINISTIC_USER=true
     command:

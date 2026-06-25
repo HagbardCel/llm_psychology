@@ -19,7 +19,7 @@ services:
   console-probe-runner:
     build:
       context: ./console-ui
-      dockerfile: Dockerfile.probe
+      dockerfile: Dockerfile
     container_name: therapist_console_probe
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:

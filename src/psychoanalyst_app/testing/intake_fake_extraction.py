@@ -105,7 +105,7 @@ def build_fake_intake_patch_payload(prompt: str) -> dict[str, Any]:
         return safety_patch
     if _is_duration(message_lower):
         return _duration_patch(quote=message, index=index)
-    if _is_functional_impairment(message_lower):
+    if _is_functional_impairment(message_lower) and not _is_sleep_impact(message_lower):
         return _functional_impairment_patch(quote=message, index=index)
     if _is_goals(message_lower):
         return _goals_patch(quote=message, index=index)
