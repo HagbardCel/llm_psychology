@@ -550,19 +550,37 @@ The probe should be able to inspect:
 > integrity. See `console-ui/scenarios/workflow-probes/intake_note_tracking.json`
 > and `make probe-console-intake-notes`.
 
-### Suggested Probe Assertions
+### Implemented Probe Assertions
+
+These ship in this phase via `console-ui/src/workflow_probe/assertions.py` and assert against the final persisted `sessions.intake_record`:
 
 ```text
-assert intake_note_tracking_enabled
-assert intake_record_created
 assert intake_record_persisted
+assert intake_record_parseable_as_intake_record
 assert intake_record_has_presenting_problem
+assert intake_record_has_duration
+assert intake_record_has_risk_screen
+assert intake_record_has_functional_impairment
 assert intake_record_has_goal_or_unknown
-assert intake_record_completeness_observed
+assert intake_record_has_goal            # informative goal (scenario-gated)
+assert intake_record_has_coping
+assert intake_record_has_sleep_impact
+assert intake_record_completion_decision_complete
+assert intake_record_completion_source_is_canonical
+assert workflow_advanced_past_intake_in_progress
+assert structured_intake_completion_supported_by_persisted_record
+assert intake_record_items_have_user_sourced_evidence
+assert intake_evidence_survived_merge
+```
+
+### Future Probe Assertions
+
+These require per-turn intake metadata, which is not currently sent over WebSocket or persisted per-message; see the deferred task bullets above.
+
+```text
 assert selected_direct_ask_item_matches_missing_field
 assert structured_gate_prevented_premature_completion
 assert final_response_metadata_intake_record_matches_reloaded_session_intake_record
-assert final_workflow_state_expected
 ```
 
 ### Acceptance Criteria
