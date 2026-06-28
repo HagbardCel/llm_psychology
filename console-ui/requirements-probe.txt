@@ -1,0 +1,4 @@
+# Extra dependencies for the workflow probe runner image only.
+# Lets the probe import backend typed IntakeRecord models and the canonical
+# intake_record_completion_decision for diagnostics without drift.
+pydantic>=2.7

@@ -17,6 +17,8 @@ from psychoanalyst_app.shared.intake_slot_evidence import (
     next_required_follow_up_slot,
 )
 
+from .intake_note_tracking import build_intake_note_tracking_diagnostics
+
 
 class ProbeRecorder:
     def __init__(self, output_dir: str | Path, scenario_id: str):
@@ -211,6 +213,7 @@ class ProbeRecorder:
         structured_plans = self._manifest_plans(structured_sessions)
         style_selection = self._manifest_style_selection()
         intake_diagnostics = self._intake_completion_diagnostics()
+        note_tracking_diagnostics = self._intake_note_tracking_diagnostics(scenario)
         failure_summary = self._failure_summary(status, intake_diagnostics)
         metadata = {
             "status": status,
@@ -232,6 +235,7 @@ class ProbeRecorder:
             "timing": timing,
             "timing_warning_overruns": overruns,
             "intake_completion_diagnostics": intake_diagnostics,
+            "intake_note_tracking": note_tracking_diagnostics,
             "failure_summary": failure_summary,
             "workflow_actions": self._workflow_action_summary(),
             "job_status": self._job_status_summary(),
@@ -253,6 +257,11 @@ class ProbeRecorder:
                 json.dumps(intake_diagnostics, indent=2) + "\n",
                 encoding="utf-8",
             )
+        if note_tracking_diagnostics:
+            (self.output_dir / "intake_note_tracking.json").write_text(
+                json.dumps(note_tracking_diagnostics, indent=2) + "\n",
+                encoding="utf-8",
+            )
         if failure_summary:
             (self.output_dir / "failure_summary.md").write_text(
                 self._render_failure_summary(failure_summary),
@@ -269,10 +278,17 @@ class ProbeRecorder:
                 + self._render_failure_summary(failure_summary).split("\n\n", 1)[1].rstrip()
                 + "\n"
             )
+        note_tracking_section = ""
+        if note_tracking_diagnostics:
+            note_tracking_section = (
+                "\n\n## Intake Note Tracking\n\n"
+                + self._render_intake_note_tracking(note_tracking_diagnostics)
+            )
         (self.output_dir / "summary.md").write_text(
             f"# Workflow Probe: {status}\n\nScenario: `{self.scenario_id}`\n\n"
             + "\n".join(checks)
             + root_cause_section
+            + note_tracking_section
             + "\n\n## Phase Timings\n\n"
             + "\n".join(
                 f"- `{phase}`: {value:.3f} ms"
@@ -696,6 +712,8 @@ class ProbeRecorder:
                     "plan_id_used_at_start": row.get("plan_id"),
                     "has_session_briefing": bool(row.get("session_briefing")),
                     "enriched": bool(row.get("enriched")),
+                    "has_intake_record": bool(row.get("intake_record")),
+                    "intake_record_updated_at": row.get("intake_record_updated_at"),
                 }
             )
         return sessions
@@ -806,6 +824,57 @@ class ProbeRecorder:
             "next_required_follow_up": next_follow_up,
             "completion_decision": completion_decision,
         }
+
+    def _intake_note_tracking_diagnostics(
+        self, scenario: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        expectations = scenario.get("intake_note_tracking") or {}
+        if not expectations:
+            return None
+        intake_session = next(
+            (
+                row
+                for row in self._session_rows()
+                if row.get("session_type") == "intake"
+            ),
+            None,
+        )
+        transcript = _loads_json(intake_session.get("transcript"), default=[]) if intake_session else []
+        return build_intake_note_tracking_diagnostics(
+            self._session_rows(),
+            transcript if isinstance(transcript, list) else [],
+            scenario,
+            final_workflow_state=self._final_workflow_state(),
+        )
+
+    def _render_intake_note_tracking(self, diagnostics: dict[str, Any]) -> str:
+        completion = diagnostics.get("completion") or {}
+        lines = [
+            f"- Session found: `{diagnostics.get('session_found')}` "
+            f"(selected: `{diagnostics.get('selected_session_id')}`)",
+            f"- Intake record persisted: `{diagnostics.get('intake_record_persisted')}`",
+            f"- Intake record parseable: `{diagnostics.get('intake_record_parseable')}`",
+            f"- Completion source: `{completion.get('source')}`",
+            f"- Structured complete: `{completion.get('complete')}`",
+            f"- Missing hard items: `{completion.get('missing_hard_items')}`",
+            f"- Missing soft items: `{completion.get('missing_soft_items')}`",
+            f"- Advanced past intake_in_progress: `{diagnostics.get('advanced_past_intake_in_progress')}`",
+        ]
+        items = diagnostics.get("items") or {}
+        if items:
+            lines.append("- Items:")
+            for key, detail in items.items():
+                lines.append(
+                    f"  - `{key}`: present={detail.get('present')} "
+                    f"unknown_or_unable={detail.get('unknown_or_unable_to_answer')} "
+                    f"evidence_count={detail.get('evidence_count')} "
+                    f"valid_user_evidence={detail.get('has_valid_user_sourced_evidence')}"
+                )
+        failure_reasons = diagnostics.get("failure_reasons") or []
+        if failure_reasons:
+            lines.append("- Failure reasons:")
+            lines.extend(f"  - {reason}" for reason in failure_reasons)
+        return "\n".join(lines) + "\n"
 
     def _final_workflow_state(self) -> str | None:
         for event in reversed(self.events):

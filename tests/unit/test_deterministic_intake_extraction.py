@@ -303,3 +303,63 @@ def test_targets_for_previous_message_constants_are_used_for_safety() -> None:
     assert patch.safety.self_harm.response_status == "unknown"
     assert patch.safety.harm_to_others.response_status == "unknown"
     assert patch.safety.medical_urgency.response_status == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("message", "expect_sleep_impact", "expect_goals"),
+    [
+        ("I want to sleep better.", False, True),
+        ("I have been sleeping badly.", True, False),
+        ("I keep waking up at night.", True, False),
+        ("I have trouble sleeping and lie awake for hours.", True, False),
+        ("My goal is to sleep better because I wake up at night.", False, True),
+        ("I can't sleep.", True, False),
+    ],
+)
+def test_sleep_impact_matcher_routing(
+    message: str, expect_sleep_impact: bool, expect_goals: bool
+) -> None:
+    patch = _patch_from_prompt(
+        _note_tracking_prompt(latest_user_message=message, source_message_index=4)
+    )
+
+    if expect_sleep_impact:
+        assert patch.presenting_problem is not None
+        assert patch.presenting_problem.sleep_impact.value is not None
+        assert patch.goals is None
+    if expect_goals:
+        assert patch.goals is not None
+        assert bool(patch.goals.therapy_goals)
+
+
+def test_sleep_impact_evidence_carries_user_source() -> None:
+    message = "I have been sleeping badly and waking up at night."
+    index = 12
+    patch = _patch_from_prompt(
+        _note_tracking_prompt(latest_user_message=message, source_message_index=index)
+    )
+
+    evidence = patch.presenting_problem.sleep_impact
+    assert evidence.source_role == "user"
+    assert evidence.source_message_index == index
+    assert evidence.evidence_quote == message
+
+
+def test_sleep_impact_disclosure_completes_soft_items() -> None:
+    record = IntakeRecord()
+    merge = merge_intake_record_patch_with_diagnostics(
+        record,
+        _patch_from_prompt(
+            _note_tracking_prompt(
+                latest_user_message="I have been sleeping badly and waking up at night.",
+                source_message_index=7,
+            )
+        ),
+        latest_user_message=_user_message(
+            "I have been sleeping badly and waking up at night."
+        ),
+        source_message_index=7,
+        strict_quote_validation=True,
+    )
+    assert merge.applied
+    assert merge.record.presenting_problem.sleep_impact.is_present()

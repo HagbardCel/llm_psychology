@@ -7,6 +7,9 @@ import re
 from typing import Any
 
 
+from .intake_note_tracking import build_intake_note_tracking_diagnostics
+
+
 DEFAULT_FORBIDDEN = (
     "support team",
     "system artifact",
@@ -114,14 +117,16 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
             message="Neutral intake used broad psychoanalytic terminology",
             phrase="defense",
         )
-    await check(
-        "intake_risk_screen",
-        "thoughts of harming yourself or someone else" in intake_assistant_text,
-    )
-    await check(
-        "intake_goal_preference",
-        "what would you most want to be different" in intake_assistant_text,
-    )
+    if criteria.get("assert_legacy_intake_phrases", True):
+        await check(
+            "intake_risk_screen",
+            "thoughts of harming yourself or someone else" in intake_assistant_text,
+        )
+        await check(
+            "intake_goal_preference",
+            "what would you most want to be different" in intake_assistant_text,
+        )
+    await _run_intake_note_tracking_assertions(check, recorder, scenario)
     await check(
         "therapy_session_plan_linked",
         bool(therapy_sessions and therapy_sessions[0].get("plan_id")),
@@ -367,6 +372,106 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
     ):
         await check(f"forbidden_phrase_{phrase}", phrase.lower() not in assistant_text)
     return passed
+
+
+async def _run_intake_note_tracking_assertions(check, recorder, scenario) -> None:
+    expectations = scenario.get("intake_note_tracking") or {}
+    if not expectations.get("expected"):
+        return
+    intake_session = next(
+        (row for row in recorder._session_rows() if row.get("session_type") == "intake"),
+        None,
+    )
+    transcript = _transcript(intake_session) if intake_session else []
+    if not isinstance(transcript, list):
+        transcript = []
+    diagnostics = build_intake_note_tracking_diagnostics(
+        recorder._session_rows(),
+        transcript,
+        scenario,
+        final_workflow_state=recorder._final_workflow_state(),
+    )
+    items = diagnostics.get("items") or {}
+    completion = diagnostics.get("completion") or {}
+
+    async def item_present(name: str, key: str) -> None:
+        await check(
+            name,
+            bool(items.get(key, {}).get("present")),
+            f"key={key}",
+        )
+
+    async def item_has_evidence(name: str, key: str) -> None:
+        await check(
+            name,
+            bool(items.get(key, {}).get("has_valid_user_sourced_evidence")),
+            f"key={key}",
+        )
+
+    await check("intake_record_persisted", bool(diagnostics.get("intake_record_persisted")))
+    await check(
+        "intake_record_parseable_as_intake_record",
+        bool(diagnostics.get("intake_record_parseable")),
+    )
+    await item_present("intake_record_has_presenting_problem", "presenting_problem")
+    await item_present("intake_record_has_duration", "duration")
+    await item_present("intake_record_has_risk_screen", "risk_screen")
+    await item_present("intake_record_has_functional_impairment", "functional_impairment")
+    await check(
+        "intake_record_has_goal_or_unknown",
+        bool(items.get("goal_preference", {}).get("present"))
+        or bool(items.get("goal_preference", {}).get("unknown_or_unable_to_answer")),
+    )
+    if expectations.get("require_informative_goal"):
+        await check(
+            "intake_record_has_goal",
+            bool(items.get("goal_preference", {}).get("present")),
+        )
+    await item_present("intake_record_has_coping", "coping_attempts")
+    await item_present("intake_record_has_sleep_impact", "sleep_impact")
+
+    await check(
+        "intake_record_completion_decision_complete",
+        bool(completion.get("complete")),
+        f"source={completion.get('source')} missing_hard={completion.get('missing_hard_items')} missing_soft={completion.get('missing_soft_items')}",
+    )
+    await check(
+        "intake_record_completion_source_is_canonical",
+        completion.get("source") == "intake_record_completion_decision",
+        f"source={completion.get('source')}",
+    )
+    await check(
+        "workflow_advanced_past_intake_in_progress",
+        bool(diagnostics.get("advanced_past_intake_in_progress")),
+        f"final_workflow_state={diagnostics.get('final_workflow_state')}",
+    )
+    await check(
+        "structured_intake_completion_supported_by_persisted_record",
+        bool(diagnostics.get("advanced_past_intake_in_progress"))
+        and bool(completion.get("complete")),
+    )
+
+    required_evidence_keys = [
+        "presenting_problem",
+        "duration",
+        "risk_screen",
+        "functional_impairment",
+        "goal_preference",
+        "coping_attempts",
+        "sleep_impact",
+    ]
+    per_item_ok = all(
+        items.get(key, {}).get("has_valid_user_sourced_evidence") for key in required_evidence_keys
+    )
+    await check(
+        "intake_record_items_have_user_sourced_evidence",
+        per_item_ok,
+        f"keys={required_evidence_keys}",
+    )
+    any_valid = any(
+        items.get(key, {}).get("has_valid_user_sourced_evidence") for key in required_evidence_keys
+    )
+    await check("intake_evidence_survived_merge", any_valid)
 
 
 def _transcript(session: dict[str, Any]) -> list[dict[str, Any]]:

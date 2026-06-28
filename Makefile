@@ -1,9 +1,9 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
 .PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean
 .PHONY: ui-console ui-console-test
-.PHONY: probe probe-console-deterministic probe-logs probe-db check-usertest-env
+.PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check
+.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
 .PHONY: prepare-runtime-dirs
 
 export PYTHONPATH := src
@@ -41,12 +41,14 @@ help:
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
+	@echo "  finalization-check-full - finalization-check plus the intake-note workflow probe (Docker)"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
 	@echo "  probe             - Run local-LLM full-stack console workflow probe"
 	@echo "  probe-console-deterministic - Run deterministic full-stack console workflow probe"
+	@echo "  probe-console-intake-notes - Run gate-enabled intake note tracking deterministic probe"
 	@echo "  probe-logs        - Print latest workflow probe summary"
 	@echo "  probe-db          - Print rows created by latest workflow probe"
 	@echo ""
@@ -122,6 +124,12 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
 	$(MAKE) probe-console-deterministic
+
+# Heavier release-candidate path: layers the gate-enabled intake-note probe on
+# top of the default finalization-check. Kept separate so the default path stays
+# fast for local iteration; run before merging an intake-tracking change.
+finalization-check-full: finalization-check
+	$(MAKE) probe-console-intake-notes
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
 test-real-llm: prepare-runtime-dirs
@@ -386,6 +394,9 @@ probe: prepare-runtime-dirs
 
 probe-console-deterministic: prepare-runtime-dirs
 	@./scripts/probe_deterministic.sh
+
+probe-console-intake-notes: prepare-runtime-dirs
+	@./scripts/probe_intake_notes.sh
 
 probe-logs:
 	@if [ -f logs/workflow-probes/latest/summary.md ]; then \
