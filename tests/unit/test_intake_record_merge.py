@@ -1,15 +1,20 @@
 from datetime import datetime
 
+import pytest
+
 from psychoanalyst_app.agents.intake.record_merge import (
     merge_intake_record_patch,
     merge_intake_record_patch_with_diagnostics,
 )
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import (
+    CopingRecord,
+    GoalsRecord,
     IntakeEvidence,
     IntakeRecord,
     IntakeRecordPatch,
     PresentingProblemRecord,
+    SafetyRecord,
     TimeCourseRecord,
 )
 
@@ -345,3 +350,127 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
     evidence = merged.presenting_problem.time_course.duration_or_onset
     assert evidence.value == "three months"
     assert evidence.is_present()
+
+
+@pytest.mark.parametrize(
+    "patch, accessor",
+    [
+        pytest.param(
+            IntakeRecordPatch(
+                presenting_problem=PresentingProblemRecord(
+                    time_course=TimeCourseRecord(duration_or_onset=_evidence("months"))
+                )
+            ),
+            lambda record: record.presenting_problem.time_course.duration_or_onset,
+            id="time_course_duration",
+        ),
+        pytest.param(
+            IntakeRecordPatch(safety=SafetyRecord(self_harm=_evidence("no self harm"))),
+            lambda record: record.safety.self_harm,
+            id="safety_self_harm",
+        ),
+        pytest.param(
+            IntakeRecordPatch(
+                safety=SafetyRecord(harm_to_others=_evidence("no harm to others"))
+            ),
+            lambda record: record.safety.harm_to_others,
+            id="safety_harm_to_others",
+        ),
+        pytest.param(
+            IntakeRecordPatch(
+                safety=SafetyRecord(medical_urgency=_evidence("not medically urgent"))
+            ),
+            lambda record: record.safety.medical_urgency,
+            id="safety_medical_urgency",
+        ),
+        pytest.param(
+            IntakeRecordPatch(
+                coping=CopingRecord(
+                    attempted_strategies=[_evidence("breathing exercises")]
+                )
+            ),
+            lambda record: record.coping.attempted_strategies[0],
+            id="coping_attempted_strategies",
+        ),
+        pytest.param(
+            IntakeRecordPatch(
+                goals=GoalsRecord(therapy_goals=[_evidence("sleep better")])
+            ),
+            lambda record: record.goals.therapy_goals[0],
+            id="goals_therapy_goals",
+        ),
+    ],
+)
+def test_valid_patch_merges_into_empty_record(patch, accessor) -> None:
+    merged = merge_intake_record_patch(
+        IntakeRecord(),
+        patch,
+        latest_user_message=_message("I feel anxious at work."),
+        source_message_index=0,
+    )
+
+    assert accessor(merged).is_present()
+
+
+@pytest.mark.parametrize(
+    "attach, build_patch, accessor, cap",
+    [
+        pytest.param(
+            lambda record, items: setattr(
+                record.presenting_problem, "symptoms", items
+            ),
+            lambda items: IntakeRecordPatch(
+                presenting_problem=PresentingProblemRecord(symptoms=items)
+            ),
+            lambda record: record.presenting_problem.symptoms,
+            20,
+            id="symptoms_cap_20",
+        ),
+        pytest.param(
+            lambda record, items: setattr(
+                record.presenting_problem.time_course, "triggers", items
+            ),
+            lambda items: IntakeRecordPatch(
+                presenting_problem=PresentingProblemRecord(
+                    time_course=TimeCourseRecord(triggers=items)
+                )
+            ),
+            lambda record: record.presenting_problem.time_course.triggers,
+            10,
+            id="triggers_cap_10",
+        ),
+        pytest.param(
+            lambda record, items: setattr(
+                record.coping, "attempted_strategies", items
+            ),
+            lambda items: IntakeRecordPatch(
+                coping=CopingRecord(attempted_strategies=items)
+            ),
+            lambda record: record.coping.attempted_strategies,
+            20,
+            id="coping_cap_20",
+        ),
+        pytest.param(
+            lambda record, items: setattr(record.goals, "therapy_goals", items),
+            lambda items: IntakeRecordPatch(goals=GoalsRecord(therapy_goals=items)),
+            lambda record: record.goals.therapy_goals,
+            10,
+            id="goals_cap_10",
+        ),
+    ],
+)
+def test_merge_evidence_list_respects_cap(attach, build_patch, accessor, cap) -> None:
+    current = IntakeRecord()
+    attach(current, [_evidence(f"existing {i}") for i in range(cap - 2)])
+    patch = build_patch([_evidence(f"new {i}") for i in range(5)])
+
+    merged = merge_intake_record_patch(
+        current,
+        patch,
+        latest_user_message=_message("I feel anxious at work."),
+        source_message_index=0,
+    )
+
+    merged_list = accessor(merged)
+    assert len(merged_list) == cap
+    assert all(item.is_present() for item in merged_list)
