@@ -353,7 +353,7 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
 
 
 @pytest.mark.parametrize(
-    "patch, accessor",
+    "patch, accessor, expected_value",
     [
         pytest.param(
             IntakeRecordPatch(
@@ -362,11 +362,13 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
                 )
             ),
             lambda record: record.presenting_problem.time_course.duration_or_onset,
+            "months",
             id="time_course_duration",
         ),
         pytest.param(
             IntakeRecordPatch(safety=SafetyRecord(self_harm=_evidence("no self harm"))),
             lambda record: record.safety.self_harm,
+            "no self harm",
             id="safety_self_harm",
         ),
         pytest.param(
@@ -374,6 +376,7 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
                 safety=SafetyRecord(harm_to_others=_evidence("no harm to others"))
             ),
             lambda record: record.safety.harm_to_others,
+            "no harm to others",
             id="safety_harm_to_others",
         ),
         pytest.param(
@@ -381,6 +384,7 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
                 safety=SafetyRecord(medical_urgency=_evidence("not medically urgent"))
             ),
             lambda record: record.safety.medical_urgency,
+            "not medically urgent",
             id="safety_medical_urgency",
         ),
         pytest.param(
@@ -390,6 +394,7 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
                 )
             ),
             lambda record: record.coping.attempted_strategies[0],
+            "breathing exercises",
             id="coping_attempted_strategies",
         ),
         pytest.param(
@@ -397,11 +402,12 @@ def test_unknown_existing_replaced_by_informative_patch() -> None:
                 goals=GoalsRecord(therapy_goals=[_evidence("sleep better")])
             ),
             lambda record: record.goals.therapy_goals[0],
+            "sleep better",
             id="goals_therapy_goals",
         ),
     ],
 )
-def test_valid_patch_merges_into_empty_record(patch, accessor) -> None:
+def test_valid_patch_merges_into_empty_record(patch, accessor, expected_value) -> None:
     merged = merge_intake_record_patch(
         IntakeRecord(),
         patch,
@@ -409,7 +415,9 @@ def test_valid_patch_merges_into_empty_record(patch, accessor) -> None:
         source_message_index=0,
     )
 
-    assert accessor(merged).is_present()
+    evidence = accessor(merged)
+    assert evidence.is_present()
+    assert evidence.value == expected_value
 
 
 @pytest.mark.parametrize(
@@ -472,5 +480,9 @@ def test_merge_evidence_list_respects_cap(attach, build_patch, accessor, cap) ->
     )
 
     merged_list = accessor(merged)
-    assert len(merged_list) == cap
+    expected_values = [f"existing {i}" for i in range(cap - 2)] + ["new 0", "new 1"]
+    assert [item.value for item in merged_list] == expected_values
     assert all(item.is_present() for item in merged_list)
+    assert "new 2" not in [item.value for item in merged_list]
+    assert "new 3" not in [item.value for item in merged_list]
+    assert "new 4" not in [item.value for item in merged_list]
