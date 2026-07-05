@@ -394,9 +394,10 @@ async def test_migration_adds_intake_record_columns_to_v1_sessions_table(tmp_pat
     finally:
         conn.close()
 
-    assert version == 2
+    assert version == 3
     assert "intake_record" in columns
     assert "intake_record_updated_at" in columns
+    assert "intake_note_tracking_diagnostics" in columns
 
     db = TrioDatabaseService(db_path, migration_service=migration_service)
     await db.initialize()

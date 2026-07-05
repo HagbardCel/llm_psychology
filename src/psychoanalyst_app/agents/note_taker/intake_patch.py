@@ -1,4 +1,4 @@
-"""Structured note tracking for intake sessions."""
+"""Structured intake note patch extraction."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Literal
 import trio
 from pydantic import ValidationError
 
-from psychoanalyst_app.agents.intake.note_tracking_contract import (
+from psychoanalyst_app.agents.intake.record_merge import count_patch_evidence
+from psychoanalyst_app.agents.note_taker.intake_contract import (
     format_intake_note_tracking_prompt,
 )
-from psychoanalyst_app.agents.intake.record_merge import count_patch_evidence
 from psychoanalyst_app.exceptions import LLMServiceError
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch

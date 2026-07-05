@@ -1,8 +1,12 @@
 # TrioIntakeAgent
 
 ## Purpose and Workflow Role
-Collects initial user information and therapy goals, establishes a usable
-Tier 1 profile, and determines when intake is complete.
+Collects initial user information and therapy goals via the canonical structured
+`IntakeRecord`, and determines when intake is complete.
+
+Profile enrichment from the intake transcript (family, work history, etc.) now
+happens only via post-session reflection (`maybe_update_tier1_profile`), not at
+intake completion.
 
 ## Trigger / Invocation
 - Routed by workflow states `NEW` and `INTAKE_IN_PROGRESS`.
@@ -14,45 +18,29 @@ References:
 
 ## Inputs
 - `message` and `ConversationContext` (session duration, topics covered, history).
-- `Settings` for `INTAKE_TOPICS` and `SESSION_DURATION_MINUTES`.
-- `LLMService` for Tier 1 extraction.
+- `Settings` for `INTAKE_TOPICS`, `SESSION_DURATION_MINUTES`, and note-tracking
+  tuning (`INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION`,
+  `INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS`).
+- `NoteTakerAgent` for structured intake patch extraction (`IntakeRecordPatch`).
+- `LLMService` for intake conversational continuation prompts (non-note paths).
 
 ## Outputs
 - `AgentResponse` with prompts or direct content.
-- `metadata.user_profile`: `StructuredUserProfileOutput` (Tier 1) when extracted.
+- `metadata.user_profile`: `StructuredUserProfileOutput` only on the guest-name
+  bootstrap turn (name collection), not on intake completion.
+- `metadata.intake_record`, `metadata.intake_note_tracking`, and
+  `metadata.intake_record_completeness` on real intake turns.
+- `metadata.topics_covered`: non-gating topic metadata for UI/debugging.
 - `metadata.intake_complete`: bool used by `AgentResponseHandler` before transitioning.
 - `workflow_event`: `START_INTAKE` or `COMPLETE_INTAKE` when appropriate.
 
-## Structured Output Examples
-
-StructuredUserProfileOutput (emitted when Tier 1 extraction succeeds):
-
-```json
-{
-  "name": "Alex Rivera",
-  "alias": "Alex",
-  "date_of_birth": "1992-04-17T00:00:00",
-  "primary_language": "English",
-  "cultural_background": "Latinx",
-  "education": "B.A. in Psychology",
-  "current_situation": "Managing work stress and sleep issues"
-}
-```
-
-StructuredTherapyPlanOutput (not emitted by intake; shown for downstream reference):
-
-```json
-{
-  "selected_therapy_style": "psychoanalysis",
-  "focus": "Attachment patterns and anxiety regulation",
-  "themes": ["loss", "self-criticism", "avoidance"],
-  "timeline": "12 weeks",
-  "initial_goals": ["Increase insight into triggers", "Improve sleep routine"],
-  "current_progress": "Baseline established",
-  "planned_interventions": ["Dream exploration", "Journaling prompts"],
-  "status": "active"
-}
-```
+## Flow
+1. Guest bootstrap: collect name, no note tracking.
+2. Initial prompt: first assistant greeting when history is empty, no note tracking.
+3. Real intake turns: `NoteTakerAgent.extract_intake_patch`, merge into `IntakeRecord`, gate uses
+   `record_state.gate_complete` (failure-aware via `compute_intake_gate_outcome`).
+4. Complete: closing prompt + `COMPLETE_INTAKE` (no intake-time Tier 1 extraction).
+5. Incomplete: structured direct-ask continuation for `next_required_item`.
 
 ## User Interaction
 - Yes, direct dialogue with the user.
@@ -60,22 +48,24 @@ StructuredTherapyPlanOutput (not emitted by intake; shown for downstream referen
 
 ## Side Effects and Persistence
 - No direct persistence in the agent.
-- `finalize_agent_response` persists `metadata.user_profile` when present.
+- `finalize_agent_response` persists `metadata.user_profile` when present (guest name).
+- Early intake turn persistence is handled by orchestration (`intake_turn_persistence`).
 
 ## Dependencies
 - Co-located prompts: `psychoanalyst_app/agents/intake/prompts.py`.
-- Slot tracking: `psychoanalyst_app/agents/intake/slots.py`.
-- Tier 1 extraction: `psychoanalyst_app/agents/intake/extraction.py`.
-- Validator: `build_user_profile_output`.
+- Topic metadata: `psychoanalyst_app/agents/intake/slots.py` (`identify_covered_topics`).
+- Structured record policy: `record_completeness.py`, `runtime.py`.
+- Note extraction: `psychoanalyst_app/agents/note_taker/` via injected `NoteTakerAgent`.
+- Validator: `build_user_profile_output` (guest name only).
 
-## Failure Modes and Fallbacks
+## Failure Modes
 - On exceptions, returns a generic retry prompt and keeps state unchanged.
-- If time is up and intake is incomplete, ends the session without transition.
+- Note-tracking extraction failures are surfaced in metadata; gate mode may block completion on stale/incomplete records.
 
 ## Removal Impact
 - Users cannot progress from NEW into the workflow.
-- Tier 1 profile extraction never occurs, blocking assessment and personalization.
+- Structured intake records are not maintained, blocking gate-controlled intake completion.
 
 ## Observability and Testing Notes
 - Key logs include intake completion decisions and topic coverage.
-- Intake completion is gated by `metadata.intake_complete`.
+- Intake completion is gated by `metadata.intake_complete` and structured record completeness.

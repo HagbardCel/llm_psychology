@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from psychoanalyst_app.agents.intake.note_tracker import (
+from psychoanalyst_app.agents.note_taker.intake_patch import (
     extract_intake_record_patch,
 )
 from psychoanalyst_app.exceptions import LLMServiceError
@@ -50,7 +50,7 @@ async def test_extract_intake_record_patch_uses_prompt_formatter(monkeypatch) ->
         return sentinel
 
     monkeypatch.setattr(
-        "psychoanalyst_app.agents.intake.note_tracker.format_intake_note_tracking_prompt",
+        "psychoanalyst_app.agents.note_taker.intake_patch.format_intake_note_tracking_prompt",
         _fake_formatter,
     )
     llm = _LLM(IntakeRecordPatch(no_new_information=True))

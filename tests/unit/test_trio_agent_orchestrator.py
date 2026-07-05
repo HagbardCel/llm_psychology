@@ -128,6 +128,113 @@ async def test_process_message_propagates_exceptions(orchestrator, mock_dependen
 
 
 @pytest.mark.trio
+async def test_process_message_persists_intake_before_stream_raises(
+    orchestrator, mock_dependencies, tmp_path
+):
+    """Pre-stream persistence must save the intake patch even if streaming hangs."""
+    from datetime import datetime
+
+    from psychoanalyst_app.models.domain import Session
+    from psychoanalyst_app.models.intake_record import (
+        IntakeEvidence,
+        IntakeRecord,
+        PresentingProblemRecord,
+    )
+
+    mock_dependencies["workflow_engine"].get_user_state.return_value = (
+        WorkflowState.INTAKE_IN_PROGRESS
+    )
+    orchestrator.session_lifecycle.ensure_session_id = AsyncMock(
+        return_value="session_123"
+    )
+    orchestrator.conversation_manager.add_message = AsyncMock()
+    context = MagicMock()
+    orchestrator.conversation_manager.get_context = AsyncMock(return_value=context)
+    orchestrator.conversation_manager.active_contexts = {}
+
+    session = Session(
+        session_id="session_123",
+        user_id="user_123",
+        timestamp=datetime.now(),
+        transcript=[],
+    )
+    trio_db_service = MagicMock()
+    trio_db_service.get_session = AsyncMock(return_value=session)
+    trio_db_service.save_session = AsyncMock(return_value=True)
+    orchestrator.conversation_manager.db_service = trio_db_service
+
+    def get_service(name):
+        if name == "trio_db_service":
+            return trio_db_service
+        return MagicMock()
+
+    orchestrator.service_container.get = get_service
+
+    record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="anxiety",
+                evidence_quote="I feel anxious",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+    agent = MagicMock()
+    agent.process_message = AsyncMock(
+        return_value=AgentResponse(
+            content="Hi",
+            next_action="continue",
+            next_state=WorkflowState.INTAKE_IN_PROGRESS,
+            metadata={
+                "intake_record": record,
+                "intake_record_persistence": {
+                    "record_changed": True,
+                    "should_persist": True,
+                },
+                "intake_note_tracking": {
+                    "status": "success",
+                    "merge_status": "applied",
+                    "applied": True,
+                    "raw_evidence_count": 1,
+                    "retained_evidence_count": 1,
+                    "dropped_evidence_count": 0,
+                    "drop_reasons": [],
+                    "drop_reasons_total": 0,
+                    "drop_reasons_truncated": False,
+                },
+            },
+        )
+    )
+    orchestrator._get_or_create_agent = AsyncMock(return_value=agent)
+
+    async def _raising_stream(*args, **kwargs):
+        raise RuntimeError("stream hung")
+        yield  # pragma: no cover - makes this an async generator
+
+    orchestrator.conversation_manager.stream_response = _raising_stream
+    orchestrator.conversation_manager.stream_static_response = _raising_stream
+    orchestrator.response_handler = AsyncMock()
+    orchestrator.emit_workflow_next_action = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="stream hung"):
+        async for _ in orchestrator.process_message("user_123", "hi", "session_123"):
+            pass
+
+    # The intake patch was persisted before the stream raised.
+    trio_db_service.save_session.assert_awaited()
+    assert isinstance(session.intake_record, IntakeRecord)
+    assert session.intake_record.presenting_problem.main_concern.value == "anxiety"
+    assert session.intake_note_tracking_diagnostics is not None
+    assert (
+        agent.process_message.return_value.metadata["intake_record_persistence"][
+            "persisted"
+        ]
+        is True
+    )
+
+
+@pytest.mark.trio
 async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     """Test successful therapy plan creation via orchestrator."""
     # Setup mocks

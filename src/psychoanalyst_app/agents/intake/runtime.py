@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Protocol
 
-from psychoanalyst_app.agents.intake.extraction import extract_tier1_data
-from psychoanalyst_app.agents.intake.note_tracker import (
-    IntakePatchExtractionResult,
-    extract_intake_record_patch,
-)
 from psychoanalyst_app.agents.intake.prompts import (
     CLOSING_PROMPT,
     CONTINUE_CONVERSATION_PROMPT,
@@ -26,28 +22,34 @@ from psychoanalyst_app.agents.intake.record_merge import (
 from psychoanalyst_app.agents.intake.record_summary import (
     summarize_intake_record_for_prompt,
 )
-from psychoanalyst_app.agents.intake.slots import (
-    next_required_follow_up,
-    patient_messages,
-)
+from psychoanalyst_app.agents.intake.slots import patient_messages
+from psychoanalyst_app.agents.note_taker.intake_patch import IntakePatchExtractionResult
 from psychoanalyst_app.models.domain import Message, UserStatus
 from psychoanalyst_app.models.intake_record import IntakeRecord
-from psychoanalyst_app.orchestration.agent_output_validators import (
-    build_user_profile_output,
-)
 from psychoanalyst_app.orchestration.models import (
     AgentResponse,
     ConversationContext,
     WorkflowEvent,
     direct_agent_response,
 )
-from psychoanalyst_app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
 TIME_UP_INTAKE_PROMPT = (
     "Our time is up for today. We will continue this intake in our next session."
 )
+
+
+class IntakePatchExtractor(Protocol):
+    async def __call__(
+        self,
+        *,
+        current_record: IntakeRecord,
+        latest_user_message: Message,
+        previous_assistant_message: Message | None,
+        source_message_index: int,
+        timeout_seconds: float,
+    ) -> IntakePatchExtractionResult: ...
 
 
 def is_guest_intake_context(context: ConversationContext) -> bool:
@@ -57,15 +59,6 @@ def is_guest_intake_context(context: ConversationContext) -> bool:
         or context.user_profile.status == UserStatus.PROFILE_ONLY
         or context.user_profile.name == context.user_profile.user_id
     )
-
-
-def should_use_structured_completion_gate(
-    *,
-    note_tracking_enabled: bool,
-    completion_gate_enabled: bool,
-) -> bool:
-    """Temporarily guard structured gate until config invariants are enforced."""
-    return note_tracking_enabled and completion_gate_enabled
 
 
 _FAILURE_TRACKING_STATUSES = frozenset(
@@ -161,27 +154,25 @@ async def prepare_intake_record_state(
     *,
     message: str,
     context: ConversationContext,
-    llm_service: LLMService,
-    note_tracking_enabled: bool,
     strict_quote_validation: bool,
     is_guest: bool,
-    structured_gate_enabled: bool,
     note_tracking_timeout_seconds: float = 20.0,
+    extract_intake_patch: IntakePatchExtractor,
 ) -> IntakeRecordState:
-    """Prepare typed intake record state and optional note-tracking diagnostics."""
+    """Prepare typed intake record state and note-tracking diagnostics."""
     record = context.intake_record or IntakeRecord()
     has_existing_record = context.intake_record is not None
     note_tracking: IntakePatchExtractionResult | None = None
     merge_result: IntakePatchMergeResult | None = None
 
-    if note_tracking_enabled and not is_guest and message.strip():
+    if not is_guest and message.strip():
         record, note_tracking, merge_result = await _update_intake_record(
             message=message,
             context=context,
             current_record=record,
-            llm_service=llm_service,
             strict_quote_validation=strict_quote_validation,
             timeout_seconds=note_tracking_timeout_seconds,
+            extract_intake_patch=extract_intake_patch,
         )
 
     completeness = intake_record_completion_decision(
@@ -191,22 +182,14 @@ async def prepare_intake_record_state(
     state = IntakeRecordState(
         record=record,
         completeness=completeness,
-        note_tracking_enabled=note_tracking_enabled,
+        note_tracking_enabled=True,
         note_tracking=note_tracking,
         merge_result=merge_result,
         should_emit_metadata=note_tracking is not None or has_existing_record,
     )
-    gate_outcome = (
-        compute_intake_gate_outcome(
-            completeness,
-            tracking_failed=note_tracking_failed(state),
-        )
-        if structured_gate_enabled
-        else IntakeGateOutcome(
-            gate_complete=completeness.complete,
-            stale_record_used=False,
-            max_turn_completion_blocked_by_failure=False,
-        )
+    gate_outcome = compute_intake_gate_outcome(
+        completeness,
+        tracking_failed=note_tracking_failed(state),
     )
     return IntakeRecordState(
         record=state.record,
@@ -226,9 +209,9 @@ async def _update_intake_record(
     message: str,
     context: ConversationContext,
     current_record: IntakeRecord,
-    llm_service: LLMService,
     strict_quote_validation: bool,
     timeout_seconds: float = 20.0,
+    extract_intake_patch: IntakePatchExtractor,
 ) -> tuple[IntakeRecord, IntakePatchExtractionResult, IntakePatchMergeResult | None]:
     latest_index = _latest_user_message_index(context, message)
     if latest_index is None:
@@ -240,8 +223,7 @@ async def _update_intake_record(
         return current_record, result, None
 
     latest_message = context.message_history[latest_index]
-    result = await extract_intake_record_patch(
-        llm_service=llm_service,
+    result = await extract_intake_patch(
         current_record=current_record,
         latest_user_message=latest_message,
         previous_assistant_message=_previous_assistant_message(
@@ -294,8 +276,6 @@ def _previous_assistant_message(
 
 def intake_record_metadata(
     state: IntakeRecordState,
-    *,
-    legacy_diagnostics: dict[str, object],
 ) -> dict[str, object]:
     """Build serializable response metadata for structured intake state."""
     if not state.should_emit_metadata:
@@ -328,6 +308,9 @@ def intake_record_metadata(
                 "retained_evidence_count": merge_result.retained_evidence_count,
                 "dropped_evidence_count": merge_result.dropped_evidence_count,
                 "record_changed": merge_result.record_changed,
+                "drop_reasons": [dict(item) for item in merge_result.drop_reasons],
+                "drop_reasons_total": merge_result.drop_reasons_total,
+                "drop_reasons_truncated": merge_result.drop_reasons_truncated,
             }
         )
         if merge_result.error_message:
@@ -343,15 +326,12 @@ def intake_record_metadata(
         },
         "intake_record_completeness": state.completeness.model_dump(mode="json"),
         "intake_note_tracking": tracking_metadata,
-        "legacy_intake_completion_diagnostics": legacy_diagnostics,
     }
 
 
 def intake_response_metadata(
     *,
     context: ConversationContext,
-    intake_slot_coverage: set[str],
-    completion_diagnostics: dict[str, object],
     record_metadata: dict[str, object],
     user_profile: object | None = None,
     intake_complete: bool | None = None,
@@ -361,8 +341,6 @@ def intake_response_metadata(
     """Build common intake response metadata."""
     metadata: dict[str, object] = {
         "topics_covered": context.topics_covered,
-        "intake_slot_coverage": sorted(intake_slot_coverage),
-        "intake_completion_diagnostics": completion_diagnostics,
         **record_metadata,
         "time_remaining_minutes": context.time_remaining_minutes,
         "can_extend": context.can_extend,
@@ -417,16 +395,10 @@ def build_structured_direct_ask_instruction(next_item: str | None) -> str:
 def build_continuation_prompt_context(
     *,
     record_state: IntakeRecordState,
-    include_structured_guidance: bool,
-    direct_ask_enabled: bool,
-    use_structured_gate: bool = False,
 ) -> str:
     """Return structured intake context for the response-generation prompt."""
-    if not include_structured_guidance and not use_structured_gate:
-        return ""
-
     parts: list[str] = []
-    if include_structured_guidance or use_structured_gate:
+    if record_state.should_emit_metadata:
         summary = summarize_intake_record_for_prompt(
             record_state.record,
             record_state.completeness,
@@ -440,25 +412,14 @@ def build_continuation_prompt_context(
             ]
         )
 
-    if use_structured_gate:
-        parts.extend(
-            [
-                "\n\nStructured direct-ask instruction:\n",
-                build_structured_direct_ask_instruction(
-                    record_state.completeness.next_required_item
-                ),
-            ]
-        )
-    elif direct_ask_enabled and record_state.completeness.next_required_item:
-        recommended_next_item = (
-            f"{record_state.completeness.next_required_item} "
-            "(ask directly; if the patient cannot answer, note that explicitly)"
-        )
-        parts.append(f"\nRecommended next item: {recommended_next_item}\n")
-    elif include_structured_guidance:
-        recommended_next_item = record_state.completeness.next_required_item or "None"
-        parts.append(f"\nRecommended next item: {recommended_next_item}\n")
-
+    parts.extend(
+        [
+            "\n\nStructured direct-ask instruction:\n",
+            build_structured_direct_ask_instruction(
+                record_state.completeness.next_required_item
+            ),
+        ]
+    )
     return "".join(parts)
 
 
@@ -475,8 +436,6 @@ def build_intake_continuation_prompt(
     context: ConversationContext,
     record_state: IntakeRecordState,
     intake_topics: list[str],
-    direct_ask_enabled: bool,
-    use_structured_gate: bool,
 ) -> str:
     """Build continuation prompt with time, topic, and structured intake context."""
     remaining_minutes = max(0, int(context.time_remaining_minutes))
@@ -489,9 +448,6 @@ def build_intake_continuation_prompt(
         pending_topics=", ".join(pending),
         structured_intake_context=build_continuation_prompt_context(
             record_state=record_state,
-            include_structured_guidance=record_state.should_emit_metadata,
-            direct_ask_enabled=direct_ask_enabled,
-            use_structured_gate=use_structured_gate,
         ),
     )
 
@@ -509,39 +465,20 @@ async def resolve_intake_continuation_turn(
     context: ConversationContext,
     record_state: IntakeRecordState,
     is_complete: bool,
-    use_structured_gate: bool,
-    intake_slot_coverage: set[str],
     intake_topics: list[str],
-    direct_ask_enabled: bool,
-    llm_service: LLMService,
-    completion_diagnostics: dict[str, object],
     record_metadata: dict[str, object],
 ) -> AgentResponse | IntakeContinuationPlan:
     """Resolve continuation turns that may complete, time out, or continue intake."""
     _ = message
     if is_complete:
-        logger.info("Intake complete - extracting Tier 1 data...")
-        tier1_updates = await extract_tier1_data(llm_service, context.message_history)
-        structured_profile = (
-            build_user_profile_output(tier1_updates) if tier1_updates else None
-        )
-        if tier1_updates:
-            logger.info(
-                "Extracted Tier 1 user profile details for %s",
-                context.user_profile.user_id,
-            )
-        else:
-            logger.warning("Failed to extract Tier 1 data from intake conversation")
         return direct_agent_response(
             content=CLOSING_PROMPT,
             next_action="transition",
             workflow_event=WorkflowEvent.COMPLETE_INTAKE,
             metadata=intake_response_metadata(
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
                 record_metadata=record_metadata,
-                user_profile=structured_profile,
+                user_profile=None,
                 intake_complete=is_complete,
                 intake_next_action_source="complete",
                 selected_direct_ask_item=None,
@@ -552,49 +489,19 @@ async def resolve_intake_continuation_turn(
             content=TIME_UP_INTAKE_PROMPT,
             metadata=intake_response_metadata(
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
                 record_metadata=record_metadata,
                 intake_complete=is_complete,
                 intake_next_action_source="time_up",
                 selected_direct_ask_item=None,
             ),
         )
-    if use_structured_gate:
-        selected_item = record_state.completeness.next_required_item
-        return IntakeContinuationPlan(
-            prompt=build_intake_continuation_prompt(
-                context=context,
-                record_state=record_state,
-                intake_topics=intake_topics,
-                direct_ask_enabled=direct_ask_enabled,
-                use_structured_gate=True,
-            ),
-            intake_next_action_source="structured_direct_ask_llm",
-            selected_direct_ask_item=selected_item,
-        )
-    required_follow_up = next_required_follow_up(intake_slot_coverage)
-    if required_follow_up:
-        return direct_agent_response(
-            content=required_follow_up,
-            metadata=intake_response_metadata(
-                context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
-                record_metadata=record_metadata,
-                intake_complete=is_complete,
-                intake_next_action_source="legacy_follow_up",
-                selected_direct_ask_item=None,
-            ),
-        )
+    selected_item = record_state.completeness.next_required_item
     return IntakeContinuationPlan(
         prompt=build_intake_continuation_prompt(
             context=context,
             record_state=record_state,
             intake_topics=intake_topics,
-            direct_ask_enabled=direct_ask_enabled,
-            use_structured_gate=False,
         ),
-        intake_next_action_source="legacy_llm_continuation",
-        selected_direct_ask_item=None,
+        intake_next_action_source="structured_direct_ask_llm",
+        selected_direct_ask_item=selected_item,
     )

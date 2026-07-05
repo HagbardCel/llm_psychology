@@ -64,10 +64,26 @@ def load_intake_record(payload: str | None) -> IntakeRecord | None:
     return IntakeRecord.model_validate(json.loads(payload))
 
 
+def dump_intake_note_tracking_diagnostics(
+    diagnostics: dict[str, Any] | None,
+) -> str | None:
+    if not diagnostics:
+        return None
+    return dump_json(diagnostics)
+
+
+def load_intake_note_tracking_diagnostics(
+    payload: str | None,
+) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    return load_json(payload, default=None)
+
+
 SESSION_COLUMNS = (
     "session_id, user_id, session_type, plan_id, timestamp, transcript, topics, "
     "session_summary, session_briefing, intake_record, intake_record_updated_at, "
-    "psychological_summary, "
+    "intake_note_tracking_diagnostics, psychological_summary, "
     "dominant_affects, key_themes, notable_interactions, "
     "interpretations, patient_reactions, enriched"
 )
@@ -107,6 +123,13 @@ def session_from_row(
         intake_record_updated_at=(
             iso_to_datetime(row["intake_record_updated_at"])
             if row["intake_record_updated_at"]
+            else None
+        ),
+        intake_note_tracking_diagnostics=(
+            load_intake_note_tracking_diagnostics(
+                row["intake_note_tracking_diagnostics"]
+            )
+            if "intake_note_tracking_diagnostics" in row.keys()
             else None
         ),
         psychological_summary=row["psychological_summary"],

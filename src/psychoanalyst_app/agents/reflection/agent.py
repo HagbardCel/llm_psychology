@@ -8,6 +8,7 @@ from typing import Any
 import trio
 
 from psychoanalyst_app.agents.memory.agent import TrioMemoryAgent
+from psychoanalyst_app.agents.note_taker import NoteTakerAgent
 from psychoanalyst_app.agents.planning.agent import TrioPlanningAgent
 from psychoanalyst_app.agents.reflection.insights_pipeline import (
     gather_therapeutic_insights,
@@ -16,8 +17,6 @@ from psychoanalyst_app.agents.reflection.insights_pipeline import (
 from psychoanalyst_app.agents.reflection.session_summary import (
     build_plan_snapshot,
     format_reflection_summary,
-    generate_session_briefing,
-    generate_session_summary_payload,
 )
 from psychoanalyst_app.agents.reflection.tier2_pipeline import (
     ensure_recent_sessions_enriched,
@@ -59,6 +58,7 @@ class TrioReflectionAgent:
         user_context: UserContext,
         memory_agent: TrioMemoryAgent,
         planning_agent: TrioPlanningAgent,
+        note_taker_agent: NoteTakerAgent,
         config: Settings,
     ):
         self.llm_service = llm_service
@@ -67,6 +67,7 @@ class TrioReflectionAgent:
         self.user_context = user_context
         self.memory_agent = memory_agent
         self.planning_agent = planning_agent
+        self.note_taker_agent = note_taker_agent
         self.config = config
         logger.info(f"TrioReflectionAgent initialized for user {user_context.user_id}")
 
@@ -106,14 +107,12 @@ class TrioReflectionAgent:
             tier3_update,
         ) = await self.generate_comprehensive_reflection(session, updated_plan)
 
-        session_briefing = await generate_session_briefing(
-            self.llm_service,
-            self.config,
-            reflection["session_context"],
-            reflection["therapeutic_memory"],
-            reflection.get("plan_assessment"),
-            session,
-            updated_plan,
+        session_briefing = await self.note_taker_agent.generate_session_briefing(
+            session_context=reflection["session_context"],
+            therapeutic_memory=reflection["therapeutic_memory"],
+            plan_assessment=reflection.get("plan_assessment"),
+            session=session,
+            therapy_plan=updated_plan,
         )
 
         if session_briefing:
@@ -266,6 +265,7 @@ class TrioReflectionAgent:
             return await generate_comprehensive_reflection_data(
                 db_service=self.db_service,
                 llm_service=self.llm_service,
+                note_taker_agent=self.note_taker_agent,
                 memory_agent=self.memory_agent,
                 planning_agent=self.planning_agent,
                 user_id=self.user_context.user_id,
@@ -281,7 +281,7 @@ class TrioReflectionAgent:
 
     async def generate_session_summary(self, session: Session) -> dict[str, Any]:
         """Generate a simple session summary (backwards compatibility)."""
-        return await generate_session_summary_payload(self.llm_service, session)
+        return await self.note_taker_agent.generate_session_summary_payload(session)
 
     async def get_therapeutic_insights(self) -> dict[str, Any]:
         """Get comprehensive therapeutic insights across all sessions."""

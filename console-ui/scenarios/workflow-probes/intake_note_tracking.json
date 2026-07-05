@@ -45,7 +45,7 @@
   },
   "timing_warning_thresholds_ms": {
     "intake_response_ms": 120000,
-    "intake_extraction_ms": 180000,
+    "intake_note_tracking_ms": 180000,
     "assessment_style_scoring_ms": 180000,
     "assessment_initial_formulation_ms": 180000,
     "initial_plan_generation_ms": 180000,

@@ -120,38 +120,6 @@ class Settings(BaseSettings):
             object.__setattr__(self, "GOOGLE_API_KEY", self.GEMINI_API_KEY)
         normalized_provider = self.LLM_PROVIDER.strip().lower()
         object.__setattr__(self, "LLM_PROVIDER", normalized_provider)
-        self._validate_intake_note_tracking_flags()
-
-    def _validate_intake_note_tracking_flags(self) -> None:
-        errors: list[str] = []
-        if (
-            self.INTAKE_RECORD_COMPLETION_GATE_ENABLED
-            and not self.INTAKE_NOTE_TRACKING_ENABLED
-        ):
-            errors.append(
-                "INTAKE_RECORD_COMPLETION_GATE_ENABLED requires "
-                "INTAKE_NOTE_TRACKING_ENABLED=true."
-            )
-        if (
-            self.INTAKE_RECORD_DIRECT_ASK_ENABLED
-            and not self.INTAKE_NOTE_TRACKING_ENABLED
-        ):
-            errors.append(
-                "INTAKE_RECORD_DIRECT_ASK_ENABLED requires "
-                "INTAKE_NOTE_TRACKING_ENABLED=true."
-            )
-        if (
-            self.INTAKE_RECORD_COMPLETION_GATE_ENABLED
-            and not self.INTAKE_RECORD_DIRECT_ASK_ENABLED
-        ):
-            errors.append(
-                "INTAKE_RECORD_COMPLETION_GATE_ENABLED requires "
-                "INTAKE_RECORD_DIRECT_ASK_ENABLED=true."
-            )
-        if errors:
-            raise ValueError(
-                "Invalid intake note-tracking flag combination: " + " ".join(errors)
-            )
 
     def get_llm_base_url(self) -> str | None:
         """Resolve the configured/default base URL for the selected LLM provider."""
@@ -244,23 +212,9 @@ class Settings(BaseSettings):
         "Support System",
         "Goals for Therapy",
     ]
-    INTAKE_NOTE_TRACKING_ENABLED: bool = Field(
-        default=False,
-        description="Enable structured incremental intake record extraction.",
-    )
-    INTAKE_RECORD_COMPLETION_GATE_ENABLED: bool = Field(
-        default=False,
-        description="Use the structured intake record as the workflow completion gate.",
-    )
     INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION: bool = Field(
         default=True,
         description="Require intake record evidence quotes to match patient messages.",
-    )
-    INTAKE_RECORD_DIRECT_ASK_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Use structured missing items to directly ask late-intake follow-ups."
-        ),
     )
     INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS: float = Field(
         default=20.0,
@@ -407,3 +361,16 @@ def setup_logging(
     # Set specific loggers to appropriate levels
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
+
+
+def log_effective_intake_flags(settings: Settings) -> None:
+    """Emit a one-line summary of intake note-tracking settings at startup."""
+    if settings.APP_ENV == "production":
+        return
+    logger = logging.getLogger("psychoanalyst_app.config")
+    logger.info(
+        "Effective intake settings: strict_quote_validation=%s, "
+        "note_tracking_timeout_seconds=%s",
+        settings.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION,
+        settings.INTAKE_NOTE_TRACKING_TIMEOUT_SECONDS,
+    )

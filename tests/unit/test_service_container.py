@@ -376,6 +376,7 @@ class TestServiceContainerAgentCreation:
             llm_service=container.get("llm_service_intake"),
             user_context=user_context,
             config=container.config,
+            note_taker_agent=container.get("note_taker_agent"),
         )
 
     @patch.object(ServiceContainer, "create_reflection_agent")
@@ -479,6 +480,7 @@ class TestServiceContainerAgentCreation:
             user_context=user_context,
             memory_agent=mock_memory,
             planning_agent=mock_planning,
+            note_taker_agent=container.get("note_taker_agent"),
             config=container.config,
         )
 

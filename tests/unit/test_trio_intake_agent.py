@@ -9,25 +9,16 @@ from datetime import datetime, timedelta
 import pytest
 
 from psychoanalyst_app.agents.intake import (
-    COPING_ATTEMPTS_PROMPT,
-    GOAL_PREFERENCE_PROMPT,
     MAX_INTAKE_PATIENT_TURNS,
     MIN_INTAKE_PATIENT_TURNS,
-    RISK_SCREEN_PROMPT,
     TrioIntakeAgent,
 )
 from psychoanalyst_app.agents.intake.prompts import CLOSING_PROMPT
 from psychoanalyst_app.agents.intake.record_completeness import (
     intake_record_completion_decision,
 )
-from psychoanalyst_app.agents.intake.slots import (
-    identify_covered_topics,
-    identify_required_slots,
-    intake_completion_diagnostics,
-    intake_slot_evidence,
-    is_intake_complete,
-    next_required_follow_up,
-)
+from psychoanalyst_app.agents.intake.slots import identify_covered_topics
+from psychoanalyst_app.agents.note_taker import NoteTakerAgent
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import Message, UserProfile, UserStatus
 from psychoanalyst_app.models.intake_record import (
@@ -39,6 +30,9 @@ from psychoanalyst_app.models.intake_record import (
 )
 from psychoanalyst_app.orchestration.models import ConversationContext, WorkflowEvent
 from psychoanalyst_app.services.llm_phases import INTAKE_NOTE_TRACKING
+
+RISK_SCREEN_PROMPT = "Have you had any thoughts of harming yourself or someone else?"
+GOAL_PREFERENCE_PROMPT = "what would you most want to be different"
 
 
 def _make_context(
@@ -61,20 +55,46 @@ def _make_context(
     )
 
 
-@pytest.fixture
-def intake_agent(mock_llm_service, app_config):
-    """Create a TrioIntakeAgent for testing."""
-    return TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
+def _make_note_taker(mock_llm_service, app_config) -> NoteTakerAgent:
+    return NoteTakerAgent(
+        intake_llm_service=mock_llm_service,
+        reflection_llm_service=mock_llm_service,
         config=app_config,
     )
 
 
+def _make_intake_agent(
+    mock_llm_service, app_config, user_id: str = "user-123"
+) -> TrioIntakeAgent:
+    return TrioIntakeAgent(
+        llm_service=mock_llm_service,
+        user_context=UserContext(user_id),
+        config=app_config,
+        note_taker_agent=_make_note_taker(mock_llm_service, app_config),
+    )
+
+
+@pytest.fixture
+def intake_agent(mock_llm_service, app_config):
+    """Create a TrioIntakeAgent for testing."""
+    return _make_intake_agent(mock_llm_service, app_config)
+
+
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
+async def test_intake_completion_uses_closing_prompt(mock_llm_service, app_config):
     """Ensure completion uses the closing prompt and triggers the intake transition."""
+    async def _generate_structured_output_async(
+        _prompt, _schema, method="json_schema", *, phase, **kwargs
+    ):
+        _ = kwargs
+        _ = method, phase
+        return IntakeRecordPatch(no_new_information=True)
+
+    mock_llm_service.generate_structured_output_async = (
+        _generate_structured_output_async
+    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -111,9 +131,10 @@ async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
             ),
         ],
     )
+    context.intake_record = _genuinely_complete_record()
 
-    response = await intake_agent.process_message(
-        "I want to keep going.",
+    response = await agent.process_message(
+        "Thanks, that covers everything.",
         context,
     )
 
@@ -122,6 +143,7 @@ async def test_intake_completion_uses_closing_prompt(intake_agent, app_config):
     assert response.next_action == "transition"
     assert response.metadata["is_direct_response"] is True
     assert "?" not in response.content
+    assert "user_profile" not in response.metadata
 
 
 def test_intake_topic_coverage_ignores_assistant_prompts():
@@ -138,258 +160,6 @@ def test_intake_topic_coverage_ignores_assistant_prompts():
     )
 
     assert covered == []
-
-
-def test_intake_slot_coverage_counts_substance_based_coping():
-    slots = identify_required_slots(
-        "I have been drinking wine to get to sleep when work stress builds.",
-        [],
-    )
-
-    assert "coping_attempts" in slots
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "I tried breathing exercises before meetings.",
-        "Mostly I avoid speaking unless I have to.",
-        "I take sleep medication when it gets bad.",
-        "I have been talking to someone about it.",
-        "I have not tried anything yet.",
-    ],
-)
-def test_intake_slot_coverage_counts_common_coping_answers(message):
-    slots = identify_required_slots(message, [])
-
-    assert "coping_attempts" in slots
-
-
-def test_duration_slot_requires_explicit_patient_evidence():
-    slots = identify_required_slots(
-        "The tightness starts when I open email and feels urgent recently.",
-        [],
-    )
-    evidence = intake_slot_evidence(
-        "The tightness starts when I open email and feels urgent recently.",
-        [],
-    )
-
-    assert "duration" not in slots
-    assert evidence["duration"]["status"] == "missing"
-    assert evidence["duration"]["evidence_quote"] is None
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "This has been happening for three months.",
-        "I have felt this way since January.",
-        "It happens twice a week before meetings.",
-        "For the past few weeks I have been anxious before work.",
-    ],
-)
-def test_duration_slot_counts_clear_duration_or_frequency(message):
-    slots = identify_required_slots(message, [])
-    evidence = intake_slot_evidence(message, [])
-
-    assert "duration" in slots
-    assert evidence["duration"]["status"] == "covered"
-    assert evidence["duration"]["explicitness"] == "explicit"
-    assert evidence["duration"]["evidence_role"] == "user"
-    assert evidence["duration"]["evidence_quote"]
-
-
-def test_hard_slots_ignore_assistant_authored_evidence():
-    slots = identify_required_slots(
-        "I am not sure.",
-        [
-            Message(
-                role="assistant",
-                content=(
-                    "The patient has anxiety for months, work impairment, "
-                    "goals, and no safety concerns."
-                ),
-                timestamp=datetime.now(),
-            )
-        ],
-    )
-
-    assert not {
-        "presenting_problem",
-        "duration",
-        "functional_impairment",
-        "risk_screen",
-        "goal_preference",
-    } & slots
-
-
-def test_next_required_follow_up_includes_coping_attempts_after_hard_prompts():
-    covered = {
-        "risk_screen",
-        "goal_preference",
-        "presenting_problem",
-        "duration",
-        "functional_impairment",
-        "sleep_impact",
-    }
-
-    assert next_required_follow_up(covered) == COPING_ATTEMPTS_PROMPT
-
-
-def test_intake_completes_after_max_turns_with_only_soft_slots_missing():
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(
-                role="user",
-                content=(
-                    f"Turn {index}: anxiety for several months affects "
-                    "work deadlines."
-                ),
-                timestamp=datetime.now(),
-            )
-            for index in range(MAX_INTAKE_PATIENT_TURNS)
-        ]
-        + [
-            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="No thoughts of harm and I feel safe.",
-                timestamp=datetime.now(),
-            ),
-            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I want to feel better at work.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-    covered = {
-        "risk_screen",
-        "goal_preference",
-        "presenting_problem",
-        "duration",
-        "functional_impairment",
-    }
-
-    diagnostics = intake_completion_diagnostics(context, covered)
-
-    assert is_intake_complete(context, covered)
-    assert diagnostics["missing_soft_slots"] == ["coping_attempts", "sleep_impact"]
-    assert diagnostics["max_turn_completion"] is True
-
-
-def test_intake_does_not_complete_without_risk_screen_after_max_turns():
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(
-                role="user",
-                content=(
-                    f"Turn {index}: anxiety for several months affects "
-                    "work and sleep."
-                ),
-                timestamp=datetime.now(),
-            )
-            for index in range(MAX_INTAKE_PATIENT_TURNS + 1)
-        ]
-        + [
-            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I want to feel better at work.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-    covered = {
-        "goal_preference",
-        "presenting_problem",
-        "duration",
-        "functional_impairment",
-        "sleep_impact",
-        "coping_attempts",
-    }
-
-    diagnostics = intake_completion_diagnostics(context, covered)
-
-    assert not is_intake_complete(context, covered)
-    assert diagnostics["missing_hard_slots"] == ["risk_screen"]
-
-
-def test_intake_does_not_complete_without_duration_evidence_after_max_turns():
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(
-                role="user",
-                content=f"Turn {index}: anxiety recently affects work and sleep.",
-                timestamp=datetime.now(),
-            )
-            for index in range(MAX_INTAKE_PATIENT_TURNS)
-        ]
-        + [
-            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="No thoughts of harm and I feel safe.",
-                timestamp=datetime.now(),
-            ),
-            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I want to feel better at work.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-    covered = {
-        "risk_screen",
-        "goal_preference",
-        "presenting_problem",
-        "duration",
-        "functional_impairment",
-        "sleep_impact",
-        "coping_attempts",
-    }
-
-    diagnostics = intake_completion_diagnostics(context, covered)
-
-    assert not is_intake_complete(context, covered)
-    assert "duration" in diagnostics["missing_hard_slots"]
-    assert diagnostics["slot_evidence"]["duration"]["status"] == "missing"
 
 
 @pytest.mark.trio
@@ -426,96 +196,9 @@ async def test_time_up_without_completion_ends_with_notice(intake_agent):
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_note_tracking_disabled_preserves_current_metadata(
-    mock_llm_service, app_config
-):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I feel anxious every day.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-
-    response = await agent.process_message("I feel anxious every day.", context)
-
-    assert "intake_record" not in response.metadata
-    assert "intake_note_tracking" not in response.metadata
-
-
-@pytest.mark.trio
-@pytest.mark.unit
-async def test_existing_record_metadata_marks_disabled_not_attempted(
-    mock_llm_service, app_config
-):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
-            Message(role="user", content="I am stressed", timestamp=datetime.now()),
-        ],
-    )
-    context.intake_record = IntakeRecord(
-        presenting_problem=PresentingProblemRecord(
-            main_concern=IntakeEvidence(
-                value="stress",
-                evidence_quote="I am stressed",
-                source_message_index=1,
-                source_role="user",
-            )
-        )
-    )
-
-    response = await agent.process_message("I am stressed", context)
-    metadata = response.metadata["intake_note_tracking"]
-
-    assert metadata["status"] == "not_run"
-    assert metadata["configured_enabled"] is False
-    assert metadata["attempted"] is False
-
-
-@pytest.mark.trio
-@pytest.mark.unit
 async def test_note_tracking_merges_patch_into_typed_metadata(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
     patch = IntakeRecordPatch(
         presenting_problem=PresentingProblemRecord(
             main_concern=IntakeEvidence(
@@ -538,11 +221,7 @@ async def test_note_tracking_merges_patch_into_typed_metadata(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -572,7 +251,6 @@ async def test_note_tracking_merges_patch_into_typed_metadata(
         "value"
     ] == "anxiety"
     assert response.metadata["intake_note_tracking"]["status"] == "success"
-    assert response.metadata["intake_note_tracking"]["configured_enabled"] is True
     assert response.metadata["intake_note_tracking"]["attempted"] is True
     assert response.metadata["intake_note_tracking"]["merge_status"] == "applied"
     assert response.metadata["intake_note_tracking"]["applied"] is True
@@ -589,8 +267,6 @@ async def test_note_tracking_merges_patch_into_typed_metadata(
 async def test_note_tracking_no_new_information_keeps_current_record(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
-
     async def _generate_structured_output_async(
         _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
@@ -601,11 +277,7 @@ async def test_note_tracking_no_new_information_keeps_current_record(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     existing = IntakeRecord(
         presenting_problem=PresentingProblemRecord(
             main_concern=IntakeEvidence(
@@ -653,7 +325,6 @@ async def test_note_tracking_no_new_information_keeps_current_record(
 async def test_note_tracking_duplicate_evidence_applies_without_persistence(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
     patch = IntakeRecordPatch(
         presenting_problem=PresentingProblemRecord(
             symptoms=[
@@ -677,11 +348,7 @@ async def test_note_tracking_duplicate_evidence_applies_without_persistence(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     existing = IntakeRecord()
     existing.presenting_problem.symptoms = [
         IntakeEvidence(
@@ -728,8 +395,6 @@ async def test_note_tracking_duplicate_evidence_applies_without_persistence(
 async def test_note_tracking_empty_patch_reports_noop_metadata(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
-
     async def _generate_structured_output_async(
         _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
@@ -740,11 +405,7 @@ async def test_note_tracking_empty_patch_reports_noop_metadata(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -785,7 +446,6 @@ async def test_note_tracking_empty_patch_reports_noop_metadata(
 async def test_note_tracking_invalid_evidence_reports_validation_failure(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
     patch = IntakeRecordPatch(
         presenting_problem=PresentingProblemRecord(
             main_concern=IntakeEvidence(
@@ -807,11 +467,7 @@ async def test_note_tracking_invalid_evidence_reports_validation_failure(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -851,70 +507,7 @@ async def test_note_tracking_invalid_evidence_reports_validation_failure(
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_completion_gate_without_note_tracking_uses_legacy_completion(
-    mock_llm_service, app_config
-):
-    config = app_config.model_copy(
-        update={
-            "INTAKE_NOTE_TRACKING_ENABLED": False,
-            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
-        }
-    )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(
-                role="user",
-                content=(
-                    f"Turn {index}: anxiety for several months affects "
-                    "work and sleep."
-                ),
-                timestamp=datetime.now(),
-            )
-            for index in range(MAX_INTAKE_PATIENT_TURNS)
-        ]
-        + [
-            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="No thoughts of harm and I feel safe.",
-                timestamp=datetime.now(),
-            ),
-            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I want to feel better at work.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-
-    response = await agent.process_message("I want to keep going.", context)
-
-    assert response.content == CLOSING_PROMPT
-    assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
-    assert "intake_note_tracking" not in response.metadata
-
-
-@pytest.mark.trio
-@pytest.mark.unit
 async def test_note_tracking_skips_guest_name_collection(mock_llm_service, app_config):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
     structured_calls = 0
 
     async def _generate_structured_output_async(
@@ -929,11 +522,7 @@ async def test_note_tracking_skips_guest_name_collection(mock_llm_service, app_c
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("guest_user"),
-        config=config,
-    )
+    agent = _make_intake_agent(mock_llm_service, app_config, user_id="guest_user")
     profile = UserProfile(
         user_id="guest_user",
         name="Guest",
@@ -1013,13 +602,6 @@ def _max_turn_history(*extra: Message) -> list[Message]:
 async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(
-        update={
-            "INTAKE_NOTE_TRACKING_ENABLED": True,
-            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
-        }
-    )
-
     async def _generate_structured_output_async(
         _prompt, _schema, method="json_schema", *, phase, **kwargs
     ):
@@ -1030,11 +612,7 @@ async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _gate_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -1083,31 +661,21 @@ async def test_gate_mode_blocks_max_turn_completion_on_extraction_failure(
 async def test_gate_mode_allows_genuinely_complete_record_despite_extraction_failure(
     mock_llm_service, app_config
 ):
-    config = app_config.model_copy(
-        update={
-            "INTAKE_NOTE_TRACKING_ENABLED": True,
-            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
-        }
-    )
     original_structured = mock_llm_service.generate_structured_output_async
 
     async def _generate_structured_output_async(
-        prompt, schema, method="json_schema", *, phase
+        prompt, schema, method="json_schema", *, phase, **kwargs
     ):
         if phase == INTAKE_NOTE_TRACKING:
             raise RuntimeError("boom")
         return await original_structured(
-            prompt, schema, method=method, phase=phase
+            prompt, schema, method=method, phase=phase, **kwargs
         )
 
     mock_llm_service.generate_structured_output_async = (
         _generate_structured_output_async
     )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
+    agent = _gate_agent(mock_llm_service, app_config)
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -1136,80 +704,20 @@ async def test_gate_mode_allows_genuinely_complete_record_despite_extraction_fai
 
     assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
     assert response.content == CLOSING_PROMPT
+    assert "user_profile" not in response.metadata
     metadata = response.metadata["intake_note_tracking"]
     assert metadata["stale_record_used"] is True
     assert metadata["max_turn_completion_blocked_by_failure"] is False
 
 
-@pytest.mark.trio
-@pytest.mark.unit
-async def test_diagnostics_only_mode_continues_on_extraction_failure(
-    mock_llm_service, app_config
-):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
-
-    async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase, **kwargs
-    ):
-        _ = kwargs
-        _ = method, phase
-        raise RuntimeError("boom")
-
-    mock_llm_service.generate_structured_output_async = (
-        _generate_structured_output_async
-    )
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(role="assistant", content="What brings you in?", timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I feel anxious every day",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-
-    response = await agent.process_message("I feel anxious every day", context)
-
-    assert response.workflow_event != WorkflowEvent.COMPLETE_INTAKE
-    metadata = response.metadata["intake_note_tracking"]
-    assert metadata["status"] == "llm_failure"
-    assert metadata["stale_record_used"] is False
-    assert metadata["max_turn_completion_blocked_by_failure"] is False
-    assert response.content
-
-
 def _gate_mode_config(app_config):
-    return app_config.model_copy(
-        update={
-            "INTAKE_NOTE_TRACKING_ENABLED": True,
-            "INTAKE_RECORD_COMPLETION_GATE_ENABLED": True,
-            "INTAKE_RECORD_DIRECT_ASK_ENABLED": True,
-        }
-    )
+    return app_config
 
 
 def _gate_agent(mock_llm_service, app_config):
-    return TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=_gate_mode_config(app_config),
+    return _make_intake_agent(
+        mock_llm_service,
+        _gate_mode_config(app_config),
     )
 
 
@@ -1231,35 +739,6 @@ def _incomplete_intake_context(*, message: str = "I feel anxious every day") -> 
             Message(role="user", content=message, timestamp=datetime.now()),
         ],
     )
-
-
-@pytest.mark.trio
-@pytest.mark.unit
-async def test_gate_mode_bypasses_legacy_follow_up(mock_llm_service, app_config, monkeypatch):
-    async def _generate_structured_output_async(
-        _prompt, _schema, method="json_schema", *, phase, **kwargs
-    ):
-        _ = kwargs
-        _ = method, phase
-        return IntakeRecordPatch(no_new_information=True)
-
-    mock_llm_service.generate_structured_output_async = (
-        _generate_structured_output_async
-    )
-    agent = _gate_agent(mock_llm_service, app_config)
-    monkeypatch.setattr(
-        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
-        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
-    )
-    context = _incomplete_intake_context()
-    context.intake_record = IntakeRecord()
-
-    response = await agent.process_message("I feel anxious every day", context)
-
-    assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
-    assert response.metadata["selected_direct_ask_item"] == "risk_screen"
-    assert "Structured direct-ask instruction:" in response.content
-    assert response.content != RISK_SCREEN_PROMPT
 
 
 @pytest.mark.trio
@@ -1323,77 +802,6 @@ async def test_gate_mode_missing_non_safety_item_uses_authoritative_llm_prompt(
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_gate_disabled_still_uses_legacy_follow_up(mock_llm_service, app_config):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": True})
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    context = _incomplete_intake_context()
-
-    response = await agent.process_message("I feel anxious every day", context)
-
-    assert response.metadata["intake_next_action_source"] == "legacy_follow_up"
-    assert response.metadata["selected_direct_ask_item"] is None
-    assert response.content == RISK_SCREEN_PROMPT
-
-
-@pytest.mark.trio
-@pytest.mark.unit
-async def test_gate_disabled_legacy_llm_continuation_metadata(mock_llm_service, app_config):
-    config = app_config.model_copy(update={"INTAKE_NOTE_TRACKING_ENABLED": False})
-    agent = TrioIntakeAgent(
-        llm_service=mock_llm_service,
-        user_context=UserContext("user-123"),
-        config=config,
-    )
-    profile = UserProfile(
-        user_id="user-123",
-        name="Test User",
-        status=UserStatus.INTAKE_IN_PROGRESS,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    context = _make_context(
-        user_profile=profile,
-        topics_covered=[],
-        session_start_time=datetime.now(),
-        duration_minutes=50,
-        message_history=[
-            Message(role="assistant", content=RISK_SCREEN_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="No thoughts of harm and I feel safe.",
-                timestamp=datetime.now(),
-            ),
-            Message(role="assistant", content=GOAL_PREFERENCE_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I want to feel better at work.",
-                timestamp=datetime.now(),
-            ),
-            Message(role="assistant", content=COPING_ATTEMPTS_PROMPT, timestamp=datetime.now()),
-            Message(
-                role="user",
-                content="I tried breathing exercises before meetings.",
-                timestamp=datetime.now(),
-            ),
-        ],
-    )
-
-    response = await agent.process_message(
-        "I tried breathing exercises before meetings.",
-        context,
-    )
-
-    assert response.metadata["intake_next_action_source"] == "legacy_llm_continuation"
-    assert response.metadata["selected_direct_ask_item"] is None
-    assert "Structured direct-ask instruction:" not in response.content
-
-
-@pytest.mark.trio
-@pytest.mark.unit
 async def test_gate_mode_completion_metadata(mock_llm_service, app_config):
     agent = _gate_agent(mock_llm_service, app_config)
     profile = UserProfile(
@@ -1416,6 +824,7 @@ async def test_gate_mode_completion_metadata(mock_llm_service, app_config):
 
     assert response.metadata["intake_next_action_source"] == "complete"
     assert response.metadata["selected_direct_ask_item"] is None
+    assert "user_profile" not in response.metadata
 
 
 @pytest.mark.trio
@@ -1470,7 +879,7 @@ async def test_initial_prompt_metadata(intake_agent):
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_gate_mode_generic_clarification_when_next_item_missing(
-    mock_llm_service, app_config, monkeypatch
+    mock_llm_service, app_config
 ):
     async def _generate_structured_output_async(
         _prompt, _schema, method="json_schema", *, phase, **kwargs
@@ -1483,10 +892,6 @@ async def test_gate_mode_generic_clarification_when_next_item_missing(
         _generate_structured_output_async
     )
     agent = _gate_agent(mock_llm_service, app_config)
-    monkeypatch.setattr(
-        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
-        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
-    )
     profile = UserProfile(
         user_id="user-123",
         name="Test User",
@@ -1528,7 +933,7 @@ async def test_gate_mode_generic_clarification_when_next_item_missing(
 @pytest.mark.trio
 @pytest.mark.unit
 async def test_gate_mode_invalid_manual_config_still_authoritative(
-    mock_llm_service, app_config, monkeypatch
+    mock_llm_service, app_config
 ):
     async def _generate_structured_output_async(
         _prompt, _schema, method="json_schema", *, phase, **kwargs
@@ -1541,11 +946,6 @@ async def test_gate_mode_invalid_manual_config_still_authoritative(
         _generate_structured_output_async
     )
     agent = _gate_agent(mock_llm_service, app_config)
-    agent.intake_record_direct_ask_enabled = False
-    monkeypatch.setattr(
-        "psychoanalyst_app.agents.intake.runtime.next_required_follow_up",
-        lambda _: pytest.fail("legacy follow-up must not be called in gate mode"),
-    )
     context = _incomplete_intake_context()
     context.intake_record = IntakeRecord()
 
@@ -1630,4 +1030,3 @@ async def test_gate_mode_advances_direct_ask_after_unknown_duration_answer(
     assert "duration" in completeness["unable_to_answer_items"]
     assert response.metadata["selected_direct_ask_item"] == "functional_impairment"
     assert response.metadata["intake_next_action_source"] == "structured_direct_ask_llm"
-

@@ -21,6 +21,11 @@ from psychoanalyst_app.models.http import (
     WorkflowNextActionDTO,
 )
 from psychoanalyst_app.orchestration.agent_output_validators import is_profile_complete
+from psychoanalyst_app.orchestration.intake_turn_persistence import (
+    extract_intake_turn_persistence_payload,
+    mark_intake_record_persisted,
+    persist_intake_turn_outputs,
+)
 from psychoanalyst_app.orchestration.models import (
     SessionInfo,
     WorkflowEvent,
@@ -173,6 +178,22 @@ class TrioAgentOrchestrator:
                 agent_response.workflow_event,
                 (agent_response.metadata or {}).get("is_direct_response"),
             )
+
+            intake_payload = extract_intake_turn_persistence_payload(agent_response)
+            if intake_payload is not None:
+                try:
+                    await persist_intake_turn_outputs(
+                        self.conversation_manager, session_id, intake_payload
+                    )
+                    mark_intake_record_persisted(
+                        agent_response, persisted_stage="pre_stream"
+                    )
+                except Exception:
+                    logger.warning(
+                        "Pre-stream intake persistence failed for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
 
             async for chunk in stream_agent_response(
                 self.conversation_manager,

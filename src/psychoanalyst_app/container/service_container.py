@@ -91,9 +91,9 @@ class ServiceContainer:
                 "migration_service": self._create_migration_service,
                 "trio_db_service": self._create_trio_db_service,
                 "style_service": self._create_style_service,
+                "note_taker_agent": self._create_note_taker_agent,
             }
         )
-        logger.debug("Registered %d service factories", len(self._factories))
 
     def get(self, service_name: str) -> Any:
         """Get service instance using singleton pattern."""
@@ -266,6 +266,15 @@ class ServiceContainer:
         service_key = self.AGENT_LLM_SERVICE_MAP.get(agent_type.upper(), "llm_service")
         return self.get(service_key)
 
+    def _create_note_taker_agent(self):
+        from psychoanalyst_app.agents.note_taker import NoteTakerAgent
+
+        return NoteTakerAgent(
+            intake_llm_service=self._get_llm_service_for_agent("INTAKE"),
+            reflection_llm_service=self._get_llm_service_for_agent("REFLECTION"),
+            config=self.config,
+        )
+
     def __str__(self) -> str:
         service_status = self.list_services()
         instantiated = sum(service_status.values())
@@ -303,6 +312,7 @@ class ServiceContainer:
             llm_service=self._get_llm_service_for_agent("INTAKE"),
             user_context=user_context,
             config=self.config,
+            note_taker_agent=self.get("note_taker_agent"),
         )
 
     def create_assessment_agent(self, user_context: UserContext):
@@ -339,6 +349,7 @@ class ServiceContainer:
             user_context=user_context,
             memory_agent=self.create_memory_agent(user_context),
             planning_agent=self.create_planning_agent(user_context),
+            note_taker_agent=self.get("note_taker_agent"),
             config=self.config,
         )
 

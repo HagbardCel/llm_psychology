@@ -162,8 +162,14 @@ def mock_llm_service_natural_flow():
 
     llm.generate_response = mock_generate_sync
 
-    async def mock_structured_output_async(prompt, schema, method="json_schema", *, phase):
+    async def mock_structured_output_async(
+        prompt, schema, method="json_schema", *, phase, **kwargs
+    ):
         from pydantic import BaseModel
+
+        from psychoanalyst_app.testing.intake_fake_extraction import (
+            build_fake_intake_patch_payload,
+        )
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):
             name = schema.__name__
@@ -177,39 +183,8 @@ def mock_llm_service_natural_flow():
                         "timeline": "12 weeks",
                     }
                 )
-            if name == "PatientProfileExtract":
-                return schema.model_validate(
-                    {
-                        "basic_info": {
-                            "alias": "Guest",
-                            "date_of_birth": None,
-                            "gender": None,
-                            "cultural_background": None,
-                            "primary_language": "English",
-                        },
-                        "family": {
-                            "parents": None,
-                            "siblings": None,
-                            "family_atmosphere": None,
-                            "significant_events": None,
-                        },
-                        "history": {
-                            "education": None,
-                            "work_history": None,
-                            "relationship_to_work": None,
-                        },
-                        "context": {
-                            "relationships": None,
-                            "social_context": None,
-                            "current_situation": None,
-                        },
-                        "frame": {
-                            "preferred_school": None,
-                            "boundary_notes": None,
-                            "frame_notes": None,
-                        },
-                    }
-                )
+            if name == "IntakeRecordPatch":
+                return schema.model_validate(build_fake_intake_patch_payload(prompt))
             if name == "PatientAnalysis":
                 return schema.model_validate(
                     {
@@ -315,6 +290,10 @@ def mock_llm_service_natural_flow():
     def mock_structured_output(prompt, schema, method="json_schema"):
         from pydantic import BaseModel
 
+        from psychoanalyst_app.testing.intake_fake_extraction import (
+            build_fake_intake_patch_payload,
+        )
+
         if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
             return {}
         name = schema.__name__
@@ -328,39 +307,8 @@ def mock_llm_service_natural_flow():
                     "timeline": "12 weeks",
                 }
             )
-        if name == "PatientProfileExtract":
-            return schema.model_validate(
-                {
-                    "basic_info": {
-                        "alias": "Guest",
-                        "date_of_birth": None,
-                        "gender": None,
-                        "cultural_background": None,
-                        "primary_language": "English",
-                    },
-                    "family": {
-                        "parents": None,
-                        "siblings": None,
-                        "family_atmosphere": None,
-                        "significant_events": None,
-                    },
-                    "history": {
-                        "education": None,
-                        "work_history": None,
-                        "relationship_to_work": None,
-                    },
-                    "context": {
-                        "relationships": None,
-                        "social_context": None,
-                        "current_situation": None,
-                    },
-                    "frame": {
-                        "preferred_school": None,
-                        "boundary_notes": None,
-                        "frame_notes": None,
-                    },
-                }
-            )
+        if name == "IntakeRecordPatch":
+            return schema.model_validate(build_fake_intake_patch_payload(prompt))
         if name == "PatientAnalysis":
             return schema.model_validate(
                 {
@@ -594,19 +542,23 @@ async def test_natural_patient_flow(test_server, use_real_llm):
             # Topics: Problem, Symptoms, History, Family, Relationships, Work, Health, Mental Health, Substance, Coping, Support, Goals
 
             intake_inputs = [
-                "I'm having a problem with anxiety.",  # Presenting Problem (problem)
-                "I have not had thoughts of harming myself or anyone else, and I feel safe.",  # Risk screen
-                "For several months I have had symptoms of sleeplessness.",  # Duration + sleep
-                "My history includes childhood anxiety.",  # Personal History (history)
-                "My family background is complicated.",  # Family Background (family)
-                "My relationship with my partner is strained.",  # Relationships (relationship)
-                "My work is very stressful.",  # Work/School (work)
-                "My physical health is good.",  # Physical Health (health)
-                "I have no history of therapy.",  # Mental Health History (therapy)
-                "I do not use drugs or alcohol.",  # Substance Use (drugs)
-                "I cope by taking deep breaths.",  # Coping Mechanisms (cope)
-                "I have a good support system.",  # Support System (support)
-                "My goal is to reduce anxiety.",  # Goals for Therapy (goal)
+                "I'm having a problem with anxiety.",
+                (
+                    "I have not had thoughts of harming myself or harm anyone else, "
+                    "and nothing medically urgent is happening."
+                ),
+                "For three months I have had symptoms of anxiety.",
+                "My history includes childhood anxiety.",
+                "My family background is complicated.",
+                "My relationship with my partner is strained.",
+                "My work makes me freeze when deadlines approach.",
+                "My physical health is good.",
+                "I have no history of therapy.",
+                "I do not use drugs or alcohol.",
+                "I tried breathing exercises when anxious.",
+                "I have been waking up at night because of stress.",
+                "I have a good support system.",
+                "My goal is to reduce anxiety.",
             ]
 
             for i, msg in enumerate(intake_inputs):

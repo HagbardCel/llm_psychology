@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from psychoanalyst_app.agents.intake.note_tracking_contract import (
-    format_intake_note_tracking_prompt,
-)
 from psychoanalyst_app.agents.intake.record_merge import (
     merge_intake_record_patch_with_diagnostics,
+)
+from psychoanalyst_app.agents.note_taker.intake_contract import (
+    format_intake_note_tracking_prompt,
 )
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import (

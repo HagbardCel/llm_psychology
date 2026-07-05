@@ -11,11 +11,6 @@ import pytest
 import trio
 
 from psychoanalyst_app.agents.assessment import TrioAssessmentAgent
-from psychoanalyst_app.agents.intake import (
-    GOAL_PREFERENCE_PROMPT,
-    RISK_SCREEN_PROMPT,
-    TrioIntakeAgent,
-)
 from psychoanalyst_app.agents.memory import TrioMemoryAgent
 from psychoanalyst_app.agents.planning import TrioPlanningAgent
 from psychoanalyst_app.agents.reflection import TrioReflectionAgent
@@ -40,6 +35,10 @@ from psychoanalyst_app.orchestration.models import (
 from psychoanalyst_app.orchestration.persistence import (
     persist_therapy_plan_from_output,
     persist_tier3_update,
+)
+from psychoanalyst_app.shared.intake_slot_evidence import (
+    GOAL_PREFERENCE_PROMPT,
+    RISK_SCREEN_PROMPT,
 )
 
 
@@ -312,11 +311,9 @@ async def test_planning_agent_build_structured_output(
 @pytest.mark.integration
 async def test_intake_agent_initialization(service_container, user_context):
     """Test TrioIntakeAgent initialization."""
-    llm_service = service_container.get("llm_service")
+    service_container.get("llm_service")
 
-    intake_agent = TrioIntakeAgent(
-        llm_service, user_context, config=service_container.config
-    )
+    intake_agent = service_container.create_intake_agent(user_context)
 
     assert intake_agent is not None
     assert intake_agent.session_duration > 0
@@ -327,7 +324,7 @@ async def test_intake_agent_initialization(service_container, user_context):
 @pytest.mark.integration
 async def test_intake_agent_guest_welcome_direct_response(service_container):
     """Test that guest welcome prompt is marked as direct response."""
-    llm_service = service_container.get("llm_service")
+    service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
 
     # Create a guest user profile
@@ -343,9 +340,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
     await trio_db_service.save_user_profile(guest_user)
 
     user_context = UserContext(user_id=guest_user.user_id)
-    intake_agent = TrioIntakeAgent(
-        llm_service, user_context, config=service_container.config
-    )
+    intake_agent = service_container.create_intake_agent(user_context)
 
     # Create session
     session_id = str(uuid.uuid4())
@@ -385,7 +380,7 @@ async def test_intake_agent_guest_welcome_direct_response(service_container):
 @pytest.mark.integration
 async def test_intake_agent_guest_name_collection(service_container):
     """Test that guest name collection triggers state transition."""
-    llm_service = service_container.get("llm_service")
+    service_container.get("llm_service")
     trio_db_service = service_container.get("trio_db_service")
 
     # Create a guest user profile
@@ -401,9 +396,7 @@ async def test_intake_agent_guest_name_collection(service_container):
     await trio_db_service.save_user_profile(guest_user)
 
     user_context = UserContext(user_id=guest_user.user_id)
-    intake_agent = TrioIntakeAgent(
-        llm_service, user_context, config=service_container.config
-    )
+    intake_agent = service_container.create_intake_agent(user_context)
 
     # Create session
     session_id = str(uuid.uuid4())
@@ -443,12 +436,12 @@ async def test_intake_agent_guest_name_collection(service_container):
 
 @pytest.mark.trio
 @pytest.mark.integration
-async def test_intake_agent_tier1_extraction(service_container):
-    """Test Tier 1 patient profile extraction from intake conversation."""
-    llm_service = service_container.get("llm_service")
+async def test_intake_agent_completion_uses_structured_record_not_tier1(
+    service_container,
+):
+    """Intake completion is gated by IntakeRecord, not intake-time Tier 1 extraction."""
     trio_db_service = service_container.get("trio_db_service")
 
-    # Create a test user
     test_user = UserProfile(
         user_id="tier1_test_user",
         name="Sarah Johnson",
@@ -461,9 +454,7 @@ async def test_intake_agent_tier1_extraction(service_container):
     await trio_db_service.save_user_profile(test_user)
 
     user_context = UserContext(user_id=test_user.user_id)
-    intake_agent = TrioIntakeAgent(
-        llm_service, user_context, config=service_container.config
-    )
+    intake_agent = service_container.create_intake_agent(user_context)
 
     # Create a rich intake conversation with patient information
     session_id = str(uuid.uuid4())
@@ -578,7 +569,7 @@ async def test_intake_agent_tier1_extraction(service_container):
         duration_minutes=60,
     )
 
-    # Process message that triggers completion
+    # Without a complete persisted IntakeRecord, canonical intake stays in progress.
     response = await intake_agent.process_message(
         (
             "My goal is to manage my anxiety "
@@ -587,17 +578,10 @@ async def test_intake_agent_tier1_extraction(service_container):
         context,
     )
 
-    # Verify intake completed
-    assert response.next_action == "transition"
-    assert response.workflow_event == WorkflowEvent.COMPLETE_INTAKE
-
-    structured_profile = response.metadata.get("user_profile")
-    assert structured_profile is not None
-    assert isinstance(structured_profile, StructuredUserProfileOutput)
-    assert structured_profile.alias == "Sarah Johnson"
-    # Note: Other fields may be null if not mentioned in conversation
-
-    # Verify timestamps are managed by persistence (not intake agent)
+    assert response.next_action == "continue"
+    assert response.workflow_event is None
+    assert response.metadata.get("user_profile") is None
+    assert "intake_record" in response.metadata
 
 
 # ===== TrioReflectionAgent Tests =====
@@ -617,7 +601,7 @@ async def test_reflection_agent_initialization(
         llm_service, trio_db_service, rag_service, user_context
     )
 
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -626,15 +610,7 @@ async def test_reflection_agent_initialization(
         style_service=style_service,
     )
 
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     assert reflection_agent is not None
     assert "TrioReflectionAgent" in str(reflection_agent)
@@ -654,7 +630,7 @@ async def test_reflection_agent_create_initial_plan(
         llm_service, trio_db_service, rag_service, user_context
     )
 
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -663,15 +639,7 @@ async def test_reflection_agent_create_initial_plan(
         style_service=style_service,
     )
 
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     # Create plan through reflection agent
     therapy_plan = await reflection_agent.create_initial_plan(test_session, "freud")
@@ -738,7 +706,7 @@ async def test_reflection_agent_session_enrichment(
         llm_service, trio_db_service, rag_service, user_context
     )
 
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -747,15 +715,7 @@ async def test_reflection_agent_session_enrichment(
         style_service=style_service,
     )
 
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     # Generate comprehensive reflection (which triggers enrichment)
     (
@@ -816,6 +776,7 @@ async def test_assessment_agent_initialization(
         user_context,
         None,
         None,
+        service_container.get("note_taker_agent"),
         config=service_container.config,
     )
 
@@ -849,6 +810,7 @@ async def test_assessment_agent_process_assessment(
         user_context,
         None,
         None,
+        service_container.get("note_taker_agent"),
         config=service_container.config,
     )
 
@@ -946,15 +908,7 @@ async def test_full_agent_workflow(
     )
 
     # Step 3: Reflection agent coordinates
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
     (
         comprehensive_reflection,
         _profile_output,
@@ -1041,7 +995,7 @@ async def test_assessment_agent_process_selection(
     memory_agent = TrioMemoryAgent(
         llm_service, trio_db_service, rag_service, user_context
     )
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -1049,15 +1003,7 @@ async def test_assessment_agent_process_selection(
         memory_agent,
         style_service=style_service,
     )
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     assessment_agent = TrioAssessmentAgent(
         llm_service,
@@ -1250,7 +1196,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
     memory_agent = TrioMemoryAgent(
         llm_service, trio_db_service, rag_service, user_context
     )
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -1258,15 +1204,7 @@ async def test_assessment_agent_creates_tier3_and_tier4(
         memory_agent,
         style_service=style_service,
     )
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     assessment_agent = TrioAssessmentAgent(
         llm_service,
@@ -1609,7 +1547,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
     memory_agent = TrioMemoryAgent(
         llm_service, trio_db_service, rag_service, user_context
     )
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -1617,15 +1555,7 @@ async def test_reflection_agent_tier3_versioning(service_container, style_servic
         memory_agent,
         style_service=style_service,
     )
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     # Run reflection (should create Tier 3 v2)
     current_plan = await trio_db_service.get_current_therapy_plan(test_user.user_id)
@@ -1897,7 +1827,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
     memory_agent = TrioMemoryAgent(
         llm_service, trio_db_service, rag_service, user_context
     )
-    planning_agent = TrioPlanningAgent(
+    TrioPlanningAgent(
         llm_service,
         trio_db_service,
         rag_service,
@@ -1905,15 +1835,7 @@ async def test_reflection_agent_tier3_no_update_when_stable(
         memory_agent,
         style_service=style_service,
     )
-    reflection_agent = TrioReflectionAgent(
-        llm_service,
-        trio_db_service,
-        rag_service,
-        user_context,
-        memory_agent,
-        planning_agent,
-        config=service_container.config,
-    )
+    reflection_agent = service_container.create_reflection_agent(user_context)
 
     # Run reflection (should NOT create Tier 3 v2)
     (

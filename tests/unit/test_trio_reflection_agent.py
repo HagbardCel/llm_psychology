@@ -9,10 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from psychoanalyst_app.agents.note_taker import NoteTakerAgent
 from psychoanalyst_app.agents.reflection import TrioReflectionAgent
-from psychoanalyst_app.agents.reflection.session_summary import (
-    generate_session_briefing,
-)
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import (
     Message,
@@ -127,6 +125,7 @@ async def test_generate_session_briefing_structure(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        note_taker_agent=mock_service_container.get("note_taker_agent"),
         config=mock_service_container.config,
     )
 
@@ -170,14 +169,12 @@ async def test_generate_session_briefing_structure(
     )
 
     # Generate briefing
-    briefing = await generate_session_briefing(
-        agent.llm_service,
-        agent.config,
-        session_context,
-        therapeutic_memory,
-        plan_assessment,
-        sample_session,
-        sample_plan,
+    briefing = await agent.note_taker_agent.generate_session_briefing(
+        session_context=session_context,
+        therapeutic_memory=therapeutic_memory,
+        plan_assessment=plan_assessment,
+        session=sample_session,
+        therapy_plan=sample_plan,
     )
 
     # Verify briefing structure
@@ -290,6 +287,11 @@ async def test_briefing_generation_failure_propagates(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        note_taker_agent=NoteTakerAgent(
+            intake_llm_service=mock_llm,
+            reflection_llm_service=mock_llm,
+            config=mock_service_container.config,
+        ),
         config=mock_service_container.config,
     )
 
@@ -371,6 +373,7 @@ async def test_process_reflection_updates_plan_with_briefing(
         user_context=user_context,
         planning_agent=planning_agent,
         memory_agent=memory_agent,
+        note_taker_agent=mock_service_container.get("note_taker_agent"),
         config=mock_service_container.config,
     )
 
