@@ -36,10 +36,6 @@ _SESSION_ADDITIVE_COLUMNS = {
     "intake_note_tracking_diagnostics": "TEXT",
 }
 
-_PLAN_UPDATE_JOBS_ADDITIVE_COLUMNS = {
-    "briefing_validation_metadata": "TEXT",
-}
-
 _TABLE_DDL: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS user_profiles (
@@ -158,28 +154,6 @@ _TABLE_DDL: list[str] = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS plan_update_jobs (
-        session_id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(
-            status IN ('queued', 'processing', 'complete', 'failed')
-        ),
-        attempts INTEGER NOT NULL DEFAULT 0,
-        current_step TEXT,
-        last_error TEXT,
-        error_type TEXT,
-        error_code TEXT,
-        error_stage TEXT,
-        artifact_path TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (session_id)
-            REFERENCES sessions(session_id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id)
-            REFERENCES user_profiles(user_id) ON DELETE CASCADE
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS user_profile_history (
         history_id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -240,14 +214,6 @@ _INDEX_DDL: list[str] = [
         "ON session_enrichment_jobs(status, updated_at ASC)"
     ),
     (
-        "CREATE INDEX IF NOT EXISTS idx_plan_update_jobs_user_status "
-        "ON plan_update_jobs(user_id, status, updated_at DESC)"
-    ),
-    (
-        "CREATE INDEX IF NOT EXISTS idx_plan_update_jobs_status_updated "
-        "ON plan_update_jobs(status, updated_at ASC)"
-    ),
-    (
         "CREATE INDEX IF NOT EXISTS idx_user_profile_history_user_created "
         "ON user_profile_history(user_id, created_at DESC)"
     ),
@@ -296,7 +262,6 @@ class MigrationService:
             self._validate_foundation_schema(conn)
             self._create_current_schema(conn)
             self._ensure_sessions_additive_columns(conn)
-            self._ensure_plan_update_jobs_additive_columns(conn)
             self._record_schema_version(conn)
         finally:
             conn.close()
@@ -346,17 +311,6 @@ class MigrationService:
         for column, ddl_type in _SESSION_ADDITIVE_COLUMNS.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {ddl_type}")
-        conn.commit()
-
-    @staticmethod
-    def _ensure_plan_update_jobs_additive_columns(conn: sqlite3.Connection) -> None:
-        cursor = conn.execute("PRAGMA table_info(plan_update_jobs)")
-        existing = {row[1] for row in cursor.fetchall()}
-        for column, ddl_type in _PLAN_UPDATE_JOBS_ADDITIVE_COLUMNS.items():
-            if column not in existing:
-                conn.execute(
-                    f"ALTER TABLE plan_update_jobs ADD COLUMN {column} {ddl_type}"
-                )
         conn.commit()
 
     @staticmethod

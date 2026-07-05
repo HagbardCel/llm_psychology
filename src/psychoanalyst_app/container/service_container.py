@@ -128,9 +128,13 @@ class ServiceContainer:
                 self._llm_service_cache.clear()
                 for llm_key in self.LLM_SERVICE_KEYS:
                     self._instances[llm_key] = instance
+                self._instances.pop("note_taker_agent", None)
                 logger.debug(
                     "Registered mock LLM service for all agent-specific LLM keys"
                 )
+            elif service_name in self.LLM_SERVICE_KEYS:
+                self._instances[service_name] = instance
+                self._instances.pop("note_taker_agent", None)
             else:
                 self._instances[service_name] = instance
             logger.debug("Registered custom instance for %s", service_name)

@@ -13,6 +13,7 @@ from psychoanalyst_app.models.intake_record import (
     IntakeEvidence,
     IntakeRecord,
     IntakeRecordPatch,
+    count_patch_evidence,
 )
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -221,18 +222,6 @@ def _validated_patch_dump(
     }
 
 
-def _count_evidence(value: Any) -> int:
-    if isinstance(value, IntakeEvidence):
-        return 1 if value.value or value.evidence_quote else 0
-    if isinstance(value, BaseModel):
-        return sum(_count_evidence(item) for item in value.__dict__.values())
-    if isinstance(value, dict):
-        return sum(_count_evidence(item) for item in value.values())
-    if isinstance(value, list):
-        return sum(_count_evidence(item) for item in value)
-    return 0
-
-
 def _validate_and_collect_drop_reasons(
     patch: IntakeRecordPatch,
     *,
@@ -249,11 +238,6 @@ def _validate_and_collect_drop_reasons(
         drop_reasons=drop_reasons,
     )
     return IntakeRecordPatch.model_validate(cleaned), drop_reasons
-
-
-def count_patch_evidence(patch: IntakeRecordPatch) -> int:
-    """Count populated evidence fields on a structured intake patch."""
-    return _count_evidence(patch)
 
 
 def validate_intake_record_patch(
@@ -386,7 +370,7 @@ def merge_intake_record_patch_with_diagnostics(
     strict_quote_validation: bool = True,
 ) -> IntakePatchMergeResult:
     """Merge a patch and report whether validation retained usable evidence."""
-    raw_evidence_count = _count_evidence(patch)
+    raw_evidence_count = count_patch_evidence(patch)
     if raw_evidence_count == 0:
         return IntakePatchMergeResult(
             record=current,
@@ -405,7 +389,7 @@ def merge_intake_record_patch_with_diagnostics(
             source_message_index=source_message_index,
             strict_quote_validation=strict_quote_validation,
         )
-        retained_evidence_count = _count_evidence(validated_patch)
+        retained_evidence_count = count_patch_evidence(validated_patch)
         dropped_evidence_count = raw_evidence_count - retained_evidence_count
         capped_reasons, drop_total, truncated = _bound_drop_reasons(raw_drop_reasons)
         if raw_evidence_count > 0 and retained_evidence_count == 0:

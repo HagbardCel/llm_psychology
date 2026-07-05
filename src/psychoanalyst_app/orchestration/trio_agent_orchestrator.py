@@ -182,12 +182,13 @@ class TrioAgentOrchestrator:
             intake_payload = extract_intake_turn_persistence_payload(agent_response)
             if intake_payload is not None:
                 try:
-                    await persist_intake_turn_outputs(
+                    persisted = await persist_intake_turn_outputs(
                         self.conversation_manager, session_id, intake_payload
                     )
-                    mark_intake_record_persisted(
-                        agent_response, persisted_stage="pre_stream"
-                    )
+                    if persisted:
+                        mark_intake_record_persisted(
+                            agent_response, persisted_stage="pre_stream"
+                        )
                 except Exception:
                     logger.warning(
                         "Pre-stream intake persistence failed for session %s",

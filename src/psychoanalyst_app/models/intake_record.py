@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -165,3 +165,20 @@ class IntakeRecordPatch(BaseModel):
     goals: GoalsRecord | None = None
     no_new_information: bool = False
     rationale: str | None = Field(default=None, max_length=500)
+
+
+def _count_evidence(value: Any) -> int:
+    if isinstance(value, IntakeEvidence):
+        return 1 if value.value or value.evidence_quote else 0
+    if isinstance(value, BaseModel):
+        return sum(_count_evidence(item) for item in value.__dict__.values())
+    if isinstance(value, dict):
+        return sum(_count_evidence(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_count_evidence(item) for item in value)
+    return 0
+
+
+def count_patch_evidence(patch: IntakeRecordPatch) -> int:
+    """Count populated evidence fields on a structured intake patch."""
+    return _count_evidence(patch)

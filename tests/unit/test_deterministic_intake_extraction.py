@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from psychoanalyst_app.agents.intake.record_merge import (
-    count_patch_evidence,
     merge_intake_record_patch_with_diagnostics,
 )
 from psychoanalyst_app.agents.note_taker.intake_contract import (
@@ -15,7 +14,11 @@ from psychoanalyst_app.agents.note_taker.intake_contract import (
 )
 from psychoanalyst_app.agents.note_taker.intake_patch import extract_intake_record_patch
 from psychoanalyst_app.models.domain import Message
-from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
+from psychoanalyst_app.models.intake_record import (
+    IntakeRecord,
+    IntakeRecordPatch,
+    count_patch_evidence,
+)
 from psychoanalyst_app.testing.fakes import DeterministicLLMService
 from psychoanalyst_app.testing.intake_fake_extraction import (
     build_fake_intake_patch_payload,

@@ -1,4 +1,4 @@
-"""Runtime helpers for optional structured intake note tracking."""
+"""Runtime helpers for canonical structured intake note tracking."""
 
 from __future__ import annotations
 

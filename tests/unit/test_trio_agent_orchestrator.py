@@ -235,6 +235,108 @@ async def test_process_message_persists_intake_before_stream_raises(
 
 
 @pytest.mark.trio
+async def test_pre_stream_persistence_false_does_not_mark_persisted_and_finalize_can_persist(
+    orchestrator, mock_dependencies,
+):
+    """Failed pre-stream save must not mark persisted; finalize can still write."""
+    from datetime import datetime
+
+    from psychoanalyst_app.models.domain import Session
+    from psychoanalyst_app.models.intake_record import (
+        IntakeEvidence,
+        IntakeRecord,
+        PresentingProblemRecord,
+    )
+
+    mock_dependencies["workflow_engine"].get_user_state.return_value = (
+        WorkflowState.INTAKE_IN_PROGRESS
+    )
+    orchestrator.session_lifecycle.ensure_session_id = AsyncMock(
+        return_value="session_123"
+    )
+    orchestrator.conversation_manager.add_message = AsyncMock()
+    context = MagicMock()
+    orchestrator.conversation_manager.get_context = AsyncMock(return_value=context)
+    orchestrator.conversation_manager.active_contexts = {}
+
+    session = Session(
+        session_id="session_123",
+        user_id="user_123",
+        timestamp=datetime.now(),
+        transcript=[],
+    )
+    trio_db_service = MagicMock()
+    trio_db_service.get_session = AsyncMock(return_value=session)
+    trio_db_service.save_session = AsyncMock(side_effect=[False, True])
+    orchestrator.conversation_manager.db_service = trio_db_service
+
+    def get_service(name):
+        if name == "trio_db_service":
+            return trio_db_service
+        return MagicMock()
+
+    orchestrator.service_container.get = get_service
+
+    record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="anxiety",
+                evidence_quote="I feel anxious",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+    agent = MagicMock()
+    agent_response = AgentResponse(
+        content="Hi",
+        next_action="continue",
+        next_state=WorkflowState.INTAKE_IN_PROGRESS,
+        metadata={
+            "intake_record": record,
+            "intake_record_persistence": {
+                "record_changed": True,
+                "should_persist": True,
+            },
+            "intake_note_tracking": {
+                "status": "success",
+                "merge_status": "applied",
+                "applied": True,
+                "raw_evidence_count": 1,
+                "retained_evidence_count": 1,
+                "dropped_evidence_count": 0,
+                "drop_reasons": [],
+                "drop_reasons_total": 0,
+                "drop_reasons_truncated": False,
+            },
+        },
+    )
+    agent.process_message = AsyncMock(return_value=agent_response)
+    orchestrator._get_or_create_agent = AsyncMock(return_value=agent)
+
+    async def _empty_stream(*args, **kwargs):
+        if False:
+            yield ""
+
+    orchestrator.conversation_manager.stream_response = _empty_stream
+    orchestrator.conversation_manager.stream_static_response = _empty_stream
+    orchestrator.response_handler = AsyncMock()
+    orchestrator.response_handler.conversation_manager = (
+        orchestrator.conversation_manager
+    )
+    orchestrator.emit_workflow_next_action = AsyncMock()
+
+    async for _ in orchestrator.process_message("user_123", "hi", "session_123"):
+        pass
+
+    persistence = agent_response.metadata["intake_record_persistence"]
+    assert persistence.get("persisted") is not True
+    assert trio_db_service.save_session.await_count == 2
+    assert isinstance(session.intake_record, IntakeRecord)
+    assert session.intake_record.presenting_problem.main_concern.value == "anxiety"
+
+
+@pytest.mark.trio
 async def test_create_therapy_plan_success(orchestrator, mock_dependencies):
     """Test successful therapy plan creation via orchestrator."""
     # Setup mocks
