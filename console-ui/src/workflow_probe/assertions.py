@@ -333,7 +333,7 @@ async def run_assertions(recorder: Any, scenario: dict[str, Any]) -> bool:
             f"failures={undercoverage['failures']}",
         )
     for phase in (
-        "intake_extraction_ms",
+        "intake_note_tracking_ms",
         "assessment_style_scoring_ms",
         "initial_plan_generation_ms",
         "therapy_opening_ms",

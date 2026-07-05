@@ -13,14 +13,9 @@ from psychoanalyst_app.agents.intake.runtime import (
     is_guest_intake_context,
     prepare_intake_record_state,
     resolve_intake_continuation_turn,
-    should_use_structured_completion_gate,
 )
-from psychoanalyst_app.agents.intake.slots import (
-    identify_covered_topics,
-    identify_required_slots,
-    intake_completion_diagnostics,
-    is_intake_complete,
-)
+from psychoanalyst_app.agents.intake.slots import identify_covered_topics
+from psychoanalyst_app.agents.note_taker import NoteTakerAgent
 from psychoanalyst_app.config import Settings
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.orchestration.agent_output_validators import (
@@ -45,16 +40,13 @@ class TrioIntakeAgent:
         llm_service: LLMService,
         user_context: UserContext,
         config: Settings,
+        note_taker_agent: NoteTakerAgent,
     ):
         self.llm_service = llm_service
         self.user_context = user_context
+        self.note_taker_agent = note_taker_agent
         self.session_duration = config.SESSION_DURATION_MINUTES
         self.intake_topics = config.INTAKE_TOPICS
-        self.intake_note_tracking_enabled = config.INTAKE_NOTE_TRACKING_ENABLED
-        self.intake_record_completion_gate_enabled = (
-            config.INTAKE_RECORD_COMPLETION_GATE_ENABLED
-        )
-        self.intake_record_direct_ask_enabled = config.INTAKE_RECORD_DIRECT_ASK_ENABLED
         self.strict_quote_validation = (
             config.INTAKE_NOTE_TRACKING_STRICT_QUOTE_VALIDATION
         )
@@ -72,74 +64,37 @@ class TrioIntakeAgent:
                 context.user_profile.user_id,
             )
 
-            covered_topics = identify_covered_topics(message, context.message_history)
-            intake_slot_coverage = identify_required_slots(
-                message, context.message_history
-            )
-            completion_diagnostics = intake_completion_diagnostics(
-                context, intake_slot_coverage
-            )
             is_guest = is_guest_intake_context(context)
-            use_structured_gate = should_use_structured_completion_gate(
-                note_tracking_enabled=self.intake_note_tracking_enabled,
-                completion_gate_enabled=self.intake_record_completion_gate_enabled,
-            )
-            record_state = await prepare_intake_record_state(
-                message=message,
-                context=context,
-                llm_service=self.llm_service,
-                note_tracking_enabled=self.intake_note_tracking_enabled,
-                strict_quote_validation=self.strict_quote_validation,
-                is_guest=is_guest,
-                structured_gate_enabled=use_structured_gate,
-                note_tracking_timeout_seconds=self.note_tracking_timeout_seconds,
-            )
-            record_metadata = intake_record_metadata(
-                record_state,
-                legacy_diagnostics=completion_diagnostics,
-            )
+            if is_guest:
+                return self._handle_guest_turn(message=message, context=context)
 
+            if len(context.message_history) == 0:
+                return self._initial_prompt_response(context=context)
+
+            covered_topics = identify_covered_topics(message, context.message_history)
             for topic in covered_topics:
                 if topic not in context.topics_covered:
                     context.topics_covered.append(topic)
 
             logger.info("Topics covered so far: %s", context.topics_covered)
 
-            is_complete = (
-                record_state.gate_complete
-                if use_structured_gate
-                else is_intake_complete(context, intake_slot_coverage)
+            record_state = await prepare_intake_record_state(
+                message=message,
+                context=context,
+                strict_quote_validation=self.strict_quote_validation,
+                is_guest=is_guest,
+                note_tracking_timeout_seconds=self.note_tracking_timeout_seconds,
+                extract_intake_patch=self.note_taker_agent.extract_intake_patch,
             )
-
-            if is_guest:
-                return self._handle_guest_turn(
-                    message=message,
-                    context=context,
-                    intake_slot_coverage=intake_slot_coverage,
-                    completion_diagnostics=completion_diagnostics,
-                    record_metadata=record_metadata,
-                )
-
-            if len(context.message_history) == 0:
-                return self._initial_prompt_response(
-                    context=context,
-                    intake_slot_coverage=intake_slot_coverage,
-                    completion_diagnostics=completion_diagnostics,
-                    record_metadata=record_metadata,
-                    intake_complete=is_complete,
-                )
+            record_metadata = intake_record_metadata(record_state)
+            is_complete = record_state.gate_complete
 
             continuation = await resolve_intake_continuation_turn(
                 message=message,
                 context=context,
                 record_state=record_state,
                 is_complete=is_complete,
-                use_structured_gate=use_structured_gate,
-                intake_slot_coverage=intake_slot_coverage,
                 intake_topics=self.intake_topics,
-                direct_ask_enabled=self.intake_record_direct_ask_enabled,
-                llm_service=self.llm_service,
-                completion_diagnostics=completion_diagnostics,
                 record_metadata=record_metadata,
             )
             if isinstance(continuation, AgentResponse):
@@ -149,8 +104,6 @@ class TrioIntakeAgent:
             return self._continuation_response(
                 plan=continuation,
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
                 record_metadata=record_metadata,
                 intake_complete=is_complete,
             )
@@ -172,18 +125,13 @@ class TrioIntakeAgent:
         *,
         message: str,
         context: ConversationContext,
-        intake_slot_coverage: set[str],
-        completion_diagnostics: dict[str, object],
-        record_metadata: dict[str, object],
     ) -> AgentResponse:
         if not message.strip():
             return direct_agent_response(
                 content=GUEST_WELCOME_PROMPT,
                 metadata=intake_response_metadata(
                     context=context,
-                    intake_slot_coverage=intake_slot_coverage,
-                    completion_diagnostics=completion_diagnostics,
-                    record_metadata=record_metadata,
+                    record_metadata={},
                 ),
             )
 
@@ -195,9 +143,7 @@ class TrioIntakeAgent:
             workflow_event=WorkflowEvent.START_INTAKE,
             metadata=intake_response_metadata(
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
-                record_metadata=record_metadata,
+                record_metadata={},
                 user_profile=structured_profile,
             ),
         )
@@ -206,10 +152,6 @@ class TrioIntakeAgent:
         self,
         *,
         context: ConversationContext,
-        intake_slot_coverage: set[str],
-        completion_diagnostics: dict[str, object],
-        record_metadata: dict[str, object],
-        intake_complete: bool,
     ) -> AgentResponse:
         return AgentResponse(
             content=build_initial_intake_prompt(context),
@@ -217,10 +159,8 @@ class TrioIntakeAgent:
             workflow_event=None,
             metadata=intake_response_metadata(
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
-                record_metadata=record_metadata,
-                intake_complete=intake_complete,
+                record_metadata={},
+                intake_complete=False,
                 intake_next_action_source="initial_prompt",
                 selected_direct_ask_item=None,
             ),
@@ -231,8 +171,6 @@ class TrioIntakeAgent:
         *,
         plan: IntakeContinuationPlan,
         context: ConversationContext,
-        intake_slot_coverage: set[str],
-        completion_diagnostics: dict[str, object],
         record_metadata: dict[str, object],
         intake_complete: bool,
     ) -> AgentResponse:
@@ -242,8 +180,6 @@ class TrioIntakeAgent:
             workflow_event=None,
             metadata=intake_response_metadata(
                 context=context,
-                intake_slot_coverage=intake_slot_coverage,
-                completion_diagnostics=completion_diagnostics,
                 record_metadata=record_metadata,
                 intake_complete=intake_complete,
                 intake_next_action_source=plan.intake_next_action_source,

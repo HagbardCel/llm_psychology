@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from psychoanalyst_app.agents.reflection.session_summary import (
+from psychoanalyst_app.agents.note_taker.session_notes import (
     generate_session_summary_payload,
     validate_session_briefing_evidence,
 )
@@ -312,7 +312,7 @@ async def test_generate_session_summary_payload_uses_helper(monkeypatch) -> None
         return "summary text"
 
     monkeypatch.setattr(
-        "psychoanalyst_app.agents.reflection.session_summary.generate_session_summary",
+        "psychoanalyst_app.agents.note_taker.session_notes.generate_session_summary",
         _fake_summary,
     )
 

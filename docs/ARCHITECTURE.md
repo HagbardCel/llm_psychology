@@ -208,17 +208,24 @@ async def process_message(
 
 #### TrioIntakeAgent (`src/psychoanalyst_app/agents/intake/agent.py`)
 
-**Purpose**: Collect initial user information
+**Purpose**: Collect initial user information via canonical structured `IntakeRecord` note tracking
 
 **Key Topics**:
-- Name, age, profession (gathered from profile)
-- Current concerns and symptoms
-- Therapy goals and expectations
-- Previous therapy experience
+- Presenting problem, duration, risk screen, functional impact, goals, coping, sleep impact
 
 **Completion Criteria**:
-- All core topics covered
-- Sufficient context for assessment
+- Structured `IntakeRecord` completeness via canonical note tracking and gate policy in `runtime.py`
+
+#### NoteTakerAgent (`src/psychoanalyst_app/agents/note_taker/agent.py`)
+
+**Purpose**: Stateless supporting agent for LLM-backed clinical notes (not workflow-routed)
+
+**Responsibilities**:
+- Extract `IntakeRecordPatch` during intake (`INTAKE_NOTE_TRACKING` phase)
+- Generate session summary payloads (`SESSION_SUMMARY` phase)
+- Generate session briefings (`SESSION_ENRICHMENT` phase)
+
+**Wiring**: Registered in `ServiceContainer` as `note_taker_agent`; injected into intake and reflection agents.
 
 #### TrioAssessmentAgent (`src/psychoanalyst_app/agents/assessment/agent.py`)
 
@@ -257,7 +264,7 @@ async def process_message(
 **Process**:
 1. Review session transcript
 2. Identify progress and insights
-3. Update therapy plan
+3. Update therapy plan via `NoteTakerAgent` summary/briefing generation
 4. Prepare for next session
 
 ### 3. Gateway Layer

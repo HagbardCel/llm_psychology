@@ -225,7 +225,9 @@ def mock_llm_service_with_context():
     llm.generate_response = Mock(return_value="This is a generated response.")
 
     # Structured outputs: used by Tier extraction/enrichment paths.
-    async def mock_structured_output_async(prompt, schema, method="json_schema", *, phase):
+    async def mock_structured_output_async(
+        prompt, schema, method="json_schema", *, phase, **kwargs
+    ):
         from pydantic import BaseModel
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):

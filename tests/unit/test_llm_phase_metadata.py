@@ -6,24 +6,17 @@ from typing import Any
 
 import pytest
 
-from psychoanalyst_app.agents.intake.extraction import extract_tier1_data
 from psychoanalyst_app.agents.memory.agent import TrioMemoryAgent
-from psychoanalyst_app.agents.reflection.session_summary import generate_session_summary
+from psychoanalyst_app.agents.note_taker.session_notes import generate_session_summary
 from psychoanalyst_app.agents.therapist.deep_topic import detect_deep_topic_via_llm
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import (
-    AnalyticFrame,
-    BasicPatientBackground,
-    EducationalWorkHistory,
-    FamilyConstellation,
     Message,
-    RelationalLifeContext,
     Session,
     UserProfile,
 )
 from psychoanalyst_app.models.llm_outputs import (
     DeepTopicSignalOutput,
-    PatientProfileExtract,
     SessionAnalysis,
     Tier2Enrichment,
 )
@@ -32,7 +25,6 @@ from psychoanalyst_app.orchestration.trio_conversation_manager import (
     TrioConversationManager,
 )
 from psychoanalyst_app.services.llm_phases import (
-    INTAKE_EXTRACTION,
     INTAKE_RESPONSE,
     MEMORY_ANALYSIS,
     SESSION_ENRICHMENT,
@@ -59,14 +51,6 @@ class _PhaseCapturingLLM:
     ) -> Any:
         _ = method
         self.phases.append(phase)
-        if schema is PatientProfileExtract:
-            return PatientProfileExtract(
-                basic_info=BasicPatientBackground(alias="Probe"),
-                family=FamilyConstellation(),
-                history=EducationalWorkHistory(),
-                context=RelationalLifeContext(),
-                frame=AnalyticFrame(),
-            )
         if schema is Tier2Enrichment:
             return Tier2Enrichment(
                 psychological_summary="summary",
@@ -180,15 +164,6 @@ async def test_conversation_manager_phases_intake_streaming() -> None:
 
     assert chunks == ["ok"]
     assert llm.phases == [INTAKE_RESPONSE]
-
-
-async def test_intake_extraction_phases_structured_output() -> None:
-    llm = _PhaseCapturingLLM()
-
-    result = await extract_tier1_data(llm, _sample_session(session_type="intake").transcript)
-
-    assert result is not None
-    assert llm.phases == [INTAKE_EXTRACTION]
 
 
 async def test_session_enrichment_phases_structured_output() -> None:

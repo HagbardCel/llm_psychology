@@ -7,7 +7,8 @@ from typing import Any, Union, get_args, get_origin
 import pytest
 from pydantic import BaseModel
 
-from psychoanalyst_app.agents.intake.note_tracking_contract import (
+from psychoanalyst_app.agents.intake.record_merge import merge_intake_record_patch
+from psychoanalyst_app.agents.note_taker.intake_contract import (
     FIELD_GUIDANCE_BY_PATH,
     FORBIDDEN_PROMPT_FIELD_NAMES,
     INFORMATIVE_EXAMPLE_NAMES,
@@ -19,7 +20,6 @@ from psychoanalyst_app.agents.intake.note_tracking_contract import (
     intake_patch_top_level_fields,
     render_patch_shape_block,
 )
-from psychoanalyst_app.agents.intake.record_merge import merge_intake_record_patch
 from psychoanalyst_app.models.domain import Message
 from psychoanalyst_app.models.intake_record import IntakeRecord, IntakeRecordPatch
 

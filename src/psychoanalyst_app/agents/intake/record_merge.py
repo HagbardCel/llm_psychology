@@ -13,9 +13,12 @@ from psychoanalyst_app.models.intake_record import (
     IntakeEvidence,
     IntakeRecord,
     IntakeRecordPatch,
+    count_patch_evidence,
 )
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+MAX_INTAKE_DROP_REASONS = 25
 
 IntakePatchMergeStatus = Literal[
     "applied",
@@ -31,6 +34,8 @@ class IntakePatchMergeResult:
 
     ``applied`` means validated evidence reached the deterministic merge path.
     ``record_changed`` is the persistence-relevant signal.
+    ``drop_reasons`` explains why individual evidence fields were rejected
+    during validation (bounded by ``MAX_INTAKE_DROP_REASONS``).
     """
 
     record: IntakeRecord
@@ -40,12 +45,56 @@ class IntakePatchMergeResult:
     retained_evidence_count: int
     dropped_evidence_count: int
     record_changed: bool
+    drop_reasons: tuple[dict[str, str], ...] = ()
+    drop_reasons_total: int = 0
+    drop_reasons_truncated: bool = False
     error_message: str | None = None
     error_code: str | None = None
 
 
 def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _evidence_drop_reason(
+    evidence: IntakeEvidence,
+    *,
+    latest_user_message: Message,
+    source_message_index: int,
+    strict_quote_validation: bool,
+) -> str | None:
+    """Return the reason an evidence field is rejected, or ``None`` when valid."""
+    if evidence.source_role != "user":
+        return "source_role_not_user"
+    if evidence.source_message_index != source_message_index:
+        return "source_index_mismatch"
+    if evidence.response_status in {"unknown", "unable_to_answer"}:
+        if not evidence.direct_ask:
+            return "missing_direct_ask"
+        if not evidence.evidence_quote:
+            return "missing_evidence_quote"
+        if not strict_quote_validation:
+            return None
+        return (
+            None
+            if _normalize(evidence.evidence_quote)
+            in _normalize(latest_user_message.content)
+            else "quote_not_found_in_message"
+        )
+    if not evidence.value:
+        return "missing_value"
+    if not evidence.evidence_quote:
+        return "missing_evidence_quote"
+    if evidence.response_status != "informative" and not evidence.direct_ask:
+        return "missing_direct_ask"
+    if not strict_quote_validation:
+        return None
+    return (
+        None
+        if _normalize(evidence.evidence_quote)
+        in _normalize(latest_user_message.content)
+        else "quote_not_found_in_message"
+    )
 
 
 def _valid_patch_evidence(
@@ -55,26 +104,14 @@ def _valid_patch_evidence(
     source_message_index: int,
     strict_quote_validation: bool,
 ) -> bool:
-    if evidence.source_role != "user":
-        return False
-    if evidence.source_message_index != source_message_index:
-        return False
-    if evidence.response_status in {"unknown", "unable_to_answer"}:
-        if not evidence.direct_ask or not evidence.evidence_quote:
-            return False
-        if not strict_quote_validation:
-            return True
-        return _normalize(evidence.evidence_quote) in _normalize(
-            latest_user_message.content
+    return (
+        _evidence_drop_reason(
+            evidence,
+            latest_user_message=latest_user_message,
+            source_message_index=source_message_index,
+            strict_quote_validation=strict_quote_validation,
         )
-    if not evidence.value or not evidence.evidence_quote:
-        return False
-    if evidence.response_status != "informative" and not evidence.direct_ask:
-        return False
-    if not strict_quote_validation:
-        return True
-    return _normalize(evidence.evidence_quote) in _normalize(
-        latest_user_message.content
+        is None
     )
 
 
@@ -139,57 +176,68 @@ def _validated_patch_dump(
     latest_user_message: Message,
     source_message_index: int,
     strict_quote_validation: bool = True,
+    drop_reasons: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    def clean(value: Any) -> Any:
+    def clean(value: Any, path: str) -> Any:
         if isinstance(value, IntakeEvidence):
-            return (
-                value
-                if _valid_patch_evidence(
-                    value,
-                    latest_user_message=latest_user_message,
-                    source_message_index=source_message_index,
-                    strict_quote_validation=strict_quote_validation,
-                )
-                else None
+            if not (value.value or value.evidence_quote):
+                return None
+            reason = _evidence_drop_reason(
+                value,
+                latest_user_message=latest_user_message,
+                source_message_index=source_message_index,
+                strict_quote_validation=strict_quote_validation,
             )
+            if reason is None:
+                return value
+            if drop_reasons is not None and path:
+                drop_reasons.append({"field_path": path, "reason": reason})
+            return None
         if isinstance(value, BaseModel):
             return {
                 key: cleaned
                 for key, item in value.__dict__.items()
-                if (cleaned := clean(item)) not in (None, [], {})
+                if (cleaned := clean(item, f"{path}.{key}"))
+                not in (None, [], {})
             }
         if isinstance(value, dict):
             return {
                 key: cleaned
                 for key, item in value.items()
-                if (cleaned := clean(item)) not in (None, [], {})
+                if (cleaned := clean(item, f"{path}.{key}"))
+                not in (None, [], {})
             }
         if isinstance(value, list):
-            return [cleaned for item in value if (cleaned := clean(item)) is not None]
+            return [
+                cleaned
+                for i, item in enumerate(value)
+                if (cleaned := clean(item, f"{path}[{i}]")) is not None
+            ]
         return value
 
     return {
         key: cleaned
         for key, item in patch.__dict__.items()
-        if (cleaned := clean(item)) not in (None, [], {})
+        if (cleaned := clean(item, key)) not in (None, [], {})
     }
 
 
-def count_patch_evidence(patch: IntakeRecordPatch) -> int:
-    """Count populated evidence fields on a structured intake patch."""
-    return _count_evidence(patch)
-
-
-def _count_evidence(value: Any) -> int:
-    if isinstance(value, IntakeEvidence):
-        return 1 if value.value or value.evidence_quote else 0
-    if isinstance(value, BaseModel):
-        return sum(_count_evidence(item) for item in value.__dict__.values())
-    if isinstance(value, dict):
-        return sum(_count_evidence(item) for item in value.values())
-    if isinstance(value, list):
-        return sum(_count_evidence(item) for item in value)
-    return 0
+def _validate_and_collect_drop_reasons(
+    patch: IntakeRecordPatch,
+    *,
+    latest_user_message: Message,
+    source_message_index: int,
+    strict_quote_validation: bool = True,
+) -> tuple[IntakeRecordPatch, list[dict[str, str]]]:
+    drop_reasons: list[dict[str, str]] = []
+    cleaned = _validated_patch_dump(
+        patch,
+        latest_user_message=latest_user_message,
+        source_message_index=source_message_index,
+        strict_quote_validation=strict_quote_validation,
+        drop_reasons=drop_reasons,
+    )
+    return IntakeRecordPatch.model_validate(cleaned), drop_reasons
 
 
 def validate_intake_record_patch(
@@ -200,13 +248,13 @@ def validate_intake_record_patch(
     strict_quote_validation: bool = True,
 ) -> IntakeRecordPatch:
     """Drop patch evidence that lacks valid patient quote/source support."""
-    cleaned = _validated_patch_dump(
+    validated, _ = _validate_and_collect_drop_reasons(
         patch,
         latest_user_message=latest_user_message,
         source_message_index=source_message_index,
         strict_quote_validation=strict_quote_validation,
     )
-    return IntakeRecordPatch.model_validate(cleaned)
+    return validated
 
 
 def merge_intake_record_patch(
@@ -305,6 +353,14 @@ def _merge_validated_patch(
     return merged
 
 
+def _bound_drop_reasons(
+    drop_reasons: list[dict[str, str]],
+) -> tuple[tuple[dict[str, str], ...], int, bool]:
+    total = len(drop_reasons)
+    capped = tuple(drop_reasons[:MAX_INTAKE_DROP_REASONS])
+    return capped, total, total > MAX_INTAKE_DROP_REASONS
+
+
 def merge_intake_record_patch_with_diagnostics(
     current: IntakeRecord,
     patch: IntakeRecordPatch,
@@ -314,7 +370,7 @@ def merge_intake_record_patch_with_diagnostics(
     strict_quote_validation: bool = True,
 ) -> IntakePatchMergeResult:
     """Merge a patch and report whether validation retained usable evidence."""
-    raw_evidence_count = _count_evidence(patch)
+    raw_evidence_count = count_patch_evidence(patch)
     if raw_evidence_count == 0:
         return IntakePatchMergeResult(
             record=current,
@@ -327,14 +383,15 @@ def merge_intake_record_patch_with_diagnostics(
         )
 
     try:
-        validated_patch = validate_intake_record_patch(
+        validated_patch, raw_drop_reasons = _validate_and_collect_drop_reasons(
             patch,
             latest_user_message=latest_user_message,
             source_message_index=source_message_index,
             strict_quote_validation=strict_quote_validation,
         )
-        retained_evidence_count = _count_evidence(validated_patch)
+        retained_evidence_count = count_patch_evidence(validated_patch)
         dropped_evidence_count = raw_evidence_count - retained_evidence_count
+        capped_reasons, drop_total, truncated = _bound_drop_reasons(raw_drop_reasons)
         if raw_evidence_count > 0 and retained_evidence_count == 0:
             return IntakePatchMergeResult(
                 record=current,
@@ -344,6 +401,9 @@ def merge_intake_record_patch_with_diagnostics(
                 retained_evidence_count=retained_evidence_count,
                 dropped_evidence_count=dropped_evidence_count,
                 record_changed=False,
+                drop_reasons=capped_reasons,
+                drop_reasons_total=drop_total,
+                drop_reasons_truncated=truncated,
             )
 
         merged = _merge_validated_patch(current, validated_patch)
@@ -369,4 +429,7 @@ def merge_intake_record_patch_with_diagnostics(
         retained_evidence_count=retained_evidence_count,
         dropped_evidence_count=dropped_evidence_count,
         record_changed=record_changed,
+        drop_reasons=capped_reasons,
+        drop_reasons_total=drop_total,
+        drop_reasons_truncated=truncated,
     )

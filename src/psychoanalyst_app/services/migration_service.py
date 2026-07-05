@@ -19,7 +19,7 @@ from psychoanalyst_app.services.db.sqlite_config import configure_connection
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 _FOUNDATION_PLAN_COLUMNS = {
     "supersedes_plan_id",
@@ -33,6 +33,7 @@ _FOUNDATION_PLAN_COLUMNS = {
 _SESSION_ADDITIVE_COLUMNS = {
     "intake_record": "TEXT",
     "intake_record_updated_at": "TEXT",
+    "intake_note_tracking_diagnostics": "TEXT",
 }
 
 _TABLE_DDL: list[str] = [
@@ -79,6 +80,7 @@ _TABLE_DDL: list[str] = [
         session_briefing TEXT,
         intake_record TEXT,
         intake_record_updated_at TEXT,
+        intake_note_tracking_diagnostics TEXT,
         psychological_summary TEXT,
         dominant_affects TEXT,
         key_themes TEXT,

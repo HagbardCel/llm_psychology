@@ -6,9 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from psychoanalyst_app.agents.reflection.session_summary import (
-    generate_session_summary_payload,
-)
+from psychoanalyst_app.agents.note_taker import NoteTakerAgent
 from psychoanalyst_app.agents.reflection.tier1_pipeline import (
     maybe_update_tier1_profile,
 )
@@ -31,6 +29,7 @@ async def generate_comprehensive_reflection_data(
     *,
     db_service,
     llm_service,
+    note_taker_agent: NoteTakerAgent,
     memory_agent,
     planning_agent,
     user_id: str,
@@ -86,8 +85,7 @@ async def generate_comprehensive_reflection_data(
         )
 
     tier4_updated = False
-    session_summary_payload = await generate_session_summary_payload(
-        llm_service,
+    session_summary_payload = await note_taker_agent.generate_session_summary_payload(
         session_record,
     )
     session_summary = session_summary_payload["summary"]

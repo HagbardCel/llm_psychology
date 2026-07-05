@@ -147,6 +147,54 @@ async def test_finalize_agent_response_skips_unchanged_intake_record_metadata():
 
 
 @pytest.mark.trio
+async def test_finalize_agent_response_skips_when_already_persisted_pre_stream():
+    record = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=IntakeEvidence(
+                value="anxiety",
+                evidence_quote="I feel anxious",
+                source_message_index=1,
+                source_role="user",
+            )
+        )
+    )
+    trio_db_service = AsyncMock()
+    service_container = MagicMock()
+    service_container.get.return_value = trio_db_service
+    response_handler = AsyncMock()
+
+    agent_response = AgentResponse(
+        content="Hi",
+        next_action="continue",
+        metadata={
+            "intake_record": record.model_dump(mode="json"),
+            "intake_record_persistence": {
+                "should_persist": True,
+                "record_changed": True,
+                "persisted": True,
+                "persisted_stage": "pre_stream",
+            },
+        },
+    )
+
+    await finalize_agent_response(
+        service_container,
+        response_handler,
+        "user_123",
+        "session_123",
+        agent_response,
+    )
+
+    trio_db_service.get_session.assert_not_called()
+    trio_db_service.save_session.assert_not_called()
+    response_handler.handle.assert_called_once_with(
+        "user_123",
+        "session_123",
+        agent_response,
+    )
+
+
+@pytest.mark.trio
 async def test_finalize_agent_response_ignores_unexpected_intake_record_type():
     trio_db_service = AsyncMock()
     service_container = MagicMock()

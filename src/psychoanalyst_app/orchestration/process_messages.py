@@ -128,11 +128,18 @@ async def finalize_agent_response(
         )
 
     persistence = metadata.get("intake_record_persistence")
+    already_persisted = isinstance(persistence, dict) and bool(
+        persistence.get("persisted")
+    )
     should_persist_intake_record = not isinstance(persistence, dict) or bool(
         persistence.get("should_persist", True)
     )
     intake_record = metadata.get("intake_record")
-    if intake_record is not None and should_persist_intake_record:
+    if (
+        intake_record is not None
+        and should_persist_intake_record
+        and not already_persisted
+    ):
         typed_record: IntakeRecord | None = None
         if isinstance(intake_record, IntakeRecord):
             typed_record = intake_record

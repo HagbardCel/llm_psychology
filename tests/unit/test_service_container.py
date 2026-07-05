@@ -341,6 +341,20 @@ class TestServiceContainer:
         assert "ServiceContainer" in repr_str
         assert "config=" in repr_str
 
+    def test_register_llm_service_rebuilds_note_taker_agent(self, container):
+        """Re-registering LLM mocks must refresh note_taker_agent LLM references."""
+        first_llm = Mock(name="first_llm")
+        second_llm = Mock(name="second_llm")
+        container.register("llm_service", first_llm)
+        first_note_taker = container.get("note_taker_agent")
+        assert first_note_taker.intake_llm_service is first_llm
+
+        container.register("llm_service", second_llm)
+        second_note_taker = container.get("note_taker_agent")
+        assert second_note_taker is not first_note_taker
+        assert second_note_taker.intake_llm_service is second_llm
+        assert second_note_taker.reflection_llm_service is second_llm
+
 
 class TestServiceContainerAgentCreation:
     """Test agent creation through container."""
@@ -376,6 +390,7 @@ class TestServiceContainerAgentCreation:
             llm_service=container.get("llm_service_intake"),
             user_context=user_context,
             config=container.config,
+            note_taker_agent=container.get("note_taker_agent"),
         )
 
     @patch.object(ServiceContainer, "create_reflection_agent")
@@ -479,6 +494,7 @@ class TestServiceContainerAgentCreation:
             user_context=user_context,
             memory_agent=mock_memory,
             planning_agent=mock_planning,
+            note_taker_agent=container.get("note_taker_agent"),
             config=container.config,
         )
 

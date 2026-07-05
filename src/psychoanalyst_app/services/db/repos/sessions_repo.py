@@ -15,6 +15,7 @@ from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 from psychoanalyst_app.services.db.sqlite_config import reraise_locked_database_error
 from psychoanalyst_app.services.db_serialization import (
     SESSION_COLUMNS,
+    dump_intake_note_tracking_diagnostics,
     dump_intake_record,
     dump_json,
     dump_messages,
@@ -63,13 +64,17 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
             if session.intake_record_updated_at
             else None
         )
+        intake_diagnostics_json = dump_intake_note_tracking_diagnostics(
+            session.intake_note_tracking_diagnostics
+        )
 
         cursor.execute(
             """
             INSERT INTO sessions
             (session_id, user_id, session_type, plan_id, timestamp, transcript, topics,
-             session_summary, session_briefing, intake_record, intake_record_updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             session_summary, session_briefing, intake_record, intake_record_updated_at,
+             intake_note_tracking_diagnostics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 timestamp = excluded.timestamp,
@@ -78,7 +83,10 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
                 session_summary = excluded.session_summary,
                 session_briefing = excluded.session_briefing,
                 intake_record = excluded.intake_record,
-                intake_record_updated_at = excluded.intake_record_updated_at
+                intake_record_updated_at = excluded.intake_record_updated_at,
+                intake_note_tracking_diagnostics = (
+                    excluded.intake_note_tracking_diagnostics
+                )
             WHERE sessions.enriched = 0
         """,
             (
@@ -93,6 +101,7 @@ def _sync_save_session(conn, session: Session, datetime_to_iso) -> bool:
                 session_briefing_json,
                 intake_record_json,
                 intake_record_updated_at,
+                intake_diagnostics_json,
             ),
         )
 

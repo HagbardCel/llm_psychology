@@ -124,6 +124,13 @@ class Session(BaseModel):
         description="Structured incremental intake record for intake sessions",
     )
     intake_record_updated_at: datetime | None = None
+    intake_note_tracking_diagnostics: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Compact per-turn note-tracking diagnostics (merge/drop reasons) "
+            "for the latest intake turn"
+        ),
+    )
 
     # Tier 2 enrichment fields (added by Reflection Agent)
     psychological_summary: str | None = Field(

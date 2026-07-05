@@ -1,8 +1,8 @@
+from psychoanalyst_app.agents.intake.policy import MAX_INTAKE_PATIENT_TURNS
 from psychoanalyst_app.agents.intake.record_completeness import (
     intake_record_completion_decision,
     missing_items_from_record,
 )
-from psychoanalyst_app.agents.intake.slots import MAX_INTAKE_PATIENT_TURNS
 from psychoanalyst_app.models.intake_record import IntakeEvidence, IntakeRecord
 
 
