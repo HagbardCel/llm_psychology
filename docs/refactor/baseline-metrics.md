@@ -8,7 +8,7 @@ source_of_truth_for: Refactor baseline measurement procedure
 
 # Baseline Metrics
 
-Phase 1 measured tree commit: `e77b7cfd311b548d6d9791ffa40f3492a9e25c42`. Captured on 2026-07-11 in the API container with:
+Phase 1 measured tree commit: `3a4989f0d51b04bf413014de9e2a642e16f57695`. Captured on 2026-07-11 in the API container with:
 
 ```bash
 scripts/measure_phase1_baseline.sh
@@ -22,8 +22,8 @@ Historical Phase 1 starting commit: `1693b01907bac827c3861374ea581e6cb629d3c7` (
 | Production Python physical LOC | 22,640 | 22,640 |
 | Production Python code LOC | 17,630 | 17,630 |
 | Test Python files | 72 | 82 |
-| Test Python physical LOC | 22,092 | 23,129 |
-| Test Python code LOC | 17,590 | 18,472 |
+| Test Python physical LOC | 22,092 | 23,110 |
+| Test Python code LOC | 17,590 | 18,453 |
 | Trio-importing production modules | 24 | 24 |
 | Service-container importing modules | 7 | 7 |
 | Persistence-related modules | 14 | 14 |
