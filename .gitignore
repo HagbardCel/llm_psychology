@@ -163,6 +163,7 @@ schemas/*.json
 .claude/
 .clinerules/
 .agent/
+.understand-anything/
 
 # Codegraph workspace database / daemon artifacts
 .codegraph/
