@@ -219,7 +219,7 @@ def measure(root: Path) -> dict[str, int]:
             )
             for path in source
         ),
-        "persistence_abstraction_modules": sum(
+        "persistence_related_modules": sum(
             1
             for path in source
             if "services/db" in path.as_posix()
@@ -232,7 +232,7 @@ def measure(root: Path) -> dict[str, int]:
             _pydantic_classes(tree) for tree in trees.values()
         ),
         "api_route_count": _route_count(api_paths),
-        "user_scoped_route_count": sum(
+        "routes_in_user_named_modules": sum(
             "user" in path.name
             for path in api_paths
             for _ in range(_route_count([path]))

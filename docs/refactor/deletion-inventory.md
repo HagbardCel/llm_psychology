@@ -18,6 +18,6 @@ source_of_truth_for: Planned legacy deletion inventory
 | `orchestration/response_jobs.py`, `job_status.py`, `api/job_routes.py` | job tree/retries | `Operation` and `ChatTurn` | rewrite_api | operation schema/recovery | 6 | planned |
 | `services/trio_db_service.py`, `services/db/{executor,repositories,facade}*` | persistence stack | `SQLiteStore` | port | store transactions | 6 | planned |
 | `api/ws_handler.py`, `utils/ws_protocol.py`, generated WS constants | legacy transport protocol | discriminated v1 events | rewrite_api | v1 adapter | 6 | planned |
-| planning/memory/reflection agent wiring | cross-agent orchestration | phase helpers/processors | retain | typed processors | 6 | planned |
+| planning/memory/reflection agent wiring | cross-agent orchestration | phase helpers/processors | port | typed processors | 6 | planned |
 | LangChain provider graph, inactive RAG modules, key rotation | speculative infrastructure | `LLMGateway` | rewrite_application | OpenAI adapter | 6 | planned |
 | duplicate Compose profiles/services, Docker-only duplicate commands | duplicate packaging workflow | minimal runtime tooling | delete_redundant | cutover runtime | 7 | planned |

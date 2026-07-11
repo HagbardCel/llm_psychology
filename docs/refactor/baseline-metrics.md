@@ -8,26 +8,34 @@ source_of_truth_for: Refactor baseline measurement procedure
 
 # Baseline Metrics
 
-Phase 1 completion commit: `b127296143e5346d5fedbb369bad3781682acf3b7`. Captured on 2026-07-11 in the API container with:
+Phase 1 completion commit: `e69610afc630a3d4c8099a7214c39f5c604003a8`. Re-measure on the merge commit that lands these corrections. Captured on 2026-07-11 in the API container with:
 
 ```bash
-docker compose run --rm api python scripts/measure_codebase.py --format markdown
+scripts/measure_phase1_baseline.sh
 ```
 
-Historical Phase 1 starting commit: `1693b01907bac827c3861374ea581e6cb629d3c7` (`main`). The measurement script was introduced after that starting commit, so the starting values below are retained evidence rather than regenerable output from that exact tree.
+Historical Phase 1 starting commit: `1693b01907bac827c3861374ea581e6cb629d3c7` (`main`). Both columns below were produced by the same `measure_codebase.py` implementation (`tokenize` code LOC, AST import detection, conservative SQL table detection).
 
 | Metric | Phase 1 start | Phase 1 completion |
 |---|---:|---:|
 | Production Python files | 131 | 131 |
 | Production Python physical LOC | 22,640 | 22,640 |
-| Production Python code LOC | 19,223 | 17,630 |
-| Test Python files | 80 | 82 |
-| Test Python physical LOC | 22,160 | 22,909 |
-| Test Python code LOC | 17,978 | 18,272 |
+| Production Python code LOC | 17,630 | 17,630 |
+| Test Python files | 72 | 82 |
+| Test Python physical LOC | 22,092 | 23,089 |
+| Test Python code LOC | 17,590 | 18,426 |
 | Trio-importing production modules | 24 | 24 |
-| Service-container importing modules | 11 | 7 |
-| Persistence abstraction modules | 9 | 14 |
-| Pydantic model candidates | 9 | 63 |
+| Service-container importing modules | 7 | 7 |
+| Persistence-related modules | 14 | 14 |
+| Pydantic model candidates | 63 | 63 |
+| API route count | 23 | 23 |
+| Routes in user-named modules | 7 | 7 |
+| WebSocket endpoint count | 1 | 1 |
+| SQLite table count | 8 | 8 |
+| Workflow state member count | 11 | 11 |
+| Workflow action member count | 18 | 18 |
+
+`persistence_related_modules` counts files under `services/db` plus production modules importing that package. `routes_in_user_named_modules` counts routes declared in API files whose filename contains `user`; it is an approximate legacy-scope metric, not an exact user-scoped route inventory.
 
 `measure_codebase.py` counts Python code lines with `tokenize` (comments, blank lines, and standalone syntax tokens excluded), parses source with AST for imports/classes/enums/Pydantic subclasses, and separately reports backend, tests, console, scripts, executable configuration, direct dependencies, routes, websocket decorators, tables, and workflow types. SQL table detection is textual and intentionally conservative. Dynamic routes, generated/ignored paths, transitive dependencies, and runtime-only tables are limitations.
 
@@ -57,6 +65,6 @@ Historical Phase 1 starting commit: `1693b01907bac827c3861374ea581e6cb629d3c7` (
 | `fastapi` / `uvicorn` / `websockets` | absent target transport | runtime/test | introduce | 3–5 |
 | `pytest` / `black` / `ruff` / `mypy` | tooling | test/tooling | retain | 1 |
 
-The baseline command, SHA, definitions, limitations, targets, dependency table, and generated machine-readable metric keys are validated by `make validate-refactor-phase-1`.
+The baseline command, SHA, definitions, limitations, targets, dependency table, and generated machine-readable metric keys are validated by `make validate-refactor-phase-1`. Commit existence for the completion SHA is verified in CI via `scripts/extract_baseline_sha.py` and `git cat-file`.
 
-Required metric keys: `production_python_files`, `production_python_physical_loc`, `production_python_code_loc`, `test_python_files`, `test_python_physical_loc`, `test_python_code_loc`, `console_python_files`, `console_python_physical_loc`, `console_python_code_loc`, `script_python_files`, `script_python_physical_loc`, `script_python_code_loc`, `executable_configuration_files`, `direct_dependency_count`, `trio_importing_production_modules`, `service_container_importing_modules`, `persistence_abstraction_modules`, `pydantic_model_candidates`, `api_route_count`, `user_scoped_route_count`, `websocket_endpoint_count`, `sqlite_table_count`, `workflow_state_member_count`, and `workflow_action_member_count`.
+Required metric keys: `production_python_files`, `production_python_physical_loc`, `production_python_code_loc`, `test_python_files`, `test_python_physical_loc`, `test_python_code_loc`, `console_python_files`, `console_python_physical_loc`, `console_python_code_loc`, `script_python_files`, `script_python_physical_loc`, `script_python_code_loc`, `executable_configuration_files`, `direct_dependency_count`, `trio_importing_production_modules`, `service_container_importing_modules`, `persistence_related_modules`, `pydantic_model_candidates`, `api_route_count`, `routes_in_user_named_modules`, `websocket_endpoint_count`, `sqlite_table_count`, `workflow_state_member_count`, and `workflow_action_member_count`.

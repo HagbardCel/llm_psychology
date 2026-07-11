@@ -201,62 +201,10 @@ The project does not implement runtime client-version negotiation. Breaking exte
 
 ## 5. Target package structure
 
-```text
-src/jung/
-├── __init__.py
-├── config.py
-├── composition.py
-├── application.py
-├── workflow.py
-├── domain/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── commands.py
-│   ├── results.py
-│   └── errors.py
-├── phases/
-│   ├── intake/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   └── models.py
-│   ├── assessment/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   └── models.py
-│   ├── therapy/
-│   │   ├── processor.py
-│   │   ├── context.py
-│   │   ├── prompts.py
-│   │   ├── models.py
-│   │   └── styles/
-│   │       ├── cbt.py
-│   │       ├── jungian.py
-│   │       └── psychoanalytic.py
-│   └── post_session/
-│       ├── processor.py
-│       ├── prompts.py
-│       └── models.py
-├── llm/
-│   ├── gateway.py
-│   ├── policies.py
-│   ├── openai_compatible.py
-│   ├── tracing.py
-│   └── fake.py
-├── persistence/
-│   ├── schema.sql
-│   └── sqlite_store.py
-├── api/
-│   ├── app.py
-│   ├── contracts.py
-│   ├── errors.py
-│   ├── routes.py
-│   └── websocket.py
-└── client/
-    ├── api_client.py
-    └── console.py
-```
-
-The exact package name may remain `psychoanalyst_app` during early implementation, but the final cutover should rename it once rather than retaining aliases. `jung` is used throughout this document as a concrete target name.
+Package shape, application interfaces, and client boundaries are defined in
+[Target Architecture](target-architecture.md). This roadmap records sequencing
+and cutover decisions only; it does not maintain an independent package tree or
+client interface copy.
 
 ## 6. Domain, application, persistence, and LLM design
 
@@ -294,19 +242,8 @@ wire schemas or event lists.
 
 ## 12. Console and future frontends
 
-Create one Python API client:
-
-```python
-class JungApiClient:
-    async def get_state(self) -> AppSnapshotDTO: ...
-    async def update_profile(self, request: ProfileUpdate) -> AppSnapshotDTO: ...
-    async def select_style(self, style: str) -> AppSnapshotDTO: ...
-    async def start_session(self) -> SessionDTO: ...
-    async def end_session(self, session_id: UUID) -> AppSnapshotDTO: ...
-    async def chat(self, ...) -> AsyncIterator[ServerEvent]: ...
-```
-
-Console UI code depends only on this client and wire contracts.
+Console UI code depends on the API client and wire contracts defined in
+[Target Architecture](target-architecture.md) and [API v1 Contract](api-v1-contract.md).
 
 The web client may use generated HTTP types from OpenAPI, but WebSocket event types remain a small explicitly maintained discriminated union.
 

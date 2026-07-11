@@ -44,8 +44,8 @@ All non-table combinations return `invalid_command`. Commands atomically compare
 |---|---|---|---|---|
 | `SETUP` | `update_profile` completes profile | profile passes validation | profile saved; revision incremented | `INTAKE` |
 | `INTAKE` | `finish_intake` (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING`; revision incremented | `ASSESSMENT` |
-| `ASSESSMENT` | operation completes | structured assessment result valid | assessment result saved; operation `COMPLETE`; revision incremented | `STYLE_SELECTION` |
-| `STYLE_SELECTION` | `select_style` | style valid; initial plan materialized | selected style + initial immutable plan; revision incremented | `READY` |
+| `ASSESSMENT` | operation completes | structured assessment result valid; includes initial plan material | assessment result saved; operation `COMPLETE`; revision incremented | `STYLE_SELECTION` |
+| `STYLE_SELECTION` | `select_style` | style valid; assessment result contains initial plan material | selected style + initial immutable plan; revision incremented | `READY` |
 | `READY` | `start_session` | no active session/operation/generation | therapy session row; revision incremented | `THERAPY` |
 | `THERAPY` | `end_session` | active session matches command | session ended; post-session `Operation` `PENDING`; revision incremented | `POST_SESSION` |
 | `POST_SESSION` | operation completes | post-session patch valid | profile/plan revisions saved; operation `COMPLETE`; revision incremented | `READY` |
@@ -76,7 +76,7 @@ PENDING → COMPLETE
 1. **Acceptance transaction**: validate stage/session/revision; resolve `(session_id, client_message_id)`; persist user message + `PENDING` turn; increment revision; schedule generation.
 2. **Generation**: supervisor streams tokens through `EventStream`; tokens are ephemeral.
 3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; increment revision; emit completion notifications.
-4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged.
+4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged; increment revision when failure occurs after acceptance.
 5. **Duplicate client message**: same ID never creates a second user message; pending/complete/failed paths return the stored outcome.
 6. **During active generation**: conflicting distinct `send_message` returns `busy`; same idempotent resubmit returns in-progress or stored completion.
 

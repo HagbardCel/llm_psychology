@@ -72,6 +72,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `available_commands` | list[Command] | yes | Backend-derived permitted commands |
 | **ProfileResponse** | | | |
 | `profile` | Profile | yes | Current profile |
+| `current_plan` | PlanDetail \| null | no | Active plan revision referenced by profile lifecycle |
 | `snapshot` | AppSnapshot | yes | Authoritative snapshot |
 | **SessionHistoryResponse** | | | |
 | `session` | SessionSummary | yes | Requested session |
@@ -81,6 +82,8 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `code` | error code literal | yes | Stable machine-readable code |
 | `message` | string | yes | Human-readable summary |
 | `request_id` | UUID | yes | Correlation identifier |
+
+For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied.
 | `current_snapshot` | AppSnapshot \| null | no | Present for `state_conflict` |
 | `retryable` | bool | no | Whether the client may retry |
 
@@ -90,6 +93,7 @@ Policy decisions:
 - `PUT /profile` is allowed only in `SETUP` and `INTAKE`;
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
 - most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
+- `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for Phase 1 clients.
 
 ## 2. Endpoint matrix
 
@@ -99,7 +103,7 @@ Policy decisions:
 | `GET /api/v1/profile` | all | — | `200 ProfileResponse` | — | read only |
 | `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdate` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
 | `GET /api/v1/styles` | all | — | `200 {styles: list[StyleSummary]}` | — | read only |
-| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | style + initial plan request + revision |
+| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
 | `GET /api/v1/sessions` | all | — | `200 {sessions: list[SessionSummary]}` | — | read only |
 | `GET /api/v1/sessions/{session_id}` | all | — | `200 SessionHistoryResponse` | `404 not_found` | read only |
 | `POST /api/v1/sessions` | `READY` | `StartSession { expected_revision }` | `201 {session, snapshot}` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
@@ -110,7 +114,7 @@ Policy decisions:
 
 State-changing HTTP requests require `expected_revision`. `Idempotency-Key` is required for `POST` commands except chat, where `(session_id, client_message_id)` is the idempotency key.
 
-`PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Intake completion is processor-driven and creates/reuses the assessment operation. Style selection succeeds only after the initial immutable plan exists.
+`PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Intake completion is processor-driven and creates/reuses the assessment operation. The assessment operation persists formulation, style recommendations, and style-neutral initial plan material. `select_style` requires a completed assessment containing initial plan material; it performs no new LLM call and atomically stores the selected style and materializes the first immutable plan.
 
 ## 3. WebSocket messages
 
@@ -134,7 +138,17 @@ accepted generation continues.
 | `message_completed` | `session_id`, `turn`, `message` | after final token | assistant message + complete turn stored | incremented at completion |
 | `snapshot_changed` | `snapshot` | after durable mutation | snapshot reread | matches stored revision |
 | `operation_changed` | `operation`, `snapshot` | when operation status changes | operation row updated | matches stored revision |
-| `error` | `error`, optional `session_id`, `request_id` | any time | failure recorded when applicable | unchanged unless acceptance failed |
+| `error` | `error`, optional `session_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
+
+Chat error revision semantics:
+
+| Error point | Durable change | Revision |
+|---|---|---|
+| Before command acceptance | none | unchanged |
+| After accepted generation fails | `ChatTurn → FAILED` | incremented |
+| Ephemeral token delivery failure for one subscriber | none | unchanged |
+
+A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`.
 
 Duplicate `(session_id, client_message_id)` resolution happens before revision validation: pending → `message_in_progress`; complete → persisted completion; retryable failed → reuse turn; permanent failed → stored error. `busy` rejects a second distinct active generation.
 

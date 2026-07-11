@@ -52,7 +52,7 @@ def test_measure_codebase_uses_tokens_ast_and_excludes_generated_paths(tmp_path)
     assert metrics["pydantic_model_candidates"] == 1
     assert metrics["trio_importing_production_modules"] == 1
     assert metrics["api_route_count"] == 2
-    assert metrics["user_scoped_route_count"] == 2
+    assert metrics["routes_in_user_named_modules"] == 2
     assert metrics["websocket_endpoint_count"] == 1
     assert metrics["sqlite_table_count"] == 1
     assert metrics["workflow_state_member_count"] == 2

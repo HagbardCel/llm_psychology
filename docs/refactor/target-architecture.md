@@ -128,6 +128,19 @@ src/jung/
 
 The package name may remain `psychoanalyst_app` during implementation if renaming would add risk without reducing complexity. The boundaries above are the important part.
 
+The package tree is illustrative. Begin with the fewest modules that preserve dependency boundaries; split only when a file has independently testable logic or distinct dependencies. In particular, post-session summarization/patch helpers and client transport code may start consolidated:
+
+```text
+phases/post_session/
+  processor.py
+  prompts.py
+  models.py
+
+client/
+  api_client.py
+  console.py
+```
+
 ## Application boundary
 
 All use cases enter through one explicitly constructed application service:
