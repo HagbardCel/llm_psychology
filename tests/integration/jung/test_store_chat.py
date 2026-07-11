@@ -9,23 +9,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
-from jung.domain.models import ChatTurnStatus, Profile, SessionKind
+from jung.domain.models import ChatTurnStatus
 from jung.persistence.sqlite_store import SQLiteStore
 
-from .scenarios import advance_to_ready
-
-
-def _open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
-    now = datetime.now(UTC)
-    store.update_profile(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=store.get_app_state().revision,
-        now=now,
-    )
-    intake = store.get_active_session()
-    assert intake is not None
-    assert intake.kind == SessionKind.INTAKE
-    return intake.id, now
+from .scenarios import advance_to_ready, open_intake
 
 
 def _therapy_ready(store: SQLiteStore):
@@ -43,7 +30,7 @@ def _therapy_ready(store: SQLiteStore):
 def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: str) -> None:
     now = datetime.now(UTC)
     if stage_setup == "intake":
-        session_id, now = _open_intake(store)
+        session_id, now = open_intake(store)
     else:
         session_id, now = _therapy_ready(store)
 
@@ -79,7 +66,7 @@ def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: st
 def test_duplicate_client_message_id_returns_existing_before_revision_check(
     store: SQLiteStore,
 ) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     client_message_id = uuid4()
     turn_id = uuid4()
     user_message_id = uuid4()
@@ -109,7 +96,7 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
 
 
 def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
         session_id=intake_id,
@@ -132,7 +119,7 @@ def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
 
 
 def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     turn_id = uuid4()
     user_message_id = uuid4()
     store.accept_chat_message(
@@ -157,8 +144,8 @@ def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
     assert messages[0].id == user_message_id
 
 
-def test_user_message_id_cannot_belong_to_two_turns(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+def test_duplicate_user_message_id_rejected_on_second_accept(store: SQLiteStore) -> None:
+    intake_id, now = open_intake(store)
     user_message_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
@@ -188,8 +175,8 @@ def test_user_message_id_cannot_belong_to_two_turns(store: SQLiteStore) -> None:
         )
 
 
-def test_assistant_message_id_unique_across_completed_turns(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+def test_duplicate_assistant_message_id_rejected_on_complete(store: SQLiteStore) -> None:
+    intake_id, now = open_intake(store)
     turn_one = uuid4()
     assistant_id = uuid4()
     store.accept_chat_message(
@@ -227,7 +214,7 @@ def test_assistant_message_id_unique_across_completed_turns(store: SQLiteStore) 
 
 @pytest.mark.parametrize("action", ["complete", "fail"])
 def test_late_chat_callback_rejected(store: SQLiteStore, action: str) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
@@ -268,7 +255,7 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
 ) -> None:
     store_a = SQLiteStore(store_path)
     store_a.initialize()
-    intake_id, now = _open_intake(store_a)
+    intake_id, now = open_intake(store_a)
     revision = store_a.get_app_state().revision
     client_message_id = uuid4()
     turn_a_id = uuid4()

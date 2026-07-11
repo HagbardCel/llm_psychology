@@ -2,38 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
-from jung.domain.models import ChatTurnStatus, OperationStatus, Profile, Stage
+from jung.domain.models import ChatTurnStatus, OperationStatus
 from jung.persistence.sqlite_store import SQLiteStore
 
-
-def _open_intake(store: SQLiteStore) -> tuple:
-    now = datetime.now(UTC)
-    store.update_profile(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=store.get_app_state().revision,
-        now=now,
-    )
-    intake = store.get_active_session()
-    assert intake is not None
-    return intake.id, now
-
-
-def test_reset_recreates_clean_database(store_path) -> None:
-    store = SQLiteStore(store_path)
-    store.initialize()
-    _open_intake(store)
-    store.reset_database()
-    state = store.get_app_state()
-    assert state.stage == Stage.SETUP
-    assert state.revision == 0
-    assert store.get_active_session() is None
+from .scenarios import open_intake
 
 
 def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -53,7 +31,7 @@ def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
 
 
 def test_recover_stale_chat_turns_is_idempotent(store: SQLiteStore) -> None:
-    intake_id, now = _open_intake(store)
+    intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,

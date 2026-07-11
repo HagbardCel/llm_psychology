@@ -26,7 +26,7 @@ class PostSessionScenario:
     now: datetime
 
 
-def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
+def open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
     now = datetime.now(UTC)
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
@@ -36,11 +36,16 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
     intake = store.get_active_session()
     assert intake is not None
     assert intake.kind == SessionKind.INTAKE
+    return intake.id, now
+
+
+def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
+    intake_id, now = open_intake(store)
 
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
-        intake_session_id=intake.id,
+        intake_session_id=intake_id,
         operation_id=operation_id,
         now=now,
     )
@@ -63,12 +68,12 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
         current_progress="baseline",
         planned_interventions=["grounding"],
         revision_recommendations=["track sleep"],
-        intake_session_id=intake.id,
+        intake_session_id=intake_id,
         now=now,
     )
     assert store.get_app_state().stage == Stage.READY
     return ReadyScenario(
-        intake_session_id=intake.id,
+        intake_session_id=intake_id,
         initial_plan_id=plan_id,
         now=now,
     )

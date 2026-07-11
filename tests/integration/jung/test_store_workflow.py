@@ -20,21 +20,7 @@ from jung.domain.models import (
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 
-from .scenarios import advance_to_post_session, advance_to_ready
-
-
-def _complete_profile(store: SQLiteStore) -> tuple:
-    profile = Profile(name="Alex", primary_language="English")
-    now = datetime.now(UTC)
-    state = store.update_profile(
-        profile,
-        expected_revision=store.get_app_state().revision,
-        now=now,
-    )
-    session = store.get_active_session()
-    assert session is not None
-    assert session.kind == SessionKind.INTAKE
-    return state, session, session.id, now
+from .scenarios import advance_to_post_session, advance_to_ready, open_intake
 
 
 def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
@@ -48,7 +34,10 @@ def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
 
 
 def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) -> None:
-    _, session, _, _ = _complete_profile(store)
+    intake_id, _now = open_intake(store)
+    session = store.get_active_session()
+    assert session is not None
+    assert session.id == intake_id
     assert session.kind == SessionKind.INTAKE
     assert session.ended_at is None
     assert store.get_app_state().stage == Stage.INTAKE
@@ -56,7 +45,7 @@ def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) ->
 
 
 def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
-    _complete_profile(store)
+    open_intake(store)
     revision = store.get_app_state().revision
     now = datetime.now(UTC)
     active_before = store.get_active_session()
@@ -72,7 +61,7 @@ def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
 
 
 def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) -> None:
-    _complete_profile(store)
+    open_intake(store)
     with pytest.raises(InvariantViolation):
         store.update_profile(
             Profile(name=" ", primary_language="English"),
@@ -82,7 +71,9 @@ def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) 
 
 
 def test_finish_intake_closes_session_and_creates_assessment(store: SQLiteStore) -> None:
-    _, session, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
+    session = store.get_session(intake_id)
+    assert session is not None
     revision = store.get_app_state().revision
     operation_id = uuid4()
     state, operation = store.finish_intake_and_create_assessment(
@@ -101,7 +92,7 @@ def test_finish_intake_closes_session_and_creates_assessment(store: SQLiteStore)
 
 
 def test_assessment_completion_advances_to_style_selection(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -126,7 +117,7 @@ def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
 
 
 def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -146,7 +137,7 @@ def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
 
 
 def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -268,7 +259,7 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
 def test_complete_assessment_rejects_invalid_json_before_persistence(
     store: SQLiteStore,
 ) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -286,7 +277,7 @@ def test_complete_assessment_rejects_invalid_json_before_persistence(
 
 
 def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -317,7 +308,7 @@ def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -
 
 
 def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -337,7 +328,7 @@ def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> N
 def test_late_operation_callback_rejected(
     store: SQLiteStore, action: str
 ) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -389,7 +380,7 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
 
 
 def test_stale_revision_leaves_database_unchanged(store: SQLiteStore) -> None:
-    _complete_profile(store)
+    open_intake(store)
     revision = store.get_app_state().revision
     with pytest.raises(RevisionConflict):
         store.finish_intake_and_create_assessment(
@@ -405,7 +396,7 @@ def test_stale_revision_leaves_database_unchanged(store: SQLiteStore) -> None:
 def test_non_retryable_failed_operation_hides_retry_command(
     store: SQLiteStore,
 ) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,
@@ -427,7 +418,7 @@ def test_non_retryable_failed_operation_hides_retry_command(
 
 
 def test_finish_intake_is_idempotent_by_session_key(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     revision = store.get_app_state().revision
     _, first_operation = store.finish_intake_and_create_assessment(
@@ -512,7 +503,7 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
 def test_invalid_plan_fields_raise_invariant_violation(
     store: SQLiteStore, path: str, invalid_kwargs: dict
 ) -> None:
-    _, _, intake_id, now = _complete_profile(store)
+    intake_id, now = open_intake(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
         expected_revision=store.get_app_state().revision,

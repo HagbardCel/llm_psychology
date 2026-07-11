@@ -14,6 +14,8 @@ from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
+from .scenarios import open_intake
+
 
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:
     state = store.get_app_state()
@@ -57,16 +59,21 @@ def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -
         store.initialize()
 
 
-def test_reset_database_produces_fresh_schema_version(store_path: Path) -> None:
+def test_reset_database_recreates_clean_schema(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
+    open_intake(store)
+
     store.reset_database()
+
     state = store.get_app_state()
     with sqlite3.connect(store_path) as conn:
-        user_version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert user_version == SCHEMA_VERSION
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    assert version == SCHEMA_VERSION
     assert state.stage == Stage.SETUP
     assert state.revision == 0
+    assert store.get_active_session() is None
 
 
 def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
@@ -188,15 +195,135 @@ def test_singleton_rejects_second_current_operation(store_path: Path) -> None:
         )
         conn.commit()
 
+        # Use a distinct operation key so only the global current-operation
+        # singleton index can reject this insert.
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
                 INSERT INTO operations (
                     id, kind, status, source_session_id, attempt, result_json,
                     error_code, error_message, retryable, created_at, updated_at
-                ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
+                ) VALUES (?, 'post_session', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
                 """,
                 (str(uuid4()), session_id, now, now),
+            )
+            conn.commit()
+
+
+def test_chat_turn_user_message_id_unique(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        now = datetime.now(UTC).isoformat()
+        user_message_id = str(uuid4())
+        conn.execute(
+            """
+            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+            VALUES (?, ?, 1, 'user', 'hello', ?)
+            """,
+            (user_message_id, session_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, status, user_message_id,
+                assistant_message_id, error_code, error_message, retryable,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'failed', ?, NULL, 'test_failure', NULL, 0, ?, ?, ?)
+            """,
+            (str(uuid4()), session_id, str(uuid4()), user_message_id, now, now, now),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO chat_turns (
+                    id, session_id, client_message_id, status, user_message_id,
+                    assistant_message_id, error_code, error_message, retryable,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, 'failed', ?, NULL, 'test_failure', NULL, 0, ?, ?, ?)
+                """,
+                (str(uuid4()), session_id, str(uuid4()), user_message_id, now, now, now),
+            )
+            conn.commit()
+
+
+def test_chat_turn_assistant_message_id_unique(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        now = datetime.now(UTC).isoformat()
+        user_message_id_one = str(uuid4())
+        user_message_id_two = str(uuid4())
+        assistant_message_id = str(uuid4())
+        conn.execute(
+            """
+            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+            VALUES (?, ?, 1, 'user', 'one', ?)
+            """,
+            (user_message_id_one, session_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+            VALUES (?, ?, 2, 'user', 'two', ?)
+            """,
+            (user_message_id_two, session_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+            VALUES (?, ?, 3, 'assistant', 'reply', ?)
+            """,
+            (assistant_message_id, session_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, status, user_message_id,
+                assistant_message_id, error_code, error_message, retryable,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'complete', ?, ?, NULL, NULL, 0, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                session_id,
+                str(uuid4()),
+                user_message_id_one,
+                assistant_message_id,
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO chat_turns (
+                    id, session_id, client_message_id, status, user_message_id,
+                    assistant_message_id, error_code, error_message, retryable,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, 'complete', ?, ?, NULL, NULL, 0, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    session_id,
+                    str(uuid4()),
+                    user_message_id_two,
+                    assistant_message_id,
+                    now,
+                    now,
+                    now,
+                ),
             )
             conn.commit()
 
