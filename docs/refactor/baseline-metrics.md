@@ -8,7 +8,7 @@ source_of_truth_for: Refactor baseline measurement procedure
 
 # Baseline Metrics
 
-Phase 1 completion commit: `e69610afc630a3d4c8099a7214c39f5c604003a8`. Re-measure on the merge commit that lands these corrections. Captured on 2026-07-11 in the API container with:
+Phase 1 completion commit: `0c43ddc1dfb927ef26d5311a501d363f2a787fdd`. Re-measure on the merge commit that lands these corrections. Captured on 2026-07-11 in the API container with:
 
 ```bash
 scripts/measure_phase1_baseline.sh
