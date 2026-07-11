@@ -445,9 +445,10 @@ class LegacyApiClient:
         self.select_style("cbt")
         self.wait_for_workflow_state("initial_plan_complete", timeout=timeout)
 
-    async def therapy_chat_turn(
+    async def chat_turn(
         self, message: str, *, register_first: bool = True
     ) -> str:
+        """Submit one intake or therapy chat turn and return the streamed assistant text."""
         if register_first:
             self.register()
         async with open_websocket_url(

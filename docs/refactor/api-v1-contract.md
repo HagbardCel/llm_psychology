@@ -30,9 +30,14 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `description` | string | yes | Short style summary |
 | **SessionSummary** | | | |
 | `id` | UUID | yes | Session identifier |
+| `kind` | `"intake"` \| `"therapy"` | yes | Session type; do not infer from `plan_id` alone |
 | `started_at` | datetime | yes | Session start timestamp |
 | `ended_at` | datetime \| null | no | End timestamp when closed |
 | `plan_id` | UUID \| null | no | Plan revision effective at session start |
+| **SessionDetail** | | | |
+| (all `SessionSummary` fields) | | | |
+| `summary` | string \| null | no | Post-session reflection summary when closed |
+| `briefing` | opaque JSON \| null | no | Session-scoped briefing artifact when present |
 | **Message** | | | |
 | `id` | UUID | yes | Message identifier |
 | `session_id` | UUID | yes | Owning session |
@@ -57,7 +62,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `current_progress` | string | yes | Qualitative progress assessment |
 | `planned_interventions` | list[string] | yes | Planned interventions or directions |
 | `revision_recommendations` | list[string] | yes | Recommendations from the latest revision |
-| `session_briefing` | structured object \| null | no | Session resumption briefing |
+| `session_briefing` | opaque validated JSON \| null | no | Server-validated resumption briefing; client display-only in v1 |
 | `source_session_id` | UUID \| null | no | Session that produced the revision |
 | `supersedes_plan_id` | UUID \| null | no | Previous revision link |
 | `created_at` | datetime | yes | Creation timestamp |
@@ -89,7 +94,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `current_plan` | PlanDetail \| null | no | Active plan revision referenced by profile lifecycle |
 | `snapshot` | AppSnapshot | yes | Authoritative snapshot |
 | **SessionHistoryResponse** | | | |
-| `session` | SessionSummary | yes | Requested session |
+| `session` | SessionDetail | yes | Requested session with closed-session artifacts when available |
 | `messages` | list[Message] | yes | Ordered durable messages |
 | `plans` | list[PlanSummary] | yes | Plan revisions linked to the session |
 | **ErrorResponse / ErrorEnvelope** | | | |
@@ -109,6 +114,10 @@ Policy decisions:
 - most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
 - `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for Phase 1 clients.
 - `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read.
+- `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available.
+- `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text.
+- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1.
+- v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
 
 ## 2. Endpoint matrix
 
@@ -127,7 +136,7 @@ Policy decisions:
 | `GET /api/v1/health` | all | — | `200 {status: "healthy"}` | `503` when unavailable | read only |
 | `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | chat acceptance increments revision; completion increments again |
 
-State-changing HTTP requests require `expected_revision`. `Idempotency-Key` is required for `POST` commands except chat, where `(session_id, client_message_id)` is the idempotency key.
+State-changing HTTP requests require `expected_revision`. Non-chat commands are serialized through `expected_revision` and application invariants. A retry after an uncertain response fetches the authoritative snapshot (`GET /api/v1/state` or the conflict envelope's `current_snapshot`). Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
 
 `PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Intake completion is processor-driven and creates/reuses the assessment operation. The assessment operation persists formulation, style recommendations, and style-neutral initial plan material. `select_style` requires a completed assessment containing initial plan material; it performs no new LLM call and atomically stores the selected style and materializes the first immutable plan.
 

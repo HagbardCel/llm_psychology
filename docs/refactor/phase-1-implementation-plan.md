@@ -901,10 +901,13 @@ It must not add unconditional `xfail` placeholder tests. Target-only behavior be
 | Session closure | Session final state persisted | Yes |
 | Plan revision | Historical session link retained | Yes |
 | Restart | Durable state reconstructed | Yes |
-| Duplicate handling | No duplicate logical side effects | Yes |
+| Restart/reconnect does not duplicate sessions, plans, or results | Restart checkpoints | Yes |
+| Network command/chat idempotency under target API | Target acceptance tests (Phases 4–5) | No (not legacy characterization) |
 | Failure behavior | Consistent state after failure | Target acceptance; not Phase 1 smoke |
 | Retry behavior | Retry does not duplicate completion | Target acceptance; not Phase 1 smoke |
 | Console/API contract | Existing console path covered | Yes |
+
+Do not add legacy characterization tests for `client_message_id` or generic HTTP idempotency; those belong in target acceptance tests during Phases 4–5.
 
 ## 14. Phase 1 exit criteria
 

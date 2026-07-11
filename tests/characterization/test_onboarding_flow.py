@@ -15,11 +15,6 @@ async def test_onboarding_persists_profile_and_intake_messages(legacy_client):
         legacy_client.server.rows("sessions")
     )
     messages = assertions.transcript_messages(intake_session)
-    assert any(
-        row.get("role") == "user" and row.get("content") == DETERMINISTIC_REPLIES[0]
-        for row in messages
-    )
-    assert any(row.get("role") == "assistant" for row in messages)
     assertions.assert_user_followed_by_assistant(
         messages, DETERMINISTIC_REPLIES[0]
     )

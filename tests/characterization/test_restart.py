@@ -28,7 +28,7 @@ async def test_restart_preserves_durable_state(legacy_client, checkpoint):
         await legacy_client.drive_to_ready()
         therapy = legacy_client.start_therapy()
         therapy_session_id = therapy["session"]["session_id"]
-        await legacy_client.therapy_chat_turn(
+        await legacy_client.chat_turn(
             "I feel anxious about a work deadline.",
             register_first=False,
         )
