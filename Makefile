@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-test validate-refactor-phase-1
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -129,7 +129,20 @@ finalization-check: prepare-runtime-dirs
 # top of the default finalization-check. Kept separate so the default path stays
 # fast for local iteration; run before merging an intake-tracking change.
 finalization-check-full: finalization-check
+	$(MAKE) characterization-test
 	$(MAKE) probe-console-intake-notes
+
+characterization-smoke: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/characterization -m characterization_smoke
+
+characterization-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/characterization
+
+validate-refactor-phase-1: prepare-runtime-dirs
+	$(MAKE) validate-docs
+	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" api python scripts/validate_refactor_phase_1.py
+	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py
+	$(MAKE) characterization-smoke
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
 test-real-llm: prepare-runtime-dirs

@@ -228,6 +228,7 @@ class AppSnapshot(BaseModel):
     selected_style: str | None
     active_session: SessionSummary | None
     operation: OperationSummary | None
+    active_chat_turn: ChatTurnSummary | None
     available_commands: list[Command]
 ```
 
@@ -253,6 +254,8 @@ class OperationStatus(StrEnum):
 
 Operations are idempotent by `(kind, source_session_id)`. On startup, stale `RUNNING` operations return to `PENDING` and are retried. This replaces job trees, child jobs, and a generalized scheduler.
 
+Chat generation uses a separate durable `ChatTurn`, keyed by `(session_id, client_message_id)`, with `pending`, `complete`, and `failed` states. A disconnect does not cancel accepted work. Stale pending turns become retryable failures at startup; retrying the same client message never duplicates the persisted user message.
+
 ## API boundary
 
 Use a small versioned API:
@@ -277,12 +280,15 @@ No user routes, login, client-version negotiation, user query parameters, generi
 WebSocket server events should be a discriminated union containing only durable product semantics:
 
 - `token`
+- `message_in_progress`
 - `message_completed`
 - `snapshot_changed`
 - `operation_changed`
 - `error`
 
 On reconnect, the client fetches `/state`; no event replay subsystem is required.
+
+HTTP owns authoritative reads and non-chat commands. WebSocket owns `send_message`, token streaming, completion, and live notifications. A chat command includes `session_id`, `client_message_id`, `request_id`, and `expected_revision`; duplicate client message IDs are resolved before revision validation. Tokens are ephemeral and never advance revision. The server persists a pending turn and revision before streaming, then persists completion and a later revision before emitting `message_completed` followed by `snapshot_changed`.
 
 ## Console client
 
@@ -306,10 +312,13 @@ Proposed tables:
 - `messages`
 - `plans`
 - `operations`
+- `chat_turns`
 
 Messages are normalized by session and sequence. `client_message_id` provides idempotency across reconnects. Plans remain immutable, versioned revisions. Profile and derived result documents may be validated JSON where relational querying is not needed.
 
 Atomic store methods should commit multi-table use cases such as assessment completion and post-session completion.
+
+Each synchronous store operation opens and closes its own SQLite connection. Schema initialization enables WAL; connections enable foreign keys and a bounded busy timeout. Async code calls whole store operations via `asyncio.to_thread()`; no connection is shared across threads.
 
 ## LLM boundary
 
@@ -333,6 +342,8 @@ class LLMGateway(Protocol):
 
 Only the `llm/` infrastructure package imports provider and structured-output libraries. Provider-specific types must not leak into processors, application code, API contracts, or tests.
 
+Structured-output capability is configuration-driven (`json_schema`, `json_object`, or `prompt`), not inferred from provider identity. The initial adapter uses Chat Completions-compatible behavior only and makes one correction attempt before returning `invalid_llm_output`.
+
 The initial concrete provider is OpenAI-compatible and must work with llama.cpp, LM Studio, OpenRouter, and equivalent endpoints by changing configuration rather than application code.
 
 ## Concurrency
@@ -345,6 +356,8 @@ Explicit server-side rules:
 - one current background operation;
 - conflicting commands return `busy` or `state_conflict`;
 - cancellation and shutdown remain structured under asyncio task ownership.
+
+FastAPI lifespan owns a failure-isolating application task supervisor backed by an `asyncio.TaskGroup`. Independent chat and operation failures are persisted locally and must not cancel siblings or API lifespan; detached tasks are prohibited.
 
 ## Error model
 
