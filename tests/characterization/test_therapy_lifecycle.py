@@ -44,6 +44,7 @@ async def test_therapy_lifecycle_closes_session_and_revises_plan(legacy_client):
         CHAT_MESSAGE,
         register_first=False,
     )
+    assert streamed.strip()
 
     therapy_row = next(
         row

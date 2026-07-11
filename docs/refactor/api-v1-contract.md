@@ -117,6 +117,8 @@ Policy decisions:
 - `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available.
 - `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text.
 - `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1.
+- `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`.
+- API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
 
 ## 2. Endpoint matrix
