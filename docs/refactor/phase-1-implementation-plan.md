@@ -532,9 +532,10 @@ tests/characterization/test_restart.py
 
 Parametrize checkpoints:
 
-- during intake after persisted messages;
-- after style selection;
-- after completed post-session work.
+- `after_intake_messages` — during intake after persisted messages;
+- `after_post_session` — after completed post-session work.
+
+Post-session reconnect may create exactly one new active therapy session on login while all prior session IDs remain durable.
 
 Assertions (`must_preserve`):
 
@@ -722,26 +723,25 @@ Add a clear banner to proposed documents:
 
 ## 10. CI and validation
 
-Add one CI or Make target:
+Phase 1 validation is split across Make targets and CI jobs to avoid duplicated execution:
 
-```text
-validate-refactor-phase-1
-```
+| Target / job | Scope |
+|---|---|
+| `validate-refactor-phase-1` | documentation link validation, artifact validator, measure/validator unit tests |
+| `test-refactor-fast` | selected deterministic unit tests plus characterization smoke |
+| `finalization-check` | default test suite (excluding characterization), characterization smoke, deterministic console probe |
+| `finalization-check-full` | `finalization-check` plus characterization-full and intake-note probe |
+| CI `phase-1-evidence` | baseline SHA check, `validate-refactor-phase-1`, hook tests, characterization-full, intake-note probe |
 
-It should run:
+Do not fold characterization back into `validate-refactor-phase-1`; that recreates duplication removed in the correction pass.
 
-- documentation link validation;
-- ADR presence and metadata validation;
-- metric-script unit test;
-- characterization tests using the deterministic fake path;
-- existing deterministic tests.
-
-Do not make real-LLM tests mandatory.
-
-Recommended local command:
+Recommended local commands:
 
 ```bash
-uv run pytest tests/characterization
+make validate-refactor-phase-1
+make test-refactor-fast
+make characterization-full
+make finalization-check-full
 ```
 
 If the current repository still requires Docker in Phase 1, retain a temporary wrapper:
@@ -910,23 +910,23 @@ It must not add unconditional `xfail` placeholder tests. Target-only behavior be
 
 All blocking criteria:
 
-- [ ] Roadmap approved.
-- [ ] All five ADRs accepted.
-- [ ] API v1 contract has no unresolved fields.
-- [ ] Workflow specification maps every current state/action.
-- [ ] Single-user and test-data strategy fixed.
-- [ ] Asyncio/FastAPI decision fixed.
-- [ ] New database reset strategy fixed.
-- [ ] Processor and LLM boundaries fixed.
-- [ ] Baseline metrics recorded against an exact commit.
-- [ ] Deletion inventory created.
-- [ ] Onboarding characterization passes.
-- [ ] Therapy lifecycle characterization passes.
-- [ ] Restart characterization passes.
-- [ ] Target-only behavior is not disguised as characterization.
-- [ ] Existing deterministic tests still pass.
-- [ ] No production behavior changed unintentionally.
-- [ ] Phase 2 task list can be derived without another architecture decision.
+- [x] Roadmap approved.
+- [x] All five ADRs accepted.
+- [x] API v1 contract has no unresolved fields.
+- [x] Workflow specification maps every current state/action.
+- [x] Single-user and test-data strategy fixed.
+- [x] Asyncio/FastAPI decision fixed.
+- [x] New database reset strategy fixed.
+- [x] Processor and LLM boundaries fixed.
+- [x] Baseline metrics recorded against an exact commit.
+- [x] Deletion inventory created.
+- [x] Onboarding characterization passes.
+- [x] Therapy lifecycle characterization passes.
+- [x] Restart characterization passes.
+- [x] Target-only behavior is not disguised as characterization.
+- [x] Existing deterministic tests still pass.
+- [x] No production behavior changed unintentionally.
+- [x] Phase 2 task list can be derived without another architecture decision.
 
 ## 15. Definition of done
 

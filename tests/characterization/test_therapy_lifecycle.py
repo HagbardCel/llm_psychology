@@ -2,14 +2,14 @@ import pytest
 
 from . import assertions
 
+CHAT_MESSAGE = "I feel anxious about a work deadline."
+
 
 @pytest.mark.characterization_smoke
 @pytest.mark.trio
 async def test_intake_chat_streams_and_persists_assistant_message(legacy_client):
     """must_preserve: intake chat streams token chunks and persists its assistant turn."""
-    streamed = await legacy_client.therapy_chat_turn(
-        "I feel anxious about a work deadline."
-    )
+    streamed = await legacy_client.therapy_chat_turn(CHAT_MESSAGE)
 
     assert streamed.strip()
     intake_session = assertions.assert_one_intake_session(
@@ -17,8 +17,15 @@ async def test_intake_chat_streams_and_persists_assistant_message(legacy_client)
     )
     transcript = assertions.transcript_messages(intake_session)
     assert any(
+        row.get("role") == "user" and row.get("content") == CHAT_MESSAGE
+        for row in transcript
+    )
+    assert any(
         row.get("role") == "assistant" and row.get("content") == streamed
         for row in transcript
+    )
+    assertions.assert_user_followed_by_assistant(
+        transcript, CHAT_MESSAGE, assistant_content=streamed
     )
 
 
@@ -41,9 +48,27 @@ async def test_therapy_lifecycle_closes_session_and_revises_plan(legacy_client):
         for row in legacy_client.server.rows("sessions")
         if row.get("session_id") == therapy_session_id
     )
-    await legacy_client.therapy_chat_turn(
-        "I feel anxious about a work deadline.",
+    streamed = await legacy_client.therapy_chat_turn(
+        CHAT_MESSAGE,
         register_first=False,
+    )
+
+    therapy_row = next(
+        row
+        for row in legacy_client.server.rows("sessions")
+        if row.get("session_id") == therapy_session_id
+    )
+    transcript = assertions.transcript_messages(therapy_row)
+    assert any(
+        row.get("role") == "user" and row.get("content") == CHAT_MESSAGE
+        for row in transcript
+    )
+    assert any(
+        row.get("role") == "assistant" and row.get("content") == streamed
+        for row in transcript
+    )
+    assertions.assert_user_followed_by_assistant(
+        transcript, CHAT_MESSAGE, assistant_content=streamed
     )
 
     legacy_client.end_session(therapy_session_id)

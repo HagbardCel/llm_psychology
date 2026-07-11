@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-11
 review_cycle_days: 30
 source_of_truth_for: Target /api/v1 external semantics
@@ -47,6 +47,20 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `source_session_id` | UUID \| null | no | Session that produced the revision |
 | `supersedes_plan_id` | UUID \| null | no | Previous revision link |
 | `created_at` | datetime | yes | Creation timestamp |
+| **PlanDetail** | | | |
+| `id` | UUID | yes | Immutable plan revision identifier |
+| `version` | int | yes | Monotonic plan version |
+| `selected_style` | string | yes | Selected therapy style |
+| `focus` | string | yes | Current therapeutic focus |
+| `themes` | list[string] | yes | Themes tracked by the plan |
+| `goals` | list[string] | yes | Therapeutic goals |
+| `current_progress` | string | yes | Qualitative progress assessment |
+| `planned_interventions` | list[string] | yes | Planned interventions or directions |
+| `revision_recommendations` | list[string] | yes | Recommendations from the latest revision |
+| `session_briefing` | structured object \| null | no | Session resumption briefing |
+| `source_session_id` | UUID \| null | no | Session that produced the revision |
+| `supersedes_plan_id` | UUID \| null | no | Previous revision link |
+| `created_at` | datetime | yes | Creation timestamp |
 | **OperationSummary** | | | |
 | `id` | UUID | yes | Operation identifier |
 | `kind` | `"assessment"` \| `"post_session"` | yes | Operation type |
@@ -82,10 +96,10 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `code` | error code literal | yes | Stable machine-readable code |
 | `message` | string | yes | Human-readable summary |
 | `request_id` | UUID | yes | Correlation identifier |
-
-For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied.
 | `current_snapshot` | AppSnapshot \| null | no | Present for `state_conflict` |
 | `retryable` | bool | no | Whether the client may retry |
+
+For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied.
 
 Policy decisions:
 
@@ -94,6 +108,7 @@ Policy decisions:
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
 - most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
 - `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for Phase 1 clients.
+- `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read.
 
 ## 2. Endpoint matrix
 
@@ -163,11 +178,13 @@ Duplicate `(session_id, client_message_id)` resolution happens before revision v
 | `busy` | 409 | Conflicting session, mutation, operation, or generation |
 | `not_found` | 404 | Unknown session or resource |
 | `validation_error` | 422 | Request body failed validation |
-| `llm_unavailable` | 502/503 | Provider unreachable |
+| `llm_unavailable` | 503 | Provider unreachable |
 | `llm_timeout` | 504 | Provider timeout |
 | `invalid_llm_output` | 422 | Structured output parse/validation failure |
-| `operation_failed` | 409/422 | Durable operation failed |
+| `operation_failed` | 409 | Durable operation already failed or cannot be accepted in current state |
 | `internal_error` | 500 | Unexpected server failure |
+
+Genuine bad upstream protocol responses may map to `502` via `internal_error` or a future provider-specific code; do not overload `llm_unavailable`.
 
 Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.
 

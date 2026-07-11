@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-11
 review_cycle_days: 30
 source_of_truth_for: Target workflow, recovery, and concurrency semantics

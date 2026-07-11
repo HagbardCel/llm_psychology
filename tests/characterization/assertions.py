@@ -6,10 +6,6 @@ import json
 from typing import Any
 
 
-def profile_rows(rows: list[dict]) -> list[dict]:
-    return rows
-
-
 def assert_single_profile(rows: list[dict]) -> dict:
     assert len(rows) == 1, f"expected one profile, found {len(rows)}"
     return rows[0]
@@ -40,14 +36,6 @@ def assert_one_intake_session(sessions: list[dict]) -> dict:
     return rows[0]
 
 
-def assert_exactly_n_intake_sessions(sessions: list[dict], count: int) -> list[dict]:
-    rows = intake_sessions(sessions)
-    assert len(rows) == count, (
-        f"expected exactly {count} intake session(s), found {len(rows)}"
-    )
-    return rows
-
-
 def transcript_messages(session_row: dict) -> list[dict[str, Any]]:
     raw = session_row.get("transcript") or "[]"
     if isinstance(raw, str):
@@ -55,9 +43,29 @@ def transcript_messages(session_row: dict) -> list[dict[str, Any]]:
     return list(raw)
 
 
-def assert_ordered_roles(messages: list[dict], roles: tuple[str, ...]) -> None:
-    observed = tuple(message.get("role") for message in messages if message.get("role"))
-    assert observed[: len(roles)] == roles, f"unexpected message order: {observed}"
+def assert_user_followed_by_assistant(
+    transcript: list[dict],
+    user_content: str,
+    *,
+    assistant_content: str | None = None,
+) -> None:
+    user_idx = next(
+        (
+            index
+            for index, row in enumerate(transcript)
+            if row.get("role") == "user" and row.get("content") == user_content
+        ),
+        None,
+    )
+    assert user_idx is not None, f"expected user message {user_content!r}"
+    assistants_after = [
+        row for row in transcript[user_idx + 1 :] if row.get("role") == "assistant"
+    ]
+    assert assistants_after, "expected assistant message after user turn"
+    if assistant_content is not None:
+        assert assistants_after[0].get("content") == assistant_content, (
+            "assistant content does not match streamed response"
+        )
 
 
 def assert_exactly_one_assessment(rows: list[dict]) -> dict:
@@ -65,17 +73,9 @@ def assert_exactly_one_assessment(rows: list[dict]) -> dict:
     return rows[0]
 
 
-def assert_assessment_results(rows: list[dict]) -> None:
-    assert_exactly_one_assessment(rows)
-
-
 def assert_exactly_one_initial_plan(rows: list[dict]) -> dict:
     assert len(rows) == 1, f"expected exactly one therapy plan, found {len(rows)}"
     return rows[0]
-
-
-def assert_plans(rows: list[dict], minimum: int = 1) -> None:
-    assert len(rows) >= minimum, f"expected at least {minimum} therapy plan(s)"
 
 
 def assert_plan_style(plan: dict, style_id: str) -> None:

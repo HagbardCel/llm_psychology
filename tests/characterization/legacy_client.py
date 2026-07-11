@@ -153,7 +153,6 @@ class LegacyApiClient:
     server: LegacyServer
     user_id: str = "characterization-user"
     session_id: str | None = None
-    reply_index: int = 0
     _replies: list[str] = field(default_factory=lambda: list(DETERMINISTIC_REPLIES))
 
     def request(self, method: str, path: str, **kwargs) -> httpx.Response:
@@ -456,6 +455,7 @@ class LegacyApiClient:
             extra_headers=[("Origin", "http://localhost")],
         ) as websocket:
             await self.wait_for_session_started(websocket)
+            await self.wait_for_initial_greeting(websocket)
             await self.send_chat(websocket, message)
             return await self.collect_chat_response(websocket)
 
@@ -473,4 +473,3 @@ class LegacyApiClient:
             await self.send_chat(websocket, self._replies[0])
             await self.collect_chat_response(websocket)
             await trio.sleep(1)
-            self.reply_index = 1
