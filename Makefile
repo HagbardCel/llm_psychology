@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs characterization-smoke characterization-test validate-refactor-phase-1
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-test validate-refactor-phase-1 hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -143,6 +143,11 @@ validate-refactor-phase-1: prepare-runtime-dirs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" api python scripts/validate_refactor_phase_1.py
 	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py
 	$(MAKE) characterization-smoke
+
+# Fast local validation. Full release validation remains an explicit checkpoint.
+hook-commit: lint
+
+hook-push: hook-commit
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
 test-real-llm: prepare-runtime-dirs

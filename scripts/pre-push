@@ -1,50 +1,29 @@
 #!/bin/bash
-# Pre-push hook to run release-candidate validation before pushing
-# This ensures finalization-check passes before code is shared
-
-set -e  # Exit on any error
-
-should_run=false
+# Fast branch-aware push validation; set HOOK_FULL=1 for release validation.
+set -euo pipefail
+updates=false
 while read -r local_ref local_sha remote_ref remote_sha; do
-    [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
-    case "$local_ref" in
-        refs/heads/*) should_run=true ;;
-    esac
+  [[ "$local_sha" != 0000000000000000000000000000000000000000 ]] && updates=true
 done
+[[ "$updates" = true ]] || exit 0
 
-if [ "$should_run" != "true" ]; then
-    echo "No branch updates detected; skipping finalization-check."
-    exit 0
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+log_dir="${TMPDIR:-/tmp}/psychoanalyst-hooks"
+mkdir -p "$log_dir"
+log="$log_dir/pre-push-$(date +%s).log"
+run() {
+  local label=$1; shift
+  if "$@" >>"$log" 2>&1; then echo "✓ $label"; else
+    echo "✗ $label failed; log: $log" >&2; tail -n 80 "$log" >&2; exit 1
+  fi
+}
+
+branch=$(git branch --show-current)
+run "fast validation" make hook-push
+if [[ "$branch" = "refactor/single-user-architecture" ]]; then
+  run "Phase 1 validation" make validate-refactor-phase-1
 fi
-
-echo "🔍 Pre-push hook: Running finalization-check..."
-echo ""
-
-REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT" || exit 1
-
-echo "Running release-candidate validation in Docker..."
-echo "This includes lint, contract validation, tests, and the deterministic probe."
-echo "Using ENV_FILE=${ENV_FILE:-.env.example} (override by exporting ENV_FILE)."
-echo ""
-
-if ENV_FILE="${ENV_FILE:-.env.example}" make finalization-check; then
-    echo ""
-    echo "✅ Finalization check passed! Proceeding with push."
-    echo ""
-    exit 0
-else
-    echo ""
-    echo "❌ Finalization check failed! Push aborted."
-    echo ""
-    echo "To fix:"
-    echo "  1. Review the failures above"
-    echo "  2. Fix the issues in your code"
-    echo "  3. Run 'ENV_FILE=\${ENV_FILE:-.env.example} make finalization-check' to verify fixes"
-    echo "  4. Try pushing again"
-    echo ""
-    echo "To skip this hook (not recommended):"
-    echo "  git push --no-verify"
-    echo ""
-    exit 1
+if [[ "${HOOK_FULL:-0}" = "1" || "$branch" = "main" ]]; then
+  run "full finalization" make finalization-check
 fi
