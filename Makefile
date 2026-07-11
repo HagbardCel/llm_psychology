@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -40,8 +40,8 @@ help:
 	@echo "  validate-generated-contracts - Validate committed generated protocol/types (Docker)"
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
-	@echo "  finalization-check - Run full release-candidate validation path (Docker)"
-	@echo "  finalization-check-full - finalization-check plus the intake-note workflow probe (Docker)"
+	@echo "  finalization-check - Standard release-candidate checks, including characterization smoke (Docker)"
+	@echo "  finalization-check-full - Complete characterization and console probes (Docker)"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
@@ -123,13 +123,40 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-generated-contracts
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
+	$(MAKE) characterization-smoke
 	$(MAKE) probe-console-deterministic
 
 # Heavier release-candidate path: layers the gate-enabled intake-note probe on
 # top of the default finalization-check. Kept separate so the default path stays
 # fast for local iteration; run before merging an intake-tracking change.
 finalization-check-full: finalization-check
+	$(MAKE) characterization-full
 	$(MAKE) probe-console-intake-notes
+
+# Fast Phase 1 checkpoint: retained deterministic unit coverage plus real smoke.
+test-refactor-fast: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/unit/test_intake_record_merge.py tests/unit/test_intake_slot_evidence_adapter.py tests/unit/test_note_taker_intake_patch.py tests/unit/test_planning_analysis.py tests/unit/test_reflection_plan_snapshot.py tests/unit/test_agent_output_validators.py
+	$(MAKE) characterization-smoke
+
+characterization-smoke: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/characterization -m characterization_smoke
+
+characterization-full: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/characterization -m characterization_full
+
+characterization-test: prepare-runtime-dirs
+	$(MAKE) characterization-smoke
+	$(MAKE) characterization-full
+
+validate-refactor-phase-1: prepare-runtime-dirs
+	$(MAKE) validate-docs
+	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" -v "$(PWD)/requirements.in:/app/requirements.in:ro" -v "$(PWD)/requirements-dev.in:/app/requirements-dev.in:ro" api python scripts/validate_refactor_phase_1.py
+	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
+
+# Fast local validation. Full release validation remains an explicit checkpoint.
+hook-commit: lint
+
+hook-push: hook-commit
 
 # Real LLM smoke tests (Docker, requires secrets / external services)
 test-real-llm: prepare-runtime-dirs
@@ -145,14 +172,14 @@ test-dev:
 	@echo "🚀 Running quick tests in Docker..."
 	@echo "Perfect for: Active development, TDD, debugging"
 	@echo ""
-	docker compose --profile test run --rm test pytest -m "not real_llm" -x --tb=short -q
+	docker compose --profile test run --rm test pytest -m "not real_llm" --ignore=tests/characterization -x --tb=short -q
 
 # Full isolated Docker tests (pre-commit validation)
 test-validate: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment..."
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
-	docker compose --profile test run --rm test
+	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs

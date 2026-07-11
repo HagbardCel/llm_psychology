@@ -40,6 +40,10 @@ Use these for focused implementation work; active docs remain the source of trut
 - `docs/current_issues/`: active troubleshooting and known issues.
 - `docs/reference/`: companion guides linked from active docs.
 
+## Proposed Refactor
+
+These target documents do not describe the running system: [roadmap](refactor/architecture-refactor-roadmap.md), [target architecture](refactor/target-architecture.md), [Phase 1 plan](refactor/phase-1-implementation-plan.md), [API v1 contract](refactor/api-v1-contract.md), and [workflow specification](refactor/workflow-specification.md).
+
 ## Historical Documentation
 Do not keep completed plans, stale assessments, migration notes, or legacy
 guides in the working tree. Delete historical documentation after its durable

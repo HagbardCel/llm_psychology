@@ -1,37 +1,29 @@
 #!/bin/bash
-# Pre-commit hook to run tests before committing
-# This ensures all tests pass before code is committed
+# Fast staged-change validation; CI and HOOK_FULL own release validation.
+set -euo pipefail
 
-set -e  # Exit on any error
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+paths=$(git diff --cached --name-only)
+log_dir="${TMPDIR:-/tmp}/psychoanalyst-hooks"
+mkdir -p "$log_dir"
+log="$log_dir/pre-commit-$(date +%s).log"
 
-echo "🔍 Pre-commit hook: Running tests..."
-echo ""
-
-REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT" || exit 1
-
-# Run tests in isolated Docker environment
-echo "Running tests in isolated Docker environment..."
-echo "This ensures clean state and prevents test pollution."
-echo ""
-
-if make docker-test; then
-    echo ""
-    echo "✅ All tests passed! Proceeding with commit."
-    echo ""
-    exit 0
-else
-    echo ""
-    echo "❌ Tests failed! Commit aborted."
-    echo ""
-    echo "To fix:"
-    echo "  1. Review the test failures above"
-    echo "  2. Fix the issues in your code"
-    echo "  3. Run 'make docker-test' to verify fixes"
-    echo "  4. Try committing again"
-    echo ""
-    echo "To skip this hook (not recommended):"
-    echo "  git commit --no-verify"
-    echo ""
+run() {
+  local label=$1; shift
+  if "$@" >>"$log" 2>&1; then
+    echo "✓ $label"
+  else
+    echo "✗ $label failed; log: $log" >&2
+    tail -n 80 "$log" >&2
     exit 1
+  fi
+}
+
+git diff --cached --check
+run "lint" make hook-commit
+if grep -q '^docs/' <<<"$paths"; then run "documentation" make validate-docs; fi
+if grep -Eq '(^schemas/|ws_protocol|TYPE_SYSTEM|models/http|generate_ws_protocol)' <<<"$paths"; then
+  run "generated contracts" make validate-generated-contracts
 fi
+if [ "${HOOK_FULL:-0}" = "1" ]; then run "full finalization" make finalization-check; fi

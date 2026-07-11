@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-10
 review_cycle_days: 30
 source_of_truth_for: Detailed implementation plan for architecture refactor Phase 1
@@ -82,14 +82,11 @@ docs/adr/
 
 tests/characterization/
 ├── conftest.py
-├── api_client.py
+├── legacy_client.py
 ├── assertions.py
-├── test_fresh_install_flow.py
-├── test_assessment_and_style_selection.py
-├── test_therapy_session_flow.py
-├── test_post_session_flow.py
-├── test_restart_resume.py
-└── test_failure_retry.py
+├── test_onboarding_flow.py
+├── test_therapy_lifecycle.py
+└── test_restart.py
 
 scripts/
 └── measure_codebase.py
@@ -423,7 +420,7 @@ Acceptance criteria:
 - no transition depends on frontend behavior;
 - no processor decides global navigation.
 
-## 6. Workstream C — Behavioral characterization
+## 6. Workstream C — Current-runtime characterization
 
 ## 6.1 Test philosophy
 
@@ -442,13 +439,17 @@ They must not:
 
 Use the existing deterministic fake-model path wherever possible.
 
+Target-only guarantees belong in later `tests/acceptance/` tests as the new runtime appears. Unconditional `NotImplementedError` or placeholder `xfail` tests are not acceptable Phase 1 evidence.
+
+The suite remains intentionally small: three broad scenario files, one process fixture, one minimal client, and one small assertion helper.
+
 ## 6.2 Shared test harness
 
 Create:
 
 ```text
 tests/characterization/conftest.py
-tests/characterization/api_client.py
+tests/characterization/legacy_client.py
 tests/characterization/assertions.py
 ```
 
@@ -457,178 +458,93 @@ The harness should provide:
 - isolated temporary data directory;
 - fresh database setup;
 - deterministic fake LLM configuration;
-- API process lifecycle;
-- HTTP client;
-- WebSocket client;
+- API process lifecycle with bounded shutdown;
+- HTTP and WebSocket clients against the legacy public contract;
 - event collection with bounded timeouts;
 - database snapshot helper;
+- captured stdout/stderr on failure;
 - normalization of nondeterministic IDs and timestamps;
 - clear trace output on failure.
 
-Do not copy the console implementation into the tests. The characterization API client should be minimal and purpose-specific.
-
-## 6.3 Scenario 1: Fresh installation and intake
+## 6.3 Scenario 1: Onboarding flow
 
 File:
 
 ```text
-tests/characterization/test_fresh_install_flow.py
+tests/characterization/test_onboarding_flow.py
 ```
-
-Preconditions:
-
-- no database;
-- deterministic fake LLM;
-- no active session.
 
 Actions:
 
-1. start backend;
-2. create the current complete profile through the existing contract;
-3. connect WebSocket;
-4. verify current session is established;
-5. submit deterministic intake turns;
-6. reach the current intake completion boundary.
+1. start backend with fresh storage;
+2. create profile through the existing contract;
+3. complete intake via deterministic chat turns;
+4. wait for assessment completion;
+5. select a style;
+6. confirm initial plan creation.
 
-Assertions:
+Assertions (`must_preserve`):
 
-- profile persisted;
-- one intake session exists;
-- user and assistant messages are persisted in order;
-- intake record contains expected user-sourced evidence;
-- workflow reaches the expected assessment boundary;
-- reconnect reproduces authoritative workflow guidance.
+- one logical intake session;
+- ordered messages;
+- intake evidence persisted;
+- one assessment result;
+- selected style persisted;
+- one initial plan;
+- ready-for-therapy state reached.
 
-The test should describe behavior in neutral terms so that its assertions can later be adapted to the target API without preserving old DTO names.
-
-## 6.4 Scenario 2: Assessment and style selection
+## 6.4 Scenario 2: Therapy lifecycle
 
 File:
 
 ```text
-tests/characterization/test_assessment_and_style_selection.py
+tests/characterization/test_therapy_lifecycle.py
 ```
 
 Actions:
 
-1. begin from completed intake fixture;
-2. trigger assessment;
-3. observe wait/progress behavior;
-4. wait for deterministic completion;
-5. retrieve recommendations;
-6. select a style;
-7. confirm initial plan creation.
-
-Assertions:
-
-- assessment runs once logically;
-- recommendations are persisted;
-- selected style is persisted;
-- initial plan exists;
-- workflow becomes ready for therapy;
-- duplicate delivery or reconnect does not create duplicate plans.
-
-## 6.5 Scenario 3: Therapy session streaming
-
-File:
-
-```text
-tests/characterization/test_therapy_session_flow.py
-```
-
-Actions:
-
-1. begin from ready fixture;
+1. begin from ready state;
 2. start therapy session;
 3. send a deterministic message;
 4. collect streamed response chunks;
-5. send a follow-up;
-6. reconnect during or after a completed response.
+5. confirm persisted assistant response;
+6. end session;
+7. wait for post-session work;
+8. inspect plan revision linkage.
 
-Assertions:
+Assertions (`must_preserve`):
 
-- chunks combine to the persisted assistant message;
-- user and assistant messages are ordered;
-- active session remains consistent;
-- style-specific context is used;
-- reconnect does not create a second active session;
-- a completed message is authoritative even if token events were missed.
+- chunks reconstruct the completed response;
+- messages are ordered;
+- one active session during therapy;
+- session closes;
+- post-session data exists;
+- exactly one new plan revision;
+- historical plan linkage remains intact.
 
-## 6.6 Scenario 4: End session and post-session update
-
-File:
-
-```text
-tests/characterization/test_post_session_flow.py
-```
-
-Actions:
-
-1. begin from an active therapy session;
-2. end session;
-3. observe post-session processing;
-4. wait for completion;
-5. start the next session.
-
-Assertions:
-
-- ended session is immutable under current rules;
-- summary/briefing data is persisted;
-- one new plan revision is created;
-- completed session retains the plan revision active at session start;
-- profile points to the new current plan;
-- workflow returns to ready;
-- rerunning completion does not create another plan revision.
-
-## 6.7 Scenario 5: Restart and resume
+## 6.5 Scenario 3: Restart
 
 File:
 
 ```text
-tests/characterization/test_restart_resume.py
+tests/characterization/test_restart.py
 ```
 
-Cover restart at these checkpoints:
+Parametrize checkpoints:
 
-- during intake;
-- after style selection;
-- during active therapy after persisted messages;
-- during assessment or post-session work where current behavior supports recovery;
-- after completed post-session processing.
+- `after_intake_messages` — during intake after persisted messages;
+- `after_post_session` — after completed post-session work.
 
-Assertions:
+Post-session reconnect may create exactly one new active therapy session on login while all prior session IDs remain durable.
+
+Assertions (`must_preserve`):
 
 - durable state is recovered;
 - no duplicate active session is created;
 - no duplicate logical operation result is persisted;
-- client can reconstruct the current UI from backend state and history.
+- client can continue from backend state and history.
 
-Document any current behavior that fails this expectation as a known discrepancy rather than silently encoding it as desired target behavior.
-
-## 6.8 Scenario 6: Failure and retry
-
-File:
-
-```text
-tests/characterization/test_failure_retry.py
-```
-
-Use deterministic injected failures for:
-
-- LLM unavailable;
-- timeout;
-- invalid structured output;
-- post-session failure.
-
-Assertions:
-
-- client receives a stable observable failure;
-- persisted data remains internally consistent;
-- retry is possible where expected;
-- retry does not duplicate completed work;
-- workflow does not advance on failed structured work.
-
-If the current system does not meet the target expectation, mark the test with an explicit `xfail` and reference a Phase 4 implementation item. Do not weaken the target specification.
+Document target-only gaps as `known_current_defect` rather than blocking smoke with unconditional `xfail`.
 
 ## 7. Workstream D — Baseline metrics
 
@@ -807,26 +723,25 @@ Add a clear banner to proposed documents:
 
 ## 10. CI and validation
 
-Add one CI or Make target:
+Phase 1 validation is split across Make targets and CI jobs to avoid duplicated execution:
 
-```text
-validate-refactor-phase-1
-```
+| Target / job | Scope |
+|---|---|
+| `validate-refactor-phase-1` | documentation link validation, artifact validator, measure/validator unit tests |
+| `test-refactor-fast` | selected deterministic unit tests plus characterization smoke |
+| `finalization-check` | default test suite (excluding characterization), characterization smoke, deterministic console probe |
+| `finalization-check-full` | `finalization-check` plus characterization-full and intake-note probe |
+| CI `phase-1-evidence` | baseline SHA check, `validate-refactor-phase-1`, hook tests, characterization-full, intake-note probe |
 
-It should run:
+Do not fold characterization back into `validate-refactor-phase-1`; that recreates duplication removed in the correction pass.
 
-- documentation link validation;
-- ADR presence and metadata validation;
-- metric-script unit test;
-- characterization tests using the deterministic fake path;
-- existing deterministic tests.
-
-Do not make real-LLM tests mandatory.
-
-Recommended local command:
+Recommended local commands:
 
 ```bash
-uv run pytest tests/characterization
+make validate-refactor-phase-1
+make test-refactor-fast
+make characterization-full
+make finalization-check-full
 ```
 
 If the current repository still requires Docker in Phase 1, retain a temporary wrapper:
@@ -966,12 +881,12 @@ It changes no production behavior.
 Contains:
 
 - characterization harness;
-- six scenario groups;
+- three scenario files (onboarding, therapy lifecycle, restart);
 - deterministic fixtures;
 - validation target;
 - known-current-behavior notes.
 
-It may add explicit `xfail` tests for known gaps, but must not change product behavior merely to satisfy characterization.
+It must not add unconditional `xfail` placeholder tests. Target-only behavior belongs in `tests/acceptance/` later.
 
 ## 13. Detailed test acceptance matrix
 
@@ -986,34 +901,35 @@ It may add explicit `xfail` tests for known gaps, but must not change product be
 | Session closure | Session final state persisted | Yes |
 | Plan revision | Historical session link retained | Yes |
 | Restart | Durable state reconstructed | Yes |
-| Duplicate handling | No duplicate logical side effects | Yes |
-| Failure behavior | Consistent state after failure | Yes |
-| Retry behavior | Retry does not duplicate completion | Target test; `xfail` allowed if documented |
+| Restart/reconnect does not duplicate sessions, plans, or results | Restart checkpoints | Yes |
+| Network command/chat idempotency under target API | Target acceptance tests (Phases 4–5) | No (not legacy characterization) |
+| Failure behavior | Consistent state after failure | Target acceptance; not Phase 1 smoke |
+| Retry behavior | Retry does not duplicate completion | Target acceptance; not Phase 1 smoke |
 | Console/API contract | Existing console path covered | Yes |
+
+Do not add legacy characterization tests for `client_message_id` or generic HTTP idempotency; those belong in target acceptance tests during Phases 4–5.
 
 ## 14. Phase 1 exit criteria
 
 All blocking criteria:
 
-- [ ] Roadmap approved.
-- [ ] All five ADRs accepted.
-- [ ] API v1 contract has no unresolved fields.
-- [ ] Workflow specification maps every current state/action.
-- [ ] Single-user and test-data strategy fixed.
-- [ ] Asyncio/FastAPI decision fixed.
-- [ ] New database reset strategy fixed.
-- [ ] Processor and LLM boundaries fixed.
-- [ ] Baseline metrics recorded against an exact commit.
-- [ ] Deletion inventory created.
-- [ ] Fresh-install characterization passes.
-- [ ] Assessment/style characterization passes.
-- [ ] Therapy streaming characterization passes.
-- [ ] Post-session characterization passes.
-- [ ] Restart characterization passes.
-- [ ] Failure/retry behavior is either passing or explicitly documented with target assertions.
-- [ ] Existing deterministic tests still pass.
-- [ ] No production behavior changed unintentionally.
-- [ ] Phase 2 task list can be derived without another architecture decision.
+- [x] Roadmap approved.
+- [x] All five ADRs accepted.
+- [x] API v1 contract has no unresolved fields.
+- [x] Workflow specification maps every current state/action.
+- [x] Single-user and test-data strategy fixed.
+- [x] Asyncio/FastAPI decision fixed.
+- [x] New database reset strategy fixed.
+- [x] Processor and LLM boundaries fixed.
+- [x] Baseline metrics recorded against an exact commit.
+- [x] Deletion inventory created.
+- [x] Onboarding characterization passes.
+- [x] Therapy lifecycle characterization passes.
+- [x] Restart characterization passes.
+- [x] Target-only behavior is not disguised as characterization.
+- [x] Existing deterministic tests still pass.
+- [x] No production behavior changed unintentionally.
+- [x] Phase 2 task list can be derived without another architecture decision.
 
 ## 15. Definition of done
 

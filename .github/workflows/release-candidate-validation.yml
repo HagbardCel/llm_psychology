@@ -2,7 +2,7 @@ name: Release Candidate Validation
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [master, main, develop, refactor/single-user-architecture]
   pull_request:
     branches: [master, main, develop]
 
@@ -23,3 +23,34 @@ jobs:
 
       - name: Check whitespace and stale generated diffs
         run: git diff --check && git diff --exit-code
+
+  phase-1-evidence:
+    name: Phase 1 evidence gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: finalization-check
+    if: >
+      github.event_name == 'pull_request' &&
+      github.head_ref == 'refactor/single-user-architecture'
+    env:
+      ENV_FILE: .env.example
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify baseline completion SHA exists
+        run: git cat-file -e "$(python scripts/extract_baseline_sha.py)^{commit}"
+
+      - name: Validate Phase 1 artifacts
+        run: make validate-refactor-phase-1
+
+      - name: Verify hook ref policy
+        run: docker compose --profile test run --rm test pytest tests/unit/test_git_hooks.py
+
+      - name: Run full characterization cases
+        run: make characterization-full
+
+      - name: Run intake-note workflow probe
+        run: make probe-console-intake-notes

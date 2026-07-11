@@ -1,12 +1,18 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-10
 review_cycle_days: 30
 source_of_truth_for: Target architecture and phased simplification roadmap
 ---
 
 # Local Therapist Architecture Refactor Roadmap
+
+> The roadmap records sequencing and decisions only. The implementable target
+> interfaces are maintained in [Target Architecture](target-architecture.md),
+> [API v1 Contract](api-v1-contract.md), and [Workflow Specification](workflow-specification.md);
+> obsolete duplicated DTO and schema snippets must be replaced by links to those
+> documents rather than independently maintained here.
 
 ## 1. Purpose
 
@@ -195,483 +201,49 @@ The project does not implement runtime client-version negotiation. Breaking exte
 
 ## 5. Target package structure
 
-```text
-src/jung/
-├── __init__.py
-├── config.py
-├── composition.py
-├── application.py
-├── workflow.py
-├── domain/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── commands.py
-│   ├── results.py
-│   └── errors.py
-├── phases/
-│   ├── intake/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   └── models.py
-│   ├── assessment/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   └── models.py
-│   ├── therapy/
-│   │   ├── processor.py
-│   │   ├── context.py
-│   │   ├── prompts.py
-│   │   ├── models.py
-│   │   └── styles/
-│   │       ├── cbt.py
-│   │       ├── jungian.py
-│   │       └── psychoanalytic.py
-│   └── post_session/
-│       ├── processor.py
-│       ├── prompts.py
-│       └── models.py
-├── llm/
-│   ├── gateway.py
-│   ├── policies.py
-│   ├── openai_compatible.py
-│   ├── tracing.py
-│   └── fake.py
-├── persistence/
-│   ├── schema.sql
-│   └── sqlite_store.py
-├── api/
-│   ├── app.py
-│   ├── contracts.py
-│   ├── errors.py
-│   ├── routes.py
-│   └── websocket.py
-└── client/
-    ├── api_client.py
-    └── console.py
-```
-
-The exact package name may remain `psychoanalyst_app` during early implementation, but the final cutover should rename it once rather than retaining aliases. `jung` is used throughout this document as a concrete target name.
-
-## 6. Domain and workflow design
-
-### 6.1 Durable stage
-
-Use one persisted workflow enum:
-
-```python
-class Stage(StrEnum):
-    SETUP = "setup"
-    INTAKE = "intake"
-    ASSESSMENT = "assessment"
-    STYLE_SELECTION = "style_selection"
-    READY = "ready"
-    THERAPY = "therapy"
-    POST_SESSION = "post_session"
-```
-
-Canonical transition graph:
-
-```text
-SETUP
-  → INTAKE
-  → ASSESSMENT
-  → STYLE_SELECTION
-  → READY
-  → THERAPY
-  → POST_SESSION
-  → READY
-```
-
-The system does not create separate durable states for:
-
-- complete;
-- in progress;
-- failed;
-- retrying.
-
-Completion advances the stage. Long-running and failed work is represented by `Operation`.
-
-### 6.2 Commands
-
-Application commands are explicit:
-
-```python
-class Command(StrEnum):
-    COMPLETE_PROFILE = "complete_profile"
-    SEND_MESSAGE = "send_message"
-    FINISH_INTAKE = "finish_intake"
-    SELECT_STYLE = "select_style"
-    START_SESSION = "start_session"
-    END_SESSION = "end_session"
-    RETRY_OPERATION = "retry_operation"
-```
-
-The backend derives available commands from the current snapshot. Clients render commands but do not infer transitions.
-
-### 6.3 Application snapshot
-
-A single snapshot is the authoritative client-facing state:
-
-```python
-class AppSnapshot(BaseModel):
-    revision: int
-    stage: Stage
-    profile_complete: bool
-    selected_style: str | None
-    active_session: SessionSummary | None
-    operation: OperationSummary | None
-    available_commands: list[Command]
-```
-
-Every meaningful mutation increments `revision`.
-
-This replaces overlapping workflow-next-action payloads, state signatures and state/action duplication.
-
-### 6.4 Long-running operations
-
-Use one generic model:
-
-```python
-class OperationKind(StrEnum):
-    ASSESSMENT = "assessment"
-    POST_SESSION = "post_session"
-
-class OperationStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETE = "complete"
-    FAILED = "failed"
-```
-
-An operation is unique by `(kind, source_session_id)`.
-
-Lifecycle:
-
-1. Persist the workflow mutation and `PENDING` operation.
-2. Start work under application-owned task supervision.
-3. Mark `RUNNING`.
-4. Generate and validate the structured result.
-5. Atomically persist the result, mark the operation complete and advance the stage.
-6. On failure, persist a stable error code and retryability.
-7. At startup, convert stale `RUNNING` operations to `PENDING` and retry them.
-
-Do not introduce a scheduler, message broker, child-job tree or general background-work framework.
-
-## 7. Phase processor design
-
-### 7.1 IntakeProcessor
-
-Responsibilities:
-
-- build intake prompts;
-- generate the conversational response;
-- extract and merge `IntakeRecordPatch`;
-- calculate completeness;
-- return a typed `IntakeTurnResult`.
-
-It does not persist messages or change `Stage`.
-
-### 7.2 AssessmentProcessor
-
-Responsibilities:
-
-- generate the initial formulation;
-- generate therapy style recommendations;
-- produce initial goals and plan content;
-- validate structured output.
-
-It returns one cohesive `AssessmentResult`.
-
-### 7.3 TherapyProcessor
-
-Responsibilities:
-
-- construct therapeutic context;
-- select declarative style guidance;
-- stream a therapist response;
-- produce optional lightweight turn metadata.
-
-Therapy styles should be declarative data unless styles genuinely require different Python behavior.
-
-### 7.4 PostSessionProcessor
-
-Responsibilities:
-
-- summarize the completed session;
-- identify themes, progress and unresolved topics;
-- propose a profile patch;
-- propose a plan patch;
-- suggest next-session focus.
-
-The current note-taking, reflection, planning and memory roles become internal functions or narrow helpers of this processor rather than independently routed agents.
-
-### 7.5 Processor rules
-
-Processors:
-
-- receive typed inputs;
-- return typed results;
-- depend on `LLMGateway` and pure prompt builders;
-- do not access SQLite;
-- do not emit HTTP or WebSocket messages;
-- do not decide global workflow transitions;
-- do not call other workflow processors;
-- do not instantiate dependencies.
-
-## 8. Application service design
-
-`TherapyApplication` is the sole entry point for business use cases.
-
-Representative interface:
-
-```python
-class TherapyApplication:
-    async def get_snapshot(self) -> AppSnapshot: ...
-    async def update_profile(self, command: UpdateProfile) -> AppSnapshot: ...
-    async def select_style(self, command: SelectStyle) -> AppSnapshot: ...
-    async def start_session(self, command: StartSession) -> Session: ...
-    async def stream_message(
-        self,
-        command: SendMessage,
-    ) -> AsyncIterator[ApplicationEvent]: ...
-    async def end_session(self, command: EndSession) -> AppSnapshot: ...
-    async def retry_operation(self, command: RetryOperation) -> AppSnapshot: ...
-```
-
-The application layer owns:
-
-- command validation;
-- concurrency locks;
-- stage validation;
-- transaction boundaries;
-- persistence calls;
-- processor invocation;
-- operation lifecycle;
-- mapping domain failures to application errors.
-
-It does not know HTTP status codes or WebSocket serialization.
-
-## 9. Persistence design
-
-### 9.1 Schema
-
-Core tables:
-
-```sql
-CREATE TABLE app_state (
-    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    stage TEXT NOT NULL,
-    revision INTEGER NOT NULL,
-    active_session_id TEXT,
-    selected_style TEXT,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE profile (
-    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    data_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE sessions (
-    session_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    status TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    plan_version INTEGER,
-    result_json TEXT
-);
-
-CREATE TABLE messages (
-    message_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id),
-    sequence INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    metadata_json TEXT,
-    client_message_id TEXT,
-    UNIQUE(session_id, sequence),
-    UNIQUE(client_message_id)
-);
-
-CREATE TABLE plans (
-    version INTEGER PRIMARY KEY,
-    data_json TEXT NOT NULL,
-    source_session_id TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE operations (
-    operation_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    source_session_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    attempt INTEGER NOT NULL,
-    error_code TEXT,
-    error_message TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(kind, source_session_id)
-);
-```
-
-JSON fields remain validated through Pydantic models.
-
-### 9.2 SQLiteStore
-
-One concrete store owns all SQL and transactions.
-
-It should expose use-case-shaped methods rather than repository-per-table abstractions. Examples:
-
-- `get_snapshot()`
-- `save_profile()`
-- `create_session()`
-- `append_message()`
-- `list_messages()`
-- `create_operation()`
-- `complete_assessment()`
-- `complete_post_session()`
-
-`complete_assessment()` and `complete_post_session()` perform atomic multi-table updates.
-
-A single connection strategy plus a lock is sufficient. Blocking calls may be placed behind `asyncio.to_thread()` at the store boundary if measurements show that this is necessary.
-
-## 10. LLM design
-
-### 10.1 Gateway
-
-```python
-class LLMGateway(Protocol):
-    async def stream(
-        self,
-        task: LLMTask,
-        messages: Sequence[ChatMessage],
-    ) -> AsyncIterator[str]: ...
-
-    async def generate_structured(
-        self,
-        task: LLMTask,
-        messages: Sequence[ChatMessage],
-        output_type: type[T],
-    ) -> T: ...
-```
-
-Initial implementations:
-
-- `OpenAICompatibleLLM`
-- `FakeLLM`
-
-A direct provider implementation is added only when an actively used provider cannot be supported through the OpenAI-compatible contract.
-
-### 10.2 Task policies
-
-Model choice and inference settings vary by task through data, not separate services:
-
-```python
-policies = {
-    LLMTask.INTAKE: ModelPolicy(...),
-    LLMTask.ASSESSMENT: ModelPolicy(...),
-    LLMTask.THERAPY: ModelPolicy(...),
-    LLMTask.POST_SESSION: ModelPolicy(...),
-}
-```
-
-### 10.3 Tracing
-
-Logging and metrics wrap the gateway:
-
-```text
-TracingLLM(OpenAICompatibleLLM)
-```
-
-Workflow code does not contain token accounting, payload redaction or provider-specific logging.
+Package shape, application interfaces, and client boundaries are defined in
+[Target Architecture](target-architecture.md). This roadmap records sequencing
+and cutover decisions only; it does not maintain an independent package tree or
+client interface copy.
+
+## 6. Domain, application, persistence, and LLM design
+
+The target workflow, application interface, persistence schema, phase processors,
+`EventStream`, and `LLMGateway` are defined in
+[Target Architecture](target-architecture.md) and ADRs
+[0003](../adr/0003-workflow-stage-command-operation-model.md),
+[0004](../adr/0004-single-sqlite-store-and-schema-reset.md), and
+[0005](../adr/0005-phase-processors-and-llm-gateway.md).
+
+This roadmap records sequencing and cutover decisions only. It does not maintain
+independent copies of:
+
+- `Stage`, command names, or transition graphs;
+- `TherapyApplication` method signatures;
+- SQLite table definitions (including `chat_turns`);
+- processor responsibilities;
+- `LLMGateway` method signatures.
+
+Canonical command names are `update_profile`, `send_message`, `finish_intake`,
+`select_style`, `start_session`, `end_session`, and `retry_operation`. Chat
+acceptance returns a durable `ChatTurn` from `submit_message`; live token
+events are published through `EventStream` to API adapters.
+
+Durable workflow behavior, command availability, operation and `ChatTurn`
+lifecycles, and legacy mappings are specified in
+[Workflow Specification](workflow-specification.md).
 
 ## 11. API v1 design
 
-### 11.1 HTTP endpoints
-
-Recommended minimum:
-
-```text
-GET    /api/v1/state
-GET    /api/v1/profile
-PUT    /api/v1/profile
-
-GET    /api/v1/styles
-PUT    /api/v1/style
-
-GET    /api/v1/sessions
-GET    /api/v1/sessions/{session_id}
-POST   /api/v1/sessions
-POST   /api/v1/sessions/{session_id}/end
-
-POST   /api/v1/operations/current/retry
-
-GET    /api/v1/health
-WS     /api/v1/chat
-```
-
-There are no user-scoped endpoints.
-
-### 11.2 WebSocket events
-
-Client command:
-
-```python
-class SendMessage(BaseModel):
-    type: Literal["send_message"]
-    client_message_id: UUID
-    session_id: UUID
-    content: str
-```
-
-Server events:
-
-- `token`
-- `message_completed`
-- `snapshot_changed`
-- `operation_changed`
-- `error`
-
-Use discriminated Pydantic unions.
-
-### 11.3 Reconnection
-
-On reconnect:
-
-1. fetch `GET /api/v1/state`;
-2. establish the WebSocket;
-3. treat the snapshot and persisted messages as authoritative;
-4. do not replay ephemeral token chunks.
-
-### 11.4 Concurrency
-
-The backend enforces:
-
-- one state-changing command at a time;
-- one active generation;
-- one active session;
-- one current long-running operation.
-
-Conflicts return a stable `busy` or `state_conflict` error.
+The endpoint matrix, Pydantic-style request/response shapes, WebSocket union,
+reconnection, idempotency, and concurrency errors are maintained solely in the
+[API v1 Contract](api-v1-contract.md). This roadmap deliberately does not copy
+wire schemas or event lists.
 
 ## 12. Console and future frontends
 
-Create one Python API client:
-
-```python
-class JungApiClient:
-    async def get_state(self) -> AppSnapshotDTO: ...
-    async def update_profile(self, request: ProfileUpdate) -> AppSnapshotDTO: ...
-    async def select_style(self, style: str) -> AppSnapshotDTO: ...
-    async def start_session(self) -> SessionDTO: ...
-    async def end_session(self, session_id: UUID) -> AppSnapshotDTO: ...
-    async def chat(self, ...) -> AsyncIterator[ServerEvent]: ...
-```
-
-Console UI code depends only on this client and wire contracts.
+Console UI code depends on the API client and wire contracts defined in
+[Target Architecture](target-architecture.md) and [API v1 Contract](api-v1-contract.md).
 
 The web client may use generated HTTP types from OpenAPI, but WebSocket event types remain a small explicitly maintained discriminated union.
 
