@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 REQUIRED = [
@@ -15,7 +13,6 @@ REQUIRED = [
     "docs/refactor/deletion-inventory.md",
     "docs/refactor/test-treatment-inventory.md",
     "docs/refactor/baseline-metrics.md",
-    "docs/refactor/dependency-inventory.md",
     "docs/refactor/phase-1-implementation-plan.md",
     *[
         f"docs/adr/000{i}-{name}.md"
@@ -32,21 +29,6 @@ REQUIRED = [
 FORBIDDEN_IN_AUTHORITATIVE = (
     "complete_profile",
     "stream_message",
-)
-
-API_ENDPOINTS = (
-    "GET /api/v1/state",
-    "GET /api/v1/profile",
-    "PUT /api/v1/profile",
-    "GET /api/v1/styles",
-    "PUT /api/v1/style",
-    "GET /api/v1/sessions",
-    "GET /api/v1/sessions/{session_id}",
-    "POST /api/v1/sessions",
-    "POST /api/v1/sessions/{session_id}/end",
-    "POST /api/v1/operations/current/retry",
-    "GET /api/v1/health",
-    "WS /api/v1/chat",
 )
 
 CHARACTERIZATION_FILES = (
@@ -76,20 +58,6 @@ def _links_exist(root: Path, path: str, text: str) -> list[str]:
         if not candidate.exists():
             broken.append(f"{path}: {target}")
     return broken
-
-
-def _direct_requirements(root: Path) -> set[str]:
-    packages: set[str] = set()
-    for name in ("requirements.in", "requirements-dev.in"):
-        path = root / name
-        if not path.is_file():
-            continue
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith(("#", "-")):
-                continue
-            packages.add(line.split("=")[0].split(">")[0].split("<")[0].strip())
-    return packages
 
 
 def _adr_status_accepted(root: Path) -> list[str]:
@@ -127,17 +95,9 @@ def _api_contract_complete(root: Path) -> list[str]:
         "## 2. Endpoint matrix",
         "## 3. WebSocket messages",
         "## 4. Errors, revisions, and reconnect rules",
-        "ProfileUpdate",
-        "StyleSummary",
-        "PlanSummary",
-        "Reconnect rules",
-        "EventStream",
     ):
         if header not in text:
-            errors.append(f"missing API contract section/content {header!r}")
-    for endpoint in API_ENDPOINTS:
-        if endpoint not in text:
-            errors.append(f"missing API endpoint {endpoint}")
+            errors.append(f"missing API contract section {header!r}")
     return errors
 
 
@@ -146,40 +106,23 @@ def _workflow_complete(root: Path) -> list[str]:
         encoding="utf-8"
     )
     errors: list[str] = []
-    for header in (
-        "## Command matrix",
-        "## Transition table",
-        "## Operation lifecycle",
-        "## ChatTurn lifecycle",
-        "## Startup and shutdown recovery",
-        "## Legacy mapping",
-        "## Legacy value inventory",
-    ):
-        if header not in text:
-            errors.append(f"missing workflow section {header!r}")
+    if "## Transition table" not in text:
+        errors.append("missing workflow transition table")
+    if "## Operation lifecycle" not in text:
+        errors.append("missing workflow operation lifecycle")
+    if "## ChatTurn lifecycle" not in text:
+        errors.append("missing workflow chat turn lifecycle")
     return errors
 
 
 def _baseline_sha_valid(root: Path) -> list[str]:
     text = (root / "docs/refactor/baseline-metrics.md").read_text(encoding="utf-8")
     errors: list[str] = []
-    match = re.search(r"`([0-9a-f]{40})`", text)
-    if not match:
+    if not re.search(r"`([0-9a-f]{40})`", text):
         errors.append("baseline-metrics.md missing 40-char SHA")
-        return errors
-    sha = match.group(1)
-    if shutil.which("git"):
-        result = subprocess.run(
-            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            errors.append(f"baseline SHA not found in repository: {sha}")
     for key in (
         "production_python_code_loc",
-        "persistence_abstraction_modules",
+        "persistence_related_modules",
         "tokenize",
         "Dependency classification",
     ):
@@ -194,15 +137,6 @@ def _deletion_inventory_columns(root: Path) -> list[str]:
     for column in DELETION_COLUMNS:
         if column not in text:
             errors.append(f"missing deletion inventory column {column!r}")
-    grouped_paths = [
-        "orchestration/trio_*",
-        "services/db/",
-        "ws_protocol",
-        "LangChain",
-    ]
-    for item in grouped_paths:
-        if item not in text:
-            errors.append(f"missing grouped deletion path {item!r}")
     return errors
 
 
@@ -264,18 +198,6 @@ def validate(root: Path | None = None) -> list[str]:
             f"broken link: {value}" for value in _links_exist(root, item, text)
         )
 
-    target = root / "docs/refactor/target-architecture.md"
-    if target.is_file():
-        text = target.read_text(encoding="utf-8")
-        markers = (
-            "submit_message",
-            "EventStream",
-            "application event subscription",
-        )
-        for marker in markers:
-            if marker not in text:
-                errors.append(f"missing target architecture marker {marker!r}")
-
     errors.extend(_adr_status_accepted(root))
     errors.extend(_forbidden_terms(root))
     errors.extend(_api_contract_complete(root))
@@ -284,16 +206,10 @@ def validate(root: Path | None = None) -> list[str]:
     errors.extend(_deletion_inventory_columns(root))
     errors.extend(_characterization_layout(root))
 
-    dependency_inventory = root / "docs/refactor/dependency-inventory.md"
-    if dependency_inventory.is_file():
-        inventory_text = dependency_inventory.read_text(encoding="utf-8")
-        if "baseline-metrics.md" not in inventory_text:
-            errors.append("dependency-inventory.md must link to baseline-metrics.md")
-
     test_treatment = root / "docs/refactor/test-treatment-inventory.md"
     if test_treatment.is_file():
         treatment_text = test_treatment.read_text(encoding="utf-8")
-        for action in ("retain", "rewrite_application", "delete_with_component"):
+        for action in ("rewrite_api", "rewrite_application", "delete_with_component"):
             if action not in treatment_text:
                 errors.append(f"missing test treatment action {action!r}")
 

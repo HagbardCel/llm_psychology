@@ -28,6 +28,7 @@ run() {
 run "fast validation" make hook-push
 if [[ "$phase_one_push" = true ]]; then
   run "Phase 1 validation" make validate-refactor-phase-1
+  run "Phase 1 fast checkpoint" make test-refactor-fast
 fi
 if [[ "${HOOK_FULL:-0}" = "1" || "$main_push" = true ]]; then
   run "full finalization" make finalization-check

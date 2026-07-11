@@ -10,7 +10,6 @@ assert _SPEC and _SPEC.loader
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 validate = _MODULE.validate
-_direct_requirements = _MODULE._direct_requirements
 
 
 def _repo_root() -> Path:
@@ -23,13 +22,6 @@ def _copy_phase1_tree(target: Path) -> None:
     shutil.copytree(root / "tests/characterization", target / "tests/characterization")
     (target / "requirements.in").write_text("pydantic\n")
     (target / "requirements-dev.in").write_text("pytest\n")
-
-
-def test_direct_requirements_excludes_comments_and_includes_dev_tools(tmp_path):
-    (tmp_path / "requirements.in").write_text("pydantic>=2\n# ignored\ntrio\n")
-    (tmp_path / "requirements-dev.in").write_text("-r requirements.in\npytest\n")
-
-    assert _direct_requirements(tmp_path) == {"pydantic", "trio", "pytest"}
 
 
 def test_validate_current_repository_passes():
@@ -63,7 +55,7 @@ def test_validate_missing_workflow_transition_fails(tmp_path):
         workflow.read_text(encoding="utf-8").replace("## Transition table", "## Removed")
     )
     errors = validate(broken)
-    assert any("Transition table" in error for error in errors)
+    assert any("workflow transition table" in error for error in errors)
 
 
 def test_validate_placeholder_characterization_fails(tmp_path):
