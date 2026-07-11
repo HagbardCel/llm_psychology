@@ -8,24 +8,163 @@ source_of_truth_for: Target /api/v1 external semantics
 
 # Target API v1 Contract
 
-> Target specification only. The current HTTP and WebSocket contracts remain active until Phase 6.
+> This is the cutover contract, not the legacy API. Until cutover, the current contracts in `docs/contracts/` and `docs/WEBSOCKET_PROTOCOL.md` govern runtime behavior.
 
-## Transport
+All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no generic workflow mutation route.
 
-HTTP provides `GET /state`, `/profile`, `/styles`, `/sessions`, `/sessions/{id}`, `/health`; `PUT /profile`, `/style`; `POST /sessions`, `/sessions/{id}/end`, and `/operations/current/retry`. All routes are rooted at `/api/v1`; none accept `user_id`.
+## 1. Shared schemas
 
-`WS /api/v1/chat` accepts only `send_message`. A command has `session_id`, `client_message_id`, `request_id`, `expected_revision`, and content. Non-chat mutations use HTTP and require `expected_revision`.
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| **Profile** | | | |
+| `name` | string | yes | Display name |
+| `primary_language` | string | yes | Preferred conversation language |
+| `date_of_birth` | date \| null | no | Optional demographic field |
+| `notes` | string \| null | no | Free-form profile notes |
+| **ProfileUpdate** | | | |
+| `expected_revision` | int | yes | Optimistic concurrency token |
+| `profile` | Profile | yes | Replacement profile payload |
+| **StyleSummary** | | | |
+| `id` | string | yes | Stable style identifier |
+| `name` | string | yes | Human-readable label |
+| `description` | string | yes | Short style summary |
+| **SessionSummary** | | | |
+| `id` | UUID | yes | Session identifier |
+| `started_at` | datetime | yes | Session start timestamp |
+| `ended_at` | datetime \| null | no | End timestamp when closed |
+| `plan_id` | UUID \| null | no | Plan revision effective at session start |
+| **Message** | | | |
+| `id` | UUID | yes | Message identifier |
+| `session_id` | UUID | yes | Owning session |
+| `sequence` | int | yes | Monotonic order within session |
+| `role` | `"user"` \| `"assistant"` \| `"system"` | yes | Speaker role |
+| `content` | string | yes | Message body |
+| `created_at` | datetime | yes | Persistence timestamp |
+| `client_message_id` | UUID \| null | no | Idempotency key for user turns |
+| **PlanSummary** | | | |
+| `id` | UUID | yes | Immutable plan revision identifier |
+| `version` | int | yes | Monotonic plan version |
+| `source_session_id` | UUID \| null | no | Session that produced the revision |
+| `supersedes_plan_id` | UUID \| null | no | Previous revision link |
+| `created_at` | datetime | yes | Creation timestamp |
+| **OperationSummary** | | | |
+| `id` | UUID | yes | Operation identifier |
+| `kind` | `"assessment"` \| `"post_session"` | yes | Operation type |
+| `status` | `"pending"` \| `"running"` \| `"complete"` \| `"failed"` | yes | Durable operation status |
+| `source_session_id` | UUID \| null | no | Source session for the operation |
+| `error` | ErrorEnvelope \| null | no | Last failure when `failed` |
+| **ChatTurnSummary** | | | |
+| `id` | UUID | yes | Turn identifier |
+| `session_id` | UUID | yes | Active chat session |
+| `client_message_id` | UUID | yes | Client idempotency key |
+| `status` | `"pending"` \| `"complete"` \| `"failed"` | yes | Turn lifecycle status |
+| `user_message_id` | UUID | yes | Persisted user message |
+| `assistant_message_id` | UUID \| null | no | Persisted assistant message when complete |
+| `error` | ErrorEnvelope \| null | no | Failure details when `failed` |
+| **AppSnapshot** | | | |
+| `revision` | int | yes | Monotonic snapshot revision |
+| `stage` | Stage | yes | Current workflow stage |
+| `profile_complete` | bool | yes | Whether profile satisfies completeness policy |
+| `selected_style` | string \| null | no | Selected therapy style |
+| `active_session` | SessionSummary \| null | no | Current open session |
+| `operation` | OperationSummary \| null | no | Current background operation |
+| `active_chat_turn` | ChatTurnSummary \| null | no | In-flight or last accepted chat turn |
+| `available_commands` | list[Command] | yes | Backend-derived permitted commands |
+| **ProfileResponse** | | | |
+| `profile` | Profile | yes | Current profile |
+| `snapshot` | AppSnapshot | yes | Authoritative snapshot |
+| **SessionHistoryResponse** | | | |
+| `session` | SessionSummary | yes | Requested session |
+| `messages` | list[Message] | yes | Ordered durable messages |
+| `plans` | list[PlanSummary] | yes | Plan revisions linked to the session |
+| **ErrorResponse / ErrorEnvelope** | | | |
+| `code` | error code literal | yes | Stable machine-readable code |
+| `message` | string | yes | Human-readable summary |
+| `request_id` | UUID | yes | Correlation identifier |
+| `current_snapshot` | AppSnapshot \| null | no | Present for `state_conflict` |
+| `retryable` | bool | no | Whether the client may retry |
 
-## Snapshot and events
+Policy decisions:
 
-`AppSnapshot` contains revision, stage, profile completion, selected style, active session, current workflow operation, active chat turn, and available commands. Notifications are hints; HTTP state/history is authoritative after reconnect.
+- session listing is non-paginated and ordered by `started_at` descending;
+- `PUT /profile` is allowed only in `SETUP` and `INTAKE`;
+- `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
+- most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
 
-Server events are discriminated unions: `token`, `message_in_progress`, `message_completed`, `snapshot_changed`, `operation_changed`, and `error`. Every chat event contains session and request identifiers. Tokens are ephemeral, ordered per request, not replayed, and never alter revision.
+## 2. Endpoint matrix
 
-For accepted chat: persist user message/pending turn and revision N+1; emit snapshot; stream tokens; persist assistant message/complete turn and N+2; emit completion then snapshot. Completion and snapshot notifications go to all local observers of the active session.
+| Method/path | Allowed stage | Request | Response | Errors | Revision effect |
+|---|---|---|---|---|---|
+| `GET /api/v1/state` | all | — | `200 AppSnapshot` | — | read only |
+| `GET /api/v1/profile` | all | — | `200 ProfileResponse` | — | read only |
+| `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdate` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
+| `GET /api/v1/styles` | all | — | `200 {styles: list[StyleSummary]}` | — | read only |
+| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | style + initial plan request + revision |
+| `GET /api/v1/sessions` | all | — | `200 {sessions: list[SessionSummary]}` | — | read only |
+| `GET /api/v1/sessions/{session_id}` | all | — | `200 SessionHistoryResponse` | `404 not_found` | read only |
+| `POST /api/v1/sessions` | `READY` | `StartSession { expected_revision }` | `201 {session, snapshot}` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
+| `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | `EndSession { expected_revision }` | `202 AppSnapshot` | `404 not_found`, `409 invalid_command`, `409 state_conflict`, `409 busy` | end session + post-session operation + revision |
+| `POST /api/v1/operations/current/retry` | failed operation visible | `RetryOperation { expected_revision }` | `202 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `409 busy` | requeue same operation |
+| `GET /api/v1/health` | all | — | `200 {status: "healthy"}` | `503` when unavailable | read only |
+| `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | chat acceptance increments revision; completion increments again |
 
-## Errors and idempotency
+State-changing HTTP requests require `expected_revision`. `Idempotency-Key` is required for `POST` commands except chat, where `(session_id, client_message_id)` is the idempotency key.
 
-Stable errors are `invalid_command`, `state_conflict`, `busy`, `not_found`, `llm_unavailable`, `llm_timeout`, `invalid_llm_output`, `operation_failed`, and `internal_error`.
+`PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Intake completion is processor-driven and creates/reuses the assessment operation. Style selection succeeds only after the initial immutable plan exists.
 
-Duplicate client message IDs are resolved before revision checking: pending yields `message_in_progress`, complete yields the persisted completion, retryable failure reuses the turn and current revision, and non-retryable failure returns its stored error. A disconnect never cancels accepted work.
+## 3. WebSocket messages
+
+Application-owned generation publishes through
+[`EventStream`](target-architecture.md#application-event-distribution); API adapters
+translate to the wire union below. Disconnect unsubscribes one client only;
+accepted generation continues.
+
+### Client
+
+| Message | Fields | Semantics |
+|---|---|---|
+| `send_message` | `type`, `session_id`, `client_message_id`, `request_id`, `expected_revision`, `content` | Accept a chat turn for the active intake or therapy session |
+
+### Server
+
+| Event | Required identifiers | Ordering | Persistence point | Revision |
+|---|---|---|---|---|
+| `token` | `session_id`, `turn_id`, `request_id`, `sequence`, `text` | strictly increasing `sequence` per turn | none (ephemeral) | none |
+| `message_in_progress` | `session_id`, `turn` | after acceptance | user message + pending turn stored | incremented at acceptance |
+| `message_completed` | `session_id`, `turn`, `message` | after final token | assistant message + complete turn stored | incremented at completion |
+| `snapshot_changed` | `snapshot` | after durable mutation | snapshot reread | matches stored revision |
+| `operation_changed` | `operation`, `snapshot` | when operation status changes | operation row updated | matches stored revision |
+| `error` | `error`, optional `session_id`, `request_id` | any time | failure recorded when applicable | unchanged unless acceptance failed |
+
+Duplicate `(session_id, client_message_id)` resolution happens before revision validation: pending → `message_in_progress`; complete → persisted completion; retryable failed → reuse turn; permanent failed → stored error. `busy` rejects a second distinct active generation.
+
+## 4. Errors, revisions, and reconnect rules
+
+### Error mapping
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `invalid_command` | 409 | Command not permitted in current stage |
+| `state_conflict` | 409 | Stale `expected_revision`; includes `current_snapshot` |
+| `busy` | 409 | Conflicting session, mutation, operation, or generation |
+| `not_found` | 404 | Unknown session or resource |
+| `validation_error` | 422 | Request body failed validation |
+| `llm_unavailable` | 502/503 | Provider unreachable |
+| `llm_timeout` | 504 | Provider timeout |
+| `invalid_llm_output` | 422 | Structured output parse/validation failure |
+| `operation_failed` | 409/422 | Durable operation failed |
+| `internal_error` | 500 | Unexpected server failure |
+
+Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.
+
+### Reconnect rules
+
+Canonical client sequence after any disconnect:
+
+1. `GET /api/v1/state`
+2. `GET /api/v1/sessions/{active_session_id}` when history is needed
+3. establish `WS /api/v1/chat`
+4. treat persisted HTTP state and stored messages as authoritative
+5. never reconstruct a completed message from missed `token` events
+
+On reconnect the client resubscribes for live notifications only; there is no event replay buffer.

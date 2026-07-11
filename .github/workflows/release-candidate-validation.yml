@@ -7,6 +7,34 @@ on:
     branches: [master, main, develop]
 
 jobs:
+  phase-1-refactor:
+    name: Phase 1 evidence gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request' || github.ref_name == 'refactor/single-user-architecture'
+    env:
+      ENV_FILE: .env.example
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Validate Phase 1 evidence and fast checkpoint
+        run: make validate-refactor-phase-1
+      - name: Verify hook ref policy
+        run: docker compose --profile test run --rm test pytest tests/unit/test_git_hooks.py
+
+  phase-1-refactor-full:
+    name: Phase 1 full characterization gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    env:
+      ENV_FILE: .env.example
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run full finalization checkpoint
+        run: make finalization-check-full
+
   finalization-check:
     name: Docker Finalization Check
     runs-on: ubuntu-latest

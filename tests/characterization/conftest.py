@@ -1,6 +1,23 @@
-"""Black-box characterization suite home.
+"""Ephemeral black-box harness for the current deterministic legacy server."""
 
-The legacy server currently has no test-only deterministic process composition
-seam. Phase 1 records target-only lifecycle cases as strict xfails; Phase 4
-replaces these with an ephemeral external-server harness.
-"""
+from __future__ import annotations
+
+import pytest
+
+from .legacy_client import LegacyApiClient, start_legacy_server
+
+
+@pytest.fixture
+def legacy_server(tmp_path):
+    server = start_legacy_server(tmp_path)
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def legacy_client(legacy_server) -> LegacyApiClient:
+    import uuid
+
+    return LegacyApiClient(legacy_server, user_id=f"char-{uuid.uuid4().hex[:10]}")

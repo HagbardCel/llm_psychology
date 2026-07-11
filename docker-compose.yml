@@ -117,6 +117,7 @@ services:
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
+      - ./docs:/app/docs:ro
       - ./schemas:/app/schemas:ro
       - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro

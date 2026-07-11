@@ -139,7 +139,8 @@ class TherapyApplication:
     async def select_style(self, command: SelectStyle) -> AppSnapshot: ...
     async def start_session(self, command: StartSession) -> Session: ...
     async def end_session(self, command: EndSession) -> AppSnapshot: ...
-    async def send_message(self, command: SendMessage) -> AsyncIterator[ChatEvent]: ...
+    async def submit_message(self, command: SendMessage) -> ChatTurn: ...
+    async def get_chat_turn(self, turn_id: UUID) -> ChatTurn: ...
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot: ...
 ```
 
@@ -151,6 +152,39 @@ Responsibilities:
 - enforce concurrency and idempotency;
 - start and recover long-running operations;
 - return domain results, not HTTP/WebSocket payloads.
+
+Accepted chat work is application-owned. The composition root supplies an
+application event subscription port for API adapters; WebSocket disconnects do
+not own or cancel generation.
+
+### Application event distribution
+
+Live generation events are delivered through a small in-process broadcaster owned
+by application composition. It is not a message broker, event store, replay
+system, plugin bus, or generalized queueing framework.
+
+```python
+class EventStream:
+    async def subscribe(self) -> AsyncIterator[ApplicationEvent]: ...
+    async def publish(self, event: ApplicationEvent) -> None: ...
+```
+
+`submit_message` validates stage, revision, session, and idempotency; persists
+the user message and pending `ChatTurn`; increments snapshot revision; schedules
+generation through the application task supervisor; and returns the accepted
+`ChatTurn`. Token events are published through `EventStream`; API adapters map
+them to WebSocket `token` events.
+
+Fixed semantics:
+
+- disconnecting a WebSocket unsubscribes that client only;
+- accepted generation continues after disconnect;
+- token events are ephemeral and never advance revision;
+- completed messages and snapshot changes are durable;
+- startup converts stale pending turns into retryable failures;
+- resubmission with the same `client_message_id` never duplicates the user message;
+- all connected observers receive completion and snapshot notifications;
+- token delivery is best-effort to currently connected observers only (no replay).
 
 No generic service locator or runtime string-based dependency lookup remains.
 
