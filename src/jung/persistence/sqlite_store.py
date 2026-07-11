@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
@@ -65,15 +65,25 @@ class SQLiteStore:
         with self._connect() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if version == 0:
-                if sql.has_target_tables(conn):
+                if sql.has_any_target_table(conn):
                     raise PersistenceFailure(
-                        "database has unexpected tables without schema version"
+                        "database has unexpected tables without schema version; "
+                        "reset the database"
                     )
-                sql.create_schema(conn)
-                sql.assert_foreign_keys(conn)
-                sql.seed_initial_state(conn)
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                conn.commit()
+                try:
+                    sql.create_schema(conn)
+                    sql.seed_initial_state(conn)
+                    sql.assert_foreign_keys(conn)
+                    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    conn.commit()
+                except sqlite3.Error as exc:
+                    if conn.in_transaction:
+                        conn.rollback()
+                    raise sql.translate_sqlite_error(exc) from exc
+                except Exception:
+                    if conn.in_transaction:
+                        conn.rollback()
+                    raise
                 return
             if version != SCHEMA_VERSION:
                 raise PersistenceFailure(
@@ -256,7 +266,7 @@ class SQLiteStore:
         with self._connect() as conn:
             return self._load_snapshot_facts(conn)
 
-    def replace_profile(
+    def update_profile(
         self,
         profile: Profile,
         *,
@@ -270,48 +280,27 @@ class SQLiteStore:
                     "profile must remain complete during intake"
                 )
             self._upsert_profile(conn, profile, now=now)
+            if stage == Stage.SETUP and is_profile_complete(profile):
+                if conn.execute(
+                    "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
+                ).fetchone():
+                    raise InvariantViolation("open session already exists")
+                intake_session_id = uuid4()
+                conn.execute(
+                    """
+                    INSERT INTO sessions (
+                        id, kind, plan_id, started_at, ended_at, summary, briefing_json
+                    ) VALUES (?, ?, NULL, ?, NULL, NULL, NULL)
+                    """,
+                    (
+                        str(intake_session_id),
+                        SessionKind.INTAKE.value,
+                        sql.dt(now),
+                    ),
+                )
+                self._set_stage(conn, Stage.INTAKE, now)
 
         return self._write(expected_revision, mutate)
-
-    def complete_profile_and_open_intake(
-        self,
-        profile: Profile,
-        *,
-        expected_revision: int,
-        intake_session_id: UUID,
-        now: datetime,
-    ) -> tuple[AppState, Session]:
-        if not is_profile_complete(profile):
-            raise InvariantViolation("profile must be complete")
-
-        session_holder: dict[str, Session] = {}
-
-        def mutate(conn: sqlite3.Connection) -> None:
-            self._require_stage(conn, {Stage.SETUP})
-            if conn.execute(
-                "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
-            ).fetchone():
-                raise InvariantViolation("open session already exists")
-            self._upsert_profile(conn, profile, now=now)
-            conn.execute(
-                """
-                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-                VALUES (?, ?, NULL, ?, NULL, NULL, NULL)
-                """,
-                (str(intake_session_id), SessionKind.INTAKE.value, sql.dt(now)),
-            )
-            self._set_stage(conn, Stage.INTAKE, now)
-            row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                FROM sessions WHERE id = ?
-                """,
-                (str(intake_session_id),),
-            ).fetchone()
-            session_holder["session"] = sql.row_to_session(row)
-
-        state = self._write(expected_revision, mutate)
-        return state, session_holder["session"]
 
     def finish_intake_and_create_assessment(
         self,

@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS app_state (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
     stage TEXT NOT NULL,

@@ -9,67 +9,41 @@ from uuid import UUID, uuid4
 import pytest
 
 from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
-from jung.domain.models import ChatTurnStatus, Profile
+from jung.domain.models import ChatTurnStatus, Profile, SessionKind
 from jung.persistence.sqlite_store import SQLiteStore
+
+from .scenarios import advance_to_ready
+
+
+def _open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
+    now = datetime.now(UTC)
+    store.update_profile(
+        Profile(name="Alex", primary_language="English"),
+        expected_revision=store.get_app_state().revision,
+        now=now,
+    )
+    intake = store.get_active_session()
+    assert intake is not None
+    assert intake.kind == SessionKind.INTAKE
+    return intake.id, now
 
 
 def _therapy_ready(store: SQLiteStore):
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
-    operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
-        intake_session_id=intake_id,
-        operation_id=operation_id,
-        now=now,
-    )
-    store.mark_operation_running(operation_id, now=now)
-    store.complete_assessment(
-        operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
-        now=now,
-    )
-    plan_id = uuid4()
-    store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
-        style_id="cbt",
-        plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-        intake_session_id=intake_id,
-        now=now,
-    )
+    ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
         expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
-        now=now,
+        now=ready.now,
     )
-    return therapy_id, now
+    return therapy_id, ready.now
 
 
 @pytest.mark.parametrize("stage_setup", ["intake", "therapy"])
 def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: str) -> None:
     now = datetime.now(UTC)
     if stage_setup == "intake":
-        intake_id = uuid4()
-        store.complete_profile_and_open_intake(
-            Profile(name="Alex", primary_language="English"),
-            expected_revision=0,
-            intake_session_id=intake_id,
-            now=now,
-        )
-        session_id = intake_id
+        session_id, now = _open_intake(store)
     else:
         session_id, now = _therapy_ready(store)
 
@@ -105,14 +79,7 @@ def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: st
 def test_duplicate_client_message_id_returns_existing_before_revision_check(
     store: SQLiteStore,
 ) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     client_message_id = uuid4()
     turn_id = uuid4()
     user_message_id = uuid4()
@@ -142,14 +109,7 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
 
 
 def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
         session_id=intake_id,
@@ -172,14 +132,7 @@ def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
 
 
 def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     turn_id = uuid4()
     user_message_id = uuid4()
     store.accept_chat_message(
@@ -205,14 +158,7 @@ def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
 
 
 def test_user_message_id_cannot_belong_to_two_turns(store: SQLiteStore) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     user_message_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
@@ -243,14 +189,7 @@ def test_user_message_id_cannot_belong_to_two_turns(store: SQLiteStore) -> None:
 
 
 def test_assistant_message_id_unique_across_completed_turns(store: SQLiteStore) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     turn_one = uuid4()
     assistant_id = uuid4()
     store.accept_chat_message(
@@ -288,14 +227,7 @@ def test_assistant_message_id_unique_across_completed_turns(store: SQLiteStore) 
 
 @pytest.mark.parametrize("action", ["complete", "fail"])
 def test_late_chat_callback_rejected(store: SQLiteStore, action: str) -> None:
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
@@ -336,14 +268,7 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
 ) -> None:
     store_a = SQLiteStore(store_path)
     store_a.initialize()
-    intake_id = uuid4()
-    now = datetime.now(UTC)
-    store_a.complete_profile_and_open_intake(
-        Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
-        intake_session_id=intake_id,
-        now=now,
-    )
+    intake_id, now = _open_intake(store_a)
     revision = store_a.get_app_state().revision
     client_message_id = uuid4()
     turn_a_id = uuid4()

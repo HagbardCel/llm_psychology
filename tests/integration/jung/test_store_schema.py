@@ -11,6 +11,7 @@ import pytest
 
 from jung.domain.errors import PersistenceFailure, RevisionConflict
 from jung.domain.models import Profile, Stage
+from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
 
@@ -71,10 +72,9 @@ def test_reset_database_produces_fresh_schema_version(store_path: Path) -> None:
 def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     profile = Profile(name="Alex", primary_language="English")
     now = datetime.now(UTC)
-    store.complete_profile_and_open_intake(
+    store.update_profile(
         profile,
         expected_revision=0,
-        intake_session_id=uuid4(),
         now=now,
     )
     reopened = SQLiteStore(store.database_path)
@@ -85,12 +85,57 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
 
 def test_stale_revision_rejected(store: SQLiteStore) -> None:
     with pytest.raises(RevisionConflict):
-        store.replace_profile(
+        store.update_profile(
             Profile(name="Alex", primary_language="English"),
             expected_revision=99,
             now=datetime.now(UTC),
         )
     assert store.get_app_state().revision == 0
+
+
+@pytest.mark.parametrize("table_name", sorted(sql.TARGET_TABLES))
+def test_version_zero_partial_target_schema_is_rejected(
+    store_path: Path,
+    table_name: str,
+) -> None:
+    with sqlite3.connect(store_path) as conn:
+        conn.execute(f'CREATE TABLE "{table_name}" (placeholder INTEGER)')
+        conn.commit()
+
+    with pytest.raises(
+        PersistenceFailure,
+        match="unexpected tables without schema version",
+    ):
+        SQLiteStore(store_path).initialize()
+
+
+def test_initialize_rolls_back_on_seed_failure(
+    store_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteStore(store_path)
+    original_seed = sql.seed_initial_state
+
+    def failing_seed(conn: sqlite3.Connection) -> None:
+        original_seed(conn)
+        raise sqlite3.IntegrityError("forced initialization failure")
+
+    monkeypatch.setattr(sql, "seed_initial_state", failing_seed)
+
+    with pytest.raises(PersistenceFailure):
+        store.initialize()
+
+    with sqlite3.connect(store_path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+    assert version == 0
+    assert tables.isdisjoint(sql.TARGET_TABLES)
 
 
 def _seed_open_session(conn: sqlite3.Connection, session_id: str, *, plan_id: str | None = None) -> None:
@@ -104,57 +149,46 @@ def _seed_open_session(conn: sqlite3.Connection, session_id: str, *, plan_id: st
     )
 
 
-@pytest.mark.parametrize(
-    ("table", "insert_sql", "params"),
-    [
-        (
-            "open session",
-            """
-            INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-            VALUES (?, 'intake', NULL, ?, NULL, NULL, NULL)
-            """,
-            lambda conn: (str(uuid4()), datetime.now(UTC).isoformat()),
-        ),
-        (
-            "current operation",
-            """
-            INSERT INTO operations (
-                id, kind, status, source_session_id, attempt, result_json,
-                error_code, error_message, retryable, created_at, updated_at
-            ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
-            """,
-            lambda conn: (
-                str(uuid4()),
-                conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0],
-                datetime.now(UTC).isoformat(),
-                datetime.now(UTC).isoformat(),
-            ),
-        ),
-        (
-            "pending chat turn",
-            """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, status, user_message_id,
-                assistant_message_id, error_code, error_message, retryable,
-                created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
-            """,
-            lambda conn: _second_pending_turn_insert_params(conn),
-        ),
-    ],
-)
-def test_singleton_indexes_reject_second_row(
-    store_path: Path, table: str, insert_sql: str, params
-) -> None:
-    del table
+def test_singleton_rejects_second_open_session(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     session_id = str(uuid4())
     with sqlite3.connect(store_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         _seed_open_session(conn, session_id)
-        if "operations" in insert_sql:
-            now = datetime.now(UTC).isoformat()
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
+                VALUES (?, 'intake', NULL, ?, NULL, NULL, NULL)
+                """,
+                (str(uuid4()), datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+
+
+def test_singleton_rejects_second_current_operation(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            """
+            INSERT INTO operations (
+                id, kind, status, source_session_id, attempt, result_json,
+                error_code, error_message, retryable, created_at, updated_at
+            ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
+            """,
+            (str(uuid4()), session_id, now, now),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
                 INSERT INTO operations (
@@ -164,8 +198,30 @@ def test_singleton_indexes_reject_second_row(
                 """,
                 (str(uuid4()), session_id, now, now),
             )
-        elif "chat_turns" in insert_sql:
-            message_id, turn_id, client_id, now = _pending_turn_params(conn, session_id)
+            conn.commit()
+
+
+def test_singleton_rejects_second_pending_turn(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        message_id, turn_id, client_id, now = _pending_turn_params(conn, session_id)
+        conn.execute(
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, status, user_message_id,
+                assistant_message_id, error_code, error_message, retryable,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+            """,
+            (turn_id, session_id, client_id, message_id, now, now),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
                 INSERT INTO chat_turns (
@@ -174,15 +230,9 @@ def test_singleton_indexes_reject_second_row(
                     created_at, updated_at, completed_at
                 ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
                 """,
-                (turn_id, session_id, client_id, message_id, now, now),
+                _second_pending_turn_insert_params(conn),
             )
-        conn.commit()
-
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert_sql, params(conn))
             conn.commit()
-
-
 
 def _pending_turn_params(
     conn: sqlite3.Connection, session_id: str | None = None

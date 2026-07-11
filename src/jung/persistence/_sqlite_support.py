@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -33,6 +34,18 @@ SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+TARGET_TABLES = frozenset(
+    {
+        "app_state",
+        "profile",
+        "sessions",
+        "messages",
+        "plans",
+        "operations",
+        "chat_turns",
+    }
+)
+
 DANGEROUS_DB_PATHS = {
     Path("data/psychoanalyst.db"),
     Path("data/usertest/psychoanalyst.db"),
@@ -52,7 +65,8 @@ def connect(database_path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    script = SCHEMA_PATH.read_text(encoding="utf-8")
+    conn.executescript(f"BEGIN IMMEDIATE;\n{script}")
 
 
 def assert_foreign_keys(conn: sqlite3.Connection) -> None:
@@ -81,12 +95,15 @@ def seed_initial_state(conn: sqlite3.Connection) -> None:
     )
 
 
-def has_target_tables(conn: sqlite3.Connection) -> bool:
+def has_any_target_table(conn: sqlite3.Connection) -> bool:
+    placeholders = ", ".join("?" for _ in TARGET_TABLES)
     row = conn.execute(
-        """
+        f"""
         SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name = 'app_state'
-        """
+        WHERE type = 'table' AND name IN ({placeholders})
+        LIMIT 1
+        """,
+        tuple(sorted(TARGET_TABLES)),
     ).fetchone()
     return row is not None
 
@@ -117,7 +134,68 @@ def date_iso(value: date | None) -> str | None:
 
 
 def json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _validate_json_value(
+    value: object,
+    *,
+    field_name: str,
+    seen: set[int] | None = None,
+) -> Any:
+    if seen is None:
+        seen = set()
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise InvariantViolation(f"{field_name} must contain finite numbers")
+        return value
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        obj_id = id(value)
+        if obj_id in seen:
+            raise InvariantViolation(f"{field_name} contains a circular reference")
+        seen.add(obj_id)
+        try:
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise InvariantViolation(f"{field_name} keys must be strings")
+                normalized[key] = _validate_json_value(
+                    item,
+                    field_name=field_name,
+                    seen=seen,
+                )
+            return normalized
+        finally:
+            seen.discard(obj_id)
+    if isinstance(value, list):
+        obj_id = id(value)
+        if obj_id in seen:
+            raise InvariantViolation(f"{field_name} contains a circular reference")
+        seen.add(obj_id)
+        try:
+            return [
+                _validate_json_value(item, field_name=field_name, seen=seen)
+                for item in value
+            ]
+        finally:
+            seen.discard(obj_id)
+
+    raise InvariantViolation(f"{field_name} must contain JSON-compatible values")
 
 
 def validate_json_mapping(
@@ -128,17 +206,9 @@ def validate_json_mapping(
     if not isinstance(value, Mapping):
         raise InvariantViolation(f"{field_name} must be a mapping")
 
-    normalized = dict(value)
-
-    if not all(isinstance(key, str) for key in normalized):
-        raise InvariantViolation(f"{field_name} keys must be strings")
-
-    try:
-        json_dumps(normalized)
-    except (TypeError, ValueError) as exc:
-        raise InvariantViolation(
-            f"{field_name} must contain JSON-compatible values"
-        ) from exc
+    normalized = _validate_json_value(dict(value), field_name=field_name)
+    if not isinstance(normalized, dict):
+        raise InvariantViolation(f"{field_name} must be a mapping")
 
     return normalized
 

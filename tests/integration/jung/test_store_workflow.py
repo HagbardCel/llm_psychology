@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.errors import InvariantViolation, RevisionConflict
+from jung.domain.errors import InvariantViolation, PersistenceFailure, RevisionConflict
 from jung.domain.models import (
     CommandName,
     OperationKind,
@@ -20,22 +20,25 @@ from jung.domain.models import (
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 
+from .scenarios import advance_to_post_session, advance_to_ready
+
 
 def _complete_profile(store: SQLiteStore) -> tuple:
-    intake_id = uuid4()
     profile = Profile(name="Alex", primary_language="English")
     now = datetime.now(UTC)
-    state, session = store.complete_profile_and_open_intake(
+    state = store.update_profile(
         profile,
         expected_revision=store.get_app_state().revision,
-        intake_session_id=intake_id,
         now=now,
     )
-    return state, session, intake_id, now
+    session = store.get_active_session()
+    assert session is not None
+    assert session.kind == SessionKind.INTAKE
+    return state, session, session.id, now
 
 
 def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
-    store.replace_profile(
+    store.update_profile(
         Profile(name="", primary_language="English"),
         expected_revision=0,
         now=datetime.now(UTC),
@@ -53,22 +56,25 @@ def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) ->
 
 
 def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
-    _, session, _, now = _complete_profile(store)
+    _complete_profile(store)
     revision = store.get_app_state().revision
-    store.replace_profile(
+    now = datetime.now(UTC)
+    active_before = store.get_active_session()
+    assert active_before is not None
+    store.update_profile(
         Profile(name="Alexandra", primary_language="English"),
         expected_revision=revision,
         now=now,
     )
-    active = store.get_active_session()
-    assert active is not None
-    assert active.id == session.id
+    active_after = store.get_active_session()
+    assert active_after is not None
+    assert active_after.id == active_before.id
 
 
 def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) -> None:
     _complete_profile(store)
     with pytest.raises(InvariantViolation):
-        store.replace_profile(
+        store.update_profile(
             Profile(name=" ", primary_language="English"),
             expected_revision=store.get_app_state().revision,
             now=datetime.now(UTC),
@@ -113,37 +119,10 @@ def test_assessment_completion_advances_to_style_selection(store: SQLiteStore) -
 
 
 def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
-    operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
-        intake_session_id=intake_id,
-        operation_id=operation_id,
-        now=now,
-    )
-    store.mark_operation_running(operation_id, now=now)
-    store.complete_assessment(
-        operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
-        now=now,
-    )
-    plan_id = uuid4()
-    store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
-        style_id="cbt",
-        plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-        intake_session_id=intake_id,
-        now=now,
-    )
+    ready = advance_to_ready(store)
     plan = store.get_current_plan()
     assert plan is not None
-    assert plan.source_session_id == intake_id
+    assert plan.source_session_id == ready.intake_session_id
 
 
 def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
@@ -196,7 +175,117 @@ def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> Non
     assert running.attempt == 2
 
 
-def test_post_session_completion_is_atomic(store: SQLiteStore) -> None:
+def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None:
+    scenario = advance_to_post_session(store)
+    new_plan_id = uuid4()
+    briefing = {"summary": "session notes"}
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    state = store.complete_post_session(
+        scenario.post_session_operation_id,
+        summary="good session",
+        briefing=briefing,
+        derived_profile={"insight": "progress"},
+        plan_id=new_plan_id,
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep better"],
+        current_progress="improved",
+        planned_interventions=["homework"],
+        revision_recommendations=["continue tracking"],
+        now=scenario.now,
+    )
+    assert state.stage == Stage.READY
+    session = store.get_session(scenario.therapy_session_id)
+    assert session is not None
+    assert session.summary == "good session"
+    assert session.briefing == briefing
+    plan = store.get_current_plan()
+    assert plan is not None
+    assert plan.id == new_plan_id
+    assert plan.version == 2
+    assert plan.selected_style == "cbt"
+    assert plan.supersedes_plan_id == scenario.current_plan_id
+    assert plan.session_briefing == briefing
+    assert plan.source_session_id == scenario.therapy_session_id
+
+
+def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> None:
+    scenario = advance_to_post_session(store)
+    stored_profile = store.get_profile()
+    assert stored_profile is not None
+    original_derived_profile = stored_profile.derived_profile
+    original_plan_id = scenario.current_plan_id
+
+    with sqlite3.connect(store.database_path) as conn:
+        original_plan_count = conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
+
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    revision_before = store.get_app_state().revision
+    with pytest.raises(PersistenceFailure):
+        store.complete_post_session(
+            scenario.post_session_operation_id,
+            summary="good session",
+            briefing={"summary": "session notes"},
+            derived_profile={"insight": "changed"},
+            plan_id=scenario.current_plan_id,
+            focus="anxiety",
+            themes=["worry"],
+            goals=["sleep better"],
+            current_progress="improved",
+            planned_interventions=["homework"],
+            revision_recommendations=["continue tracking"],
+            now=scenario.now,
+        )
+
+    state = store.get_app_state()
+    assert state.stage == Stage.POST_SESSION
+    assert state.revision == revision_before
+
+    session = store.get_session(scenario.therapy_session_id)
+    assert session is not None
+    assert session.summary is None
+    assert session.briefing is None
+
+    stored_profile = store.get_profile()
+    assert stored_profile is not None
+    assert stored_profile.derived_profile == original_derived_profile
+    assert stored_profile.current_plan_id == original_plan_id
+
+    current_plan = store.get_current_plan()
+    assert current_plan is not None
+    assert current_plan.id == original_plan_id
+
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.status == OperationStatus.RUNNING
+    assert operation.result is None
+
+    with sqlite3.connect(store.database_path) as conn:
+        plan_count = conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
+    assert plan_count == original_plan_count
+
+
+def test_complete_assessment_rejects_invalid_json_before_persistence(
+    store: SQLiteStore,
+) -> None:
+    _, _, intake_id, now = _complete_profile(store)
+    operation_id = uuid4()
+    store.finish_intake_and_create_assessment(
+        expected_revision=store.get_app_state().revision,
+        intake_session_id=intake_id,
+        operation_id=operation_id,
+        now=now,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    with pytest.raises(InvariantViolation):
+        store.complete_assessment(
+            operation_id,
+            result={"initial_plan": {"focus": float("nan")}},
+            now=now,
+        )
+
+
+def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -> None:
     _, _, intake_id, now = _complete_profile(store)
     operation_id = uuid4()
     store.finish_intake_and_create_assessment(
@@ -211,63 +300,20 @@ def test_post_session_completion_is_atomic(store: SQLiteStore) -> None:
         result={"initial_plan": {"focus": "anxiety"}},
         now=now,
     )
-    plan_id = uuid4()
-    store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
-        style_id="cbt",
-        plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-        intake_session_id=intake_id,
-        now=now,
-    )
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        now=now,
-    )
-    post_op_id = uuid4()
-    store.end_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        operation_id=post_op_id,
-        now=now,
-    )
-    new_plan_id = uuid4()
-    briefing = {"summary": "session notes"}
-    store.mark_operation_running(post_op_id, now=now)
-    state = store.complete_post_session(
-        post_op_id,
-        summary="good session",
-        briefing=briefing,
-        derived_profile={"insight": "progress"},
-        plan_id=new_plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep better"],
-        current_progress="improved",
-        planned_interventions=["homework"],
-        revision_recommendations=["continue tracking"],
-        now=now,
-    )
-    assert state.stage == Stage.READY
-    session = store.get_session(therapy_id)
-    assert session is not None
-    assert session.summary == "good session"
-    assert session.briefing == briefing
-    plan = store.get_current_plan()
-    assert plan is not None
-    assert plan.id == new_plan_id
-    assert plan.version == 2
-    assert plan.selected_style == "cbt"
-    assert plan.supersedes_plan_id == plan_id
-    assert plan.session_briefing == briefing
-    assert plan.source_session_id == therapy_id
+    with pytest.raises(InvariantViolation):
+        store.select_style_and_create_initial_plan(
+            expected_revision=store.get_app_state().revision,
+            style_id="cbt",
+            plan_id=uuid4(),
+            focus="anxiety",
+            themes=[1],
+            goals=["sleep"],
+            current_progress="baseline",
+            planned_interventions=["grounding"],
+            revision_recommendations=["track sleep"],
+            intake_session_id=intake_id,
+            now=now,
+        )
 
 
 def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> None:
@@ -324,50 +370,10 @@ def test_late_operation_callback_rejected(
 
 
 def test_complete_post_session_requires_running_operation(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
-    operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
-        intake_session_id=intake_id,
-        operation_id=operation_id,
-        now=now,
-    )
-    store.mark_operation_running(operation_id, now=now)
-    store.complete_assessment(
-        operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
-        now=now,
-    )
-    plan_id = uuid4()
-    store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
-        style_id="cbt",
-        plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-        intake_session_id=intake_id,
-        now=now,
-    )
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        now=now,
-    )
-    post_op_id = uuid4()
-    store.end_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        operation_id=post_op_id,
-        now=now,
-    )
+    scenario = advance_to_post_session(store)
     with pytest.raises(InvariantViolation):
         store.complete_post_session(
-            post_op_id,
+            scenario.post_session_operation_id,
             summary="too early",
             briefing={},
             derived_profile={},
@@ -378,7 +384,7 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
             current_progress="",
             planned_interventions=[],
             revision_recommendations=[],
-            now=now,
+            now=scenario.now,
         )
 
 
@@ -453,39 +459,12 @@ def test_finish_intake_is_idempotent_by_session_key(store: SQLiteStore) -> None:
 
 
 def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) -> None:
-    _, _, intake_id, now = _complete_profile(store)
-    operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
-        intake_session_id=intake_id,
-        operation_id=operation_id,
-        now=now,
-    )
-    store.mark_operation_running(operation_id, now=now)
-    store.complete_assessment(
-        operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
-        now=now,
-    )
-    plan_id = uuid4()
-    store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
-        style_id="cbt",
-        plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-        intake_session_id=intake_id,
-        now=now,
-    )
+    ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
         expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
-        now=now,
+        now=ready.now,
     )
     post_op_id = uuid4()
     revision = store.get_app_state().revision
@@ -493,14 +472,14 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
         expected_revision=revision,
         session_id=therapy_id,
         operation_id=post_op_id,
-        now=now,
+        now=ready.now,
     )
     first_state = store.get_app_state()
     second_state, second_operation = store.end_therapy_session(
         expected_revision=revision - 1,
         session_id=therapy_id,
         operation_id=uuid4(),
-        now=now,
+        now=ready.now,
     )
     assert second_state == first_state
     assert second_operation.id == first_operation.id
