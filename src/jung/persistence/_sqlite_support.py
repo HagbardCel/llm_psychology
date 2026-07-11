@@ -125,7 +125,7 @@ def translate_sqlite_error(exc: BaseException) -> BaseException:
 
 def dt(value: datetime) -> str:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
+        raise InvariantViolation("timestamp must be timezone-aware")
     return value.astimezone(UTC).isoformat()
 
 

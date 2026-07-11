@@ -33,6 +33,17 @@ def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
     assert store.get_active_session() is None
 
 
+def test_write_uses_transaction_now_for_revision_timestamp(store: SQLiteStore) -> None:
+    fixed_now = datetime(2026, 7, 12, 10, 30, tzinfo=UTC)
+    store.update_profile(
+        Profile(name="Alex", primary_language="English"),
+        expected_revision=0,
+        now=fixed_now,
+    )
+    state = store.get_app_state()
+    assert state.updated_at == fixed_now
+
+
 def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) -> None:
     intake_id, _now = open_intake(store)
     session = store.get_active_session()
