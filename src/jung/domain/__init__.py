@@ -32,6 +32,7 @@ from jung.domain.models import (
     SessionKind,
     Stage,
     StoredProfile,
+    UtcDateTime,
     WorkflowFacts,
     is_profile_complete,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "StartSession",
     "StoredProfile",
     "UpdateProfile",
+    "UtcDateTime",
     "WorkflowFacts",
     "is_profile_complete",
 ]

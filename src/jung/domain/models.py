@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.astimezone(UTC)
+
+
+UtcDateTime = Annotated[AwareDatetime, AfterValidator(_as_utc)]
 
 
 class Stage(StrEnum):
@@ -79,8 +93,8 @@ class StoredProfile(BaseModel):
     profile: Profile
     derived_profile: dict[str, Any] | None = None
     current_plan_id: UUID | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDateTime
+    updated_at: UtcDateTime
 
 
 class Session(BaseModel):
@@ -89,8 +103,8 @@ class Session(BaseModel):
     id: UUID
     kind: SessionKind
     plan_id: UUID | None = None
-    started_at: datetime
-    ended_at: datetime | None = None
+    started_at: UtcDateTime
+    ended_at: UtcDateTime | None = None
     summary: str | None = None
     briefing: dict[str, Any] | None = None
 
@@ -104,7 +118,7 @@ class Message(BaseModel):
     role: MessageRole
     content: str
     client_message_id: UUID | None = None
-    created_at: datetime
+    created_at: UtcDateTime
 
     @field_validator("sequence")
     @classmethod
@@ -129,7 +143,7 @@ class Plan(BaseModel):
     session_briefing: dict[str, Any] | None = None
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
-    created_at: datetime
+    created_at: UtcDateTime
 
     @field_validator("focus", "current_progress")
     @classmethod
@@ -151,10 +165,10 @@ class Operation(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     retryable: bool
-    created_at: datetime
-    updated_at: datetime
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
+    created_at: UtcDateTime
+    updated_at: UtcDateTime
+    started_at: UtcDateTime | None = None
+    completed_at: UtcDateTime | None = None
 
 
 class ChatTurn(BaseModel):
@@ -169,9 +183,9 @@ class ChatTurn(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     retryable: bool
-    created_at: datetime
-    updated_at: datetime
-    completed_at: datetime | None = None
+    created_at: UtcDateTime
+    updated_at: UtcDateTime
+    completed_at: UtcDateTime | None = None
 
 
 class AppState(BaseModel):
@@ -179,8 +193,8 @@ class AppState(BaseModel):
 
     stage: Stage
     revision: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDateTime
+    updated_at: UtcDateTime
 
     @field_validator("revision")
     @classmethod

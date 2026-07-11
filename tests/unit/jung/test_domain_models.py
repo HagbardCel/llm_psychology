@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from jung.domain.models import (
+    AppState,
     Message,
     MessageRole,
     Plan,
     Profile,
+    Stage,
     is_profile_complete,
 )
 
@@ -77,3 +79,24 @@ def test_profile_optional_fields():
     )
     assert profile.date_of_birth == date(1990, 1, 2)
     assert profile.notes == "note"
+
+
+def test_domain_timestamp_rejects_naive_datetime() -> None:
+    with pytest.raises(ValidationError):
+        AppState(
+            stage=Stage.SETUP,
+            revision=0,
+            created_at=datetime.now(),
+            updated_at=datetime.now(UTC),
+        )
+
+
+def test_domain_timestamp_normalizes_offset_to_utc() -> None:
+    source = datetime(2026, 7, 12, 12, tzinfo=timezone(timedelta(hours=2)))
+    state = AppState(
+        stage=Stage.SETUP,
+        revision=0,
+        created_at=source,
+        updated_at=source,
+    )
+    assert state.created_at.utcoffset() == timedelta(0)
