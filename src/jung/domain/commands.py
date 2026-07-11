@@ -29,7 +29,6 @@ class SelectStyle(BaseModel):
     expected_revision: int
     style_id: str
     plan_id: UUID
-    plan_version: int = 1
     focus: str
     themes: list[str]
     goals: list[str]

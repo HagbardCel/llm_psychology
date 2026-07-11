@@ -244,8 +244,6 @@ def test_post_session_completion_is_atomic(store: SQLiteStore) -> None:
         briefing=briefing,
         derived_profile={"insight": "progress"},
         plan_id=new_plan_id,
-        plan_version=2,
-        selected_style="cbt",
         focus="anxiety",
         themes=["worry"],
         goals=["sleep better"],
@@ -262,8 +260,123 @@ def test_post_session_completion_is_atomic(store: SQLiteStore) -> None:
     plan = store.get_current_plan()
     assert plan is not None
     assert plan.id == new_plan_id
+    assert plan.version == 2
+    assert plan.selected_style == "cbt"
+    assert plan.supersedes_plan_id == plan_id
     assert plan.session_briefing == briefing
     assert plan.source_session_id == therapy_id
+
+
+def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> None:
+    _, _, intake_id, now = _complete_profile(store)
+    operation_id = uuid4()
+    store.finish_intake_and_create_assessment(
+        expected_revision=store.get_app_state().revision,
+        intake_session_id=intake_id,
+        operation_id=operation_id,
+        now=now,
+    )
+    with pytest.raises(InvariantViolation):
+        store.complete_assessment(
+            operation_id,
+            result={"initial_plan": {"focus": "anxiety"}},
+            now=now,
+        )
+
+
+@pytest.mark.parametrize("action", ["complete", "fail"])
+def test_late_operation_callback_rejected(
+    store: SQLiteStore, action: str
+) -> None:
+    _, _, intake_id, now = _complete_profile(store)
+    operation_id = uuid4()
+    store.finish_intake_and_create_assessment(
+        expected_revision=store.get_app_state().revision,
+        intake_session_id=intake_id,
+        operation_id=operation_id,
+        now=now,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.complete_assessment(
+        operation_id,
+        result={"initial_plan": {"focus": "anxiety"}},
+        now=now,
+    )
+    if action == "complete":
+        with pytest.raises(InvariantViolation):
+            store.complete_assessment(
+                operation_id,
+                result={"initial_plan": {"focus": "again"}},
+                now=now,
+            )
+    else:
+        with pytest.raises(InvariantViolation):
+            store.fail_operation(
+                operation_id,
+                error_code="late",
+                error_message="too late",
+                retryable=False,
+                now=now,
+            )
+
+
+def test_complete_post_session_requires_running_operation(store: SQLiteStore) -> None:
+    _, _, intake_id, now = _complete_profile(store)
+    operation_id = uuid4()
+    store.finish_intake_and_create_assessment(
+        expected_revision=store.get_app_state().revision,
+        intake_session_id=intake_id,
+        operation_id=operation_id,
+        now=now,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.complete_assessment(
+        operation_id,
+        result={"initial_plan": {"focus": "anxiety"}},
+        now=now,
+    )
+    plan_id = uuid4()
+    store.select_style_and_create_initial_plan(
+        expected_revision=store.get_app_state().revision,
+        style_id="cbt",
+        plan_id=plan_id,
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep"],
+        current_progress="baseline",
+        planned_interventions=["grounding"],
+        revision_recommendations=["track sleep"],
+        intake_session_id=intake_id,
+        now=now,
+    )
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=now,
+    )
+    post_op_id = uuid4()
+    store.end_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        operation_id=post_op_id,
+        now=now,
+    )
+    with pytest.raises(InvariantViolation):
+        store.complete_post_session(
+            post_op_id,
+            summary="too early",
+            briefing={},
+            derived_profile={},
+            plan_id=uuid4(),
+            focus="x",
+            themes=[],
+            goals=[],
+            current_progress="",
+            planned_interventions=[],
+            revision_recommendations=[],
+            now=now,
+        )
 
 
 def test_stale_revision_leaves_database_unchanged(store: SQLiteStore) -> None:

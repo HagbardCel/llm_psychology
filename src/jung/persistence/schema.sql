@@ -15,11 +15,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at TEXT NOT NULL,
     ended_at TEXT NULL,
     summary TEXT NULL,
-    briefing_json TEXT NULL
+    briefing_json TEXT NULL,
+    FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_open
-    ON sessions(id)
+    ON sessions((1))
     WHERE ended_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS plans (
@@ -85,11 +86,15 @@ CREATE TABLE IF NOT EXISTS operations (
     started_at TEXT NULL,
     completed_at TEXT NULL,
     FOREIGN KEY (source_session_id) REFERENCES sessions(id),
-    UNIQUE (kind, source_session_id)
+    UNIQUE (kind, source_session_id),
+    CHECK (status = 'complete' OR result_json IS NULL),
+    CHECK (status != 'complete' OR result_json IS NOT NULL),
+    CHECK (status = 'failed' OR error_code IS NULL),
+    CHECK (status != 'failed' OR error_code IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_one_current
-    ON operations(id)
+    ON operations((1))
     WHERE status IN ('pending', 'running', 'failed');
 
 CREATE TABLE IF NOT EXISTS chat_turns (
@@ -108,11 +113,15 @@ CREATE TABLE IF NOT EXISTS chat_turns (
     FOREIGN KEY (session_id) REFERENCES sessions(id),
     FOREIGN KEY (user_message_id) REFERENCES messages(id),
     FOREIGN KEY (assistant_message_id) REFERENCES messages(id),
-    UNIQUE (session_id, client_message_id)
+    UNIQUE (session_id, client_message_id),
+    CHECK (status = 'complete' OR assistant_message_id IS NULL),
+    CHECK (status != 'complete' OR assistant_message_id IS NOT NULL),
+    CHECK (status = 'failed' OR error_code IS NULL),
+    CHECK (status != 'failed' OR error_code IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_one_pending
-    ON chat_turns(session_id)
+    ON chat_turns((1))
     WHERE status = 'pending';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_assistant_message

@@ -80,3 +80,221 @@ def test_stale_revision_rejected(store: SQLiteStore) -> None:
             now=datetime.now(UTC),
         )
     assert store.get_app_state().revision == 0
+
+
+def _seed_open_session(conn: sqlite3.Connection, session_id: str, *, plan_id: str | None = None) -> None:
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
+        VALUES (?, 'intake', ?, ?, NULL, NULL, NULL)
+        """,
+        (session_id, plan_id, now),
+    )
+
+
+@pytest.mark.parametrize(
+    ("table", "insert_sql", "params"),
+    [
+        (
+            "open session",
+            """
+            INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
+            VALUES (?, 'intake', NULL, ?, NULL, NULL, NULL)
+            """,
+            lambda conn: (str(uuid4()), datetime.now(UTC).isoformat()),
+        ),
+        (
+            "current operation",
+            """
+            INSERT INTO operations (
+                id, kind, status, source_session_id, attempt, result_json,
+                error_code, error_message, retryable, created_at, updated_at
+            ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
+            """,
+            lambda conn: (
+                str(uuid4()),
+                conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0],
+                datetime.now(UTC).isoformat(),
+                datetime.now(UTC).isoformat(),
+            ),
+        ),
+        (
+            "pending chat turn",
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, status, user_message_id,
+                assistant_message_id, error_code, error_message, retryable,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+            """,
+            lambda conn: _second_pending_turn_insert_params(conn),
+        ),
+    ],
+)
+def test_singleton_indexes_reject_second_row(
+    store_path: Path, table: str, insert_sql: str, params
+) -> None:
+    del table
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        if "operations" in insert_sql:
+            now = datetime.now(UTC).isoformat()
+            conn.execute(
+                """
+                INSERT INTO operations (
+                    id, kind, status, source_session_id, attempt, result_json,
+                    error_code, error_message, retryable, created_at, updated_at
+                ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
+                """,
+                (str(uuid4()), session_id, now, now),
+            )
+        elif "chat_turns" in insert_sql:
+            message_id, turn_id, client_id, now = _pending_turn_params(conn, session_id)
+            conn.execute(
+                """
+                INSERT INTO chat_turns (
+                    id, session_id, client_message_id, status, user_message_id,
+                    assistant_message_id, error_code, error_message, retryable,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+                """,
+                (turn_id, session_id, client_id, message_id, now, now),
+            )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert_sql, params(conn))
+            conn.commit()
+
+
+
+def _pending_turn_params(
+    conn: sqlite3.Connection, session_id: str | None = None
+) -> tuple[str, str, str, str]:
+    if session_id is None:
+        session_id = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
+    now = datetime.now(UTC).isoformat()
+    message_id = str(uuid4())
+    conn.execute(
+        """
+        INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+        VALUES (?, ?, 1, 'user', 'hello', ?)
+        """,
+        (message_id, session_id, now),
+    )
+    return message_id, str(uuid4()), str(uuid4()), now
+
+
+def _second_pending_turn_insert_params(
+    conn: sqlite3.Connection,
+) -> tuple[str, str, str, str, str, str]:
+    session_id = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
+    now = datetime.now(UTC).isoformat()
+    message_id = str(uuid4())
+    conn.execute(
+        """
+        INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+        VALUES (?, ?, 2, 'user', 'again', ?)
+        """,
+        (message_id, session_id, now),
+    )
+    return str(uuid4()), session_id, str(uuid4()), message_id, now, now
+
+
+def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
+                VALUES (?, 'therapy', ?, ?, NULL, NULL, NULL)
+                """,
+                (str(uuid4()), str(uuid4()), datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+
+
+@pytest.mark.parametrize(
+    ("table", "update_sql", "params"),
+    [
+        (
+            "operations",
+            """
+            UPDATE operations
+            SET status = 'complete', result_json = NULL
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "operations",
+            """
+            UPDATE operations
+            SET status = 'failed', error_code = NULL
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "chat_turns",
+            """
+            UPDATE chat_turns
+            SET status = 'complete', assistant_message_id = NULL
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "chat_turns",
+            """
+            UPDATE chat_turns
+            SET status = 'failed', error_code = NULL
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+        ),
+    ],
+)
+def test_status_shape_checks_reject_invalid_rows(
+    store_path: Path, table: str, update_sql: str, params
+) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    now = datetime.now(UTC).isoformat()
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        conn.execute(
+            """
+            INSERT INTO operations (
+                id, kind, status, source_session_id, attempt, result_json,
+                error_code, error_message, retryable, created_at, updated_at
+            ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
+            """,
+            (str(uuid4()), session_id, now, now),
+        )
+        message_id, turn_id, client_id, _ = _pending_turn_params(conn, session_id)
+        conn.execute(
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, status, user_message_id,
+                assistant_message_id, error_code, error_message, retryable,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+            """,
+            (turn_id, session_id, client_id, message_id, now, now),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(update_sql, params(conn))
+            conn.commit()

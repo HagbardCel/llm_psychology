@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import sqlite3
+import threading
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
-from jung.domain.errors import Busy
+from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
 from jung.domain.models import ChatTurnStatus, Profile
 from jung.persistence.sqlite_store import SQLiteStore
 
@@ -230,7 +230,7 @@ def test_user_message_id_cannot_belong_to_two_turns(store: SQLiteStore) -> None:
         retryable=True,
         now=now,
     )
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(PersistenceFailure):
         store.accept_chat_message(
             expected_revision=store.get_app_state().revision,
             session_id=intake_id,
@@ -277,10 +277,117 @@ def test_assistant_message_id_unique_across_completed_turns(store: SQLiteStore) 
         content="two",
         now=now,
     )
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(PersistenceFailure):
         store.complete_chat_turn(
             store.get_active_chat_turn().id,
             assistant_message_id=assistant_id,
             content="duplicate assistant",
             now=now,
         )
+
+
+@pytest.mark.parametrize("action", ["complete", "fail"])
+def test_late_chat_callback_rejected(store: SQLiteStore, action: str) -> None:
+    intake_id = uuid4()
+    now = datetime.now(UTC)
+    store.complete_profile_and_open_intake(
+        Profile(name="Alex", primary_language="English"),
+        expected_revision=0,
+        intake_session_id=intake_id,
+        now=now,
+    )
+    turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=uuid4(),
+        turn_id=turn_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=now,
+    )
+    store.complete_chat_turn(
+        turn_id,
+        assistant_message_id=uuid4(),
+        content="done",
+        now=now,
+    )
+    if action == "complete":
+        with pytest.raises(InvariantViolation):
+            store.complete_chat_turn(
+                turn_id,
+                assistant_message_id=uuid4(),
+                content="late",
+                now=now,
+            )
+    else:
+        with pytest.raises(InvariantViolation):
+            store.fail_chat_turn(
+                turn_id,
+                error_code="late",
+                error_message="too late",
+                retryable=False,
+                now=now,
+            )
+
+
+def test_concurrent_duplicate_client_message_id_is_idempotent(
+    store_path,
+) -> None:
+    store_a = SQLiteStore(store_path)
+    store_a.initialize()
+    intake_id = uuid4()
+    now = datetime.now(UTC)
+    store_a.complete_profile_and_open_intake(
+        Profile(name="Alex", primary_language="English"),
+        expected_revision=0,
+        intake_session_id=intake_id,
+        now=now,
+    )
+    revision = store_a.get_app_state().revision
+    client_message_id = uuid4()
+    turn_id = uuid4()
+    user_message_id = uuid4()
+    store_b = SQLiteStore(store_path)
+
+    barrier = threading.Barrier(2)
+    results: list[tuple] = []
+    errors: list[BaseException] = []
+
+    def accept(store: SQLiteStore, turn: UUID, user_msg: UUID) -> None:
+        barrier.wait()
+        try:
+            results.append(
+                store.accept_chat_message(
+                    expected_revision=revision,
+                    session_id=intake_id,
+                    client_message_id=client_message_id,
+                    turn_id=turn,
+                    user_message_id=user_msg,
+                    content="hello",
+                    now=now,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread_a = threading.Thread(
+        target=accept, args=(store_a, turn_id, user_message_id)
+    )
+    thread_b = threading.Thread(
+        target=accept, args=(store_b, uuid4(), uuid4())
+    )
+    thread_a.start()
+    thread_b.start()
+    thread_a.join()
+    thread_b.join()
+
+    assert not errors
+    assert len(results) == 2
+    states = [result[0] for result in results]
+    turns = [result[1] for result in results]
+    assert sum(state is None for state in states) == 1
+    assert sum(state is not None for state in states) == 1
+    assert turns[0].id == turns[1].id == turn_id
+    assert store_a.get_app_state().revision == revision + 1
+    assert len(store_a.list_messages(intake_id)) == 1

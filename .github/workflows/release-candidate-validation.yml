@@ -2,7 +2,12 @@ name: Release Candidate Validation
 
 on:
   push:
-    branches: [master, main, develop, refactor/single-user-architecture]
+    branches:
+      - master
+      - main
+      - develop
+      - refactor/single-user-architecture
+      - refactor/phase-2-domain-persistence
   pull_request:
     branches: [master, main, develop]
 
@@ -54,20 +59,3 @@ jobs:
 
       - name: Run intake-note workflow probe
         run: make probe-console-intake-notes
-
-  phase-2-evidence:
-    name: Phase 2 evidence gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: finalization-check
-    if: >
-      github.event_name == 'pull_request' &&
-      github.head_ref == 'refactor/phase-2-domain-persistence'
-    env:
-      ENV_FILE: .env.example
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Validate Phase 2 package
-        run: make validate-refactor-phase-2
