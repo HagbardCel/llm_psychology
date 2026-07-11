@@ -347,8 +347,9 @@ The closed session is the canonical owner of the session briefing.
 - monotonic `sequence` within the session;
 - `role`;
 - `content`;
-- optional `client_message_id` for user chat turns;
 - `created_at`.
+
+`client_message_id` is not a durable column on `messages`; it is owned by `chat_turns` and exposed on message read models via join.
 
 #### `Plan`
 
@@ -640,7 +641,6 @@ session_id TEXT NOT NULL
 sequence INTEGER NOT NULL
 role TEXT NOT NULL
 content TEXT NOT NULL
-client_message_id TEXT NULL
 created_at TEXT NOT NULL
 ```
 
@@ -649,9 +649,9 @@ Constraints:
 - foreign key to session with explicit deletion policy;
 - unique `(session_id, sequence)`;
 - `sequence >= 1`;
-- role in the accepted role set;
-- `client_message_id` is permitted only for user chat messages;
-- unique `(session_id, client_message_id)` where the client ID is not null.
+- role in the accepted role set.
+
+`client_message_id` is **not** stored on `messages`. The canonical durable idempotency key lives on `chat_turns.client_message_id`; message read models derive it through `chat_turns.user_message_id`.
 
 Do not store a serialized transcript blob.
 

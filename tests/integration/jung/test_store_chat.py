@@ -346,8 +346,10 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
     )
     revision = store_a.get_app_state().revision
     client_message_id = uuid4()
-    turn_id = uuid4()
-    user_message_id = uuid4()
+    turn_a_id = uuid4()
+    turn_b_id = uuid4()
+    user_message_a_id = uuid4()
+    user_message_b_id = uuid4()
     store_b = SQLiteStore(store_path)
 
     barrier = threading.Barrier(2)
@@ -372,22 +374,27 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
             errors.append(exc)
 
     thread_a = threading.Thread(
-        target=accept, args=(store_a, turn_id, user_message_id)
+        target=accept, args=(store_a, turn_a_id, user_message_a_id)
     )
     thread_b = threading.Thread(
-        target=accept, args=(store_b, uuid4(), uuid4())
+        target=accept, args=(store_b, turn_b_id, user_message_b_id)
     )
     thread_a.start()
     thread_b.start()
-    thread_a.join()
-    thread_b.join()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
 
+    assert not thread_a.is_alive()
+    assert not thread_b.is_alive()
     assert not errors
     assert len(results) == 2
     states = [result[0] for result in results]
     turns = [result[1] for result in results]
     assert sum(state is None for state in states) == 1
     assert sum(state is not None for state in states) == 1
-    assert turns[0].id == turns[1].id == turn_id
+    assert turns[0].id == turns[1].id
+    assert turns[0].id in {turn_a_id, turn_b_id}
     assert store_a.get_app_state().revision == revision + 1
-    assert len(store_a.list_messages(intake_id)) == 1
+    messages = store_a.list_messages(intake_id)
+    assert len(messages) == 1
+    assert messages[0].id in {user_message_a_id, user_message_b_id}

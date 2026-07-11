@@ -28,11 +28,9 @@ def test_initialize_is_idempotent(store: SQLiteStore) -> None:
 def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
-    with sqlite3.connect(store_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
+    with store._connect() as conn:
         fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    with store._connect() as conn:
         busy = conn.execute("PRAGMA busy_timeout").fetchone()[0]
     assert fk == 1
     assert journal.lower() == "wal"
@@ -47,14 +45,27 @@ def test_user_version_is_set(store_path: Path) -> None:
     assert version == SCHEMA_VERSION
 
 
-def test_incompatible_user_version_is_rejected(store_path: Path) -> None:
+@pytest.mark.parametrize("version", [1, 99])
+def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     with sqlite3.connect(store_path) as conn:
-        conn.execute("PRAGMA user_version = 99")
+        conn.execute(f"PRAGMA user_version = {version}")
         conn.commit()
     with pytest.raises(PersistenceFailure):
         store.initialize()
+
+
+def test_reset_database_produces_fresh_schema_version(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    store.reset_database()
+    state = store.get_app_state()
+    with sqlite3.connect(store_path) as conn:
+        user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert user_version == SCHEMA_VERSION
+    assert state.stage == Stage.SETUP
+    assert state.revision == 0
 
 
 def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
@@ -206,6 +217,30 @@ def _second_pending_turn_insert_params(
     return str(uuid4()), session_id, str(uuid4()), message_id, now, now
 
 
+def test_plan_empty_focus_rejected_by_schema(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    session_id = str(uuid4())
+    now = datetime.now(UTC).isoformat()
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_open_session(conn, session_id)
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO plans (
+                    id, version, selected_style, focus, themes_json, goals_json,
+                    current_progress, planned_interventions_json,
+                    revision_recommendations_json, session_briefing_json,
+                    source_session_id, supersedes_plan_id, created_at
+                ) VALUES (?, 1, 'cbt', ' ', '[]', '[]', 'ok', '[]', '[]', NULL, ?, NULL, ?)
+                """,
+                (str(uuid4()), session_id, now),
+            )
+            conn.commit()
+
+
 def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -257,6 +292,42 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             """
             UPDATE chat_turns
             SET status = 'failed', error_code = NULL
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "operations",
+            """
+            UPDATE operations
+            SET status = 'pending', error_message = 'stale'
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "operations",
+            """
+            UPDATE operations
+            SET status = 'pending', retryable = 1
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "chat_turns",
+            """
+            UPDATE chat_turns
+            SET status = 'pending', error_message = 'stale'
+            WHERE id = ?
+            """,
+            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+        ),
+        (
+            "chat_turns",
+            """
+            UPDATE chat_turns
+            SET status = 'complete', retryable = 1
             WHERE id = ?
             """,
             lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),

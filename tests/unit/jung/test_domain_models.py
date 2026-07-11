@@ -40,6 +40,22 @@ def test_plan_requires_non_empty_focus_and_progress():
         )
 
 
+def test_plan_version_must_be_at_least_one():
+    with pytest.raises(ValidationError):
+        Plan(
+            id=uuid4(),
+            version=0,
+            selected_style="cbt",
+            focus="anxiety",
+            themes=[],
+            goals=[],
+            current_progress="progress",
+            planned_interventions=[],
+            revision_recommendations=[],
+            created_at=datetime.now(UTC),
+        )
+
+
 def test_message_sequence_must_be_positive():
     with pytest.raises(ValidationError):
         Message(

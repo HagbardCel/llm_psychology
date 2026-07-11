@@ -45,7 +45,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `role` | `"user"` \| `"assistant"` \| `"system"` | yes | Speaker role |
 | `content` | string | yes | Message body |
 | `created_at` | datetime | yes | Persistence timestamp |
-| `client_message_id` | UUID \| null | no | Idempotency key for user turns |
+| `client_message_id` | UUID \| null | no | Derived idempotency key from the owning chat turn (not stored on `messages`) |
 | **PlanSummary** | | | |
 | `id` | UUID | yes | Immutable plan revision identifier |
 | `version` | int | yes | Monotonic plan version |

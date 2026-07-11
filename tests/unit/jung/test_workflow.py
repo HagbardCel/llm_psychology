@@ -43,8 +43,20 @@ from jung.workflow import (
                 has_active_session=False,
                 operation_kind=OperationKind.ASSESSMENT,
                 operation_status=OperationStatus.FAILED,
+                operation_retryable=True,
             ),
             frozenset({CommandName.RETRY_OPERATION}),
+        ),
+        (
+            WorkflowFacts(
+                stage=Stage.ASSESSMENT,
+                profile_complete=True,
+                has_active_session=False,
+                operation_kind=OperationKind.ASSESSMENT,
+                operation_status=OperationStatus.FAILED,
+                operation_retryable=False,
+            ),
+            frozenset(),
         ),
         (
             WorkflowFacts(stage=Stage.STYLE_SELECTION, profile_complete=True, has_active_session=False),
@@ -65,8 +77,20 @@ from jung.workflow import (
                 has_active_session=False,
                 operation_kind=OperationKind.POST_SESSION,
                 operation_status=OperationStatus.FAILED,
+                operation_retryable=True,
             ),
             frozenset({CommandName.RETRY_OPERATION}),
+        ),
+        (
+            WorkflowFacts(
+                stage=Stage.POST_SESSION,
+                profile_complete=True,
+                has_active_session=False,
+                operation_kind=OperationKind.POST_SESSION,
+                operation_status=OperationStatus.FAILED,
+                operation_retryable=False,
+            ),
+            frozenset(),
         ),
     ],
 )

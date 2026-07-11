@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from jung.domain.errors import Busy, PersistenceFailure
+from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
 from jung.domain.models import (
     AppState,
     ChatTurn,
@@ -29,7 +29,7 @@ from jung.domain.models import (
     StoredProfile,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -118,6 +118,29 @@ def date_iso(value: date | None) -> str | None:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def validate_json_mapping(
+    value: object,
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise InvariantViolation(f"{field_name} must be a mapping")
+
+    normalized = dict(value)
+
+    if not all(isinstance(key, str) for key in normalized):
+        raise InvariantViolation(f"{field_name} keys must be strings")
+
+    try:
+        json_dumps(normalized)
+    except (TypeError, ValueError) as exc:
+        raise InvariantViolation(
+            f"{field_name} must contain JSON-compatible values"
+        ) from exc
+
+    return normalized
 
 
 def json_loads(value: str | None) -> Any:

@@ -38,7 +38,10 @@ CREATE TABLE IF NOT EXISTS plans (
     supersedes_plan_id TEXT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (source_session_id) REFERENCES sessions(id),
-    FOREIGN KEY (supersedes_plan_id) REFERENCES plans(id)
+    FOREIGN KEY (supersedes_plan_id) REFERENCES plans(id),
+    CHECK (length(trim(focus)) > 0),
+    CHECK (length(trim(current_progress)) > 0),
+    CHECK (version >= 1)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_supersedes
@@ -90,7 +93,9 @@ CREATE TABLE IF NOT EXISTS operations (
     CHECK (status = 'complete' OR result_json IS NULL),
     CHECK (status != 'complete' OR result_json IS NOT NULL),
     CHECK (status = 'failed' OR error_code IS NULL),
-    CHECK (status != 'failed' OR error_code IS NOT NULL)
+    CHECK (status != 'failed' OR error_code IS NOT NULL),
+    CHECK (status = 'failed' OR error_message IS NULL),
+    CHECK (status = 'failed' OR retryable = 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_one_current
@@ -117,7 +122,9 @@ CREATE TABLE IF NOT EXISTS chat_turns (
     CHECK (status = 'complete' OR assistant_message_id IS NULL),
     CHECK (status != 'complete' OR assistant_message_id IS NOT NULL),
     CHECK (status = 'failed' OR error_code IS NULL),
-    CHECK (status != 'failed' OR error_code IS NOT NULL)
+    CHECK (status != 'failed' OR error_code IS NOT NULL),
+    CHECK (status = 'failed' OR error_message IS NULL),
+    CHECK (status = 'failed' OR retryable = 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_one_pending

@@ -125,4 +125,5 @@ def _failed_operation_retry_available(
     return (
         facts.operation_kind == kind
         and facts.operation_status == OperationStatus.FAILED
+        and facts.operation_retryable is True
     )

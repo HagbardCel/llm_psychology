@@ -118,7 +118,7 @@ class Plan(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: UUID
-    version: int
+    version: int = Field(ge=1)
     selected_style: str
     focus: str
     themes: list[str]
@@ -200,6 +200,7 @@ class WorkflowFacts(BaseModel):
     has_active_session: bool
     operation_kind: OperationKind | None = None
     operation_status: OperationStatus | None = None
+    operation_retryable: bool | None = None
     chat_turn_status: ChatTurnStatus | None = None
 
 

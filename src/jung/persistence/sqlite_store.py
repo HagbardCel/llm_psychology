@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from jung.domain.errors import (
     Busy,
     InvariantViolation,
@@ -38,6 +40,13 @@ from jung.domain.models import (
 from jung.persistence import _sqlite_support as sql
 
 SCHEMA_VERSION = sql.SCHEMA_VERSION
+
+
+def _build_plan(**values: object) -> Plan:
+    try:
+        return Plan.model_validate(values, strict=True)
+    except ValidationError as exc:
+        raise InvariantViolation("invalid plan payload") from exc
 
 
 class SQLiteStore:
@@ -312,53 +321,44 @@ class SQLiteStore:
         operation_id: UUID,
         now: datetime,
     ) -> tuple[AppState, Operation]:
-        operation_holder: dict[str, Operation] = {}
-
-        def mutate(conn: sqlite3.Connection) -> None:
-            self._require_stage(conn, {Stage.INTAKE})
-            session = self._require_open_session(conn, intake_session_id)
-            if session.kind != SessionKind.INTAKE:
-                raise InvariantViolation("session must be intake")
-            conn.execute(
-                "UPDATE sessions SET ended_at = ? WHERE id = ?",
-                (sql.dt(now), str(intake_session_id)),
-            )
-            existing = conn.execute(
-                """
-                SELECT id FROM operations
-                WHERE kind = ? AND source_session_id = ?
-                """,
-                (OperationKind.ASSESSMENT.value, str(intake_session_id)),
-            ).fetchone()
-            if existing:
-                operation_holder["operation"] = self._load_operation(
-                    conn, UUID(existing[0])
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._find_operation_by_source(
+                    conn, OperationKind.ASSESSMENT, intake_session_id
                 )
-            else:
+                if existing is not None:
+                    state = self._load_app_state(conn)
+                    conn.rollback()
+                    return state, existing
+
+                revision = self._load_revision(conn)
+                if revision != expected_revision:
+                    raise RevisionConflict(expected_revision, revision)
+
+                self._require_stage(conn, {Stage.INTAKE})
+                session = self._require_open_session(conn, intake_session_id)
+                if session.kind != SessionKind.INTAKE:
+                    raise InvariantViolation("session must be intake")
                 conn.execute(
-                    """
-                    INSERT INTO operations (
-                        id, kind, status, source_session_id, attempt, result_json,
-                        error_code, error_message, retryable, created_at, updated_at,
-                        started_at, completed_at
-                    ) VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, 0, ?, ?, NULL, NULL)
-                    """,
-                    (
-                        str(operation_id),
-                        OperationKind.ASSESSMENT.value,
-                        OperationStatus.PENDING.value,
-                        str(intake_session_id),
-                        sql.dt(now),
-                        sql.dt(now),
-                    ),
+                    "UPDATE sessions SET ended_at = ? WHERE id = ?",
+                    (sql.dt(now), str(intake_session_id)),
                 )
-                operation_holder["operation"] = self._load_operation(
-                    conn, operation_id
+                operation = self._insert_pending_operation(
+                    conn,
+                    kind=OperationKind.ASSESSMENT,
+                    source_session_id=intake_session_id,
+                    operation_id=operation_id,
+                    now=now,
                 )
-            self._set_stage(conn, Stage.ASSESSMENT, now)
+                self._set_stage(conn, Stage.ASSESSMENT, now)
+                self._increment_revision(conn)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                raise sql.translate_sqlite_error(exc) from exc
 
-        state = self._write(expected_revision, mutate)
-        return state, operation_holder["operation"]
+        return self.get_app_state(), operation
 
     def mark_operation_running(
         self,
@@ -395,6 +395,8 @@ class SQLiteStore:
         result: dict[str, Any],
         now: datetime,
     ) -> AppState:
+        validated_result = sql.validate_json_mapping(result, field_name="result")
+
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.ASSESSMENT})
             cursor = conn.execute(
@@ -406,7 +408,7 @@ class SQLiteStore:
                 """,
                 (
                     OperationStatus.COMPLETE.value,
-                    sql.json_dumps(result),
+                    sql.json_dumps(validated_result),
                     sql.dt(now),
                     sql.dt(now),
                     str(operation_id),
@@ -498,7 +500,22 @@ class SQLiteStore:
         intake_session_id: UUID,
         now: datetime,
     ) -> tuple[AppState, Plan]:
-        plan_holder: dict[str, Plan] = {}
+        plan = _build_plan(
+            id=plan_id,
+            version=1,
+            selected_style=style_id,
+            focus=focus,
+            themes=themes,
+            goals=goals,
+            current_progress=current_progress,
+            planned_interventions=planned_interventions,
+            revision_recommendations=revision_recommendations,
+            session_briefing=None,
+            source_session_id=intake_session_id,
+            supersedes_plan_id=None,
+            created_at=now,
+        )
+        plan_holder: dict[str, Plan] = {"plan": plan}
 
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.STYLE_SELECTION})
@@ -519,27 +536,27 @@ class SQLiteStore:
                     current_progress, planned_interventions_json,
                     revision_recommendations_json, session_briefing_json,
                     source_session_id, supersedes_plan_id, created_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?)
                 """,
                 (
-                    str(plan_id),
-                    style_id,
-                    focus,
-                    sql.json_dumps(themes),
-                    sql.json_dumps(goals),
-                    current_progress,
-                    sql.json_dumps(planned_interventions),
-                    sql.json_dumps(revision_recommendations),
-                    str(intake_session_id),
-                    sql.dt(now),
+                    str(plan.id),
+                    plan.version,
+                    plan.selected_style,
+                    plan.focus,
+                    sql.json_dumps(plan.themes),
+                    sql.json_dumps(plan.goals),
+                    plan.current_progress,
+                    sql.json_dumps(plan.planned_interventions),
+                    sql.json_dumps(plan.revision_recommendations),
+                    str(plan.source_session_id),
+                    sql.dt(plan.created_at),
                 ),
             )
             conn.execute(
                 "UPDATE profile SET current_plan_id = ?, updated_at = ? WHERE singleton_id = 1",
-                (str(plan_id), sql.dt(now)),
+                (str(plan.id), sql.dt(now)),
             )
             self._set_stage(conn, Stage.READY, now)
-            plan_holder["plan"] = self._load_plan(conn, plan_id)
 
         state = self._write(expected_revision, mutate)
         return state, plan_holder["plan"]
@@ -597,53 +614,44 @@ class SQLiteStore:
         operation_id: UUID,
         now: datetime,
     ) -> tuple[AppState, Operation]:
-        operation_holder: dict[str, Operation] = {}
-
-        def mutate(conn: sqlite3.Connection) -> None:
-            self._require_stage(conn, {Stage.THERAPY})
-            session = self._require_open_session(conn, session_id)
-            if session.kind != SessionKind.THERAPY:
-                raise InvariantViolation("session must be therapy")
-            conn.execute(
-                "UPDATE sessions SET ended_at = ? WHERE id = ?",
-                (sql.dt(now), str(session_id)),
-            )
-            existing = conn.execute(
-                """
-                SELECT id FROM operations
-                WHERE kind = ? AND source_session_id = ?
-                """,
-                (OperationKind.POST_SESSION.value, str(session_id)),
-            ).fetchone()
-            if existing:
-                operation_holder["operation"] = self._load_operation(
-                    conn, UUID(existing[0])
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._find_operation_by_source(
+                    conn, OperationKind.POST_SESSION, session_id
                 )
-            else:
+                if existing is not None:
+                    state = self._load_app_state(conn)
+                    conn.rollback()
+                    return state, existing
+
+                revision = self._load_revision(conn)
+                if revision != expected_revision:
+                    raise RevisionConflict(expected_revision, revision)
+
+                self._require_stage(conn, {Stage.THERAPY})
+                session = self._require_open_session(conn, session_id)
+                if session.kind != SessionKind.THERAPY:
+                    raise InvariantViolation("session must be therapy")
                 conn.execute(
-                    """
-                    INSERT INTO operations (
-                        id, kind, status, source_session_id, attempt, result_json,
-                        error_code, error_message, retryable, created_at, updated_at,
-                        started_at, completed_at
-                    ) VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, 0, ?, ?, NULL, NULL)
-                    """,
-                    (
-                        str(operation_id),
-                        OperationKind.POST_SESSION.value,
-                        OperationStatus.PENDING.value,
-                        str(session_id),
-                        sql.dt(now),
-                        sql.dt(now),
-                    ),
+                    "UPDATE sessions SET ended_at = ? WHERE id = ?",
+                    (sql.dt(now), str(session_id)),
                 )
-                operation_holder["operation"] = self._load_operation(
-                    conn, operation_id
+                operation = self._insert_pending_operation(
+                    conn,
+                    kind=OperationKind.POST_SESSION,
+                    source_session_id=session_id,
+                    operation_id=operation_id,
+                    now=now,
                 )
-            self._set_stage(conn, Stage.POST_SESSION, now)
+                self._set_stage(conn, Stage.POST_SESSION, now)
+                self._increment_revision(conn)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                raise sql.translate_sqlite_error(exc) from exc
 
-        state = self._write(expected_revision, mutate)
-        return state, operation_holder["operation"]
+        return self.get_app_state(), operation
 
     def complete_post_session(
         self,
@@ -661,6 +669,11 @@ class SQLiteStore:
         revision_recommendations: list[str],
         now: datetime,
     ) -> AppState:
+        validated_briefing = sql.validate_json_mapping(briefing, field_name="briefing")
+        validated_profile = sql.validate_json_mapping(
+            derived_profile, field_name="derived_profile"
+        )
+
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.POST_SESSION})
             op_row = conn.execute(
@@ -676,16 +689,30 @@ class SQLiteStore:
                 raise InvariantViolation("operation must be post_session")
             if op_row[1] != OperationStatus.RUNNING.value:
                 raise InvariantViolation("operation must be running")
-            source_session_id = op_row[2]
+            source_session_id = UUID(op_row[2])
             current_plan = self._require_current_plan(conn)
-            new_version = current_plan.version + 1
+            plan = _build_plan(
+                id=plan_id,
+                version=current_plan.version + 1,
+                selected_style=current_plan.selected_style,
+                focus=focus,
+                themes=themes,
+                goals=goals,
+                current_progress=current_progress,
+                planned_interventions=planned_interventions,
+                revision_recommendations=revision_recommendations,
+                session_briefing=validated_briefing,
+                source_session_id=source_session_id,
+                supersedes_plan_id=current_plan.id,
+                created_at=now,
+            )
             conn.execute(
                 """
                 UPDATE sessions
                 SET summary = ?, briefing_json = ?
                 WHERE id = ?
                 """,
-                (summary, sql.json_dumps(briefing), source_session_id),
+                (summary, sql.json_dumps(validated_briefing), str(source_session_id)),
             )
             conn.execute(
                 """
@@ -697,19 +724,19 @@ class SQLiteStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(plan_id),
-                    new_version,
-                    current_plan.selected_style,
-                    focus,
-                    sql.json_dumps(themes),
-                    sql.json_dumps(goals),
-                    current_progress,
-                    sql.json_dumps(planned_interventions),
-                    sql.json_dumps(revision_recommendations),
-                    sql.json_dumps(briefing),
-                    source_session_id,
-                    str(current_plan.id),
-                    sql.dt(now),
+                    str(plan.id),
+                    plan.version,
+                    plan.selected_style,
+                    plan.focus,
+                    sql.json_dumps(plan.themes),
+                    sql.json_dumps(plan.goals),
+                    plan.current_progress,
+                    sql.json_dumps(plan.planned_interventions),
+                    sql.json_dumps(plan.revision_recommendations),
+                    sql.json_dumps(plan.session_briefing),
+                    str(plan.source_session_id),
+                    str(plan.supersedes_plan_id),
+                    sql.dt(plan.created_at),
                 ),
             )
             conn.execute(
@@ -718,9 +745,13 @@ class SQLiteStore:
                 SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
                 WHERE singleton_id = 1
                 """,
-                (sql.json_dumps(derived_profile), str(plan_id), sql.dt(now)),
+                (
+                    sql.json_dumps(validated_profile),
+                    str(plan.id),
+                    sql.dt(now),
+                ),
             )
-            result = {"plan_id": str(plan_id), "version": new_version}
+            result = {"plan_id": str(plan.id), "version": plan.version}
             cursor = conn.execute(
                 """
                 UPDATE operations
@@ -1112,6 +1143,59 @@ class SQLiteStore:
             raise InvariantViolation("current plan is required")
         return sql.row_to_plan(row)
 
+    def _load_app_state(self, conn: sqlite3.Connection) -> AppState:
+        row = conn.execute(
+            "SELECT stage, revision, created_at, updated_at FROM app_state WHERE singleton_id = 1"
+        ).fetchone()
+        if row is None:
+            raise NotFound("app_state")
+        return sql.row_to_app_state(row)
+
+    def _find_operation_by_source(
+        self,
+        conn: sqlite3.Connection,
+        kind: OperationKind,
+        source_session_id: UUID,
+    ) -> Operation | None:
+        row = conn.execute(
+            """
+            SELECT id FROM operations
+            WHERE kind = ? AND source_session_id = ?
+            """,
+            (kind.value, str(source_session_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._load_operation(conn, UUID(row[0]))
+
+    def _insert_pending_operation(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        kind: OperationKind,
+        source_session_id: UUID,
+        operation_id: UUID,
+        now: datetime,
+    ) -> Operation:
+        conn.execute(
+            """
+            INSERT INTO operations (
+                id, kind, status, source_session_id, attempt, result_json,
+                error_code, error_message, retryable, created_at, updated_at,
+                started_at, completed_at
+            ) VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, 0, ?, ?, NULL, NULL)
+            """,
+            (
+                str(operation_id),
+                kind.value,
+                OperationStatus.PENDING.value,
+                str(source_session_id),
+                sql.dt(now),
+                sql.dt(now),
+            ),
+        )
+        return self._load_operation(conn, operation_id)
+
     def _load_revision(self, conn: sqlite3.Connection) -> int:
         row = conn.execute(
             "SELECT revision FROM app_state WHERE singleton_id = 1"
@@ -1253,7 +1337,7 @@ class SQLiteStore:
         ).fetchone()
         op_row = conn.execute(
             """
-            SELECT kind, status FROM operations
+            SELECT kind, status, retryable FROM operations
             WHERE status IN ('pending', 'running', 'failed')
             ORDER BY created_at DESC LIMIT 1
             """
@@ -1267,5 +1351,6 @@ class SQLiteStore:
             has_active_session=active_session is not None,
             operation_kind=OperationKind(op_row[0]) if op_row else None,
             operation_status=OperationStatus(op_row[1]) if op_row else None,
+            operation_retryable=bool(op_row[2]) if op_row else None,
             chat_turn_status=ChatTurnStatus(turn_row[0]) if turn_row else None,
         )
