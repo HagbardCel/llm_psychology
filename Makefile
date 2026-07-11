@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 hook-commit hook-push
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -152,6 +152,13 @@ validate-refactor-phase-1: prepare-runtime-dirs
 	$(MAKE) validate-docs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" -v "$(PWD)/requirements.in:/app/requirements.in:ro" -v "$(PWD)/requirements-dev.in:/app/requirements-dev.in:ro" api python scripts/validate_refactor_phase_1.py
 	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
+
+phase-2-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/unit/jung tests/integration/jung -q
+
+validate-refactor-phase-2: prepare-runtime-dirs
+	docker compose --profile test run --rm test ruff check src/jung tests/unit/jung tests/integration/jung
+	$(MAKE) phase-2-test
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
 hook-commit: lint

@@ -2,7 +2,12 @@ name: Release Candidate Validation
 
 on:
   push:
-    branches: [master, main, develop, refactor/single-user-architecture]
+    branches:
+      - master
+      - main
+      - develop
+      - refactor/single-user-architecture
+      - refactor/phase-2-domain-persistence
   pull_request:
     branches: [master, main, develop]
 

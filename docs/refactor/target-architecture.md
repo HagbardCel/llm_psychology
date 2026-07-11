@@ -361,7 +361,7 @@ Proposed tables:
 - `operations`
 - `chat_turns`
 
-Messages are normalized by session and sequence. `client_message_id` provides idempotency across reconnects. Command retry safety comes from revision checks, snapshot reread, operation uniqueness, and chat turn keys — not a generic receipt store. Plans remain immutable, versioned revisions. Profile and derived result documents may be validated JSON where relational querying is not needed.
+Messages are normalized by session and sequence. Chat idempotency uses the durable `(session_id, client_message_id)` key on `chat_turns`; `Message.client_message_id` is a derived read-model field joined from the owning turn, not a duplicate column on `messages`. Command retry safety comes from revision checks, snapshot reread, operation uniqueness, and chat turn keys — not a generic receipt store. Plans remain immutable, versioned revisions. Profile and derived result documents may be validated JSON where relational querying is not needed.
 
 Atomic store methods should commit multi-table use cases such as assessment completion and post-session completion.
 

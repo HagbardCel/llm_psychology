@@ -68,3 +68,18 @@ Historical Phase 1 starting commit: `1693b01907bac827c3861374ea581e6cb629d3c7` (
 The baseline command, SHA, definitions, limitations, targets, dependency table, and generated machine-readable metric keys are validated by `make validate-refactor-phase-1`. Commit existence for the completion SHA is verified in CI via `scripts/extract_baseline_sha.py` and `git cat-file`.
 
 Required metric keys: `production_python_files`, `production_python_physical_loc`, `production_python_code_loc`, `test_python_files`, `test_python_physical_loc`, `test_python_code_loc`, `console_python_files`, `console_python_physical_loc`, `console_python_code_loc`, `script_python_files`, `script_python_physical_loc`, `script_python_code_loc`, `executable_configuration_files`, `direct_dependency_count`, `trio_importing_production_modules`, `service_container_importing_modules`, `persistence_related_modules`, `pydantic_model_candidates`, `api_route_count`, `routes_in_user_named_modules`, `websocket_endpoint_count`, `sqlite_table_count`, `workflow_state_member_count`, and `workflow_action_member_count`.
+
+## Phase 2 checkpoint (in progress)
+
+Branch `refactor/phase-2-domain-persistence` adds the isolated target package under `src/jung/`:
+
+| Artifact | Location |
+|---|---|
+| Domain models, commands, errors | `src/jung/domain/` |
+| Pure workflow policy | `src/jung/workflow.py` |
+| SQLite schema + store | `src/jung/persistence/` |
+| Unit tests | `tests/unit/jung/` |
+| Integration tests | `tests/integration/jung/` |
+| Validation target | `make validate-refactor-phase-2` |
+
+Phase 2 does not modify legacy runtime metrics above. Re-measure at Phase 2 merge for an updated checkpoint row.

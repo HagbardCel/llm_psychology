@@ -15,7 +15,7 @@ Test retirement actions are recorded in the `Test action` column of [Deletion In
 | intake record merge, completeness, evidence provenance, turn persistence | retain | durable domain behavior; `phases/intake` and store tests |
 | note-taker patch, planning analysis/extractors, reflection snapshots | port | pure helpers become phase tests |
 | LLM structured output, phase metadata, prompts, fake LLM | retain | gateway/phase seam remains |
-| profile merge and immutable plan/history linkage | rewrite_application | target commands and SQLite transactions own it |
+| profile merge and immutable plan/history linkage | rewrite_application | target commands and SQLite transactions own it; Phase 2 `SQLiteStore` covers profile/plan linkage |
 | console workflow/probe tests | rewrite_api | console becomes the reference v1 client |
 | characterization test semantics | rewrite_api | rewrite to `/api/v1` black-box coverage in Phase 5 |
 | `tests/characterization/legacy_client.py` harness | delete_with_component | removed with legacy API at cutover |

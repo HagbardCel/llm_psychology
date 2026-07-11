@@ -39,6 +39,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "psychoanalyst_app" = ["styles/**/*", "prompts/**/*"]
+"jung.persistence" = ["schema.sql"]
 
 [tool.black]
 line-length = 88
@@ -67,6 +68,7 @@ max-complexity = 32
 "tests/**" = ["C901", "E501", "E402"]
 "src/psychoanalyst_app/orchestration/response_handler.py" = ["C901"]
 "src/psychoanalyst_app/agents/therapist/prompt_context.py" = ["C901"]
+"src/jung/persistence/sqlite_store.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
