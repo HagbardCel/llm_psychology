@@ -1,4 +1,8 @@
-"""Minimal HTTP/WebSocket client for legacy public API characterization."""
+"""Minimal HTTP/WebSocket client for legacy public API characterization.
+
+Setup helpers (`persist_intake_messages`, `drive_to_ready`) always register a
+fresh user. Callers must not register before invoking them.
+"""
 
 from __future__ import annotations
 
@@ -35,11 +39,28 @@ DETERMINISTIC_REPLIES = [
     ),
 ]
 
+DEFAULT_WS_TIMEOUT = 120.0
+DEFAULT_INTAKE_TIMEOUT = 480.0
+
 
 def _port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def _diagnostic_context(
+    server: LegacyServer,
+    *,
+    last_status: dict[str, Any] | None = None,
+    last_action: dict[str, Any] | None = None,
+) -> str:
+    parts = [f"server_stderr={server.stderr}"]
+    if last_status is not None:
+        parts.append(f"workflow_status={last_status}")
+    if last_action is not None:
+        parts.append(f"workflow_next={last_action}")
+    return "; ".join(parts)
 
 
 @dataclass
@@ -241,7 +262,8 @@ class LegacyApiClient:
                 return last
             time.sleep(1)
         raise AssertionError(
-            f"timed out waiting for workflow_state={target!r}, last={last}"
+            f"timed out waiting for workflow_state={target!r}, "
+            f"{_diagnostic_context(self.server, last_status=last)}"
         )
 
     def wait_for_job(self, job_id: str, *, timeout: float = 180) -> dict:
@@ -260,7 +282,10 @@ class LegacyApiClient:
             if last.get("status") == "failed":
                 raise AssertionError(f"job failed: {last}")
             time.sleep(2)
-        raise AssertionError(f"timed out waiting for job {job_id!r}, last={last}")
+        raise AssertionError(
+            f"timed out waiting for job {job_id!r}, last={last}, "
+            f"{_diagnostic_context(self.server)}"
+        )
 
     def websocket_url(self) -> str:
         return (
@@ -268,88 +293,143 @@ class LegacyApiClient:
             + f"/ws?user_id={self.user_id}"
         )
 
-    async def wait_for_session_started(self, websocket) -> dict:
-        for _ in range(30):
-            event = json.loads(await websocket.get_message())
+    async def _receive_json_message(self, websocket, *, timeout: float) -> dict:
+        with trio.move_on_after(timeout) as cancel_scope:
+            raw = await websocket.get_message()
+        if cancel_scope.cancelled_caught:
+            raise trio.TooSlowError
+        return json.loads(raw)
+
+    async def wait_for_session_started(
+        self, websocket, *, timeout: float = DEFAULT_WS_TIMEOUT
+    ) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            try:
+                event = await self._receive_json_message(
+                    websocket, timeout=min(remaining, 5.0)
+                )
+            except trio.TooSlowError:
+                continue
             if event.get("type") == "session_started":
                 return event
-        pytest.fail("legacy websocket did not start a session")
+        pytest.fail(
+            "legacy websocket did not start a session; "
+            f"{_diagnostic_context(self.server, last_status=self.user_status())}"
+        )
 
     async def send_chat(self, websocket, message: str) -> None:
         await websocket.send_message(
             json.dumps({"type": "chat_message", "data": {"message": message}})
         )
 
-    async def collect_chat_response(self, websocket, *, limit: int = 60) -> str:
+    async def collect_chat_response(
+        self, websocket, *, timeout: float = DEFAULT_WS_TIMEOUT
+    ) -> str:
+        deadline = time.time() + timeout
         chunks: list[str] = []
-        for _ in range(limit):
-            event = json.loads(await websocket.get_message())
+        while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            try:
+                event = await self._receive_json_message(
+                    websocket, timeout=min(remaining, 5.0)
+                )
+            except trio.TooSlowError:
+                continue
             if event.get("type") != "chat_response_chunk":
                 continue
             chunks.append(event["data"]["chunk"])
             if event["data"]["is_complete"]:
                 return "".join(chunks)
-        pytest.fail("legacy websocket did not complete chat streaming")
+        pytest.fail(
+            "legacy websocket did not complete chat streaming; "
+            f"{_diagnostic_context(self.server, last_status=self.user_status())}"
+        )
 
-    async def wait_for_initial_greeting(self, websocket) -> None:
-        for _ in range(90):
-            with trio.move_on_after(1):
-                try:
-                    event = json.loads(await websocket.get_message())
-                except trio.TooSlowError:
-                    continue
-                if (
-                    event.get("type") == "chat_response_chunk"
-                    and event["data"].get("is_complete")
-                ):
-                    await trio.sleep(0.5)
-                    return
+    async def wait_for_initial_greeting(
+        self, websocket, *, timeout: float = DEFAULT_WS_TIMEOUT
+    ) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            try:
+                event = await self._receive_json_message(
+                    websocket, timeout=min(remaining, 2.0)
+                )
+            except trio.TooSlowError:
+                continue
+            if (
+                event.get("type") == "chat_response_chunk"
+                and event["data"].get("is_complete")
+            ):
+                await trio.sleep(0.5)
+                return
+        pytest.fail(
+            "legacy websocket did not finish initial greeting; "
+            f"{_diagnostic_context(self.server, last_status=self.user_status())}"
+        )
 
-    async def drive_intake_chat(self, websocket, *, max_turns: int = 16) -> None:
-        await self.wait_for_initial_greeting(websocket)
+    async def drive_intake_chat(
+        self,
+        websocket,
+        *,
+        max_turns: int = 16,
+        timeout: float = DEFAULT_INTAKE_TIMEOUT,
+    ) -> None:
+        await self.wait_for_initial_greeting(websocket, timeout=timeout)
+        deadline = time.time() + timeout
         sent = 0
-        while sent < max_turns:
+        last_action: dict[str, Any] = {}
+        while sent < max_turns and time.time() < deadline:
             status = self.user_status()
             state = status.get("workflow_state")
             if state not in {"intake_in_progress", "new", "profile_only"}:
                 return
-            action = self.workflow_next()
-            required = action.get("required_action")
+            last_action = self.workflow_next()
+            required = last_action.get("required_action")
             if required == "complete_profile":
                 self.complete_profile()
                 continue
             if required == "wait":
-                await trio.sleep(2)
+                await trio.sleep(min(2.0, max(0.1, deadline - time.time())))
                 continue
             reply = self._replies[min(sent, len(self._replies) - 1)]
             await self.send_chat(websocket, reply)
-            await self.collect_chat_response(websocket)
+            await self.collect_chat_response(
+                websocket, timeout=max(0.1, deadline - time.time())
+            )
             await trio.sleep(1)
             sent += 1
-        if self.user_status().get("workflow_state") == "intake_in_progress":
+        status = self.user_status()
+        if status.get("workflow_state") == "intake_in_progress":
             raise AssertionError(
-                f"intake did not complete after {max_turns} turns: {self.user_status()}"
+                f"intake did not complete after {max_turns} turns: {status}; "
+                f"{_diagnostic_context(self.server, last_status=status, last_action=last_action)}"
             )
 
-    async def wait_for_assessment_complete(self, websocket, *, timeout: float = 300) -> dict:
+    async def wait_for_assessment_complete(
+        self, websocket, *, timeout: float = DEFAULT_INTAKE_TIMEOUT
+    ) -> dict:
         deadline = time.time() + timeout
         last: dict[str, Any] = {}
         while time.time() < deadline:
             last = self.user_status()
-            state = last.get("workflow_state")
-            if state == "assessment_complete":
+            if last.get("workflow_state") == "assessment_complete":
                 return last
-            with trio.move_on_after(1):
+            remaining = max(0.1, deadline - time.time())
+            with trio.move_on_after(min(remaining, 2.0)):
                 try:
                     await websocket.get_message()
                 except trio.TooSlowError:
                     pass
-            await trio.sleep(2)
+            await trio.sleep(1)
         raise AssertionError(
-            f"timed out waiting for assessment completion, last={last}"
+            f"timed out waiting for assessment completion, last={last}; "
+            f"{_diagnostic_context(self.server, last_status=last)}"
         )
 
-    async def drive_to_ready(self, *, timeout: float = 480) -> None:
+    async def drive_to_ready(self, *, timeout: float = DEFAULT_INTAKE_TIMEOUT) -> None:
         payload = self.register()
         action = payload.get("workflow_next_action", {})
         if action.get("required_action") == "complete_profile":
@@ -359,14 +439,18 @@ class LegacyApiClient:
             self.websocket_url(),
             extra_headers=[("Origin", "http://localhost")],
         ) as websocket:
-            await self.wait_for_session_started(websocket)
-            await self.drive_intake_chat(websocket)
+            await self.wait_for_session_started(websocket, timeout=timeout)
+            await self.drive_intake_chat(websocket, timeout=timeout)
             await self.wait_for_assessment_complete(websocket, timeout=timeout)
 
         self.select_style("cbt")
         self.wait_for_workflow_state("initial_plan_complete", timeout=timeout)
 
-    async def therapy_chat_turn(self, message: str) -> str:
+    async def therapy_chat_turn(
+        self, message: str, *, register_first: bool = True
+    ) -> str:
+        if register_first:
+            self.register()
         async with open_websocket_url(
             self.websocket_url(),
             extra_headers=[("Origin", "http://localhost")],

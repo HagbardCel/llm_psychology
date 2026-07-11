@@ -6,6 +6,8 @@ import pytest
 
 from .legacy_client import LegacyApiClient, start_legacy_server
 
+pytestmark = pytest.mark.characterization
+
 
 @pytest.fixture
 def legacy_server(tmp_path):

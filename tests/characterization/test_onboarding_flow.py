@@ -7,7 +7,6 @@ from . import assertions
 @pytest.mark.trio
 async def test_onboarding_persists_profile_and_intake_messages(legacy_client):
     """must_preserve: fresh install persists profile, session, and intake messages."""
-    legacy_client.register()
     await legacy_client.persist_intake_messages()
 
     assertions.assert_single_profile(legacy_client.server.rows("user_profiles"))
@@ -27,7 +26,7 @@ async def test_onboarding_reaches_ready_state(legacy_client):
     await legacy_client.drive_to_ready()
 
     profile = assertions.assert_single_profile(legacy_client.server.rows("user_profiles"))
-    assertions.assert_ready_status(profile)
+    assertions.assert_profile_status(profile, "INITIAL_PLAN_COMPLETE")
 
     intake_session = assertions.assert_one_intake_session(
         legacy_client.server.rows("sessions")
@@ -35,9 +34,12 @@ async def test_onboarding_reaches_ready_state(legacy_client):
     messages = assertions.transcript_messages(intake_session)
     assert messages
     assertions.assert_intake_evidence(intake_session)
-    assertions.assert_assessment_results(
+    assessment = assertions.assert_exactly_one_assessment(
         legacy_client.server.rows("assessment_recommendations")
     )
-    assertions.assert_plans(legacy_client.server.rows("therapy_plans"))
-    plan = legacy_client.server.rows("therapy_plans")[-1]
-    assert plan.get("selected_therapy_style") == "cbt"
+    assert assessment.get("user_id") == profile.get("user_id")
+    plan = assertions.assert_exactly_one_initial_plan(
+        legacy_client.server.rows("therapy_plans")
+    )
+    assertions.assert_plan_style(plan, "cbt")
+    assertions.assert_plan_belongs_to_profile(plan, profile)
