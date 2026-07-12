@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-12
 review_cycle_days: 30
 source_of_truth_for: Detailed implementation plan for architecture refactor Phase 3
@@ -28,7 +28,9 @@ At the end of Phase 3, the new package must contain:
 - one tracing wrapper around the gateway boundary;
 - four independently testable processors with typed inputs and results;
 - pure prompt, context, validation, merge, and policy helpers;
-- no persistence, HTTP, WebSocket, application-task, or workflow-transition implementation.
+- no HTTP, WebSocket, application-task, or workflow-transition implementation.
+
+**Step 0 (prerequisite):** limited completion of Phase 2 processor-facing persistence seams (`PlanContent`, durable intake record on sessions, optional post-session plan revision). This does not move application orchestration or ordinary processor persistence into Phase 3.
 
 Phase 3 preserves product behavior where that behavior is therapeutically useful, but it does not preserve the legacy implementation topology. It deliberately replaces nested agents and generic response metadata with explicit processor contracts.
 
@@ -183,6 +185,8 @@ Phase 3 includes:
 - therapy prompt/context construction and streaming;
 - typed post-session analysis, briefing, profile patch, and plan patch generation;
 - pure merge and no-op detection helpers;
+- shared domain `PlanContent` model;
+- Step 0 store seams: `intake_record_json` on intake sessions, `complete_chat_turn` intake-record persistence, optional post-session plan revision via `NewPlanRevision`, compact store-derived post-session operation result;
 - Phase 3 unit and processor tests;
 - import-boundary validation;
 - optional local-server smoke tests.
@@ -195,8 +199,8 @@ Phase 3 must not implement:
 - application locking or task supervision;
 - `EventStream`;
 - operation scheduling or recovery;
-- chat-turn acceptance or persistence;
-- store transactions;
+- chat-turn acceptance or persistence (other than Step 0 `complete_chat_turn` intake-record extension);
+- store transactions (other than the explicitly listed Step 0 seam corrections);
 - HTTP routes;
 - WebSocket events;
 - FastAPI startup or lifespan;
@@ -206,7 +210,7 @@ Phase 3 must not implement:
 - workflow transitions;
 - selection-command handling;
 - session start/end handling;
-- persistence of intake records, assessment results, profile patches, plans, or briefings;
+- persistence of intake records, assessment results, profile patches, plans, or briefings (other than Step 0 seam corrections for intake record storage and optional post-session plan creation);
 - migration or compatibility logic;
 - deletion of the legacy agents or `LLMService`;
 - production selection of the new package;
@@ -223,7 +227,7 @@ Phase 3 may define typed results that Phase 4 will persist, but it must not crea
 
 ## 4. Entry conditions
 
-Phase 3 starts only after all Phase 2 exit criteria are satisfied.
+Phase 3 starts only after all Phase 2 exit criteria are satisfied. **Step 0** closes the processor/store seams identified during planning (intake record durability, `PlanContent`, optional post-session plan revision).
 
 Required inputs from Phase 2:
 
@@ -264,7 +268,11 @@ src/jung/
 │   ├── structured.py
 │   ├── tracing.py
 │   └── fake.py
-├── styles.py
+├── styles/
+│   ├── __init__.py
+│   ├── jung/
+│   ├── cbt/
+│   └── freud/
 └── phases/
     ├── __init__.py
     ├── intake/
@@ -307,7 +315,7 @@ tests/unit/jung/
 └── test_styles.py
 
 tests/integration/jung/
-└── test_phase_processors.py
+└── test_processor_contracts.py
 ```
 
 This tree is a starting point, not a requirement to create every file immediately.
@@ -1713,6 +1721,22 @@ Fail validation if target processor code introduces:
 Use AST/import checks rather than line-count budgets.
 
 ## 20. Implementation sequence
+
+Workstreams use internal names (Step 0, Workstreams A–D) to avoid confusion with architecture-refactor Phases 1–7.
+
+### Step 0 — Persistence seam remediation
+
+Before gateway or processor code:
+
+- add domain `PlanContent` with shared validators; refactor `Plan` to inherit it;
+- refactor `select_style_and_create_initial_plan(content=PlanContent)`;
+- add `sessions.intake_record_json` in fresh `CREATE TABLE` (schema version 3);
+- extend `complete_chat_turn(..., intake_record=None)` for intake sessions;
+- refactor `complete_post_session(..., new_plan: NewPlanRevision | None)` with store-derived compact operation result;
+- add five integration tests for intake and post-session seams;
+- scope `validate-refactor-phase-2` pytest and ruff to Phase 2 paths only.
+
+Validation: `make validate-refactor-phase-2` green.
 
 ### Step 1 — Confirm Phase 2 seams
 
