@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from jung.domain.models import PlanContent, Profile
+from jung.phases.intake.models import IntakeRecord
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import StyleDefinition
 
 
 class StyleRecommendation(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     style_id: str
     score: float = Field(ge=0.0, le=1.0)
@@ -37,7 +36,7 @@ class StyleRecommendation(BaseModel):
 
 
 class AssessmentResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     formulation: str
     presenting_concerns: tuple[str, ...]
@@ -57,7 +56,7 @@ class AssessmentResult(BaseModel):
 class AssessmentInput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    intake_record: dict[str, Any]
+    intake_record: IntakeRecord
     transcript: tuple[TranscriptTurn, ...]
     profile: Profile
     available_styles: tuple[StyleDefinition, ...]

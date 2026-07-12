@@ -15,7 +15,7 @@ EvidenceResponseStatus = Literal["informative", "unknown", "unable_to_answer"]
 
 
 class IntakeEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     value: str | None = Field(default=None, max_length=500)
     evidence_quote: str | None = Field(default=None, max_length=500)
@@ -54,7 +54,7 @@ class IntakeEvidence(BaseModel):
 
 
 class TimeCourseRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     duration_or_onset: IntakeEvidence = Field(default_factory=IntakeEvidence)
     frequency: IntakeEvidence = Field(default_factory=IntakeEvidence)
@@ -75,7 +75,7 @@ class TimeCourseRecord(BaseModel):
 
 
 class PresentingProblemRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     main_concern: IntakeEvidence = Field(default_factory=IntakeEvidence)
     symptoms: tuple[IntakeEvidence, ...] = ()
@@ -85,7 +85,7 @@ class PresentingProblemRecord(BaseModel):
 
 
 class SafetyRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     self_harm: IntakeEvidence = Field(default_factory=IntakeEvidence)
     harm_to_others: IntakeEvidence = Field(default_factory=IntakeEvidence)
@@ -107,7 +107,7 @@ class SafetyRecord(BaseModel):
 
 
 class CopingRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempted_strategies: tuple[IntakeEvidence, ...] = ()
     substances_or_medication: IntakeEvidence = Field(default_factory=IntakeEvidence)
@@ -126,7 +126,7 @@ class CopingRecord(BaseModel):
 
 
 class GoalsRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     therapy_goals: tuple[IntakeEvidence, ...] = ()
     preferred_start: IntakeEvidence = Field(default_factory=IntakeEvidence)
@@ -145,7 +145,7 @@ class GoalsRecord(BaseModel):
 
 
 class IntakeRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: int = 1
     presenting_problem: PresentingProblemRecord = Field(
@@ -157,7 +157,7 @@ class IntakeRecord(BaseModel):
 
 
 class IntakeRecordPatch(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     presenting_problem: PresentingProblemRecord | None = None
     safety: SafetyRecord | None = None

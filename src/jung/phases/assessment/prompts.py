@@ -33,7 +33,7 @@ def build_assessment_messages(input: AssessmentInput) -> list[ChatMessage]:
     user_content = "\n\n".join(
         [
             f"Patient: {input.profile.name}, language={input.profile.primary_language}",
-            f"Intake record JSON:\n{json.dumps(input.intake_record, ensure_ascii=True)}",
+            f"Intake record JSON:\n{json.dumps(input.intake_record.model_dump(), ensure_ascii=True)}",
             f"Transcript:\n{transcript or 'None'}",
             "Available therapy styles:\n" + _format_styles(input),
             (

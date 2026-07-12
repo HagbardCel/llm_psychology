@@ -22,7 +22,7 @@ class InterventionEvidence(BaseModel):
 
 
 class SessionAnalysisResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     summary: str
     key_themes: tuple[str, ...]
@@ -44,7 +44,7 @@ class SessionAnalysisResult(BaseModel):
 
 
 class SessionBriefing(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     narrative_handoff: str
     continuity_points: tuple[str, ...] = ()
@@ -64,7 +64,7 @@ class DerivedProfilePatch(BaseModel):
 
 
 class PlanPatch(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     focus: str | None = None
     themes: tuple[str, ...] | None = None
@@ -75,7 +75,7 @@ class PlanPatch(BaseModel):
 
 
 class PostSessionResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     session_summary: str
     session_briefing: SessionBriefing

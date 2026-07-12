@@ -13,17 +13,6 @@ from jung.phases.transcript import TranscriptTurn
 
 PROMPT_VERSION = "intake-v1"
 
-INITIAL_GREETING = (
-    "Welcome, {name}. I am glad you are here. This intake helps me understand "
-    "what brings you to therapy and what support would be most useful. "
-    "We will take it one step at a time. What feels most important to share first?"
-)
-
-CLOSING_MESSAGE = (
-    "Thank you for sharing what you have so far. I have enough to move forward "
-    "with the next step in your care. We can continue from here when you are ready."
-)
-
 
 def _record_summary(record: IntakeRecord, completeness: IntakeCompleteness) -> str:
     concern = record.presenting_problem.main_concern.value or "not yet established"
@@ -79,6 +68,18 @@ def build_patch_extraction_messages(
     ]
 
 
+def _recent_transcript(
+    transcript: tuple[TranscriptTurn, ...],
+    *,
+    latest_user_message: str | None,
+) -> str:
+    turns = list(transcript[-6:])
+    if latest_user_message and turns and turns[-1].role == "user":
+        if turns[-1].content.strip() == latest_user_message.strip():
+            turns = turns[:-1]
+    return "\n".join(f"{turn.role}: {turn.content}" for turn in turns)
+
+
 def build_response_messages(
     *,
     profile: Profile,
@@ -93,34 +94,33 @@ def build_response_messages(
             ChatMessage(
                 role=ChatRole.SYSTEM,
                 content=(
-                    "You are a compassionate intake therapist. Respond in "
-                    f"{profile.primary_language}. Prioritize safety concerns. "
-                    "Ask at most one main question."
+                    "You are a compassionate intake therapist. "
+                    f"Respond in {profile.primary_language}. "
+                    "Generate a brief welcoming intake opening and ask one main question."
                 ),
             ),
             ChatMessage(
                 role=ChatRole.USER,
-                content=INITIAL_GREETING.format(name=profile.name),
+                content=f"Open the intake session for a patient named {profile.name}.",
             ),
         ]
 
     if completeness.complete:
-        user_content = latest_user_message or "Continue intake."
+        user_content = latest_user_message or "Close the intake session."
         return [
             ChatMessage(
                 role=ChatRole.SYSTEM,
                 content=(
                     "You are a compassionate intake therapist closing the intake. "
-                    f"Respond in {profile.primary_language}."
+                    f"Respond in {profile.primary_language}. "
+                    "Generate a brief closing that thanks the patient and explains "
+                    "you have enough to move to the next step."
                 ),
             ),
             ChatMessage(role=ChatRole.USER, content=user_content),
-            ChatMessage(role=ChatRole.ASSISTANT, content=CLOSING_MESSAGE),
         ]
 
-    recent = "\n".join(
-        f"{turn.role}: {turn.content}" for turn in transcript[-6:]
-    )
+    recent = _recent_transcript(transcript, latest_user_message=latest_user_message)
     user_content = "\n\n".join(
         [
             f"Patient profile: {profile.name}, language={profile.primary_language}",
