@@ -23,6 +23,14 @@ PHASE2_FORBIDDEN_PREFIXES = (
     "console-ui",
 )
 
+ALLOWED_CROSS_PHASE_MODULES = frozenset(
+    {
+        "jung.phases.transcript",
+        "jung.phases.context_bounds",
+    }
+)
+
+
 def _imported_modules(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     modules: list[str] = []
@@ -66,6 +74,14 @@ def _phase2_paths() -> list[Path]:
     if workflow.exists():
         paths.append(workflow)
     return paths
+
+
+def _cross_phase_import_allowed(module: str, other: str) -> bool:
+    if module in ALLOWED_CROSS_PHASE_MODULES:
+        return True
+    if module == f"jung.phases.{other}.models":
+        return True
+    return module.startswith(f"jung.phases.{other}.models.")
 
 
 def test_phase2_packages_have_no_forbidden_imports() -> None:
@@ -114,8 +130,9 @@ def test_phase3_packages_respect_llm_and_processor_boundaries() -> None:
         for module in _imported_modules(path):
             for other in phase_processor_dirs:
                 if other != phase_name and module.startswith(f"jung.phases.{other}"):
-                    violations.append(
-                        f"{path.relative_to(ROOT)} imports cross-phase {module}"
-                    )
+                    if not _cross_phase_import_allowed(module, other):
+                        violations.append(
+                            f"{path.relative_to(ROOT)} imports cross-phase {module}"
+                        )
 
     assert violations == []

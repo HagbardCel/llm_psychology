@@ -178,6 +178,7 @@ validate-refactor-phase-2: prepare-runtime-dirs
 		tests/unit/jung/test_json_validation.py \
 		tests/unit/jung/test_sqlite_support.py \
 		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_store_chat.py \
 		tests/integration/jung/test_store_recovery.py \
 		tests/integration/jung/test_store_schema.py \

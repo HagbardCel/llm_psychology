@@ -73,3 +73,33 @@ async def test_fake_llm_returns_structured_models() -> None:
     )
     assert result.value == "ok"
     gateway.assert_exhausted()
+
+
+@pytest.mark.asyncio
+async def test_fake_llm_raises_mid_stream_error() -> None:
+    from jung.llm.errors import LLMUnavailable
+
+    gateway = FakeLLM(
+        [
+            StreamExpectation(
+                task=LLMTask.THERAPY_RESPONSE,
+                chunks=("partial",),
+                error_after_chunks=LLMUnavailable("stream failed"),
+            )
+        ]
+    )
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="fake",
+        temperature=0.7,
+        timeout_seconds=30.0,
+    )
+    chunks: list[str] = []
+    with pytest.raises(LLMUnavailable):
+        async for chunk in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hello")],
+            policy,
+        ):
+            chunks.append(chunk)
+    assert chunks == ["partial"]
+    gateway.assert_exhausted()

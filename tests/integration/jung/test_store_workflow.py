@@ -352,7 +352,7 @@ def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -
             expected_revision=store.get_app_state().revision,
             style_id="cbt",
             plan_id=uuid4(),
-            content=_plan_content(themes=[1]),  # type: ignore[list-item]
+            content=_plan_content(goals=["   "]),
             intake_session_id=intake_id,
             now=now,
         )

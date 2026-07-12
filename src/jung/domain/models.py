@@ -149,6 +149,25 @@ class PlanContent(BaseModel):
             raise ValueError("must be non-empty")
         return value
 
+    @field_validator(
+        "themes",
+        "goals",
+        "planned_interventions",
+        "revision_recommendations",
+        mode="before",
+    )
+    @classmethod
+    def normalize_string_lists(cls, value: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in value:
+            text = " ".join(str(item).split())
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
     @field_validator("goals", "planned_interventions")
     @classmethod
     def non_empty_required_lists(cls, value: list[str]) -> list[str]:
