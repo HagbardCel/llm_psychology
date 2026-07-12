@@ -115,7 +115,7 @@ class IntakeProcessor:
             yield chunk
 
     def _latest_user_turn(self, input: IntakeTurnInput) -> TranscriptTurn | None:
-        for turn in reversed(input.transcript):
-            if turn.role == "user":
-                return turn
-        return None
+        if not input.transcript:
+            return None
+        latest = input.transcript[-1]
+        return latest if latest.role == "user" else None

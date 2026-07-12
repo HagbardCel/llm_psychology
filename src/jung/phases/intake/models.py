@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from jung.domain.models import Profile
 from jung.llm.gateway import ChatMessage
-from jung.phases.transcript import TranscriptTurn
+from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
 
 Confidence = Literal["high", "medium", "low"]
 EvidenceResponseStatus = Literal["informative", "unknown", "unable_to_answer"]
@@ -177,6 +177,32 @@ class IntakeTurnInput(BaseModel):
     previous_assistant_message: str | None = None
     strict_quote_validation: bool = True
     patient_turn_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_transcript_coherence(self) -> IntakeTurnInput:
+        if not self.transcript and self.latest_user_message is None:
+            return self
+        if not self.transcript:
+            raise ValueError(
+                "latest_user_message requires a nonempty transcript"
+            )
+        final_turn = self.transcript[-1]
+        if final_turn.role != "user":
+            raise ValueError(
+                "latest_user_message requires the final transcript turn to be user"
+            )
+        if self.latest_user_message is None:
+            raise ValueError(
+                "a transcript ending in a user turn requires latest_user_message"
+            )
+        normalized_message = normalize_transcript_content(self.latest_user_message)
+        if not normalized_message:
+            raise ValueError("latest_user_message must be nonblank")
+        if normalize_transcript_content(final_turn.content) != normalized_message:
+            raise ValueError(
+                "latest_user_message must match the final transcript user turn"
+            )
+        return self
 
 
 class IntakeMergeDiagnostics(BaseModel):

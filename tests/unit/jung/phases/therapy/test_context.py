@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from jung.domain.models import Plan, Profile
 from jung.phases.therapy.context import (
+    _SECTION_SEPARATOR,
     build_context_sections,
     build_opening_context_sections,
 )
@@ -116,12 +118,49 @@ def test_transcript_dedupe_keeps_earlier_identical_user_turn() -> None:
 def test_opening_context_respects_total_budget() -> None:
     sections = build_opening_context_sections(
         _input(
+            is_opening_turn=True,
             session_briefing={"summary": "b" * 5000},
             derived_profile={"observations": ["p" * 5000]},
             recent_session_summaries=("s" * 5000,),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=200,
+                max_section_chars=2500,
+                max_total_chars=1000,
+            ),
+            selected_style=load_styles()["cbt"],
+        )
+    )
+    compressible = [
+        section
+        for section in sections
+        if not section.startswith("Patient:")
+    ]
+    rendered = _SECTION_SEPARATOR.join(compressible)
+    style_section = next(
+        section for section in compressible if section.startswith("Therapy style instructions:")
+    )
+    plan_section = next(
+        section for section in compressible if section.startswith("Current plan:")
+    )
+    assert style_section.split(":\n", 1)[1].strip()
+    assert plan_section.split(":\n", 1)[1].strip()
+    assert len(rendered) <= 1000
+
+
+def test_dual_core_sections_preserve_style_and_plan_bodies() -> None:
+    style = load_styles()["cbt"]
+    huge_instructions = style.therapist_instructions + (" EXTRA " * 500)
+    style = replace(style, therapist_instructions=huge_instructions)
+    sections = build_opening_context_sections(
+        _input(
+            is_opening_turn=True,
+            selected_style=style,
+            session_briefing={"summary": "b" * 5000},
+            derived_profile={"observations": ["p" * 5000]},
+            recent_session_summaries=("s" * 5000,),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_section_chars=2500,
                 max_total_chars=1000,
             ),
         )
@@ -131,13 +170,22 @@ def test_opening_context_respects_total_budget() -> None:
         for section in sections
         if not section.startswith("Patient:")
     ]
-    assert sum(len(section) for section in compressible) <= 1000
+    rendered = _SECTION_SEPARATOR.join(compressible)
+    style_section = next(
+        section for section in compressible if section.startswith("Therapy style instructions:")
+    )
+    plan_section = next(
+        section for section in compressible if section.startswith("Current plan:")
+    )
+    assert style_section.split(":\n", 1)[1].strip()
+    assert plan_section.split(":\n", 1)[1].strip()
+    assert len(rendered) <= 1000
 
 
 def test_opening_context_includes_session_briefing() -> None:
     briefing = {"summary": "prior sleep focus"}
     sections = build_opening_context_sections(
-        _input(session_briefing=briefing),
+        _input(is_opening_turn=True, session_briefing=briefing),
     )
     combined = "\n".join(sections)
     assert "prior sleep focus" in combined

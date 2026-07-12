@@ -15,3 +15,7 @@ class TranscriptTurn(BaseModel):
     sequence: int = Field(ge=1)
     role: Literal["user", "assistant"]
     content: str
+
+
+def normalize_transcript_content(text: str) -> str:
+    return " ".join(text.split())

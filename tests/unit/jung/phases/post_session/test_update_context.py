@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -93,20 +94,24 @@ def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
 
 
 def test_optional_sections_drop_before_plan_categories() -> None:
-    marker = "OPTIONAL_BRIEFING_MARKER"
+    style = replace(load_styles()["cbt"], post_session_instructions="s" * 5000)
     sections = build_update_context_sections(
         _input(
-            prior_session_briefing={"summary": marker * 200},
-            recent_session_summaries=("old " * 1000, "new " * 1000),
-            derived_profile={"observations": ["p" * 2000]},
+            selected_style=style,
+            prior_session_briefing={"summary": "OPTIONAL_BRIEFING_MARKER" * 2000},
+            recent_session_summaries=("old " * 2000, "new " * 2000),
+            derived_profile={"observations": ["p" * 5000]},
         ),
         SessionAnalysisResult(
-            summary="x" * 3000,
-            key_themes=tuple(f"theme-{index}" for index in range(50)),
+            summary="x" * 10000,
+            key_themes=tuple(f"theme-{index}" * 20 for index in range(80)),
         ),
     )
     rendered = "\n\n".join(sections)
     assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
+    assert not any(
+        section.startswith("Recent session summaries:") for section in sections
+    )
     plan_section = next(section for section in sections if section.startswith("Current plan:"))
     document = json.loads(plan_section.split(":\n", 1)[1])
     assert set(document) == {
@@ -138,17 +143,29 @@ def test_plan_section_retains_all_semantic_field_names() -> None:
 
 def test_newest_summaries_preferred() -> None:
     sections = build_update_context_sections(
-        _input(recent_session_summaries=("older summary", "newer summary")),
+        _input(
+            recent_session_summaries=(
+                "old summary",
+                "middle-too-large " * 400,
+                "newest summary",
+            )
+        ),
         _analysis(),
     )
-    rendered = "\n\n".join(sections)
-    if "Recent session summaries" in rendered:
-        assert rendered.rfind("newer summary") > rendered.rfind("older summary")
+    summary_section = next(
+        section for section in sections if section.startswith("Recent session summaries:")
+    )
+    body = summary_section.split(":\n", 1)[1]
+    assert body == "newest summary"
+    assert "old summary" not in body
+    assert "middle-too-large" not in body
 
 
 def test_serialized_sections_are_valid_json_or_prose() -> None:
     sections = build_update_context_sections(_input(), _analysis())
     for section in sections:
+        if section.startswith("Session analysis:"):
+            json.loads(section.split(":\n", 1)[1])
         if section.startswith("Current plan:") or section.startswith("Derived profile:"):
             json.loads(section.split(":\n", 1)[1])
         if section.startswith("Prior session briefing:"):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -13,7 +12,7 @@ from jung.phases.intake.models import (
     IntakeRecord,
     IntakeRecordPatch,
 )
-from jung.phases.transcript import TranscriptTurn
+from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 MAX_INTAKE_DROP_REASONS = 25
@@ -40,10 +39,6 @@ class IntakePatchMergeResult:
     drop_reasons_truncated: bool = False
     error_message: str | None = None
     error_code: str | None = None
-
-
-def _normalize(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().lower()
 
 
 def _count_evidence(value: Any) -> int:
@@ -82,8 +77,8 @@ def _evidence_drop_reason(
             return None
         return (
             None
-            if _normalize(evidence.evidence_quote)
-            in _normalize(latest_user_message.content)
+            if normalize_transcript_content(evidence.evidence_quote)
+            in normalize_transcript_content(latest_user_message.content)
             else "quote_not_found_in_message"
         )
     if not evidence.value:
@@ -96,8 +91,8 @@ def _evidence_drop_reason(
         return None
     return (
         None
-        if _normalize(evidence.evidence_quote)
-        in _normalize(latest_user_message.content)
+        if normalize_transcript_content(evidence.evidence_quote)
+        in normalize_transcript_content(latest_user_message.content)
         else "quote_not_found_in_message"
     )
 
@@ -128,9 +123,9 @@ def _merge_evidence(
 
 def _evidence_list_key(item: IntakeEvidence) -> str:
     if item.value:
-        return f"value:{_normalize(item.value)}"
+        return f"value:{normalize_transcript_content(item.value)}"
     if item.evidence_quote:
-        return f"quote:{_normalize(item.evidence_quote)}"
+        return f"quote:{normalize_transcript_content(item.evidence_quote)}"
     return ""
 
 

@@ -12,6 +12,11 @@ from jung.phases.context_bounds import (
     newest_within_budget,
 )
 from jung.phases.therapy.models import TherapyTurnInput
+from jung.phases.transcript import normalize_transcript_content
+
+_STYLE_HEADING = "Therapy style instructions"
+_PLAN_HEADING = "Current plan"
+_SECTION_SEPARATOR = "\n\n"
 
 
 def format_plan_section(input: TherapyTurnInput) -> str:
@@ -25,10 +30,6 @@ def format_plan_section(input: TherapyTurnInput) -> str:
             f"Interventions: {', '.join(plan.planned_interventions)}",
         ]
     )
-
-
-def _normalize_content(text: str) -> str:
-    return " ".join(text.split())
 
 
 def _compact_mapping_json(document: Mapping[str, Any], limit: int) -> str:
@@ -63,11 +64,67 @@ def _transcript_lines(
 ) -> list[str]:
     turns = list(input.transcript[-input.context_limits.max_transcript_turns :])
     if turns and latest_user_message and turns[-1].role == "user":
-        if _normalize_content(turns[-1].content) == _normalize_content(
-            latest_user_message
-        ):
+        final_content = normalize_transcript_content(turns[-1].content)
+        if final_content == normalize_transcript_content(latest_user_message):
             turns = turns[:-1]
     return [f"{turn.role}: {turn.content}" for turn in turns]
+
+
+def _render_core_sections(input: TherapyTurnInput) -> tuple[list[str], int]:
+    limits = input.context_limits
+    style_prefix = f"{_STYLE_HEADING}:\n"
+    plan_prefix = f"{_PLAN_HEADING}:\n"
+
+    core_body_budget = (
+        limits.max_total_chars
+        - len(style_prefix)
+        - len(plan_prefix)
+        - len(_SECTION_SEPARATOR)
+    )
+    if core_body_budget <= 0:
+        raise ValueError("therapy core context budget is nonpositive")
+
+    style_body_budget = min(limits.max_section_chars, core_body_budget // 2)
+    plan_body_budget = min(
+        limits.max_section_chars,
+        core_body_budget - style_body_budget,
+    )
+
+    style_body = bounded_text(
+        input.selected_style.therapist_instructions,
+        style_body_budget,
+    )
+    plan_body = bounded_text(format_plan_section(input), plan_body_budget)
+
+    style_section = f"{style_prefix}{style_body}"
+    plan_section = f"{plan_prefix}{plan_body}"
+    sections = [style_section, plan_section]
+
+    rendered_core = _SECTION_SEPARATOR.join(sections)
+    remaining = limits.max_total_chars - len(rendered_core)
+    return sections, max(0, remaining)
+
+
+def _append_optional_section(
+    sections: list[str],
+    *,
+    heading: str,
+    body: str,
+    remaining: int,
+) -> int:
+    if not body.strip():
+        return remaining
+    prefix = f"{heading}:\n"
+    separator_cost = len(_SECTION_SEPARATOR)
+    payload_budget = max(0, remaining - separator_cost - len(prefix))
+    bounded_body = bounded_text(body, payload_budget)
+    if not bounded_body.strip():
+        return remaining
+    section = f"{prefix}{bounded_body}"
+    if separator_cost + len(section) > remaining:
+        return remaining
+    sections.append(section)
+    return max(0, remaining - separator_cost - len(section))
 
 
 def build_therapy_context(
@@ -75,25 +132,7 @@ def build_therapy_context(
     *,
     include_current_message: bool,
 ) -> list[str]:
-    limits = input.context_limits
-    # max_total_chars = maximum compressible context characters
-    remaining = limits.max_total_chars
-    sections: list[str] = []
-
-    style_cap = min(limits.max_section_chars, remaining)
-    style_body = bounded_text(input.selected_style.therapist_instructions, style_cap)
-    style_section = f"Therapy style instructions:\n{style_body}"
-    sections.append(style_section)
-    remaining = max(0, remaining - len(style_section))
-
-    plan_cap = min(limits.max_section_chars, remaining)
-    plan_body = bounded_text(format_plan_section(input), plan_cap)
-    plan_section = f"Current plan:\n{plan_body}"
-    sections.append(plan_section)
-    remaining = max(0, remaining - len(plan_section))
-
-    if include_current_message and input.latest_user_message:
-        sections.append(f"Current patient message:\n{input.latest_user_message}")
+    sections, remaining = _render_core_sections(input)
 
     latest_message = input.latest_user_message if include_current_message else None
     transcript_lines = _transcript_lines(
@@ -101,48 +140,72 @@ def build_therapy_context(
         latest_user_message=latest_message,
     )
     if transcript_lines and remaining > 0:
-        heading = "Active session transcript:\n"
-        payload_budget = max(0, remaining - len(heading))
+        heading = "Active session transcript"
+        payload_budget = max(
+            0,
+            remaining - len(f"{heading}:\n") - len(_SECTION_SEPARATOR),
+        )
         selected_lines = newest_lines_within_budget(transcript_lines, payload_budget)
         transcript = "\n".join(selected_lines)
-        if transcript:
-            transcript_section = f"{heading}{transcript}"
-            sections.append(transcript_section)
-            remaining = max(0, remaining - len(transcript_section))
+        remaining = _append_optional_section(
+            sections,
+            heading=heading,
+            body=transcript,
+            remaining=remaining,
+        )
 
     if input.session_briefing and remaining > 0:
-        heading = "Session briefing:\n"
-        payload_budget = max(0, remaining - len(heading))
+        heading = "Session briefing"
+        payload_budget = max(
+            0,
+            remaining - len(f"{heading}:\n") - len(_SECTION_SEPARATOR),
+        )
         briefing = _compact_mapping_json(input.session_briefing, payload_budget)
-        if briefing:
-            briefing_section = f"{heading}{briefing}"
-            sections.append(briefing_section)
-            remaining = max(0, remaining - len(briefing_section))
+        remaining = _append_optional_section(
+            sections,
+            heading=heading,
+            body=briefing,
+            remaining=remaining,
+        )
 
     if input.derived_profile and remaining > 0:
-        heading = "Derived profile:\n"
-        payload_budget = max(0, remaining - len(heading))
+        heading = "Derived profile"
+        payload_budget = max(
+            0,
+            remaining - len(f"{heading}:\n") - len(_SECTION_SEPARATOR),
+        )
         derived = _compact_mapping_json(input.derived_profile, payload_budget)
-        if derived:
-            derived_section = f"{heading}{derived}"
-            sections.append(derived_section)
-            remaining = max(0, remaining - len(derived_section))
+        remaining = _append_optional_section(
+            sections,
+            heading=heading,
+            body=derived,
+            remaining=remaining,
+        )
 
     if input.recent_session_summaries and remaining > 0:
-        heading = "Recent session summaries:\n"
-        payload_budget = max(0, remaining - len(heading))
+        heading = "Recent session summaries"
+        payload_budget = max(
+            0,
+            remaining - len(f"{heading}:\n") - len(_SECTION_SEPARATOR),
+        )
         summaries = newest_within_budget(
             input.recent_session_summaries,
             payload_budget,
         )
         if summaries:
             body = "\n".join(summaries)
-            summary_section = f"{heading}{body}"
-            if len(summary_section) > remaining:
-                body = bounded_text(body, max(0, remaining - len(heading)))
-                summary_section = f"{heading}{body}" if body else ""
-            if summary_section:
-                sections.append(summary_section)
+            remaining = _append_optional_section(
+                sections,
+                heading=heading,
+                body=body,
+                remaining=remaining,
+            )
+
+    if include_current_message and input.latest_user_message:
+        sections.insert(
+            2,
+            f"Current patient message:\n{input.latest_user_message}",
+        )
 
     return sections
 

@@ -479,6 +479,16 @@ async def test_extra_body_merge_applies_task_overrides(
             api_key="test",
             task_extra_body={LLMTask.ASSESSMENT: {"response_format": {"type": "json_object"}}},
         ),
+        AdapterConfig(
+            base_url="http://testserver/v1",
+            api_key="test",
+            extra_body={"stream": True},
+        ),
+        AdapterConfig(
+            base_url="http://testserver/v1",
+            api_key="test",
+            extra_body={"temperature": 0.2},
+        ),
     ],
 )
 async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -> None:

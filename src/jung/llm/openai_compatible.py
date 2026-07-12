@@ -42,6 +42,8 @@ _FORBIDDEN_EXTRA_BODY_KEYS = frozenset(
         "messages",
         "response_format",
         "max_completion_tokens",
+        "stream",
+        "temperature",
     }
 )
 
