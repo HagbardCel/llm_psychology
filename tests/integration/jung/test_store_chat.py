@@ -310,3 +310,115 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
     messages = store_a.list_messages(intake_id)
     assert len(messages) == 1
     assert messages[0].id in {user_message_a_id, user_message_b_id}
+
+
+def test_complete_chat_turn_persists_intake_record_atomically(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    turn_id = uuid4()
+    user_message_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=uuid4(),
+        turn_id=turn_id,
+        user_message_id=user_message_id,
+        content="I feel anxious",
+        now=now,
+    )
+    intake_record = {"schema_version": 1, "presenting_problem": {"summary": "anxiety"}}
+    store.complete_chat_turn(
+        turn_id,
+        assistant_message_id=uuid4(),
+        content="thank you for sharing",
+        intake_record=intake_record,
+        now=now,
+    )
+    session = store.get_session(intake_id)
+    assert session is not None
+    assert session.intake_record == intake_record
+
+
+def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    first_turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=uuid4(),
+        turn_id=first_turn_id,
+        user_message_id=uuid4(),
+        content="first message",
+        now=now,
+    )
+    first_record = {"schema_version": 1, "presenting_problem": {"summary": "first"}}
+    store.complete_chat_turn(
+        first_turn_id,
+        assistant_message_id=uuid4(),
+        content="response one",
+        intake_record=first_record,
+        now=now,
+    )
+
+    retry_turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=uuid4(),
+        turn_id=retry_turn_id,
+        user_message_id=uuid4(),
+        content="second message",
+        now=now,
+    )
+    store.fail_chat_turn(
+        retry_turn_id,
+        error_code="llm_timeout",
+        error_message="stream failed",
+        retryable=True,
+        now=now,
+    )
+    session = store.get_session(intake_id)
+    assert session is not None
+    assert session.intake_record == first_record
+
+    store.retry_chat_turn(retry_turn_id, now=now)
+    store.complete_chat_turn(
+        retry_turn_id,
+        assistant_message_id=uuid4(),
+        content="response two",
+        intake_record={"schema_version": 1, "presenting_problem": {"summary": "updated"}},
+        now=now,
+    )
+    session = store.get_session(intake_id)
+    assert session is not None
+    assert session.intake_record == {
+        "schema_version": 1,
+        "presenting_problem": {"summary": "updated"},
+    }
+
+
+def test_intake_record_on_therapy_session_raises_invariant(
+    store: SQLiteStore,
+) -> None:
+    therapy_id, now = _therapy_ready(store)
+    turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        client_message_id=uuid4(),
+        turn_id=turn_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=now,
+    )
+    with pytest.raises(InvariantViolation):
+        store.complete_chat_turn(
+            turn_id,
+            assistant_message_id=uuid4(),
+            content="hi",
+            intake_record={"schema_version": 1},
+            now=now,
+        )
