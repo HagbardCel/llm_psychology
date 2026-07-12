@@ -191,7 +191,7 @@ phase-3-test: prepare-runtime-dirs
 		tests/unit/jung/phases \
 		tests/unit/jung/test_styles.py \
 		tests/unit/jung/test_import_boundaries.py \
-		tests/integration/jung/test_processor_contracts.py \
+		tests/integration/jung/test_processor_store_seams.py \
 		-q
 
 validate-refactor-phase-3: prepare-runtime-dirs
@@ -203,7 +203,7 @@ validate-refactor-phase-3: prepare-runtime-dirs
 		tests/unit/jung/phases \
 		tests/unit/jung/test_styles.py \
 		tests/unit/jung/test_import_boundaries.py \
-		tests/integration/jung/test_processor_contracts.py
+		tests/integration/jung/test_processor_store_seams.py
 	$(MAKE) phase-3-test
 
 smoke-refactor-phase-3-local-llm: prepare-runtime-dirs

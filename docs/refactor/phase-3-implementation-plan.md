@@ -416,7 +416,7 @@ class ModelPolicy:
     model: str
     temperature: float
     timeout_seconds: float
-    max_output_tokens: int | None = None
+    max_completion_tokens: int | None = None
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.PROMPT
 ```
 
@@ -2056,24 +2056,30 @@ The Phase 3 PR should run:
 
 Do not run a real local model in mandatory hosted CI.
 
-### 22.3 Optional local-model smoke
+### 22.3 Local-model smoke (required before merge)
 
-Add one opt-in command, for example:
+Add one opt-in command:
 
 ```text
 make smoke-refactor-phase-3-local-llm
 ```
 
+Run this against the target local server before merging Phase 3. It remains manual and is not part of mandatory hosted CI.
+
 It should verify:
 
-- one short text stream;
-- one small structured result;
+- one short therapy stream via `TherapyProcessor.stream_response()`;
+- one full `AssessmentProcessor.assess()` call with real prompts and styles;
+- one full two-call `PostSessionProcessor.process()` flow;
 - configured structured-output mode;
 - configured request extras such as thinking-mode controls;
+- `gateway.aclose()` cleanup;
+- correction-log counting for structured calls;
 - timeout/error reporting;
 - llama.cpp or LM Studio compatibility through the same adapter.
 
 The smoke test must not mutate the database or require the legacy server.
+Record a PR evidence table with server, model, structured mode, latencies, correction counts, and configured nonsecret extras. Do not record therapeutic content.
 
 ### 22.4 Dependency validation
 

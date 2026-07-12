@@ -1,74 +1,179 @@
-"""Optional manual smoke for real local LLM schemas."""
+"""Optional manual smoke for real local LLM processors."""
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import time
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 
+from jung.domain.models import Plan, Profile
 from jung.llm.gateway import (
     AdapterConfig,
-    ChatMessage,
-    ChatRole,
+    LLMSettings,
     LLMTask,
-    ModelPolicy,
     StructuredOutputMode,
 )
 from jung.llm.openai_compatible import OpenAICompatibleLLM
-from jung.phases.assessment.models import AssessmentResult
-from jung.phases.post_session.models import PostSessionResult
+from jung.llm.policies import build_model_policies
+from jung.phases.assessment.models import AssessmentInput, IntakeRecord
+from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.post_session.models import PostSessionInput
+from jung.phases.post_session.processor import PostSessionProcessor
+from jung.phases.therapy.models import TherapyTurnInput
+from jung.phases.therapy.processor import TherapyProcessor
+from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
 
 
-def _policy(task: LLMTask) -> ModelPolicy:
-    return ModelPolicy(
-        task=task,
-        model=os.environ.get("PHASE3_SMOKE_MODEL", "local-model"),
-        temperature=0.1,
-        timeout_seconds=float(os.environ.get("PHASE3_SMOKE_TIMEOUT", "120")),
-        structured_output_mode=StructuredOutputMode.JSON_SCHEMA,
+def _structured_mode() -> StructuredOutputMode:
+    raw = os.environ.get("PHASE3_SMOKE_STRUCTURED_MODE", "json_schema")
+    return StructuredOutputMode(raw)
+
+
+def _adapter_config() -> AdapterConfig:
+    extra_body: dict[str, object] | None = None
+    raw_extra = os.environ.get("PHASE3_SMOKE_EXTRA_BODY")
+    if raw_extra:
+        extra_body = json.loads(raw_extra)
+    return AdapterConfig(
+        base_url=os.environ["PHASE3_SMOKE_BASE_URL"],
+        api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
+        extra_body=extra_body,
     )
+
+
+def _policies() -> dict[LLMTask, object]:
+    settings = LLMSettings(
+        default_model=os.environ.get("PHASE3_SMOKE_MODEL", "local-model"),
+        base_url=os.environ["PHASE3_SMOKE_BASE_URL"],
+        api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
+        task_structured_modes=dict.fromkeys(LLMTask, _structured_mode()),
+        task_timeouts={
+            task: float(os.environ.get("PHASE3_SMOKE_TIMEOUT", "120"))
+            for task in LLMTask
+        },
+    )
+    return build_model_policies(settings)
+
+
+def _plan() -> Plan:
+    now = datetime.now(UTC)
+    return Plan(
+        id=uuid4(),
+        version=1,
+        selected_style="cbt",
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep"],
+        current_progress="baseline",
+        planned_interventions=["grounding"],
+        revision_recommendations=[],
+        created_at=now,
+    )
+
+
+@pytest.fixture
+async def gateway():
+    if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
+        pytest.skip("PHASE3_SMOKE_BASE_URL not set")
+    llm = OpenAICompatibleLLM(_adapter_config())
+    yield llm
+    await llm.aclose()
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_assessment_schema() -> None:
-    base_url = os.environ.get("PHASE3_SMOKE_BASE_URL")
-    if not base_url:
-        pytest.skip("PHASE3_SMOKE_BASE_URL not set")
-    gateway = OpenAICompatibleLLM(
-        AdapterConfig(base_url=base_url, api_key=os.environ.get("OPENAI_API_KEY", "not-needed"))
+async def test_smoke_therapy_stream(gateway: OpenAICompatibleLLM) -> None:
+    policies = _policies()
+    processor = TherapyProcessor(
+        gateway,
+        response_policy=policies[LLMTask.THERAPY_RESPONSE],
     )
-    styles = load_styles()
-    result = await gateway.generate_structured(
-        [
-            ChatMessage(role=ChatRole.SYSTEM, content="Return assessment JSON only."),
-            ChatMessage(
-                role=ChatRole.USER,
-                content=f"Styles: {', '.join(styles)}. Intake summary: mild anxiety.",
-            ),
-        ],
-        AssessmentResult,
-        _policy(LLMTask.ASSESSMENT),
-    )
-    assert result.style_recommendations
+    started = time.perf_counter()
+    first_chunk_at: float | None = None
+    chunks: list[str] = []
+    async for chunk in processor.stream_response(
+        TherapyTurnInput(
+            profile=Profile(name="Alex", primary_language="English"),
+            current_plan=_plan(),
+            latest_user_message="I slept poorly again.",
+            selected_style=load_styles()["cbt"],
+        )
+    ):
+        if first_chunk_at is None:
+            first_chunk_at = time.perf_counter()
+        chunks.append(chunk)
+    assert chunks
+    assert first_chunk_at is not None
+    assert first_chunk_at - started >= 0
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_post_session_schema() -> None:
-    base_url = os.environ.get("PHASE3_SMOKE_BASE_URL")
-    if not base_url:
-        pytest.skip("PHASE3_SMOKE_BASE_URL not set")
-    gateway = OpenAICompatibleLLM(
-        AdapterConfig(base_url=base_url, api_key=os.environ.get("OPENAI_API_KEY", "not-needed"))
+async def test_smoke_assessment_processor(
+    gateway: OpenAICompatibleLLM,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    policies = _policies()
+    processor = AssessmentProcessor(
+        gateway,
+        assessment_policy=policies[LLMTask.ASSESSMENT],
     )
-    result = await gateway.generate_structured(
-        [
-            ChatMessage(role=ChatRole.SYSTEM, content="Return post-session JSON only."),
-            ChatMessage(role=ChatRole.USER, content="Transcript: patient discussed worry."),
-        ],
-        PostSessionResult,
-        _policy(LLMTask.POST_SESSION_UPDATE),
+    with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
+        result = await processor.assess(
+            AssessmentInput(
+                intake_record=IntakeRecord(),
+                transcript=(),
+                profile=Profile(name="Alex", primary_language="English"),
+                available_styles=tuple(load_styles().values()),
+            )
+        )
+    assert len(result.style_recommendations) == len(load_styles())
+    correction_count = sum(
+        1
+        for record in caplog.records
+        if record.message.startswith("llm structured correction")
     )
+    assert correction_count >= 0
+
+
+@pytest.mark.real_llm
+@pytest.mark.asyncio
+async def test_smoke_post_session_processor(
+    gateway: OpenAICompatibleLLM,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    policies = _policies()
+    processor = PostSessionProcessor(
+        gateway,
+        analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
+        update_policy=policies[LLMTask.POST_SESSION_UPDATE],
+    )
+    with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
+        result = await processor.process(
+            PostSessionInput(
+                transcript=(
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=1,
+                        role="user",
+                        content="I slept badly.",
+                    ),
+                ),
+                current_plan=_plan(),
+                profile=Profile(name="Alex", primary_language="English"),
+                selected_style=load_styles()["cbt"],
+            )
+        )
     assert result.session_summary
+    correction_count = sum(
+        1
+        for record in caplog.records
+        if record.message.startswith("llm structured correction")
+    )
+    assert correction_count >= 0
