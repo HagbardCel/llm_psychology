@@ -199,7 +199,6 @@ def test_oversized_transcript_retains_final_exchange() -> None:
             transcript=(
                 _turn(1, "user", "old " * 500),
                 _turn(2, "assistant", "How did that feel?"),
-                _turn(3, "user", "prior answer"),
             ),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
@@ -208,9 +207,11 @@ def test_oversized_transcript_retains_final_exchange() -> None:
             ),
         )
     )
+    combined = "\n\n".join(sections)
     transcript_section = next(
         section for section in sections if section.startswith("Active session transcript:")
     )
-    body = transcript_section.split(":\n", 1)[1]
-    assert "prior answer" in body or "How did that feel?" in body
-    assert "old " * 50 not in body
+    transcript_body = transcript_section.split(":\n", 1)[1]
+    assert combined.count("Current patient message:\nbrand new answer") == 1
+    assert "How did that feel?" in transcript_body
+    assert "old " * 50 not in transcript_body

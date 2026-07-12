@@ -2,14 +2,54 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
+from jung.domain.models import Plan, Profile
 from jung.phases.post_session.models import (
     InterventionEvidence,
+    PostSessionInput,
     PostSessionResult,
     SessionBriefing,
 )
+from jung.phases.transcript import TranscriptTurn
+from jung.styles import load_styles
+
+
+def _plan() -> Plan:
+    now = datetime.now(UTC)
+    return Plan(
+        id=uuid4(),
+        version=1,
+        selected_style="cbt",
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep"],
+        current_progress="baseline",
+        planned_interventions=["grounding"],
+        revision_recommendations=[],
+        created_at=now,
+    )
+
+
+def test_post_session_input_rejects_mismatched_style() -> None:
+    with pytest.raises(ValidationError, match="selected_style must match"):
+        PostSessionInput(
+            transcript=(
+                TranscriptTurn(
+                    message_id=uuid4(),
+                    sequence=1,
+                    role="user",
+                    content="I slept badly.",
+                ),
+            ),
+            current_plan=_plan(),
+            profile=Profile(name="Alex", primary_language="English"),
+            selected_style=load_styles()["jung"],
+        )
 
 
 @pytest.mark.parametrize(

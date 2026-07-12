@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jung.domain.models import Plan
-from jung.phases.context_bounds import bounded_text, newest_within_budget
+from jung.phases.context_bounds import bounded_text, newest_lines_within_budget
 from jung.phases.post_session.models import PostSessionInput, SessionAnalysisResult
 
 _UPDATE_CONTEXT_LIMIT = 8_000
@@ -322,9 +322,10 @@ def build_update_context_sections(
             remaining,
             remaining,
         )
-        summaries = newest_within_budget(
+        summaries = newest_lines_within_budget(
             input.recent_session_summaries,
             summary_budget,
+            separator="\n",
         )
         if summaries:
             body = "\n".join(summaries)

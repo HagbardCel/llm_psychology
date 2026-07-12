@@ -118,3 +118,61 @@ def test_merge_is_idempotent_for_same_patch() -> None:
     )
     assert second.record == first.record
     assert second.record_changed is False
+
+
+def test_merge_accepts_evidence_quote_with_capitalization_difference() -> None:
+    latest = _user_turn("I Feel Anxious Every Morning")
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=_valid_evidence(
+                value="anxiety",
+                quote="I feel anxious every morning",
+            )
+        )
+    )
+    result = merge_intake_record_patch_with_diagnostics(
+        IntakeRecord(),
+        patch,
+        latest_user_message=latest,
+        source_message_sequence=latest.sequence,
+    )
+    assert result.status == "applied"
+    assert result.record.presenting_problem.main_concern.is_present()
+
+
+def test_merge_deduplicates_list_evidence_by_casefolded_value() -> None:
+    latest = _user_turn("I feel anxious every morning")
+    existing = IntakeRecord(
+        presenting_problem=PresentingProblemRecord(
+            symptoms=(
+                _valid_evidence(
+                    value="Anxiety",
+                    quote="I feel anxious every morning",
+                ),
+            )
+        )
+    )
+    patch = IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            symptoms=(
+                _valid_evidence(
+                    value="anxiety",
+                    quote="I feel anxious every morning",
+                ),
+            )
+        )
+    )
+    first = merge_intake_record_patch_with_diagnostics(
+        existing,
+        patch,
+        latest_user_message=latest,
+        source_message_sequence=latest.sequence,
+    )
+    second = merge_intake_record_patch_with_diagnostics(
+        first.record,
+        patch,
+        latest_user_message=latest,
+        source_message_sequence=latest.sequence,
+    )
+    assert len(second.record.presenting_problem.symptoms) == 1
+    assert second.record_changed is False

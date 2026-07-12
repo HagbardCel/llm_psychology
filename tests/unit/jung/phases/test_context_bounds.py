@@ -5,7 +5,6 @@ from __future__ import annotations
 from jung.phases.context_bounds import (
     bounded_text,
     newest_lines_within_budget,
-    newest_within_budget,
 )
 
 
@@ -21,8 +20,8 @@ def test_bounded_text_short_text_unchanged() -> None:
     assert bounded_text("hello", 10) == "hello"
 
 
-def test_newest_within_budget_zero_returns_empty() -> None:
-    assert newest_within_budget(["a", "b"], 0) == []
+def test_newest_lines_within_budget_zero_returns_empty() -> None:
+    assert newest_lines_within_budget(["a", "b"], 0) == []
 
 
 def test_newest_lines_within_budget_counts_separators() -> None:

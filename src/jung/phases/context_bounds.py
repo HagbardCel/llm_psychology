@@ -45,19 +45,3 @@ def newest_lines_within_budget(
     if selected and len(separator.join(selected)) > budget:
         return [bounded_text(selected[-1], budget)]
     return selected
-
-
-def newest_within_budget(items: Sequence[str], budget: int) -> list[str]:
-    if budget <= 0 or not items:
-        return []
-    selected: list[str] = []
-    used = 0
-    for item in reversed(items):
-        if not item.strip():
-            continue
-        addition = len(item) if not selected else len(item) + 1
-        if used + addition > budget:
-            break
-        selected.insert(0, item)
-        used += addition
-    return selected

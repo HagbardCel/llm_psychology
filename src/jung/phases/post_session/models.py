@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from jung.domain.models import Plan, Profile
 from jung.phases.transcript import TranscriptTurn
@@ -117,3 +117,11 @@ class PostSessionInput(BaseModel):
     prior_session_briefing: dict[str, Any] | None = None
     recent_session_summaries: tuple[str, ...] = ()
     selected_style: StyleDefinition
+
+    @model_validator(mode="after")
+    def validate_style_matches_plan(self) -> PostSessionInput:
+        if self.selected_style.id != self.current_plan.selected_style:
+            raise ValueError(
+                "selected_style must match current_plan.selected_style"
+            )
+        return self

@@ -57,6 +57,10 @@ def count_patch_evidence(patch: IntakeRecordPatch) -> int:
     return _count_evidence(patch)
 
 
+def _normalize_evidence_text(text: str) -> str:
+    return normalize_transcript_content(text).casefold()
+
+
 def _evidence_drop_reason(
     evidence: IntakeEvidence,
     *,
@@ -77,8 +81,8 @@ def _evidence_drop_reason(
             return None
         return (
             None
-            if normalize_transcript_content(evidence.evidence_quote)
-            in normalize_transcript_content(latest_user_message.content)
+            if _normalize_evidence_text(evidence.evidence_quote)
+            in _normalize_evidence_text(latest_user_message.content)
             else "quote_not_found_in_message"
         )
     if not evidence.value:
@@ -91,8 +95,8 @@ def _evidence_drop_reason(
         return None
     return (
         None
-        if normalize_transcript_content(evidence.evidence_quote)
-        in normalize_transcript_content(latest_user_message.content)
+        if _normalize_evidence_text(evidence.evidence_quote)
+        in _normalize_evidence_text(latest_user_message.content)
         else "quote_not_found_in_message"
     )
 
@@ -123,9 +127,9 @@ def _merge_evidence(
 
 def _evidence_list_key(item: IntakeEvidence) -> str:
     if item.value:
-        return f"value:{normalize_transcript_content(item.value)}"
+        return f"value:{_normalize_evidence_text(item.value)}"
     if item.evidence_quote:
-        return f"quote:{normalize_transcript_content(item.evidence_quote)}"
+        return f"quote:{_normalize_evidence_text(item.evidence_quote)}"
     return ""
 
 
