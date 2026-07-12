@@ -2079,6 +2079,12 @@ It should verify:
 - llama.cpp or LM Studio compatibility through the same adapter.
 
 The smoke test must not mutate the database or require the legacy server.
+Emit one machine-extractable terminal line:
+
+```text
+PHASE3_SMOKE_EVIDENCE={"server":"...","model":"...","structured_mode":"json_schema",...}
+```
+
 Record a PR evidence table with server, model, structured mode, latencies, correction counts, and configured nonsecret extras. Do not record therapeutic content.
 
 ### 22.4 Dependency validation

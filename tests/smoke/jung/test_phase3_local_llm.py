@@ -1,4 +1,4 @@
-"""Optional manual smoke for real local LLM processors."""
+"""Required manual smoke for real local LLM processors before Phase 3 merge."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
+from tests.smoke.jung.smoke_evidence import COLLECTOR, SmokePathResult
 
 
 def _structured_mode() -> StructuredOutputMode:
@@ -77,6 +78,29 @@ def _plan() -> Plan:
     )
 
 
+def _correction_count(caplog: pytest.LogCaptureFixture) -> int:
+    return sum(
+        1
+        for record in caplog.records
+        if record.message.startswith("llm structured correction")
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_smoke_metadata() -> None:
+    if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
+        return
+    COLLECTOR.server = os.environ["PHASE3_SMOKE_BASE_URL"]
+    COLLECTOR.model = os.environ.get("PHASE3_SMOKE_MODEL", "local-model")
+    COLLECTOR.structured_mode = os.environ.get(
+        "PHASE3_SMOKE_STRUCTURED_MODE",
+        "json_schema",
+    )
+    raw_extra = os.environ.get("PHASE3_SMOKE_EXTRA_BODY")
+    if raw_extra:
+        COLLECTOR.request_extras = json.loads(raw_extra)
+
+
 @pytest.fixture
 async def gateway():
     if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
@@ -97,20 +121,32 @@ async def test_smoke_therapy_stream(gateway: OpenAICompatibleLLM) -> None:
     started = time.perf_counter()
     first_chunk_at: float | None = None
     chunks: list[str] = []
-    async for chunk in processor.stream_response(
-        TherapyTurnInput(
-            profile=Profile(name="Alex", primary_language="English"),
-            current_plan=_plan(),
-            latest_user_message="I slept poorly again.",
-            selected_style=load_styles()["cbt"],
+    try:
+        async for chunk in processor.stream_response(
+            TherapyTurnInput(
+                profile=Profile(name="Alex", primary_language="English"),
+                current_plan=_plan(),
+                latest_user_message="I slept poorly again.",
+                selected_style=load_styles()["cbt"],
+            )
+        ):
+            if first_chunk_at is None:
+                first_chunk_at = time.perf_counter()
+            chunks.append(chunk)
+        assert chunks
+        assert first_chunk_at is not None
+        COLLECTOR.therapy = SmokePathResult(
+            success=True,
+            latency_seconds=time.perf_counter() - started,
+            ttfc_seconds=first_chunk_at - started,
         )
-    ):
-        if first_chunk_at is None:
-            first_chunk_at = time.perf_counter()
-        chunks.append(chunk)
-    assert chunks
-    assert first_chunk_at is not None
-    assert first_chunk_at - started >= 0
+    except Exception as exc:
+        COLLECTOR.therapy = SmokePathResult(
+            success=False,
+            latency_seconds=time.perf_counter() - started,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 @pytest.mark.real_llm
@@ -124,22 +160,30 @@ async def test_smoke_assessment_processor(
         gateway,
         assessment_policy=policies[LLMTask.ASSESSMENT],
     )
-    with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
-        result = await processor.assess(
-            AssessmentInput(
-                intake_record=IntakeRecord(),
-                transcript=(),
-                profile=Profile(name="Alex", primary_language="English"),
-                available_styles=tuple(load_styles().values()),
+    started = time.perf_counter()
+    try:
+        with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
+            result = await processor.assess(
+                AssessmentInput(
+                    intake_record=IntakeRecord(),
+                    transcript=(),
+                    profile=Profile(name="Alex", primary_language="English"),
+                    available_styles=tuple(load_styles().values()),
+                )
             )
+        assert len(result.style_recommendations) == len(load_styles())
+        COLLECTOR.assessment = SmokePathResult(
+            success=True,
+            latency_seconds=time.perf_counter() - started,
+            correction_count=_correction_count(caplog),
         )
-    assert len(result.style_recommendations) == len(load_styles())
-    correction_count = sum(
-        1
-        for record in caplog.records
-        if record.message.startswith("llm structured correction")
-    )
-    assert correction_count >= 0
+    except Exception as exc:
+        COLLECTOR.assessment = SmokePathResult(
+            success=False,
+            latency_seconds=time.perf_counter() - started,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 @pytest.mark.real_llm
@@ -154,26 +198,34 @@ async def test_smoke_post_session_processor(
         analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
         update_policy=policies[LLMTask.POST_SESSION_UPDATE],
     )
-    with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
-        result = await processor.process(
-            PostSessionInput(
-                transcript=(
-                    TranscriptTurn(
-                        message_id=uuid4(),
-                        sequence=1,
-                        role="user",
-                        content="I slept badly.",
+    started = time.perf_counter()
+    try:
+        with caplog.at_level(logging.INFO, logger="jung.llm.openai_compatible"):
+            result = await processor.process(
+                PostSessionInput(
+                    transcript=(
+                        TranscriptTurn(
+                            message_id=uuid4(),
+                            sequence=1,
+                            role="user",
+                            content="I slept badly.",
+                        ),
                     ),
-                ),
-                current_plan=_plan(),
-                profile=Profile(name="Alex", primary_language="English"),
-                selected_style=load_styles()["cbt"],
+                    current_plan=_plan(),
+                    profile=Profile(name="Alex", primary_language="English"),
+                    selected_style=load_styles()["cbt"],
+                )
             )
+        assert result.session_summary
+        COLLECTOR.post_session = SmokePathResult(
+            success=True,
+            latency_seconds=time.perf_counter() - started,
+            correction_count=_correction_count(caplog),
         )
-    assert result.session_summary
-    correction_count = sum(
-        1
-        for record in caplog.records
-        if record.message.startswith("llm structured correction")
-    )
-    assert correction_count >= 0
+    except Exception as exc:
+        COLLECTOR.post_session = SmokePathResult(
+            success=False,
+            latency_seconds=time.perf_counter() - started,
+            error_type=type(exc).__name__,
+        )
+        raise

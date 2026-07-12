@@ -159,6 +159,7 @@ validate-refactor-phase-1: prepare-runtime-dirs
 phase-2-test: prepare-runtime-dirs
 	docker compose --profile test run --rm test pytest \
 		tests/unit/jung/test_domain_models.py \
+		tests/unit/jung/domain/test_plan_content.py \
 		tests/unit/jung/test_json_validation.py \
 		tests/unit/jung/test_sqlite_support.py \
 		tests/unit/jung/test_workflow.py \
@@ -175,6 +176,7 @@ validate-refactor-phase-2: prepare-runtime-dirs
 		src/jung/persistence \
 		src/jung/workflow.py \
 		tests/unit/jung/test_domain_models.py \
+		tests/unit/jung/domain/test_plan_content.py \
 		tests/unit/jung/test_json_validation.py \
 		tests/unit/jung/test_sqlite_support.py \
 		tests/unit/jung/test_workflow.py \
@@ -207,7 +209,13 @@ validate-refactor-phase-3: prepare-runtime-dirs
 	$(MAKE) phase-3-test
 
 smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest tests/smoke/jung/test_phase3_local_llm.py -m real_llm -q
+	docker compose --profile test run --rm \
+		-e PHASE3_SMOKE_BASE_URL \
+		-e PHASE3_SMOKE_MODEL \
+		-e PHASE3_SMOKE_TIMEOUT \
+		-e PHASE3_SMOKE_STRUCTURED_MODE \
+		-e PHASE3_SMOKE_EXTRA_BODY \
+		test pytest tests/smoke/jung/test_phase3_local_llm.py -m real_llm --no-mocks -q
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
 hook-commit: lint
