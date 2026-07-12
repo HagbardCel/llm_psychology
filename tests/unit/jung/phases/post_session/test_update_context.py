@@ -13,6 +13,7 @@ from jung.phases.post_session.models import (
 )
 from jung.phases.post_session.update_context import (
     _UPDATE_CONTEXT_LIMIT,
+    _section_payload_budget,
     build_update_context_sections,
 )
 from jung.phases.transcript import TranscriptTurn
@@ -65,6 +66,29 @@ def test_update_context_stays_within_total_budget() -> None:
     sections = build_update_context_sections(_input(), _analysis())
     rendered = "\n\n".join(sections)
     assert rendered
+    assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
+
+
+def test_section_payload_budget_accounts_for_heading_prefix() -> None:
+    heading = "Session analysis"
+    remaining = 100
+    budget = _section_payload_budget(heading, remaining, remaining)
+    assert budget == remaining - len(f"{heading}:\n")
+
+
+def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
+    sections = build_update_context_sections(
+        _input(
+            prior_session_briefing={"summary": "b" * 5000},
+            recent_session_summaries=tuple(f"summary-{index}" * 200 for index in range(20)),
+            derived_profile={"observations": ["p" * 5000]},
+        ),
+        SessionAnalysisResult(
+            summary="x" * 5000,
+            key_themes=tuple(f"theme-{index}" for index in range(50)),
+        ),
+    )
+    rendered = "\n\n".join(sections)
     assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
 
 

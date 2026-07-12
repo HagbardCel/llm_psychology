@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from jung.llm.gateway import LLMGateway, ModelPolicy
+from jung.phases.post_session.merge import validate_update_result
 from jung.phases.post_session.models import (
     PostSessionInput,
     PostSessionResult,
@@ -36,4 +37,8 @@ class PostSessionProcessor:
             build_update_messages(input, analysis),
             PostSessionResult,
             self._update_policy,
+            validate_result=lambda result: validate_update_result(
+                result,
+                current_plan=input.current_plan,
+            ),
         )

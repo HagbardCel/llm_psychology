@@ -240,7 +240,8 @@ def _briefing_prose(briefing: Mapping[str, Any], limit: int) -> str:
 
 
 def _section_payload_budget(heading: str, cap: int, remaining: int) -> int:
-    return max(0, min(cap, remaining) - len(heading) - 1)
+    prefix = f"{heading}:\n"
+    return max(0, min(cap, remaining) - len(prefix))
 
 
 def build_update_context_sections(

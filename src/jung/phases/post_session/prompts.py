@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from jung.llm.gateway import ChatMessage, ChatRole
-from jung.phases.context_bounds import bounded_text
+from jung.phases.context_bounds import newest_lines_within_budget
 from jung.phases.post_session.models import (
     PostSessionInput,
     SessionAnalysisResult,
@@ -15,9 +15,11 @@ _ANALYSIS_TRANSCRIPT_LIMIT = 12000
 
 
 def build_analysis_messages(input: PostSessionInput) -> list[ChatMessage]:
-    transcript = bounded_text(
-        "\n".join(f"{turn.role}: {turn.content}" for turn in input.transcript),
-        _ANALYSIS_TRANSCRIPT_LIMIT,
+    transcript_lines = [
+        f"{turn.role}: {turn.content}" for turn in input.transcript
+    ]
+    transcript = "\n".join(
+        newest_lines_within_budget(transcript_lines, _ANALYSIS_TRANSCRIPT_LIMIT)
     )
     style_instructions = input.selected_style.post_session_instructions or ""
     user_content = "\n\n".join(

@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from jung.domain.models import Plan, PlanContent
-from jung.phases.post_session.models import DerivedProfilePatch, PlanPatch
+from jung.phases.post_session.models import (
+    DerivedProfilePatch,
+    PlanPatch,
+    PostSessionResult,
+)
 
 
 def _normalize_list(values: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
@@ -115,3 +119,12 @@ def merge_plan_content(
     if plan_patch_is_noop(current, patch):
         return None
     return apply_plan_patch(current, patch)
+
+
+def validate_update_result(
+    result: PostSessionResult,
+    *,
+    current_plan: Plan,
+) -> PostSessionResult:
+    apply_plan_patch(current_plan, result.plan_patch)
+    return result

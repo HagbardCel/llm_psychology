@@ -142,3 +142,27 @@ def test_opening_context_includes_session_briefing() -> None:
     combined = "\n".join(sections)
     assert "prior sleep focus" in combined
     assert "Session briefing:" in combined
+
+
+def test_oversized_transcript_retains_final_exchange() -> None:
+    sections = build_context_sections(
+        _input(
+            latest_user_message="brand new answer",
+            transcript=(
+                _turn(1, "user", "old " * 500),
+                _turn(2, "assistant", "How did that feel?"),
+                _turn(3, "user", "prior answer"),
+            ),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_section_chars=200,
+                max_total_chars=1000,
+            ),
+        )
+    )
+    transcript_section = next(
+        section for section in sections if section.startswith("Active session transcript:")
+    )
+    body = transcript_section.split(":\n", 1)[1]
+    assert "prior answer" in body or "How did that feel?" in body
+    assert "old " * 50 not in body

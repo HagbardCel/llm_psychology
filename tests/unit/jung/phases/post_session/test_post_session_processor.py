@@ -110,6 +110,66 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
     gateway.assert_exhausted()
 
 
+@pytest.mark.asyncio
+async def test_post_session_processor_rejects_invalid_plan_patch() -> None:
+    gateway = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysisResult,
+                response=SessionAnalysisResult(
+                    summary="Patient explored sleep difficulties.",
+                    key_themes=("sleep",),
+                ),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_UPDATE,
+                output_type=PostSessionResult,
+                response=PostSessionResult(
+                    session_summary="Sleep remained difficult.",
+                    session_briefing=_briefing(),
+                    derived_profile_patch=DerivedProfilePatch(),
+                    plan_patch=PlanPatch(goals=()),
+                ),
+            ),
+        ]
+    )
+    processor = PostSessionProcessor(
+        gateway,
+        analysis_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_ANALYSIS,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+        update_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_UPDATE,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+    )
+    with pytest.raises(InvalidLLMOutput):
+        await processor.process(
+            PostSessionInput(
+                transcript=(
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=1,
+                        role="user",
+                        content="I slept badly.",
+                    ),
+                ),
+                current_plan=_plan(),
+                profile=Profile(name="Alex", primary_language="English"),
+                selected_style=load_styles()["cbt"],
+            )
+        )
+    gateway.assert_exhausted()
+
+
 def test_plan_patch_noop_and_revision_merge() -> None:
     plan = _plan()
     noop_patch = PlanPatch()

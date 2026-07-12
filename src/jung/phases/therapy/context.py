@@ -6,7 +6,11 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from jung.phases.context_bounds import bounded_text, newest_within_budget
+from jung.phases.context_bounds import (
+    bounded_text,
+    newest_lines_within_budget,
+    newest_within_budget,
+)
 from jung.phases.therapy.models import TherapyTurnInput
 
 
@@ -99,7 +103,8 @@ def build_therapy_context(
     if transcript_lines and remaining > 0:
         heading = "Active session transcript:\n"
         payload_budget = max(0, remaining - len(heading))
-        transcript = bounded_text("\n".join(transcript_lines), payload_budget)
+        selected_lines = newest_lines_within_budget(transcript_lines, payload_budget)
+        transcript = "\n".join(selected_lines)
         if transcript:
             transcript_section = f"{heading}{transcript}"
             sections.append(transcript_section)
