@@ -53,17 +53,19 @@ def _build_plan(**values: object) -> Plan:
 
 def _derived_profiles_equal(
     existing: dict[str, Any] | None,
-    updated: dict[str, Any],
+    updated: dict[str, Any] | None,
 ) -> bool:
-    updated_normalized = sql.validate_json_mapping(
-        updated, field_name="derived_profile"
-    )
-    if existing is None:
+    if existing is None and updated is None:
+        return True
+    if existing is None or updated is None:
         return False
     existing_normalized = sql.validate_json_mapping(
         existing, field_name="derived_profile"
     )
-    return sql.json_dumps(existing_normalized) == sql.json_dumps(updated_normalized)
+    updated_normalized = sql.validate_json_mapping(
+        updated, field_name="derived_profile"
+    )
+    return existing_normalized == updated_normalized
 
 
 _SESSION_SELECT = """
@@ -170,25 +172,14 @@ class SQLiteStore:
     def list_sessions(self) -> list[Session]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
-                   intake_record_json,
-                       intake_record_json
-                FROM sessions
-                ORDER BY started_at DESC
-                """
+                f"{_SESSION_SELECT} ORDER BY started_at DESC"
             ).fetchall()
             return [sql.row_to_session(row) for row in rows]
 
     def get_session(self, session_id: UUID) -> Session | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
-                   intake_record_json,
-                       intake_record_json
-                FROM sessions WHERE id = ?
-                """,
+                f"{_SESSION_SELECT} WHERE id = ?",
                 (str(session_id),),
             ).fetchone()
             return sql.row_to_session(row) if row else None
@@ -268,13 +259,7 @@ class SQLiteStore:
     def get_active_session(self) -> Session | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
-                   intake_record_json,
-                       intake_record_json
-                FROM sessions WHERE ended_at IS NULL
-                LIMIT 1
-                """
+                f"{_SESSION_SELECT} WHERE ended_at IS NULL LIMIT 1"
             ).fetchone()
             return sql.row_to_session(row) if row else None
 
@@ -608,12 +593,7 @@ class SQLiteStore:
             )
             self._set_stage(conn, Stage.THERAPY, now)
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
-                   intake_record_json,
-                       intake_record_json
-                FROM sessions WHERE id = ?
-                """,
+                f"{_SESSION_SELECT} WHERE id = ?",
                 (str(session_id),),
             ).fetchone()
             session_holder["session"] = sql.row_to_session(row)
@@ -674,14 +654,16 @@ class SQLiteStore:
         *,
         summary: str,
         briefing: dict[str, Any],
-        derived_profile: dict[str, Any],
+        derived_profile: dict[str, Any] | None,
         new_plan: NewPlanRevision | None,
         now: datetime,
     ) -> AppState:
         validated_briefing = sql.validate_json_mapping(briefing, field_name="briefing")
-        validated_profile = sql.validate_json_mapping(
-            derived_profile, field_name="derived_profile"
-        )
+        validated_profile: dict[str, Any] | None = None
+        if derived_profile is not None:
+            validated_profile = sql.validate_json_mapping(
+                derived_profile, field_name="derived_profile"
+            )
 
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.POST_SESSION})
@@ -701,12 +683,16 @@ class SQLiteStore:
             source_session_id = UUID(op_row[2])
             current_plan = self._require_current_plan(conn)
             profile_row = conn.execute(
-                "SELECT derived_profile_json FROM profile WHERE singleton_id = 1"
+                "SELECT derived_profile_json, current_plan_id, updated_at "
+                "FROM profile WHERE singleton_id = 1"
             ).fetchone()
-            existing_profile = sql.json_loads(profile_row[0]) if profile_row else None
+            existing_profile = (
+                sql.json_loads(profile_row[0]) if profile_row and profile_row[0] else None
+            )
             profile_changed = not _derived_profiles_equal(
                 existing_profile, validated_profile
             )
+            plan_changed = new_plan is not None
 
             conn.execute(
                 """
@@ -761,18 +747,41 @@ class SQLiteStore:
                 result_plan_version = plan.version
                 current_plan_id = str(plan.id)
 
-            conn.execute(
-                """
-                UPDATE profile
-                SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
-                WHERE singleton_id = 1
-                """,
-                (
-                    sql.json_dumps(validated_profile),
-                    current_plan_id,
-                    sql.dt(now),
-                ),
-            )
+            if profile_changed or plan_changed:
+                if profile_changed and plan_changed:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (
+                            sql.json_dumps(validated_profile),
+                            current_plan_id,
+                            sql.dt(now),
+                        ),
+                    )
+                elif profile_changed:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET derived_profile_json = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (
+                            sql.json_dumps(validated_profile),
+                            sql.dt(now),
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET current_plan_id = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (current_plan_id, sql.dt(now)),
+                    )
             result = {
                 "plan_id": result_plan_id,
                 "plan_version": result_plan_version,
@@ -1321,11 +1330,7 @@ class SQLiteStore:
         self, conn: sqlite3.Connection, session_id: UUID
     ) -> Session:
         row = conn.execute(
-            """
-            SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
-                   intake_record_json
-            FROM sessions WHERE id = ? AND ended_at IS NULL
-            """,
+            f"{_SESSION_SELECT} WHERE id = ? AND ended_at IS NULL",
             (str(session_id),),
         ).fetchone()
         if row is None:

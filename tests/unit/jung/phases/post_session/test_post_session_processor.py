@@ -10,7 +10,7 @@ import pytest
 from jung.domain.models import Plan, Profile
 from jung.llm.fake import FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
-from jung.phases.post_session.merge import merge_plan_revision, plan_patch_is_noop
+from jung.phases.post_session.merge import merge_plan_content, plan_patch_is_noop
 from jung.phases.post_session.models import (
     DerivedProfilePatch,
     PlanPatch,
@@ -113,11 +113,11 @@ def test_plan_patch_noop_and_revision_merge() -> None:
     plan = _plan()
     noop_patch = PlanPatch()
     assert plan_patch_is_noop(plan, noop_patch) is True
-    assert merge_plan_revision(plan, noop_patch) is None
+    assert merge_plan_content(plan, noop_patch) is None
 
-    changed = merge_plan_revision(
+    changed = merge_plan_content(
         plan,
         PlanPatch(current_progress="improved sleep hygiene"),
     )
     assert changed is not None
-    assert changed.content.current_progress == "improved sleep hygiene"
+    assert changed.current_progress == "improved sleep hygiene"

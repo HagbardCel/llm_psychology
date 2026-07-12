@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from jung.domain.models import NewPlanRevision, Plan, PlanContent
+from jung.domain.models import Plan, PlanContent
 from jung.phases.post_session.models import DerivedProfilePatch, PlanPatch
 
 
@@ -22,33 +22,43 @@ def _normalize_list(values: tuple[str, ...] | list[str] | None) -> tuple[str, ..
     return tuple(normalized)
 
 
-def _normalize_plan_content(content: PlanContent) -> PlanContent:
-    return PlanContent(
-        focus=content.focus.strip(),
-        themes=list(_normalize_list(tuple(content.themes))),
-        goals=list(_normalize_list(tuple(content.goals))),
-        current_progress=content.current_progress.strip(),
-        planned_interventions=list(
-            _normalize_list(tuple(content.planned_interventions))
-        ),
-        revision_recommendations=list(
-            _normalize_list(tuple(content.revision_recommendations))
-        ),
+def _normalize_derived_profile_patch(
+    patch: DerivedProfilePatch,
+) -> DerivedProfilePatch:
+    return DerivedProfilePatch(
+        observations=_normalize_list(patch.observations),
+        hypotheses=_normalize_list(patch.hypotheses),
+        patient_stated_facts=_normalize_list(patch.patient_stated_facts),
+    )
+
+
+def derived_profile_patch_is_empty(patch: DerivedProfilePatch) -> bool:
+    normalized = _normalize_derived_profile_patch(patch)
+    return not (
+        normalized.observations
+        or normalized.hypotheses
+        or normalized.patient_stated_facts
     )
 
 
 def merge_derived_profile(
     current: dict[str, Any] | None,
     patch: DerivedProfilePatch,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    normalized_patch = _normalize_derived_profile_patch(patch)
+    if derived_profile_patch_is_empty(normalized_patch):
+        return current
+
     merged: dict[str, Any] = dict(current or {})
     for field_name in (
         "observations",
         "hypotheses",
         "patient_stated_facts",
     ):
+        incoming = getattr(normalized_patch, field_name)
+        if not incoming:
+            continue
         existing = tuple(merged.get(field_name, ()))
-        incoming = getattr(patch, field_name)
         merged[field_name] = list(_normalize_list(existing + incoming))
     return merged
 
@@ -57,11 +67,22 @@ def derived_profile_changed(
     current: dict[str, Any] | None,
     patch: DerivedProfilePatch,
 ) -> bool:
-    return merge_derived_profile(current, patch) != dict(current or {})
+    return merge_derived_profile(current, patch) != current
+
+
+def _current_plan_content(current: Plan) -> PlanContent:
+    return PlanContent(
+        focus=current.focus,
+        themes=current.themes,
+        goals=current.goals,
+        current_progress=current.current_progress,
+        planned_interventions=current.planned_interventions,
+        revision_recommendations=current.revision_recommendations,
+    )
 
 
 def apply_plan_patch(current: Plan, patch: PlanPatch) -> PlanContent:
-    content = PlanContent(
+    return PlanContent(
         focus=patch.focus if patch.focus is not None else current.focus,
         themes=list(patch.themes if patch.themes is not None else current.themes),
         goals=list(patch.goals if patch.goals is not None else current.goals),
@@ -81,31 +102,16 @@ def apply_plan_patch(current: Plan, patch: PlanPatch) -> PlanContent:
             else current.revision_recommendations
         ),
     )
-    return _normalize_plan_content(content)
 
 
 def plan_patch_is_noop(current: Plan, patch: PlanPatch) -> bool:
-    candidate = apply_plan_patch(current, patch)
-    current_content = _normalize_plan_content(
-        PlanContent(
-            focus=current.focus,
-            themes=current.themes,
-            goals=current.goals,
-            current_progress=current.current_progress,
-            planned_interventions=current.planned_interventions,
-            revision_recommendations=current.revision_recommendations,
-        )
-    )
-    return candidate == current_content
+    return apply_plan_patch(current, patch) == _current_plan_content(current)
 
 
-def merge_plan_revision(
+def merge_plan_content(
     current: Plan,
     patch: PlanPatch,
-) -> NewPlanRevision | None:
+) -> PlanContent | None:
     if plan_patch_is_noop(current, patch):
         return None
-    return NewPlanRevision(
-        plan_id=current.id,
-        content=apply_plan_patch(current, patch),
-    )
+    return apply_plan_patch(current, patch)

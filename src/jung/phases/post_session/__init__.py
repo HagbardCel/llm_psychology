@@ -1,6 +1,6 @@
 """Post-session phase processor package."""
 
-from jung.phases.post_session.merge import merge_plan_revision
+from jung.phases.post_session.merge import merge_plan_content
 from jung.phases.post_session.models import (
     PostSessionInput,
     PostSessionResult,
@@ -13,5 +13,5 @@ __all__ = [
     "PostSessionProcessor",
     "PostSessionResult",
     "SessionAnalysisResult",
-    "merge_plan_revision",
+    "merge_plan_content",
 ]

@@ -623,3 +623,81 @@ def test_invalid_plan_fields_raise_invariant_violation(
             ),
             now=now,
         )
+
+
+def test_complete_post_session_empty_profile_patch_preserves_none(store: SQLiteStore) -> None:
+    scenario = advance_to_post_session(store)
+    stored_before = store.get_profile()
+    assert stored_before is not None
+    assert stored_before.derived_profile is None
+    updated_before = stored_before.updated_at
+
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    store.complete_post_session(
+        scenario.post_session_operation_id,
+        summary="steady session",
+        briefing={"summary": "no profile change"},
+        derived_profile=None,
+        new_plan=None,
+        now=scenario.now,
+    )
+
+    stored_after = store.get_profile()
+    assert stored_after is not None
+    assert stored_after.derived_profile is None
+    assert stored_after.updated_at == updated_before
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.result == {
+        "plan_id": None,
+        "plan_version": None,
+        "profile_changed": False,
+    }
+
+
+def test_complete_post_session_empty_profile_patch_preserves_sparse_mapping(
+    store: SQLiteStore,
+) -> None:
+    scenario = advance_to_post_session(store)
+    sparse = {"custom_observation": "existing"}
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    store.complete_post_session(
+        scenario.post_session_operation_id,
+        summary="first session",
+        briefing={"summary": "seed"},
+        derived_profile=sparse,
+        new_plan=None,
+        now=scenario.now,
+    )
+    stored_before = store.get_profile()
+    assert stored_before is not None
+    updated_before = stored_before.updated_at
+
+    post_op_id = uuid4()
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=scenario.now,
+    )
+    store.end_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        operation_id=post_op_id,
+        now=scenario.now,
+    )
+    store.mark_operation_running(post_op_id, now=scenario.now)
+    store.complete_post_session(
+        post_op_id,
+        summary="second session",
+        briefing={"summary": "no profile change"},
+        derived_profile=sparse,
+        new_plan=None,
+        now=scenario.now,
+    )
+
+    stored_after = store.get_profile()
+    assert stored_after is not None
+    assert stored_after.derived_profile == sparse
+    assert "observations" not in (stored_after.derived_profile or {})
+    assert stored_after.updated_at == updated_before
