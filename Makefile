@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 hook-commit hook-push
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -41,7 +41,10 @@ help:
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo "  finalization-check - Standard release-candidate checks, including characterization smoke (Docker)"
-	@echo "  finalization-check-full - Complete characterization and console probes (Docker)"
+	@echo "  validate-refactor-phase-2 - Validate Phase 2 jung domain/persistence (Docker)"
+	@echo "  phase-3-test            - Run Phase 3 LLM and processor tests (Docker)"
+	@echo "  validate-refactor-phase-3 - Validate Phase 3 jung llm/phases (Docker)"
+	@echo "  smoke-refactor-phase-3-local-llm - Manual local-model smoke for Phase 3 schemas"
 	@echo ""
 	@echo "UI Mode Selection:"
 	@echo "  ui-console        - Run console UI service (Docker, WebSocket client)"
@@ -154,11 +157,56 @@ validate-refactor-phase-1: prepare-runtime-dirs
 	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
 
 phase-2-test: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest tests/unit/jung tests/integration/jung -q
+	docker compose --profile test run --rm test pytest \
+		tests/unit/jung/test_domain_models.py \
+		tests/unit/jung/test_json_validation.py \
+		tests/unit/jung/test_sqlite_support.py \
+		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/test_import_boundaries.py::test_phase2_packages_have_no_forbidden_imports \
+		tests/integration/jung/test_store_chat.py \
+		tests/integration/jung/test_store_recovery.py \
+		tests/integration/jung/test_store_schema.py \
+		tests/integration/jung/test_store_workflow.py \
+		-q
 
 validate-refactor-phase-2: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check src/jung tests/unit/jung tests/integration/jung
+	docker compose --profile test run --rm test ruff check \
+		src/jung/domain \
+		src/jung/persistence \
+		src/jung/workflow.py \
+		tests/unit/jung/test_domain_models.py \
+		tests/unit/jung/test_json_validation.py \
+		tests/unit/jung/test_sqlite_support.py \
+		tests/unit/jung/test_workflow.py \
+		tests/integration/jung/test_store_chat.py \
+		tests/integration/jung/test_store_recovery.py \
+		tests/integration/jung/test_store_schema.py \
+		tests/integration/jung/test_store_workflow.py
 	$(MAKE) phase-2-test
+
+phase-3-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest \
+		tests/unit/jung/llm \
+		tests/unit/jung/phases \
+		tests/unit/jung/test_styles.py \
+		tests/unit/jung/test_import_boundaries.py \
+		tests/integration/jung/test_processor_contracts.py \
+		-q
+
+validate-refactor-phase-3: prepare-runtime-dirs
+	docker compose --profile test run --rm test ruff check \
+		src/jung/llm \
+		src/jung/phases \
+		src/jung/styles \
+		tests/unit/jung/llm \
+		tests/unit/jung/phases \
+		tests/unit/jung/test_styles.py \
+		tests/unit/jung/test_import_boundaries.py \
+		tests/integration/jung/test_processor_contracts.py
+	$(MAKE) phase-3-test
+
+smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest tests/smoke/jung/test_phase3_local_llm.py -m real_llm -q
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
 hook-commit: lint
