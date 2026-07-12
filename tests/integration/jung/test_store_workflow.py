@@ -7,12 +7,15 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from jung.domain.errors import InvariantViolation, PersistenceFailure, RevisionConflict
 from jung.domain.models import (
     CommandName,
+    NewPlanRevision,
     OperationKind,
     OperationStatus,
+    PlanContent,
     Profile,
     SessionKind,
     Stage,
@@ -21,6 +24,19 @@ from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 
 from .scenarios import advance_to_post_session, advance_to_ready, open_intake
+
+
+def _plan_content(**overrides: object) -> PlanContent:
+    values = {
+        "focus": "anxiety",
+        "themes": ["worry"],
+        "goals": ["sleep"],
+        "current_progress": "baseline",
+        "planned_interventions": ["grounding"],
+        "revision_recommendations": ["track sleep"],
+    }
+    values.update(overrides)
+    return PlanContent(**values)
 
 
 def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
@@ -187,13 +203,15 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
         summary="good session",
         briefing=briefing,
         derived_profile={"insight": "progress"},
-        plan_id=new_plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep better"],
-        current_progress="improved",
-        planned_interventions=["homework"],
-        revision_recommendations=["continue tracking"],
+        new_plan=NewPlanRevision(
+            plan_id=new_plan_id,
+            content=_plan_content(
+                goals=["sleep better"],
+                current_progress="improved",
+                planned_interventions=["homework"],
+                revision_recommendations=["continue tracking"],
+            ),
+        ),
         now=scenario.now,
     )
     assert state.stage == Stage.READY
@@ -209,6 +227,31 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
     assert plan.supersedes_plan_id == scenario.current_plan_id
     assert plan.session_briefing == briefing
     assert plan.source_session_id == scenario.therapy_session_id
+
+
+def test_complete_post_session_without_plan_revision(store: SQLiteStore) -> None:
+    scenario = advance_to_post_session(store)
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    state = store.complete_post_session(
+        scenario.post_session_operation_id,
+        summary="steady session",
+        briefing={"summary": "no plan change"},
+        derived_profile={"insight": "progress"},
+        new_plan=None,
+        now=scenario.now,
+    )
+    assert state.stage == Stage.READY
+    plan = store.get_current_plan()
+    assert plan is not None
+    assert plan.id == scenario.current_plan_id
+    assert plan.version == 1
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.result == {
+        "plan_id": None,
+        "plan_version": None,
+        "profile_changed": True,
+    }
 
 
 def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> None:
@@ -229,13 +272,15 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
             summary="good session",
             briefing={"summary": "session notes"},
             derived_profile={"insight": "changed"},
-            plan_id=scenario.current_plan_id,
-            focus="anxiety",
-            themes=["worry"],
-            goals=["sleep better"],
-            current_progress="improved",
-            planned_interventions=["homework"],
-            revision_recommendations=["continue tracking"],
+            new_plan=NewPlanRevision(
+                plan_id=scenario.current_plan_id,
+                content=_plan_content(
+                    goals=["sleep better"],
+                    current_progress="improved",
+                    planned_interventions=["homework"],
+                    revision_recommendations=["continue tracking"],
+                ),
+            ),
             now=scenario.now,
         )
 
@@ -302,17 +347,12 @@ def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -
         result={"initial_plan": {"focus": "anxiety"}},
         now=now,
     )
-    with pytest.raises(InvariantViolation):
+    with pytest.raises(ValidationError):
         store.select_style_and_create_initial_plan(
             expected_revision=store.get_app_state().revision,
             style_id="cbt",
             plan_id=uuid4(),
-            focus="anxiety",
-            themes=[1],
-            goals=["sleep"],
-            current_progress="baseline",
-            planned_interventions=["grounding"],
-            revision_recommendations=["track sleep"],
+            content=_plan_content(themes=[1]),  # type: ignore[list-item]
             intake_session_id=intake_id,
             now=now,
         )
@@ -378,14 +418,8 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
             scenario.post_session_operation_id,
             summary="too early",
             briefing={},
-            derived_profile={},
-            plan_id=uuid4(),
-            focus="x",
-            themes=[],
-            goals=[],
-            current_progress="",
-            planned_interventions=[],
-            revision_recommendations=[],
+            derived_profile={"insight": "x"},
+            new_plan=None,
             now=scenario.now,
         )
 
@@ -499,20 +533,17 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
 
 
 @pytest.mark.parametrize(
-    ("path", "invalid_kwargs"),
+    ("path", "invalid_field", "invalid_value"),
     [
-        (
-            "initial_plan",
-            {"focus": " "},
-        ),
-        (
-            "post_session",
-            {"current_progress": " "},
-        ),
+        ("initial_plan", "focus", " "),
+        ("post_session", "current_progress", " "),
     ],
 )
 def test_invalid_plan_fields_raise_invariant_violation(
-    store: SQLiteStore, path: str, invalid_kwargs: dict
+    store: SQLiteStore,
+    path: str,
+    invalid_field: str,
+    invalid_value: str,
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
@@ -528,27 +559,35 @@ def test_invalid_plan_fields_raise_invariant_violation(
         result={"initial_plan": {"focus": "anxiety"}},
         now=now,
     )
-    base_plan = {
-        "expected_revision": store.get_app_state().revision,
-        "style_id": "cbt",
-        "plan_id": uuid4(),
+    content_kwargs = {
         "focus": "anxiety",
         "themes": ["worry"],
         "goals": ["sleep"],
         "current_progress": "baseline",
         "planned_interventions": ["grounding"],
         "revision_recommendations": ["track sleep"],
-        "intake_session_id": intake_id,
-        "now": now,
     }
     if path == "initial_plan":
-        with pytest.raises(InvariantViolation):
+        content_kwargs[invalid_field] = invalid_value
+        with pytest.raises(ValidationError):
             store.select_style_and_create_initial_plan(
-                **{**base_plan, **invalid_kwargs},
+                expected_revision=store.get_app_state().revision,
+                style_id="cbt",
+                plan_id=uuid4(),
+                content=PlanContent(**content_kwargs),
+                intake_session_id=intake_id,
+                now=now,
             )
         return
 
-    store.select_style_and_create_initial_plan(**base_plan)
+    store.select_style_and_create_initial_plan(
+        expected_revision=store.get_app_state().revision,
+        style_id="cbt",
+        plan_id=uuid4(),
+        content=PlanContent(**content_kwargs),
+        intake_session_id=intake_id,
+        now=now,
+    )
     therapy_id = uuid4()
     store.start_therapy_session(
         expected_revision=store.get_app_state().revision,
@@ -563,21 +602,24 @@ def test_invalid_plan_fields_raise_invariant_violation(
         now=now,
     )
     store.mark_operation_running(post_op_id, now=now)
-    post_session_kwargs = {
-        "summary": "good session",
-        "briefing": {"summary": "notes"},
-        "derived_profile": {"insight": "progress"},
-        "plan_id": uuid4(),
+    post_content_kwargs = {
         "focus": "anxiety",
         "themes": ["worry"],
         "goals": ["sleep better"],
         "current_progress": "improved",
         "planned_interventions": ["homework"],
         "revision_recommendations": ["continue tracking"],
-        "now": now,
     }
-    with pytest.raises(InvariantViolation):
+    post_content_kwargs[invalid_field] = invalid_value
+    with pytest.raises(ValidationError):
         store.complete_post_session(
             post_op_id,
-            **{**post_session_kwargs, **invalid_kwargs},
+            summary="good session",
+            briefing={"summary": "notes"},
+            derived_profile={"insight": "progress"},
+            new_plan=NewPlanRevision(
+                plan_id=uuid4(),
+                content=PlanContent(**post_content_kwargs),
+            ),
+            now=now,
         )
