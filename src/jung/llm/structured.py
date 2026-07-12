@@ -33,14 +33,18 @@ def format_validation_error(exc: ValidationError) -> str:
     return "; ".join(parts) if parts else str(exc)
 
 
+def format_semantic_error(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        return format_validation_error(exc)
+    return str(exc)
+
+
 def validate_structured_text(output_type: type[T], text: str) -> T:
     normalized = strip_markdown_json_fence(text)
     try:
         return output_type.model_validate_json(normalized)
     except ValidationError as exc:
-        raise InvalidLLMOutput(
-            format_validation_error(exc), retryable=False
-        ) from exc
+        raise InvalidLLMOutput(format_validation_error(exc)) from exc
 
 
 def build_prompt_schema_instruction(output_type: type[BaseModel]) -> str:

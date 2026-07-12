@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+import logging
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import TypeVar
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from jung.llm.errors import (
     InvalidLLMOutput,
@@ -25,12 +26,15 @@ from jung.llm.gateway import (
 from jung.llm.structured import (
     build_correction_messages,
     build_prompt_schema_instruction,
+    format_semantic_error,
     response_format_for_mode,
     strip_markdown_json_fence,
     validate_structured_text,
 )
 
 T = TypeVar("T", bound=BaseModel)
+
+logger = logging.getLogger(__name__)
 
 
 def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
@@ -52,22 +56,24 @@ def _merge_extra_body(
     return merged or None
 
 
-def _classify_error(exc: Exception) -> Exception:
+def _classify_provider_error(exc: Exception) -> Exception:
     if isinstance(
         exc,
         (InvalidLLMOutput, LLMUnavailable, LLMTimeout, LLMProtocolError),
     ):
         return exc
     if isinstance(exc, APITimeoutError):
-        return LLMTimeout(str(exc), retryable=True)
+        return LLMTimeout(str(exc))
     if isinstance(exc, APIConnectionError):
-        return LLMUnavailable(str(exc), retryable=True)
+        return LLMUnavailable(str(exc))
     if isinstance(exc, APIStatusError):
         status = exc.status_code
-        if status in {408, 429} or status >= 500:
-            return LLMUnavailable(str(exc), retryable=True)
-        return LLMProtocolError(str(exc), retryable=False)
-    return LLMProtocolError(str(exc), retryable=False)
+        if status == 408:
+            return LLMTimeout(str(exc))
+        if status == 429 or status >= 500:
+            return LLMUnavailable(str(exc))
+        return LLMProtocolError(str(exc))
+    return LLMProtocolError(str(exc))
 
 
 class OpenAICompatibleLLM:
@@ -96,7 +102,7 @@ class OpenAICompatibleLLM:
         policy: ModelPolicy,
     ) -> AsyncIterator[str]:
         if not messages:
-            raise LLMProtocolError("messages must not be empty", retryable=False)
+            raise LLMProtocolError("messages must not be empty")
         request = self._base_request(messages, policy)
         request["stream"] = True
         try:
@@ -108,41 +114,70 @@ class OpenAICompatibleLLM:
                 if text:
                     yield text
         except Exception as exc:
-            raise _classify_error(exc) from exc
+            raise _classify_provider_error(exc) from exc
 
     async def generate_structured(
         self,
         messages: Sequence[ChatMessage],
         output_type: type[T],
         policy: ModelPolicy,
+        validate_result: Callable[[T], T] | None = None,
     ) -> T:
         if not messages:
-            raise LLMProtocolError("messages must not be empty", retryable=False)
+            raise LLMProtocolError("messages must not be empty")
 
         prepared = self._prepare_structured_messages(messages, output_type, policy)
         invalid_text = ""
         try:
-            invalid_text = await self._request_text(prepared, policy, output_type)
-            return validate_structured_text(output_type, invalid_text)
+            invalid_text = await self._make_provider_request(
+                prepared,
+                policy,
+                output_type,
+            )
+            return self._validate_result(
+                output_type,
+                invalid_text,
+                validate_result,
+            )
         except InvalidLLMOutput as first_error:
+            logger.info(
+                "llm structured correction task=%s model=%s output=%s",
+                policy.task.value,
+                policy.model,
+                output_type.__name__,
+            )
             correction_messages = build_correction_messages(
-                original_messages=list(messages),
+                original_messages=prepared,
                 output_type=output_type,
                 invalid_text=invalid_text,
                 validation_message=str(first_error),
             )
-            try:
-                corrected = await self._request_text(
-                    correction_messages,
-                    policy,
-                    output_type,
-                )
-                return validate_structured_text(output_type, corrected)
-            except Exception as exc:
-                classified = _classify_error(exc)
-                raise classified from exc
-        except Exception as exc:
-            raise _classify_error(exc) from exc
+            corrected = await self._make_provider_request(
+                correction_messages,
+                policy,
+                output_type,
+            )
+            return self._validate_result(
+                output_type,
+                corrected,
+                validate_result,
+            )
+
+    def _validate_result(
+        self,
+        output_type: type[T],
+        text: str,
+        validate_result: Callable[[T], T] | None,
+    ) -> T:
+        parsed = validate_structured_text(output_type, text)
+        if validate_result is None:
+            return parsed
+        try:
+            return validate_result(parsed)
+        except InvalidLLMOutput:
+            raise
+        except (ValueError, ValidationError) as exc:
+            raise InvalidLLMOutput(format_semantic_error(exc)) from exc
 
     def _prepare_structured_messages(
         self,
@@ -171,14 +206,14 @@ class OpenAICompatibleLLM:
             "temperature": policy.temperature,
             "timeout": policy.timeout_seconds,
         }
-        if policy.max_output_tokens is not None:
-            request["max_output_tokens"] = policy.max_output_tokens
+        if policy.max_completion_tokens is not None:
+            request["max_completion_tokens"] = policy.max_completion_tokens
         extra = _merge_extra_body(self._config, policy.task)
         if extra:
             request["extra_body"] = extra
         return request
 
-    async def _request_text(
+    async def _make_provider_request(
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
@@ -192,10 +227,13 @@ class OpenAICompatibleLLM:
         )
         if response_format is not None:
             request["response_format"] = response_format
-        response = await self._client.chat.completions.create(**request)
+        try:
+            response = await self._client.chat.completions.create(**request)
+        except Exception as exc:
+            raise _classify_provider_error(exc) from exc
         if not response.choices:
-            raise InvalidLLMOutput("empty provider response", retryable=False)
+            raise InvalidLLMOutput("empty provider response")
         content = response.choices[0].message.content
         if not content or not str(content).strip():
-            raise InvalidLLMOutput("missing text content", retryable=False)
+            raise InvalidLLMOutput("missing text content")
         return strip_markdown_json_fence(str(content))

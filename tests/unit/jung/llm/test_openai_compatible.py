@@ -9,7 +9,12 @@ import pytest
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from jung.llm.errors import InvalidLLMOutput, LLMUnavailable
+from jung.llm.errors import (
+    InvalidLLMOutput,
+    LLMProtocolError,
+    LLMTimeout,
+    LLMUnavailable,
+)
 from jung.llm.gateway import (
     AdapterConfig,
     ChatMessage,
@@ -144,3 +149,202 @@ async def test_connection_error_maps_to_llm_unavailable() -> None:
             _policy(mode=StructuredOutputMode.PROMPT),
         ):
             pass
+
+
+@pytest.mark.asyncio
+async def test_request_includes_max_completion_tokens_when_set() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(httpx.MockTransport(handler))
+    policy = ModelPolicy(
+        task=LLMTask.ASSESSMENT,
+        model="test-model",
+        temperature=0.0,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.JSON_OBJECT,
+        max_completion_tokens=128,
+    )
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        policy,
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body.get("max_completion_tokens") == 128
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (408, LLMTimeout),
+        (429, LLMUnavailable),
+        (503, LLMUnavailable),
+        (400, LLMProtocolError),
+    ],
+)
+async def test_http_status_maps_to_expected_error(
+    status: int,
+    expected: type[Exception],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"message": "boom"}})
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(expected):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_mode_correction_preserves_schema_instruction() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content.decode()))
+        content = '{"value":"ok"}' if len(bodies) == 2 else '{"value":1}'
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(httpx.MockTransport(handler))
+    result = await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(mode=StructuredOutputMode.PROMPT),
+    )
+    assert result.value == "ok"
+    assert len(bodies) == 2
+    second_messages = bodies[1]["messages"]
+    combined = json.dumps(second_messages)
+    assert "Respond with JSON only that matches this schema" in combined
+    assert "was invalid" in combined
+
+
+@pytest.mark.asyncio
+async def test_validator_runtime_error_propagates_without_correction() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def broken_validator(result: _Answer) -> _Answer:
+        raise RuntimeError("programming defect")
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="programming defect"):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+            validate_result=broken_validator,
+        )
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_validator_failure_triggers_single_correction() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        content = '{"value":"ok"}' if calls["count"] == 2 else '{"value":"bad"}'
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def validator(result: _Answer) -> _Answer:
+        if result.value != "ok":
+            raise ValueError("semantic mismatch")
+        return result
+
+    gateway = _client(httpx.MockTransport(handler))
+    result = await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+        validate_result=validator,
+    )
+    assert result.value == "ok"
+    assert calls["count"] == 2
+    import asyncio
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chunk = json.dumps(
+            {
+                "id": "1",
+                "object": "chat.completion.chunk",
+                "choices": [{"delta": {"content": "hi"}, "index": 0}],
+            }
+        )
+        sse_body = f"data: {chunk}\n\ndata: [DONE]\n\n"
+        return httpx.Response(
+            200,
+            content=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    gateway = _client(httpx.MockTransport(handler))
+
+    async def consume() -> None:
+        async for _ in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hello")],
+            _policy(mode=StructuredOutputMode.PROMPT),
+        ):
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await consume()

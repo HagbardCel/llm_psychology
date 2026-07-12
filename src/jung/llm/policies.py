@@ -41,13 +41,13 @@ def build_model_policies(settings: LLMSettings) -> dict[LLMTask, ModelPolicy]:
         mode = (settings.task_structured_modes or {}).get(
             task, _DEFAULT_STRUCTURED_MODES[task]
         )
-        max_tokens = (settings.task_max_output_tokens or {}).get(task)
+        max_tokens = (settings.task_max_completion_tokens or {}).get(task)
         policies[task] = ModelPolicy(
             task=task,
             model=model,
             temperature=temperature,
             timeout_seconds=timeout,
-            max_output_tokens=max_tokens,
+            max_completion_tokens=max_tokens,
             structured_output_mode=mode,
         )
     return policies

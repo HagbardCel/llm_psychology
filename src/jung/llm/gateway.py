@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, TypeVar
@@ -10,6 +10,8 @@ from typing import Protocol, TypeVar
 from pydantic import BaseModel, field_validator
 
 T = TypeVar("T", bound=BaseModel)
+
+ResultValidator = Callable[[T], T]
 
 
 class ChatRole(StrEnum):
@@ -51,7 +53,7 @@ class ModelPolicy:
     model: str
     temperature: float
     timeout_seconds: float
-    max_output_tokens: int | None = None
+    max_completion_tokens: int | None = None
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.PROMPT
 
     def __post_init__(self) -> None:
@@ -61,6 +63,8 @@ class ModelPolicy:
             raise ValueError("timeout_seconds must be positive")
         if not 0.0 <= self.temperature <= 2.0:
             raise ValueError("temperature out of range")
+        if self.max_completion_tokens is not None and self.max_completion_tokens <= 0:
+            raise ValueError("max_completion_tokens must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +85,7 @@ class LLMSettings:
     task_temperatures: dict[LLMTask, float] | None = None
     task_timeouts: dict[LLMTask, float] | None = None
     task_structured_modes: dict[LLMTask, StructuredOutputMode] | None = None
-    task_max_output_tokens: dict[LLMTask, int] | None = None
+    task_max_completion_tokens: dict[LLMTask, int] | None = None
     extra_body: dict[str, object] | None = None
     task_extra_body: dict[LLMTask, dict[str, object]] | None = None
     default_headers: dict[str, str] | None = None
@@ -99,4 +103,5 @@ class LLMGateway(Protocol):
         messages: Sequence[ChatMessage],
         output_type: type[T],
         policy: ModelPolicy,
+        validate_result: ResultValidator[T] | None = None,
     ) -> T: ...

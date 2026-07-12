@@ -73,6 +73,7 @@ class TracingLLMGateway:
         messages: Sequence[ChatMessage],
         output_type: type[T],
         policy: ModelPolicy,
+        validate_result=None,
     ) -> T:
         started = time.perf_counter()
         self._log_start(policy, "generate_structured", messages, output_type.__name__)
@@ -81,6 +82,7 @@ class TracingLLMGateway:
                 messages,
                 output_type,
                 policy,
+                validate_result=validate_result,
             )
         except Exception:
             logger.exception(

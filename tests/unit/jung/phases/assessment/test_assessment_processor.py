@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from jung.domain.models import PlanContent, Profile
+from jung.llm.errors import InvalidLLMOutput
 from jung.llm.fake import FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.assessment.models import (
@@ -71,7 +72,7 @@ async def test_assessment_processor_makes_one_structured_call() -> None:
     )
     result = await processor.assess(
         AssessmentInput(
-            intake_record=IntakeRecord().model_dump(),
+            intake_record=IntakeRecord(),
             transcript=(),
             profile=Profile(name="Alex", primary_language="English"),
             available_styles=styles,
@@ -91,3 +92,42 @@ def test_assessment_result_revalidates() -> None:
     )
     restored = AssessmentResult.model_validate_json(raw.model_dump_json())
     assert restored == raw
+
+
+@pytest.mark.asyncio
+async def test_assessment_processor_rejects_missing_style_coverage() -> None:
+    styles = tuple(load_styles().values())
+    gateway = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=AssessmentResult(
+                    formulation="Patient presents with anxiety.",
+                    presenting_concerns=("anxiety",),
+                    strengths_and_resources=("supportive partner",),
+                    style_recommendations=(_recommendation("cbt", 0.9),),
+                ),
+            )
+        ]
+    )
+    processor = AssessmentProcessor(
+        gateway,
+        assessment_policy=ModelPolicy(
+            task=LLMTask.ASSESSMENT,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+    )
+    with pytest.raises(InvalidLLMOutput):
+        await processor.assess(
+            AssessmentInput(
+                intake_record=IntakeRecord(),
+                transcript=(),
+                profile=Profile(name="Alex", primary_language="English"),
+                available_styles=styles,
+            )
+        )
+    gateway.assert_exhausted()
