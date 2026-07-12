@@ -18,6 +18,7 @@ class SmokePathResult:
 @dataclass
 class SmokeEvidenceCollector:
     server: str | None = None
+    base_url: str | None = None
     model: str | None = None
     structured_mode: str | None = None
     request_extras: dict[str, Any] = field(default_factory=dict)
@@ -32,6 +33,8 @@ class SmokeEvidenceCollector:
             "structured_mode": self.structured_mode,
             "request_extras": self.request_extras,
         }
+        if self.base_url is not None:
+            payload["base_url"] = self.base_url
         for key in ("therapy", "assessment", "post_session"):
             result = getattr(self, key)
             if result is None:

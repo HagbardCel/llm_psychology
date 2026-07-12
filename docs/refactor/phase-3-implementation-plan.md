@@ -2066,6 +2066,24 @@ make smoke-refactor-phase-3-local-llm
 
 Run this against the target local server before merging Phase 3. It remains manual and is not part of mandatory hosted CI.
 
+Required environment variables (fail fast when missing or empty):
+
+- `PHASE3_SMOKE_SERVER` — implementation identity (for example `llama.cpp`), not the HTTP endpoint
+- `PHASE3_SMOKE_BASE_URL` — OpenAI-compatible base URL
+- `PHASE3_SMOKE_MODEL` — exact model identifier loaded on the server
+
+Recommended merge acceptance run uses `PHASE3_SMOKE_TIMEOUT=300`. A `PHASE3_SMOKE_TIMEOUT=900` rerun is diagnostic only on a heavily loaded machine and is not representative performance evidence.
+
+Example:
+
+```bash
+PHASE3_SMOKE_SERVER=llama.cpp \
+PHASE3_SMOKE_BASE_URL=http://host.docker.internal:8080/v1 \
+PHASE3_SMOKE_MODEL='<exact-model-id>' \
+PHASE3_SMOKE_TIMEOUT=300 \
+make smoke-refactor-phase-3-local-llm
+```
+
 It should verify:
 
 - one short therapy stream via `TherapyProcessor.stream_response()`;
@@ -2082,10 +2100,10 @@ The smoke test must not mutate the database or require the legacy server.
 Emit one machine-extractable terminal line:
 
 ```text
-PHASE3_SMOKE_EVIDENCE={"server":"...","model":"...","structured_mode":"json_schema",...}
+PHASE3_SMOKE_EVIDENCE={"server":"llama.cpp","base_url":"http://host.docker.internal:8080/v1","model":"<exact-model-id>","structured_mode":"json_schema",...}
 ```
 
-Record a PR evidence table with server, model, structured mode, latencies, correction counts, and configured nonsecret extras. Do not record therapeutic content.
+Record a PR evidence table with server implementation, base URL, model, structured mode, measured latencies, correction counts, and configured nonsecret extras. Transport timeout is not performance evidence. Do not record therapeutic content.
 
 ### 22.4 Dependency validation
 

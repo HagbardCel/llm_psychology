@@ -31,6 +31,13 @@ from jung.styles import load_styles
 from tests.smoke.jung.smoke_evidence import COLLECTOR, SmokePathResult
 
 
+def _required_smoke_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        pytest.fail(f"{name} must be set for Phase 3 smoke")
+    return value
+
+
 def _structured_mode() -> StructuredOutputMode:
     raw = os.environ.get("PHASE3_SMOKE_STRUCTURED_MODE", "json_schema")
     return StructuredOutputMode(raw)
@@ -42,7 +49,7 @@ def _adapter_config() -> AdapterConfig:
     if raw_extra:
         extra_body = json.loads(raw_extra)
     return AdapterConfig(
-        base_url=os.environ["PHASE3_SMOKE_BASE_URL"],
+        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
         extra_body=extra_body,
     )
@@ -50,8 +57,8 @@ def _adapter_config() -> AdapterConfig:
 
 def _policies() -> dict[LLMTask, object]:
     settings = LLMSettings(
-        default_model=os.environ.get("PHASE3_SMOKE_MODEL", "local-model"),
-        base_url=os.environ["PHASE3_SMOKE_BASE_URL"],
+        default_model=_required_smoke_env("PHASE3_SMOKE_MODEL"),
+        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
         task_structured_modes=dict.fromkeys(LLMTask, _structured_mode()),
         task_timeouts={
@@ -90,8 +97,9 @@ def _correction_count(caplog: pytest.LogCaptureFixture) -> int:
 def _configure_smoke_metadata() -> None:
     if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
         return
-    COLLECTOR.server = os.environ["PHASE3_SMOKE_BASE_URL"]
-    COLLECTOR.model = os.environ.get("PHASE3_SMOKE_MODEL", "local-model")
+    COLLECTOR.server = _required_smoke_env("PHASE3_SMOKE_SERVER")
+    COLLECTOR.base_url = _required_smoke_env("PHASE3_SMOKE_BASE_URL")
+    COLLECTOR.model = _required_smoke_env("PHASE3_SMOKE_MODEL")
     COLLECTOR.structured_mode = os.environ.get(
         "PHASE3_SMOKE_STRUCTURED_MODE",
         "json_schema",
@@ -103,8 +111,9 @@ def _configure_smoke_metadata() -> None:
 
 @pytest.fixture
 async def gateway():
-    if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
-        pytest.skip("PHASE3_SMOKE_BASE_URL not set")
+    _required_smoke_env("PHASE3_SMOKE_SERVER")
+    _required_smoke_env("PHASE3_SMOKE_BASE_URL")
+    _required_smoke_env("PHASE3_SMOKE_MODEL")
     llm = OpenAICompatibleLLM(_adapter_config())
     yield llm
     await llm.aclose()

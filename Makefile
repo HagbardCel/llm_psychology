@@ -210,6 +210,7 @@ validate-refactor-phase-3: prepare-runtime-dirs
 
 smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
 	docker compose --profile test run --rm \
+		-e PHASE3_SMOKE_SERVER \
 		-e PHASE3_SMOKE_BASE_URL \
 		-e PHASE3_SMOKE_MODEL \
 		-e PHASE3_SMOKE_TIMEOUT \
