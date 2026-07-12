@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from jung.llm.gateway import ChatMessage, ChatRole
-from jung.phases.therapy.context import build_context_sections
+from jung.phases.therapy.context import (
+    build_context_sections,
+    build_opening_context_sections,
+)
 from jung.phases.therapy.models import TherapyTurnInput
 
 PROMPT_VERSION = "therapy-v1"
@@ -11,10 +14,16 @@ PROMPT_VERSION = "therapy-v1"
 
 def build_messages(input: TherapyTurnInput) -> list[ChatMessage]:
     if input.is_opening_turn:
-        user_content = (
-            f"Begin a therapy session for {input.profile.name}. "
-            "Acknowledge the plan focus without presenting it as a diagnosis. "
-            "Invite the patient to choose what feels most important today."
+        context = "\n\n".join(build_opening_context_sections(input))
+        user_content = "\n\n".join(
+            [
+                context,
+                (
+                    f"Begin a therapy session for {input.profile.name}. "
+                    "Acknowledge the plan focus without presenting it as a diagnosis. "
+                    "Invite the patient to choose what feels most important today."
+                ),
+            ]
         )
     else:
         user_content = "\n\n".join(build_context_sections(input))
