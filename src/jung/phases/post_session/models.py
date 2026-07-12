@@ -14,11 +14,19 @@ InterventionStatus = Literal["proposed", "accepted", "completed"]
 
 
 class InterventionEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     intervention: str
     status: InterventionStatus
     patient_quote: str | None = Field(default=None, max_length=500)
+
+    @field_validator("intervention")
+    @classmethod
+    def non_empty_intervention(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("intervention must be non-empty")
+        return value
 
 
 class SessionAnalysisResult(BaseModel):
@@ -54,6 +62,14 @@ class SessionBriefing(BaseModel):
     emotional_context: tuple[str, ...] = ()
     intervention_evidence: tuple[InterventionEvidence, ...] = ()
 
+    @field_validator("narrative_handoff", "recommended_opening_focus")
+    @classmethod
+    def non_empty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must be non-empty")
+        return value
+
 
 class DerivedProfilePatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -81,6 +97,14 @@ class PostSessionResult(BaseModel):
     session_briefing: SessionBriefing
     derived_profile_patch: DerivedProfilePatch
     plan_patch: PlanPatch
+
+    @field_validator("session_summary")
+    @classmethod
+    def non_empty_session_summary(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("session_summary must be non-empty")
+        return value
 
 
 class PostSessionInput(BaseModel):

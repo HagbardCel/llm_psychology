@@ -132,7 +132,7 @@ class Message(BaseModel):
 class PlanContent(BaseModel):
     """Mutable plan fields shared across assessment, store, and revisions."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     focus: str
     themes: list[str]
@@ -157,12 +157,18 @@ class PlanContent(BaseModel):
         mode="before",
     )
     @classmethod
-    def normalize_string_lists(cls, value: list[str]) -> list[str]:
+    def normalize_string_lists(cls, value: object) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("must be a list or tuple")
         seen: set[str] = set()
         normalized: list[str] = []
         for item in value:
-            text = " ".join(str(item).split())
-            if not text or text in seen:
+            if not isinstance(item, str):
+                raise ValueError("list items must be strings")
+            text = " ".join(item.split())
+            if not text:
+                raise ValueError("list items must be non-empty")
+            if text in seen:
                 continue
             seen.add(text)
             normalized.append(text)

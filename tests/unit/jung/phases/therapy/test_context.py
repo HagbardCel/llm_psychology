@@ -77,9 +77,61 @@ def test_message_exceeding_total_budget_still_present() -> None:
         _input(
             latest_user_message=message,
             transcript=(_turn(1, "user", message),),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_section_chars=200,
+                max_total_chars=1000,
+            ),
+            session_briefing={"summary": "x" * 5000},
+            derived_profile={"observations": ["y" * 5000]},
+            recent_session_summaries=("z" * 5000,),
         )
     )
-    assert any(message in section for section in sections)
+    combined = "\n".join(sections)
+    assert message in combined
+    assert combined.count(message) == 1
+    assert "x" * 5000 not in combined
+    assert "y" * 5000 not in combined
+    assert "z" * 5000 not in combined
+
+
+def test_transcript_dedupe_keeps_earlier_identical_user_turn() -> None:
+    duplicate = "I feel anxious"
+    sections = build_context_sections(
+        _input(
+            latest_user_message=duplicate,
+            transcript=(
+                _turn(1, "user", duplicate),
+                _turn(2, "assistant", "Tell me more."),
+                _turn(3, "user", duplicate),
+            ),
+        )
+    )
+    combined = "\n".join(sections)
+    assert combined.count(duplicate) == 2
+    assert "user: I feel anxious" in combined
+    assert "Current patient message:\nI feel anxious" in combined
+
+
+def test_opening_context_respects_total_budget() -> None:
+    sections = build_opening_context_sections(
+        _input(
+            session_briefing={"summary": "b" * 5000},
+            derived_profile={"observations": ["p" * 5000]},
+            recent_session_summaries=("s" * 5000,),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_section_chars=200,
+                max_total_chars=1000,
+            ),
+        )
+    )
+    compressible = [
+        section
+        for section in sections
+        if not section.startswith("Patient:")
+    ]
+    assert sum(len(section) for section in compressible) <= 1000
 
 
 def test_opening_context_includes_session_briefing() -> None:

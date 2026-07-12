@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 
 def bounded_text(text: str, limit: int) -> str:
-    if limit <= 0 or len(text) <= limit:
+    """Return bounded display text. May truncate text."""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
         return text
+    if limit <= 3:
+        return text[:limit]
     return text[: limit - 3].rstrip() + "..."
-
-
-def bounded_json(document: Mapping[str, object], limit: int) -> str:
-    return bounded_text(json.dumps(document, ensure_ascii=True), limit)
 
 
 def newest_within_budget(items: Sequence[str], budget: int) -> list[str]:
