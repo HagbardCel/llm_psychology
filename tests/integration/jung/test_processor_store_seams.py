@@ -60,29 +60,37 @@ def test_assessment_initial_plan_round_trips_through_select_style(
         now=now,
     )
     store.mark_operation_running(operation_id, now=now)
+    assessment = _assessment_result()
     store.complete_assessment(
         operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
+        result=assessment.model_dump(mode="json"),
         now=now,
     )
-    result = _assessment_result()
+    operation = store.get_operation(operation_id)
+    assert operation is not None
+    reloaded = AssessmentResult.model_validate(operation.result)
     selected = next(
-        item for item in result.style_recommendations if item.style_id == "cbt"
+        item for item in reloaded.style_recommendations if item.style_id == "cbt"
     )
 
+    plan_id = uuid4()
     state, plan = store.select_style_and_create_initial_plan(
         expected_revision=store.get_app_state().revision,
         style_id="cbt",
-        plan_id=uuid4(),
+        plan_id=plan_id,
         content=selected.initial_plan,
         intake_session_id=intake_id,
         now=now,
     )
+    persisted = store.get_current_plan()
 
     assert state.stage.value == "ready"
     assert plan.focus == "anxiety"
     assert plan.selected_style == "cbt"
     assert plan.version == 1
+    assert persisted is not None
+    assert persisted.id == plan_id
+    assert persisted.focus == selected.initial_plan.focus
 
 
 def test_post_session_merge_commits_fresh_plan_id(store: SQLiteStore) -> None:
@@ -117,3 +125,11 @@ def test_post_session_merge_commits_fresh_plan_id(store: SQLiteStore) -> None:
     assert new_plan.id != previous_plan.id
     assert new_plan.supersedes_plan_id == previous_plan.id
     assert new_plan.current_progress == "improved sleep hygiene"
+
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.result == {
+        "plan_id": str(new_plan_id),
+        "plan_version": previous_plan.version + 1,
+        "profile_changed": False,
+    }

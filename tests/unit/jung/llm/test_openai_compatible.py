@@ -40,12 +40,20 @@ def _policy(*, mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT) ->
     )
 
 
-def _client(handler: httpx.MockTransport) -> OpenAICompatibleLLM:
+def _client(
+    handler: httpx.MockTransport,
+    *,
+    config: AdapterConfig | None = None,
+) -> OpenAICompatibleLLM:
+    adapter_config = config or AdapterConfig(
+        base_url="http://testserver/v1",
+        api_key="test",
+    )
     return OpenAICompatibleLLM(
-        AdapterConfig(base_url="http://testserver/v1", api_key="test"),
+        adapter_config,
         client=AsyncOpenAI(
-            base_url="http://testserver/v1",
-            api_key="test",
+            base_url=adapter_config.base_url,
+            api_key=adapter_config.api_key,
             http_client=httpx.AsyncClient(transport=handler),
             max_retries=0,
         ),
@@ -320,6 +328,10 @@ async def test_semantic_validator_failure_triggers_single_correction() -> None:
     )
     assert result.value == "ok"
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_cancellation_propagates() -> None:
     import asyncio
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -348,3 +360,132 @@ async def test_semantic_validator_failure_triggers_single_correction() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await consume()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected_type"),
+    [
+        (StructuredOutputMode.JSON_SCHEMA, "json_schema"),
+        (StructuredOutputMode.JSON_OBJECT, "json_object"),
+        (StructuredOutputMode.PROMPT, None),
+    ],
+)
+async def test_response_format_for_structured_mode(
+    mode: StructuredOutputMode,
+    expected_type: str | None,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(httpx.MockTransport(handler))
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(mode=mode),
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    response_format = body.get("response_format")
+    if expected_type is None:
+        assert response_format is None
+    else:
+        assert isinstance(response_format, dict)
+        assert response_format.get("type") == expected_type
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "expected_extra"),
+    [
+        (
+            AdapterConfig(
+                base_url="http://testserver/v1",
+                api_key="test",
+                extra_body={"thinking": True, "shared": "global"},
+                task_extra_body={
+                    LLMTask.ASSESSMENT: {
+                        "shared": "task",
+                        "reasoning_effort": "low",
+                    }
+                },
+            ),
+            {"thinking": True, "shared": "task", "reasoning_effort": "low"},
+        ),
+    ],
+)
+async def test_extra_body_merge_applies_task_overrides(
+    config: AdapterConfig,
+    expected_extra: dict[str, object],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(httpx.MockTransport(handler), config=config)
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    for key, value in expected_extra.items():
+        assert body.get(key) == value
+    assert body.get("model") == "test-model"
+    assert body.get("messages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        AdapterConfig(
+            base_url="http://testserver/v1",
+            api_key="test",
+            extra_body={"model": "override"},
+        ),
+        AdapterConfig(
+            base_url="http://testserver/v1",
+            api_key="test",
+            task_extra_body={LLMTask.ASSESSMENT: {"response_format": {"type": "json_object"}}},
+        ),
+    ],
+)
+async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -> None:
+    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)), config=config)
+    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )

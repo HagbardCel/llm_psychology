@@ -8,7 +8,8 @@ from uuid import uuid4
 import pytest
 
 from jung.domain.models import Plan, Profile
-from jung.llm.fake import FakeLLM, StructuredExpectation
+from jung.llm.errors import InvalidLLMOutput
+from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.post_session.merge import merge_plan_content, plan_patch_is_noop
 from jung.phases.post_session.models import (
@@ -121,3 +122,103 @@ def test_plan_patch_noop_and_revision_merge() -> None:
     )
     assert changed is not None
     assert changed.current_progress == "improved sleep hygiene"
+
+
+@pytest.mark.asyncio
+async def test_post_session_processor_skips_update_when_analysis_fails() -> None:
+    gateway = FakeLLM(
+        [
+            FailureExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                error=InvalidLLMOutput("analysis failed"),
+            ),
+        ]
+    )
+    processor = PostSessionProcessor(
+        gateway,
+        analysis_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_ANALYSIS,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+        update_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_UPDATE,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+    )
+    with pytest.raises(InvalidLLMOutput, match="analysis failed"):
+        await processor.process(
+            PostSessionInput(
+                transcript=(
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=1,
+                        role="user",
+                        content="I slept badly.",
+                    ),
+                ),
+                current_plan=_plan(),
+                profile=Profile(name="Alex", primary_language="English"),
+                selected_style=load_styles()["cbt"],
+            )
+        )
+    gateway.assert_exhausted()
+
+
+@pytest.mark.asyncio
+async def test_post_session_processor_raises_when_update_fails() -> None:
+    gateway = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysisResult,
+                response=SessionAnalysisResult(
+                    summary="Patient explored sleep difficulties.",
+                    key_themes=("sleep",),
+                ),
+            ),
+            FailureExpectation(
+                task=LLMTask.POST_SESSION_UPDATE,
+                error=InvalidLLMOutput("update failed"),
+            ),
+        ]
+    )
+    processor = PostSessionProcessor(
+        gateway,
+        analysis_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_ANALYSIS,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+        update_policy=ModelPolicy(
+            task=LLMTask.POST_SESSION_UPDATE,
+            model="fake",
+            temperature=0.0,
+            timeout_seconds=60.0,
+            structured_output_mode=StructuredOutputMode.PROMPT,
+        ),
+    )
+    with pytest.raises(InvalidLLMOutput, match="update failed"):
+        await processor.process(
+            PostSessionInput(
+                transcript=(
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=1,
+                        role="user",
+                        content="I slept badly.",
+                    ),
+                ),
+                current_plan=_plan(),
+                profile=Profile(name="Alex", primary_language="English"),
+                selected_style=load_styles()["cbt"],
+            )
+        )
+    gateway.assert_exhausted()

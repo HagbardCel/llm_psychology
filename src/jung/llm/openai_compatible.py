@@ -36,6 +36,15 @@ T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
+_FORBIDDEN_EXTRA_BODY_KEYS = frozenset(
+    {
+        "model",
+        "messages",
+        "response_format",
+        "max_completion_tokens",
+    }
+)
+
 
 def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
     return [
@@ -53,6 +62,12 @@ def _merge_extra_body(
         merged.update(config.extra_body)
     if config.task_extra_body and task in config.task_extra_body:
         merged.update(config.task_extra_body[task])
+    forbidden = merged.keys() & _FORBIDDEN_EXTRA_BODY_KEYS
+    if forbidden:
+        raise ValueError(
+            "extra_body cannot override adapter-owned fields: "
+            f"{sorted(forbidden)}"
+        )
     return merged or None
 
 
