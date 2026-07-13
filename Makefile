@@ -201,6 +201,44 @@ phase-3-test: prepare-runtime-dirs
 		tests/unit/jung/smoke/test_smoke_diagnostics.py \
 		-q
 
+phase-4-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest \
+		-o trio_mode=false \
+		-o asyncio_mode=auto \
+		tests/unit/jung/test_events.py \
+		tests/unit/jung/test_supervisor.py \
+		tests/unit/jung/test_application_helpers.py \
+		tests/integration/jung/test_application_workflow.py \
+		tests/integration/jung/test_application_chat.py \
+		tests/integration/jung/test_application_operations.py \
+		tests/integration/jung/test_application_recovery.py \
+		tests/integration/jung/test_application_composition.py \
+		-q
+
+validate-refactor-phase-4: prepare-runtime-dirs
+	docker compose --profile test run --rm test ruff check \
+		src/jung/application.py \
+		src/jung/events.py \
+		src/jung/supervisor.py \
+		src/jung/composition.py \
+		tests/unit/jung/test_events.py \
+		tests/unit/jung/test_supervisor.py \
+		tests/unit/jung/test_application_helpers.py \
+		tests/integration/jung/application_fixtures.py \
+		tests/integration/jung/test_application_workflow.py \
+		tests/integration/jung/test_application_chat.py \
+		tests/integration/jung/test_application_operations.py \
+		tests/integration/jung/test_application_recovery.py \
+		tests/integration/jung/test_application_composition.py \
+		tests/unit/jung/test_import_boundaries.py
+	docker compose --profile test run --rm test python scripts/validate_refactor_phase_4.py
+	$(MAKE) phase-4-test
+
+validate-refactor-target-all: prepare-runtime-dirs
+	$(MAKE) validate-refactor-phase-2
+	$(MAKE) validate-refactor-phase-3
+	$(MAKE) validate-refactor-phase-4
+
 validate-refactor-phase-3: prepare-runtime-dirs
 	docker compose --profile test run --rm test ruff check \
 		src/jung/llm \
