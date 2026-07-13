@@ -9,7 +9,7 @@ import pytest
 
 from jung.domain.commands import EndSession, SendMessage, StartSession, UpdateProfile
 from jung.domain.errors import Busy, StoredWorkFailure
-from jung.domain.models import ChatTurnStatus, MessageRole, Profile, Stage
+from jung.domain.models import ChatTurn, ChatTurnStatus, MessageRole, Profile, Stage
 from jung.events import ChatTokenGenerated, ChatTurnAccepted, ChatTurnCompleted
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import (
@@ -416,32 +416,42 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
         )
         session_id = (await runtime.application.get_snapshot()).active_session
         assert session_id is not None
-        submit_task = asyncio.create_task(
-            runtime.application.submit_message(
-                SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
-                    session_id=session_id.id,
-                    client_message_id=uuid4(),
-                    content="hello",
+        submit_task: asyncio.Task[ChatTurn] | None = None
+        try:
+            submit_task = asyncio.create_task(
+                runtime.application.submit_message(
+                    SendMessage(
+                        expected_revision=(
+                            await runtime.application.get_snapshot()
+                        ).revision,
+                        session_id=session_id.id,
+                        client_message_id=uuid4(),
+                        content="hello",
+                    )
                 )
             )
-        )
-        await asyncio.to_thread(gate.wait, 2.0)
-        submit_task.cancel()
-        await asyncio.sleep(0)
-        assert not submit_task.done()
+            assert await asyncio.to_thread(gate.wait, 2.0)
+            submit_task.cancel()
+            await asyncio.sleep(0)
+            assert not submit_task.done()
 
-        submit_task.cancel()
-        await asyncio.sleep(0)
-        assert not submit_task.done()
+            submit_task.cancel()
+            await asyncio.sleep(0)
+            assert not submit_task.done()
 
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await submit_task
-        assert not runtime.application._generation_lock.locked()
-        active_turn = runtime.store.get_active_chat_turn()
-        assert active_turn is not None
-        assert active_turn.status is ChatTurnStatus.PENDING
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await submit_task
+            assert not runtime.application._generation_lock.locked()
+            active_turn = runtime.store.get_active_chat_turn()
+            assert active_turn is not None
+            assert active_turn.status is ChatTurnStatus.PENDING
+        finally:
+            release.set()
+            if submit_task is not None:
+                if not submit_task.done():
+                    submit_task.cancel()
+                await asyncio.gather(submit_task, return_exceptions=True)
 
 
 async def test_submit_message_cancel_after_turn_assigned_worker_completes_and_releases_lock(
@@ -484,32 +494,41 @@ async def test_submit_message_cancel_after_turn_assigned_worker_completes_and_re
         assert session_id is not None
         revision = (await runtime.application.get_snapshot()).revision
         gate_next_assemble = True
-        submit_task = asyncio.create_task(
-            runtime.application.submit_message(
-                SendMessage(
-                    expected_revision=revision,
-                    session_id=session_id.id,
-                    client_message_id=uuid4(),
-                    content="hello",
+        submit_task: asyncio.Task[ChatTurn] | None = None
+        try:
+            submit_task = asyncio.create_task(
+                runtime.application.submit_message(
+                    SendMessage(
+                        expected_revision=revision,
+                        session_id=session_id.id,
+                        client_message_id=uuid4(),
+                        content="hello",
+                    )
                 )
             )
-        )
-        await asyncio.wait_for(assemble_entered.wait(), timeout=2.0)
-        submit_task.cancel()
-        release_assemble.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(submit_task, timeout=2.0)
-        await asyncio.wait_for(processor_entered.wait(), timeout=2.0)
-        active_turn = runtime.store.get_active_chat_turn()
-        assert active_turn is not None
-        llm_gate.set()
-        completed = await wait_for_chat_turn(
-            runtime.application,
-            active_turn.id,
-            ChatTurnStatus.COMPLETE,
-        )
-        assert completed.status is ChatTurnStatus.COMPLETE
-        assert not runtime.application._generation_lock.locked()
+            await asyncio.wait_for(assemble_entered.wait(), timeout=2.0)
+            submit_task.cancel()
+            release_assemble.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(submit_task, timeout=2.0)
+            await asyncio.wait_for(processor_entered.wait(), timeout=2.0)
+            active_turn = runtime.store.get_active_chat_turn()
+            assert active_turn is not None
+            llm_gate.set()
+            completed = await wait_for_chat_turn(
+                runtime.application,
+                active_turn.id,
+                ChatTurnStatus.COMPLETE,
+            )
+            assert completed.status is ChatTurnStatus.COMPLETE
+            assert not runtime.application._generation_lock.locked()
+        finally:
+            release_assemble.set()
+            llm_gate.set()
+            if submit_task is not None:
+                if not submit_task.done():
+                    submit_task.cancel()
+                await asyncio.gather(submit_task, return_exceptions=True)
     fake.assert_exhausted()
 
 
