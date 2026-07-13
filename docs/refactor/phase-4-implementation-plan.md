@@ -87,12 +87,15 @@ No LLM call starts before the corresponding work is durable.
 
 For chat:
 
-1. validate idempotency, stage, session, revision, and generation availability;
-2. persist the user message and `PENDING` `ChatTurn`;
-3. increment revision;
-4. reserve generation ownership;
-5. schedule supervised generation;
-6. return the accepted durable turn.
+1. validate idempotency, stage, session, revision, and active-generation availability;
+2. reserve generation ownership;
+3. persist the user message and `PENDING` `ChatTurn`;
+4. increment revision;
+5. publish accepted events;
+6. synchronously admit the supervised worker (or place the turn in the defined failed/recoverable state);
+7. return the authoritative durable turn.
+
+Steps 5–6 must guarantee that generation ownership is transferred to a supervised worker or the generation lock is released and the durable turn is placed in the defined recoverable/failed state, even if event publication is interrupted.
 
 For assessment and post-session work:
 
@@ -161,7 +164,7 @@ Expected LLM failures retain the Phase 3 taxonomy:
 - `llm_unavailable` — retryable;
 - `llm_timeout` — retryable;
 - `invalid_llm_output` — not retryable;
-- `internal_error` for unexpected provider-protocol or application failures — not retryable by default.
+- `internal_error` for unexpected provider-protocol or application failures — not retryable by default, except pre-worker chat task-admission failures which use `internal_error` with `retryable=True` because the accepted turn remains valid and no generation attempt occurred.
 
 Processors must not generate friendly fallback text after a failed model call. The application records the failed `ChatTurn` or `Operation`; Phase 5 maps the result to transport errors.
 
@@ -576,8 +579,7 @@ Use one bounded queue per subscriber.
 Rules:
 
 - publishing never waits indefinitely for a slow subscriber;
-- token overflow may drop tokens for that subscriber;
-- durable-event overflow closes or evicts the slow subscription rather than blocking accepted work;
+- any subscriber queue overflow evicts that subscription rather than blocking accepted work;
 - unsubscribe removes the queue in `finally`;
 - one subscriber exception does not affect other subscribers;
 - there is no replay;
@@ -635,9 +637,16 @@ Illustrative interface:
 class TaskSupervisor:
     async def __aenter__(self) -> TaskSupervisor: ...
     async def __aexit__(self, exc_type, exc, tb) -> None: ...
-    def start(self, *, name: str, coroutine: Coroutine[Any, Any, None]) -> None: ...
+    def start(
+        self,
+        *,
+        name: str,
+        run: Callable[[], Awaitable[None]],
+    ) -> bool: ...
     async def shutdown(self, *, timeout_seconds: float) -> None: ...
 ```
+
+`start()` tracks owned `asyncio.Task` objects, rolls back active names when `create_task()` fails, and `shutdown()` waits/cancels only owned tasks via `asyncio.wait()`. Shutdown is safely repeatable.
 
 ### 10.2 Failure isolation
 
@@ -828,7 +837,7 @@ Under the mutation lock:
 3. when existing status is `COMPLETE`, return it without revision validation or duplicate events;
 4. when existing status is retryable `FAILED`, reserve the generation lock, reset the same turn to `PENDING`, and schedule it with the new request correlation;
 5. when existing status is permanently `FAILED`, raise a stable application error carrying the stored code and retryability;
-6. for a new turn, require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
+6. for a new turn, raise `Busy` when another chat turn is pending or generation is active; otherwise require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
 7. reserve generation before durable acceptance so a second distinct command cannot pass the same check;
 8. generate turn and user-message IDs;
 9. call `store.accept_chat_message()`;
@@ -838,7 +847,7 @@ Under the mutation lock:
 13. schedule the worker;
 14. return the durable turn.
 
-If persistence or scheduling fails after the generation lock is reserved but before the worker owns it, release the lock in a guaranteed cleanup path. If persistence succeeded but scheduling cannot occur, mark the turn failed rather than leaving accepted work silently stranded.
+If persistence or scheduling fails after the generation lock is reserved but before the worker owns it, release the lock in a guaranteed cleanup path. If persistence succeeded but chat task admission returns `False` or raises unexpectedly, mark the turn failed with retryable `internal_error` rather than leaving accepted work silently stranded. Operation scheduling uses attempt-scoped task names `operation:{id}:attempt:{attempt + 1}`; benign duplicate admission for the same attempt is ignored.
 
 ### 13.2 Generation lock ownership
 
