@@ -17,6 +17,7 @@ class TaskSupervisor:
     def __init__(self) -> None:
         self._task_group: asyncio.TaskGroup | None = None
         self._active: set[str] = set()
+        self._tasks: dict[str, asyncio.Task[None]] = {}
         self._accepting = True
 
     async def __aenter__(self) -> TaskSupervisor:
@@ -35,34 +36,32 @@ class TaskSupervisor:
         name: str,
         run: Callable[[], Awaitable[None]],
     ) -> bool:
-        if not self._accepting:
+        if not self._accepting or self._task_group is None:
             raise SupervisorClosed("supervisor is closed to new tasks")
-        if self._task_group is None:
-            raise SupervisorClosed("supervisor is not running")
         if name in self._active:
             return False
         self._active.add(name)
-        self._task_group.create_task(self._run_wrapper(name, run))
+        try:
+            task = self._task_group.create_task(
+                self._run_wrapper(name, run),
+                name=name,
+            )
+        except BaseException:
+            self._active.discard(name)
+            raise
+        self._tasks[name] = task
         return True
 
     async def shutdown(self, *, timeout_seconds: float) -> None:
         self._accepting = False
-        if self._task_group is None:
+        owned = list(self._tasks.values())
+        if not owned:
             return
-        current = asyncio.current_task()
-        tasks = [
-            task
-            for task in asyncio.all_tasks()
-            if task is not current and not task.done()
-        ]
-        if not tasks:
-            return
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                await asyncio.gather(*tasks, return_exceptions=True)
-        except TimeoutError:
-            for task in tasks:
-                task.cancel()
+        _done, pending = await asyncio.wait(owned, timeout=timeout_seconds)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _run_wrapper(
         self,
@@ -77,3 +76,4 @@ class TaskSupervisor:
             logger.exception("supervised task failed: %s", name)
         finally:
             self._active.discard(name)
+            self._tasks.pop(name, None)
