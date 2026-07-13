@@ -2100,7 +2100,6 @@ Diagnostic example (focused post-session, experimental caps):
 ```bash
 PHASE3_SMOKE_TARGET="tests/smoke/jung/test_phase3_local_llm.py::test_smoke_post_session_processor" \
 PHASE3_SMOKE_PYTEST_ARGS="-vv -s --log-cli-level=INFO --durations=0" \
-PHASE3_SMOKE_DEBUG=1 \
 PHASE3_SMOKE_LOG_PROMPT_PREVIEWS=0 \
 PHASE3_SMOKE_REQUEST_TIMEOUT=360 \
 PHASE3_SMOKE_STRICT_ACCEPTANCE=0 \
@@ -2126,11 +2125,13 @@ It should verify:
 - llama.cpp or LM Studio compatibility through the same adapter.
 
 The smoke test must not mutate the database or require the legacy server.
-Emit one machine-extractable terminal line:
+Emit one machine-extractable terminal line when real smoke metadata is present (`server`, `model`, `base_url`):
 
 ```text
 PHASE3_SMOKE_EVIDENCE={"server":"llama.cpp","strict_acceptance":true,"calls":[...],"provider_attempts":[...],...}
 ```
+
+Synthetic diagnostic unit tests must not emit this line. Use `PHASE3_SMOKE_PYTEST_ARGS="-vv -s --log-cli-level=INFO --durations=0"` for progress visibility via provider-attempt and tracing logs.
 
 Evidence layers:
 

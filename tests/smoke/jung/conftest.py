@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from tests.smoke.jung.smoke_evidence import COLLECTOR
+from tests.smoke.jung.smoke_evidence import COLLECTOR, render_smoke_evidence
 
 
 @pytest.fixture(scope="session", autouse=True)
 def verify_smoke_instrumentation():
     yield
-    if COLLECTOR.has_data():
-        payload = json.dumps(
-            COLLECTOR.to_payload(),
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-        print(f"PHASE3_SMOKE_EVIDENCE={payload}")
+    evidence_line = render_smoke_evidence(COLLECTOR)
+    if evidence_line is not None:
+        print(evidence_line)
     assert not COLLECTOR.instrumentation_errors, (
         "smoke instrumentation errors: "
         f"{COLLECTOR.instrumentation_errors}"

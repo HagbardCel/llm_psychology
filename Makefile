@@ -196,7 +196,7 @@ phase-3-test: prepare-runtime-dirs
 		tests/unit/jung/test_styles.py \
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_processor_store_seams.py \
-		tests/smoke/jung/test_smoke_diagnostics.py \
+		tests/unit/jung/smoke/test_smoke_diagnostics.py \
 		-q
 
 validate-refactor-phase-3: prepare-runtime-dirs
@@ -206,6 +206,8 @@ validate-refactor-phase-3: prepare-runtime-dirs
 		src/jung/styles \
 		tests/unit/jung/llm \
 		tests/unit/jung/phases \
+		tests/unit/jung/smoke \
+		tests/smoke/jung \
 		tests/unit/jung/test_styles.py \
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_processor_store_seams.py
@@ -225,7 +227,6 @@ smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
 		-e PHASE3_SMOKE_ASSESSMENT_MAX_SECONDS \
 		-e PHASE3_SMOKE_POST_SESSION_MAX_SECONDS \
 		-e PHASE3_SMOKE_STRICT_ACCEPTANCE \
-		-e PHASE3_SMOKE_DEBUG \
 		-e PHASE3_SMOKE_LOG_PROMPT_PREVIEWS \
 		test pytest $(PHASE3_SMOKE_TARGET) \
 			-m real_llm --no-mocks $(PHASE3_SMOKE_PYTEST_ARGS)

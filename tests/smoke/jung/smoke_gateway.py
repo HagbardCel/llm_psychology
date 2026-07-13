@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -9,7 +10,6 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from jung.llm.async_compat import is_async_cancellation
 from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
 from tests.smoke.jung.smoke_context import current_smoke_call_id
@@ -49,11 +49,6 @@ class SmokeObservingGateway:
         validate_result: Callable[[T], T] | None = None,
     ) -> T:
         call_id = self._collector.next_call_id(policy.task.value)
-        token = current_smoke_call_id.set(call_id)
-        started = time.perf_counter()
-        status = "error"
-        error_type: str | None = None
-        result_chars: int | None = None
         input_message_chars = tuple(len(message.content) for message in messages)
         input_chars = sum(input_message_chars)
         output_schema_chars = len(
@@ -62,6 +57,11 @@ class SmokeObservingGateway:
                 separators=(",", ":"),
             )
         )
+        token = current_smoke_call_id.set(call_id)
+        started = time.perf_counter()
+        status = "error"
+        error_type: str | None = None
+        result_chars: int | None = None
         try:
             result = await self._inner.generate_structured(
                 messages,
@@ -72,15 +72,15 @@ class SmokeObservingGateway:
             status = "success"
             result_chars = len(result.model_dump_json())
             return result
-        except BaseException as exc:
-            if is_async_cancellation(exc):
-                status = "cancelled"
-                error_type = "CancelledError"
-                raise
-            if isinstance(exc, LLMTimeout):
-                status = "timeout"
-                error_type = "LLMTimeout"
-                raise
+        except asyncio.CancelledError as exc:
+            status = "cancelled"
+            error_type = type(exc).__name__
+            raise
+        except LLMTimeout:
+            status = "timeout"
+            error_type = "LLMTimeout"
+            raise
+        except Exception as exc:
             status = "error"
             error_type = type(exc).__name__
             raise

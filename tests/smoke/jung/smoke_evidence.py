@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -95,8 +96,6 @@ class SmokeEvidenceCollector:
                 self._serialize_provider_attempt(attempt)
                 for attempt in self.provider_attempts
             ]
-            if self.structured_calls:
-                payload["call_attempt_summary"] = self._call_attempt_summary()
         for key in ("therapy", "assessment", "post_session"):
             result = getattr(self, key)
             if result is None:
@@ -170,24 +169,6 @@ class SmokeEvidenceCollector:
             entry["error_type"] = attempt.error_type
         return entry
 
-    def _call_attempt_summary(self) -> dict[str, dict[str, object]]:
-        attempts_by_call: dict[str, list[SmokeProviderAttemptResult]] = {}
-        for attempt in self.provider_attempts:
-            attempts_by_call.setdefault(attempt.call_id, []).append(attempt)
-
-        summary: dict[str, dict[str, object]] = {}
-        for call_id, attempts in attempts_by_call.items():
-            by_kind = {attempt.attempt: attempt.status for attempt in attempts}
-            summary[call_id] = {
-                "initial": by_kind.get("initial"),
-                "correction": by_kind.get("correction"),
-                "correction_count": sum(
-                    1 for attempt in attempts if attempt.attempt == "correction"
-                ),
-                "total_attempts": len(attempts),
-            }
-        return summary
-
     def has_data(self) -> bool:
         return any(
             value is not None
@@ -197,6 +178,19 @@ class SmokeEvidenceCollector:
                 self.post_session,
             )
         )
+
+
+def render_smoke_evidence(collector: SmokeEvidenceCollector) -> str | None:
+    if not all((collector.server, collector.model, collector.base_url)):
+        return None
+    if not collector.has_data():
+        return None
+    payload = json.dumps(
+        collector.to_payload(),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return f"PHASE3_SMOKE_EVIDENCE={payload}"
 
 
 COLLECTOR = SmokeEvidenceCollector()

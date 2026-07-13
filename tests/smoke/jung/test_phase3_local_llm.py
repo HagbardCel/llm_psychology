@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from datetime import UTC, datetime
@@ -28,19 +27,18 @@ from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
-from tests.smoke.jung.smoke_evidence import COLLECTOR
-from tests.smoke.jung.smoke_gateway import SmokeObservingGateway
-from tests.smoke.jung.smoke_path import (
-    SmokeOperationResult,
+from tests.smoke.jung.smoke_env import (
     effective_completion_cap_labels,
     parse_completion_caps,
-    run_smoke_path,
-    smoke_debug_enabled,
+    parse_smoke_extra_body,
     smoke_log_prompt_previews,
     smoke_path_budget_seconds,
     smoke_request_timeout_seconds,
     smoke_strict_acceptance,
 )
+from tests.smoke.jung.smoke_evidence import COLLECTOR
+from tests.smoke.jung.smoke_gateway import SmokeObservingGateway
+from tests.smoke.jung.smoke_path import SmokeOperationResult, run_smoke_path
 from tests.smoke.jung.smoke_recorder import SmokeAttemptRecorder
 
 
@@ -56,16 +54,9 @@ def _structured_mode() -> StructuredOutputMode:
     return StructuredOutputMode(raw)
 
 
-def _adapter_config() -> AdapterConfig:
-    extra_body: dict[str, object] | None = None
-    raw_extra = os.environ.get("PHASE3_SMOKE_EXTRA_BODY")
-    if raw_extra:
-        extra_body = json.loads(raw_extra)
-    return AdapterConfig(
-        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
-        api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
-        extra_body=extra_body,
-    )
+@pytest.fixture(scope="session")
+def smoke_extra_body() -> dict[str, object] | None:
+    return parse_smoke_extra_body(os.environ.get("PHASE3_SMOKE_EXTRA_BODY"))
 
 
 def _policies() -> dict[LLMTask, object]:
@@ -105,7 +96,9 @@ def _plan() -> Plan:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _configure_smoke_metadata() -> None:
+def configure_smoke_metadata(
+    smoke_extra_body: dict[str, object] | None,
+) -> None:
     if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
         return
     COLLECTOR.server = _required_smoke_env("PHASE3_SMOKE_SERVER")
@@ -115,9 +108,7 @@ def _configure_smoke_metadata() -> None:
         "PHASE3_SMOKE_STRUCTURED_MODE",
         "json_schema",
     )
-    raw_extra = os.environ.get("PHASE3_SMOKE_EXTRA_BODY")
-    if raw_extra:
-        COLLECTOR.request_extras = json.loads(raw_extra)
+    COLLECTOR.request_extras = smoke_extra_body or {}
     COLLECTOR.strict_acceptance = smoke_strict_acceptance()
     COLLECTOR.path_budgets_seconds = {
         "therapy": smoke_path_budget_seconds("therapy"),
@@ -127,12 +118,16 @@ def _configure_smoke_metadata() -> None:
 
 
 @pytest.fixture
-async def gateway():
+async def gateway(smoke_extra_body: dict[str, object] | None):
     _required_smoke_env("PHASE3_SMOKE_SERVER")
     _required_smoke_env("PHASE3_SMOKE_BASE_URL")
     _required_smoke_env("PHASE3_SMOKE_MODEL")
     attempt_recorder = SmokeAttemptRecorder(COLLECTOR)
-    config = _adapter_config()
+    config = AdapterConfig(
+        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
+        api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
+        extra_body=smoke_extra_body,
+    )
     raw = OpenAICompatibleLLM(
         config,
         on_provider_attempt=attempt_recorder.record,
@@ -141,7 +136,6 @@ async def gateway():
         raw,
         log_prompt_previews=smoke_log_prompt_previews(),
         preview_chars=300,
-        heartbeat_seconds=30 if smoke_debug_enabled() else None,
     )
     observed = SmokeObservingGateway(
         traced,
@@ -183,6 +177,7 @@ async def test_smoke_therapy_stream(gateway: SmokeObservingGateway) -> None:
         )
 
     result = await run_smoke_path(
+        collector=COLLECTOR,
         name="therapy",
         budget_seconds=smoke_path_budget_seconds("therapy"),
         operation=operation,
@@ -212,6 +207,7 @@ async def test_smoke_assessment_processor(gateway: SmokeObservingGateway) -> Non
         return SmokeOperationResult(value=result)
 
     await run_smoke_path(
+        collector=COLLECTOR,
         name="assessment",
         budget_seconds=smoke_path_budget_seconds("assessment"),
         operation=operation,
@@ -248,6 +244,7 @@ async def test_smoke_post_session_processor(gateway: SmokeObservingGateway) -> N
         return SmokeOperationResult(value=result)
 
     await run_smoke_path(
+        collector=COLLECTOR,
         name="post_session",
         budget_seconds=smoke_path_budget_seconds("post_session"),
         operation=operation,
