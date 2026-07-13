@@ -191,6 +191,8 @@ validate-refactor-phase-2: prepare-runtime-dirs
 
 phase-3-test: prepare-runtime-dirs
 	docker compose --profile test run --rm test pytest \
+		-o trio_mode=false \
+		-o asyncio_mode=auto \
 		tests/unit/jung/llm \
 		tests/unit/jung/phases \
 		tests/unit/jung/test_styles.py \
@@ -229,7 +231,9 @@ smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
 		-e PHASE3_SMOKE_STRICT_ACCEPTANCE \
 		-e PHASE3_SMOKE_LOG_PROMPT_PREVIEWS \
 		test pytest $(PHASE3_SMOKE_TARGET) \
-			-m real_llm --no-mocks $(PHASE3_SMOKE_PYTEST_ARGS)
+			-m real_llm --no-mocks \
+			-o trio_mode=false -o asyncio_mode=strict \
+			$(PHASE3_SMOKE_PYTEST_ARGS)
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
 hook-commit: lint

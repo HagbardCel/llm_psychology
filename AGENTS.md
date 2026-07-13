@@ -47,7 +47,10 @@ Run all commands inside containers. Do not run Python or Node on the host.
 - Release-candidate validation: `make finalization-check`
 
 ## Core Developer Guidance
-- Trio is the async runtime; do not introduce asyncio.
+- The running legacy `psychoanalyst_app` remains Trio-based until cutover.
+- Async target code under `src/jung` uses asyncio according to ADR 0002.
+- Tests for target asyncio gateways and application components must run through pytest-asyncio.
+- Do not add Trio/asyncio compatibility adapters to target code.
 - Keep agents as pure business logic; orchestration owns workflow transitions.
 - Prefer existing utilities and services before adding new ones.
 - If docs conflict with this guide, follow this guide and update the docs you touched.

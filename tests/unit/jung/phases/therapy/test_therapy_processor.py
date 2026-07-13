@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import pytest
-
 from jung.domain.models import Plan, Profile
 from jung.llm.fake import FakeLLM, StreamExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy
@@ -31,7 +29,6 @@ def _plan() -> Plan:
     )
 
 
-@pytest.mark.asyncio
 async def test_build_messages_includes_style_and_plan() -> None:
     processor = TherapyProcessor(
         FakeLLM([]),
@@ -57,7 +54,6 @@ async def test_build_messages_includes_style_and_plan() -> None:
     assert "I slept poorly again." in combined
 
 
-@pytest.mark.asyncio
 async def test_stream_response_passes_chunks_unchanged() -> None:
     gateway = FakeLLM(
         [

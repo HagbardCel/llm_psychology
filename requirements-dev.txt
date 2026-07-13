@@ -191,7 +191,10 @@ pygments==2.19.2
 pytest==9.0.1
     # via
     #   -r requirements-dev.in
+    #   pytest-asyncio
     #   pytest-trio
+pytest-asyncio==1.4.0
+    # via -r requirements-dev.in
 pytest-trio==0.8.0
     # via -r requirements-dev.in
 python-dotenv==1.2.1
@@ -257,6 +260,7 @@ typing-extensions==4.15.0
     #   openai
     #   pydantic
     #   pydantic-core
+    #   pytest-asyncio
     #   typing-inspection
 typing-inspection==0.4.2
     # via

@@ -61,7 +61,7 @@ class TracingLLMGateway:
             elapsed = time.perf_counter() - started
             ttfc = (first_chunk_at - started) if first_chunk_at is not None else None
             logger.info(
-                "llm stream complete task=%s model=%s elapsed=%.3fs "
+                "llm stream complete task=%s model=%s status=success elapsed=%.3fs "
                 "ttfc=%s chunks=%s chars=%s",
                 policy.task.value,
                 policy.model,
@@ -101,7 +101,8 @@ class TracingLLMGateway:
         else:
             elapsed = time.perf_counter() - started
             logger.info(
-                "llm structured complete task=%s model=%s output=%s elapsed=%.3fs",
+                "llm structured complete task=%s model=%s output=%s "
+                "status=success elapsed=%.3fs",
                 policy.task.value,
                 policy.model,
                 output_type.__name__,

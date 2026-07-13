@@ -39,7 +39,6 @@ def _recommendation(style_id: str, score: float) -> StyleRecommendation:
     )
 
 
-@pytest.mark.asyncio
 async def test_assessment_processor_makes_one_structured_call() -> None:
     styles = tuple(load_styles().values())
     gateway = FakeLLM(
@@ -94,7 +93,6 @@ def test_assessment_result_revalidates() -> None:
     assert restored == raw
 
 
-@pytest.mark.asyncio
 async def test_assessment_processor_rejects_missing_style_coverage() -> None:
     styles = tuple(load_styles().values())
     gateway = FakeLLM(

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-import pytest
-
 from jung.domain.models import Profile
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
@@ -36,7 +34,6 @@ def _policies() -> tuple[ModelPolicy, ModelPolicy]:
     return patch, response
 
 
-@pytest.mark.asyncio
 async def test_prepare_turn_opening_skips_patch_extraction() -> None:
     patch_policy, response_policy = _policies()
     gateway = FakeLLM(
@@ -62,7 +59,6 @@ async def test_prepare_turn_opening_skips_patch_extraction() -> None:
     gateway.assert_exhausted()
 
 
-@pytest.mark.asyncio
 async def test_prepare_turn_applies_patch_and_streams_response() -> None:
     patch_policy, response_policy = _policies()
     user_turn = TranscriptTurn(

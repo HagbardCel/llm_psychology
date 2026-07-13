@@ -85,18 +85,23 @@ class SmokeObservingGateway:
             error_type = type(exc).__name__
             raise
         finally:
-            self._collector.structured_calls.append(
-                SmokeStructuredCallResult(
-                    call_id=call_id,
-                    task=policy.task.value,
-                    output_type=output_type.__name__,
-                    status=status,
-                    latency_seconds=time.perf_counter() - started,
-                    input_chars=input_chars,
-                    input_message_chars=input_message_chars,
-                    output_schema_chars=output_schema_chars,
-                    result_chars=result_chars,
-                    error_type=error_type,
-                )
-            )
             current_smoke_call_id.reset(token)
+            try:
+                self._collector.structured_calls.append(
+                    SmokeStructuredCallResult(
+                        call_id=call_id,
+                        task=policy.task.value,
+                        output_type=output_type.__name__,
+                        status=status,
+                        latency_seconds=time.perf_counter() - started,
+                        input_chars=input_chars,
+                        input_message_chars=input_message_chars,
+                        output_schema_chars=output_schema_chars,
+                        result_chars=result_chars,
+                        error_type=error_type,
+                    )
+                )
+            except Exception as exc:
+                self._collector.instrumentation_errors.append(
+                    f"structured call recorder failed: {type(exc).__name__}"
+                )

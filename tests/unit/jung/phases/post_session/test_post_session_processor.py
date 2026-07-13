@@ -48,7 +48,6 @@ def _briefing() -> SessionBriefing:
     )
 
 
-@pytest.mark.asyncio
 async def test_post_session_processor_makes_two_structured_calls() -> None:
     gateway = FakeLLM(
         [
@@ -110,7 +109,6 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
     gateway.assert_exhausted()
 
 
-@pytest.mark.asyncio
 async def test_post_session_processor_rejects_invalid_plan_patch() -> None:
     gateway = FakeLLM(
         [
@@ -184,7 +182,6 @@ def test_plan_patch_noop_and_revision_merge() -> None:
     assert changed.current_progress == "improved sleep hygiene"
 
 
-@pytest.mark.asyncio
 async def test_post_session_processor_skips_update_when_analysis_fails() -> None:
     gateway = FakeLLM(
         [
@@ -230,7 +227,6 @@ async def test_post_session_processor_skips_update_when_analysis_fails() -> None
     gateway.assert_exhausted()
 
 
-@pytest.mark.asyncio
 async def test_post_session_processor_raises_when_update_fails() -> None:
     gateway = FakeLLM(
         [

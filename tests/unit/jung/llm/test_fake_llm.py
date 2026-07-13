@@ -21,7 +21,6 @@ class _SampleOutput(BaseModel):
     value: str
 
 
-@pytest.mark.asyncio
 async def test_fake_llm_streams_scripted_chunks() -> None:
     gateway = FakeLLM(
         [
@@ -48,7 +47,6 @@ async def test_fake_llm_streams_scripted_chunks() -> None:
     gateway.assert_exhausted()
 
 
-@pytest.mark.asyncio
 async def test_fake_llm_returns_structured_models() -> None:
     gateway = FakeLLM(
         [
@@ -75,7 +73,6 @@ async def test_fake_llm_returns_structured_models() -> None:
     gateway.assert_exhausted()
 
 
-@pytest.mark.asyncio
 async def test_fake_llm_raises_mid_stream_error() -> None:
     from jung.llm.errors import LLMUnavailable
 

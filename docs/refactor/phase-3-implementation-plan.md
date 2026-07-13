@@ -2034,15 +2034,19 @@ Fewer commits are acceptable if each commit remains coherent. Do not split every
 
 ### 22.1 Fast local loop
 
-Recommended:
+Run the complete Phase 3 target suite under asyncio:
 
 ```bash
-uv run pytest tests/unit/jung/llm tests/unit/jung/phases -q
-uv run pytest tests/integration/jung/test_phase_processors.py -q
-uv run ruff check src/jung/llm src/jung/phases src/jung/styles.py tests/unit/jung tests/integration/jung
+make phase-3-test
 ```
 
-Use the repository's canonical type-check command once Phase 2 has established the target package configuration.
+For lint plus tests:
+
+```bash
+make validate-refactor-phase-3
+```
+
+The Phase 3 Make target explicitly disables the legacy Trio test mode and enables pytest-asyncio.
 
 ### 22.2 PR validation
 

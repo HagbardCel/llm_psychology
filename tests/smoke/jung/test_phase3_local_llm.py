@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import (
@@ -117,7 +118,7 @@ def configure_smoke_metadata(
     }
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def gateway(smoke_extra_body: dict[str, object] | None):
     _required_smoke_env("PHASE3_SMOKE_SERVER")
     _required_smoke_env("PHASE3_SMOKE_BASE_URL")

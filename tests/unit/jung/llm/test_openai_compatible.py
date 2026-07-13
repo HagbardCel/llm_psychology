@@ -65,7 +65,6 @@ def _client(
     )
 
 
-@pytest.mark.asyncio
 async def test_stream_text_yields_non_empty_chunks() -> None:
     chunk = json.dumps(
         {
@@ -94,7 +93,6 @@ async def test_stream_text_yields_non_empty_chunks() -> None:
     assert chunks == ["hi"]
 
 
-@pytest.mark.asyncio
 async def test_generate_structured_validates_json_object_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -120,7 +118,6 @@ async def test_generate_structured_validates_json_object_response() -> None:
     assert result.value == "ok"
 
 
-@pytest.mark.asyncio
 async def test_generate_structured_retries_once_then_raises() -> None:
     calls = {"count": 0}
 
@@ -150,7 +147,6 @@ async def test_generate_structured_retries_once_then_raises() -> None:
     assert calls["count"] == 2
 
 
-@pytest.mark.asyncio
 async def test_connection_error_maps_to_llm_unavailable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
@@ -164,7 +160,6 @@ async def test_connection_error_maps_to_llm_unavailable() -> None:
             pass
 
 
-@pytest.mark.asyncio
 async def test_request_includes_max_completion_tokens_when_set() -> None:
     captured: dict[str, object] = {}
 
@@ -203,33 +198,82 @@ async def test_request_includes_max_completion_tokens_when_set() -> None:
     assert body.get("max_completion_tokens") == 128
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "expected"),
+    (
+        "status_code",
+        "expected_exception",
+        "expected_status",
+        "expected_error_type",
+    ),
     [
-        (408, LLMTimeout),
-        (429, LLMUnavailable),
-        (503, LLMUnavailable),
-        (400, LLMProtocolError),
+        (408, LLMTimeout, "timeout", "LLMTimeout"),
+        (429, LLMUnavailable, "error", "LLMUnavailable"),
+        (503, LLMUnavailable, "error", "LLMUnavailable"),
+        (400, LLMProtocolError, "error", "LLMProtocolError"),
     ],
 )
-async def test_http_status_maps_to_expected_error(
-    status: int,
-    expected: type[Exception],
+async def test_http_failure_translates_and_records_attempt_metadata(
+    status_code: int,
+    expected_exception: type[Exception],
+    expected_status: str,
+    expected_error_type: str,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, json={"error": {"message": "boom"}})
+    events: list[ProviderAttemptEvent] = []
 
-    gateway = _client(httpx.MockTransport(handler))
-    with pytest.raises(expected):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"error": {"message": "boom"}})
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    with pytest.raises(expected_exception):
         await gateway.generate_structured(
             [ChatMessage(role=ChatRole.USER, content="give json")],
             _Answer,
             _policy(),
         )
+    assert len(events) == 1
+    assert events[0].attempt == "initial"
+    assert events[0].status == expected_status
+    assert events[0].error_type == expected_error_type
 
 
-@pytest.mark.asyncio
+async def test_provider_attempt_event_records_empty_content_correction_metadata() -> None:
+    events: list[ProviderAttemptEvent] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": ""},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    with pytest.raises(InvalidLLMOutput):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+    assert [event.attempt for event in events] == ["initial", "correction"]
+    assert all(event.status == "error" for event in events)
+    assert all(event.error_type == "InvalidLLMOutput" for event in events)
+    assert events[0].correction_trigger is None
+    assert events[1].correction_trigger == "syntactic_or_schema_validation"
+
+
 async def test_prompt_mode_correction_preserves_schema_instruction() -> None:
     bodies: list[dict[str, object]] = []
 
@@ -264,7 +308,6 @@ async def test_prompt_mode_correction_preserves_schema_instruction() -> None:
     assert "was invalid" in combined
 
 
-@pytest.mark.asyncio
 async def test_validator_runtime_error_propagates_without_correction() -> None:
     calls = {"count": 0}
 
@@ -298,7 +341,6 @@ async def test_validator_runtime_error_propagates_without_correction() -> None:
     assert calls["count"] == 1
 
 
-@pytest.mark.asyncio
 async def test_semantic_validator_failure_triggers_single_correction() -> None:
     calls = {"count": 0}
 
@@ -335,7 +377,6 @@ async def test_semantic_validator_failure_triggers_single_correction() -> None:
     assert calls["count"] == 2
 
 
-@pytest.mark.asyncio
 async def test_stream_cancellation_propagates() -> None:
     import asyncio
 
@@ -367,7 +408,6 @@ async def test_stream_cancellation_propagates() -> None:
         await consume()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mode", "expected_type"),
     [
@@ -414,7 +454,6 @@ async def test_response_format_for_structured_mode(
         assert response_format.get("type") == expected_type
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("config", "expected_extra"),
     [
@@ -470,7 +509,6 @@ async def test_extra_body_merge_applies_task_overrides(
     assert body.get("messages")
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config",
     [
@@ -506,7 +544,6 @@ async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -
         )
 
 
-@pytest.mark.asyncio
 async def test_provider_attempt_event_emitted_on_initial_success() -> None:
     events: list[ProviderAttemptEvent] = []
 
@@ -546,7 +583,6 @@ async def test_provider_attempt_event_emitted_on_initial_success() -> None:
     assert event.completion_tokens == 5
 
 
-@pytest.mark.asyncio
 async def test_correction_trigger_classified_for_semantic_and_schema_failures() -> None:
     events: list[ProviderAttemptEvent] = []
     calls = {"count": 0}
@@ -591,7 +627,6 @@ async def test_correction_trigger_classified_for_semantic_and_schema_failures() 
     assert events[1].correction_trigger == "semantic_validation"
 
 
-@pytest.mark.asyncio
 async def test_unclassified_invalid_output_uses_schema_correction_trigger() -> None:
     events: list[ProviderAttemptEvent] = []
     calls = {"count": 0}
@@ -626,7 +661,6 @@ async def test_unclassified_invalid_output_uses_schema_correction_trigger() -> N
     assert events[1].correction_trigger == "syntactic_or_schema_validation"
 
 
-@pytest.mark.asyncio
 async def test_raising_observer_does_not_corrupt_provider_result() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -662,7 +696,6 @@ class _UnexpectedProviderBug(RuntimeError):
     pass
 
 
-@pytest.mark.asyncio
 async def test_unexpected_provider_error_propagates_unchanged_structured() -> None:
     gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
 
@@ -679,7 +712,6 @@ async def test_unexpected_provider_error_propagates_unchanged_structured() -> No
         )
 
 
-@pytest.mark.asyncio
 async def test_unexpected_provider_error_propagates_unchanged_stream() -> None:
     gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
 
@@ -696,7 +728,6 @@ async def test_unexpected_provider_error_propagates_unchanged_stream() -> None:
             pass
 
 
-@pytest.mark.asyncio
 async def test_response_chars_measures_raw_content_before_fence_strip() -> None:
     events: list[ProviderAttemptEvent] = []
     fenced = '```json\n{"value":"ok"}\n```'
@@ -730,7 +761,6 @@ async def test_response_chars_measures_raw_content_before_fence_strip() -> None:
     assert events[0].response_chars != len('{"value":"ok"}')
 
 
-@pytest.mark.asyncio
 async def test_validator_invalid_llm_output_records_semantic_correction_trigger() -> None:
     events: list[ProviderAttemptEvent] = []
     calls = {"count": 0}
