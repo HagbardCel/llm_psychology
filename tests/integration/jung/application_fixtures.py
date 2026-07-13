@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+import fnmatch
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,18 +12,149 @@ from types import MappingProxyType
 from uuid import UUID, uuid4
 
 from jung.application import TherapyApplication
-from jung.domain.models import ChatTurn, ChatTurnStatus, OperationStatus, Stage
+from jung.domain.models import (
+    ChatTurn,
+    ChatTurnStatus,
+    OperationStatus,
+    PlanContent,
+    Stage,
+)
 from jung.events import EventStream
-from jung.llm.fake import FakeLLM
+from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.policies import build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.assessment.models import AssessmentResult, StyleRecommendation
 from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.intake.processor import IntakeProcessor
+from jung.phases.post_session.models import (
+    DerivedProfilePatch,
+    PlanPatch,
+    PostSessionResult,
+    SessionAnalysisResult,
+    SessionBriefing,
+)
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
-from jung.supervisor import TaskSupervisor
+from jung.supervisor import SupervisorClosed, TaskSupervisor
+
+StartScript = bool | type[SupervisorClosed] | BaseException
+
+
+def plan_content() -> PlanContent:
+    return PlanContent(
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep"],
+        current_progress="baseline",
+        planned_interventions=["grounding"],
+        revision_recommendations=["track sleep"],
+    )
+
+
+def assessment_result() -> AssessmentResult:
+    return AssessmentResult(
+        formulation="Anxiety presentation",
+        presenting_concerns=("anxiety",),
+        strengths_and_resources=("support",),
+        style_recommendations=tuple(
+            StyleRecommendation(
+                style_id=style_id,
+                score=0.9 if style_id == "cbt" else 0.5,
+                rationale=f"Fit for {style_id}",
+                key_topics=("anxiety",),
+                initial_plan=plan_content(),
+            )
+            for style_id in ("jung", "cbt", "freud")
+        ),
+    )
+
+
+def post_session_expectations() -> list[StreamExpectation | StructuredExpectation]:
+    return [
+        StructuredExpectation(
+            task=LLMTask.POST_SESSION_ANALYSIS,
+            output_type=SessionAnalysisResult,
+            response=SessionAnalysisResult(
+                summary="Patient explored sleep difficulties.",
+                key_themes=("sleep",),
+            ),
+        ),
+        StructuredExpectation(
+            task=LLMTask.POST_SESSION_UPDATE,
+            output_type=PostSessionResult,
+            response=PostSessionResult(
+                session_summary="Sleep remained difficult.",
+                session_briefing=SessionBriefing(
+                    narrative_handoff="Session focused on sleep.",
+                    recommended_opening_focus="sleep routine",
+                ),
+                derived_profile_patch=DerivedProfilePatch(
+                    observations=("reports poor sleep",)
+                ),
+                plan_patch=PlanPatch(current_progress="some progress"),
+            ),
+        ),
+    ]
+
+
+def intake_message_expectations(
+    response: str,
+) -> list[StructuredExpectation | StreamExpectation]:
+    return [
+        StructuredExpectation(
+            task=LLMTask.INTAKE_PATCH,
+            output_type=IntakeRecordPatch,
+            response=IntakeRecordPatch(),
+        ),
+        StreamExpectation(
+            task=LLMTask.INTAKE_RESPONSE,
+            chunks=(response,),
+        ),
+    ]
+
+
+class ScriptedTaskSupervisor(TaskSupervisor):
+    """Test supervisor that scripts ``start()`` outcomes by name or call order."""
+
+    def __init__(
+        self,
+        *,
+        by_name: Mapping[str, Sequence[StartScript]] | None = None,
+        in_order: Sequence[StartScript] | None = None,
+    ) -> None:
+        super().__init__()
+        self._by_name = {pattern: list(outcomes) for pattern, outcomes in (by_name or {}).items()}
+        self._in_order = list(in_order or [])
+
+    def start(
+        self,
+        *,
+        name: str,
+        run: Callable[[], Awaitable[None]],
+    ) -> bool:
+        outcome = self._next_outcome(name)
+        if outcome is True:
+            return super().start(name=name, run=run)
+        if outcome is False:
+            return False
+        if outcome is SupervisorClosed or (
+            isinstance(outcome, type) and issubclass(outcome, SupervisorClosed)
+        ):
+            raise SupervisorClosed(f"scripted supervisor closed for {name}")
+        if isinstance(outcome, BaseException):
+            raise outcome
+        raise TypeError(f"unsupported scripted start outcome: {outcome!r}")
+
+    def _next_outcome(self, name: str) -> StartScript:
+        for pattern, outcomes in self._by_name.items():
+            if fnmatch.fnmatch(name, pattern) and outcomes:
+                return outcomes.pop(0)
+        if self._in_order:
+            return self._in_order.pop(0)
+        return True
 
 
 @dataclass
@@ -87,6 +219,7 @@ async def build_test_application(
     now: Callable[[], datetime] | None = None,
     new_id: Callable[[], UUID] | None = None,
     recover: bool = True,
+    supervisor: TaskSupervisor | None = None,
 ) -> AsyncIterator[TestApplicationRuntime]:
     """Wire TherapyApplication with real store, processors, events, and supervisor."""
     intake, assessment, therapy, post_session = _build_processors(fake_llm)
@@ -95,7 +228,8 @@ async def build_test_application(
     clock = now or (lambda: datetime.now(UTC))
     ids = new_id or uuid4
 
-    async with TaskSupervisor() as supervisor:
+    supervisor_instance = supervisor or TaskSupervisor()
+    async with supervisor_instance as active_supervisor:
         application = TherapyApplication(
             store=store,
             intake=intake,
@@ -104,7 +238,7 @@ async def build_test_application(
             post_session=post_session,
             styles=styles,
             events=events,
-            supervisor=supervisor,
+            supervisor=active_supervisor,
             now=clock,
             new_id=ids,
         )
@@ -113,7 +247,7 @@ async def build_test_application(
         runtime = TestApplicationRuntime(
             application=application,
             events=events,
-            supervisor=supervisor,
+            supervisor=active_supervisor,
             store=store,
             fake_llm=fake_llm,
         )
@@ -121,7 +255,7 @@ async def build_test_application(
             yield runtime
         finally:
             application.begin_shutdown()
-            await supervisor.shutdown(timeout_seconds=5.0)
+            await active_supervisor.shutdown(timeout_seconds=5.0)
 
 
 async def wait_for_stage(
@@ -183,3 +317,17 @@ async def wait_for_operation_status(
     raise TimeoutError(
         f"timed out waiting for operation {operation_id} status {status.value}, got {current}"
     )
+
+
+__all__ = [
+    "ScriptedTaskSupervisor",
+    "TestApplicationRuntime",
+    "assessment_result",
+    "build_test_application",
+    "intake_message_expectations",
+    "plan_content",
+    "post_session_expectations",
+    "wait_for_chat_turn",
+    "wait_for_operation_status",
+    "wait_for_stage",
+]

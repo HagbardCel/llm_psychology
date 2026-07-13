@@ -14,16 +14,18 @@ from jung.llm.gateway import LLMSettings
 pytestmark = pytest.mark.asyncio
 
 
-class _ClosableFakeLLM(FakeLLM):
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__([])
-
-    async def aclose(self) -> None:
-        return None
-
-
 async def test_application_context_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", _ClosableFakeLLM)
+    closed = False
+
+    class TrackingFakeLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
     settings = Settings(
         database_path=tmp_path / "composition.db",
         llm=LLMSettings(
@@ -38,29 +40,4 @@ async def test_application_context_smoke(tmp_path: Path, monkeypatch: pytest.Mon
         assert snapshot.stage is Stage.SETUP
         assert runtime.events is not None
         assert runtime.supervisor is not None
-
-
-async def test_application_context_closes_llm_client(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    closed = False
-
-    class TrackingFakeLLM(_ClosableFakeLLM):
-        async def aclose(self) -> None:
-            nonlocal closed
-            closed = True
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
-    settings = Settings(
-        database_path=tmp_path / "composition-close.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
-    async with application_context(settings):
-        pass
     assert closed is True

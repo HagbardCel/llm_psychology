@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -11,45 +12,22 @@ from jung.domain.errors import Busy
 from jung.domain.models import (
     ChatTurnStatus,
     OperationStatus,
-    PlanContent,
     Profile,
     Stage,
 )
 from jung.llm.fake import FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
-from jung.phases.assessment.models import AssessmentResult, StyleRecommendation
+from jung.phases.assessment.models import AssessmentResult
 
-from .application_fixtures import build_test_application, wait_for_stage
+from .application_fixtures import (
+    assessment_result,
+    build_test_application,
+    wait_for_stage,
+)
 from .scenarios import complete_intake_for_assessment, open_intake
 
 pytestmark = pytest.mark.asyncio
-
-
-def _assessment_result() -> AssessmentResult:
-    plan = PlanContent(
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-    )
-    return AssessmentResult(
-        formulation="Anxiety presentation",
-        presenting_concerns=("anxiety",),
-        strengths_and_resources=("support",),
-        style_recommendations=tuple(
-            StyleRecommendation(
-                style_id=style_id,
-                score=0.9 if style_id == "cbt" else 0.5,
-                rationale=f"Fit for {style_id}",
-                key_topics=("anxiety",),
-                initial_plan=plan,
-            )
-            for style_id in ("jung", "cbt", "freud")
-        ),
-    )
 
 
 async def test_recover_on_startup_reschedules_pending_operation(
@@ -68,7 +46,7 @@ async def test_recover_on_startup_reschedules_pending_operation(
             StructuredExpectation(
                 task=LLMTask.ASSESSMENT,
                 output_type=AssessmentResult,
-                response=_assessment_result(),
+                response=assessment_result(),
             )
         ]
     )
@@ -117,7 +95,7 @@ async def test_stale_running_operation_is_recovered_then_completes(
             StructuredExpectation(
                 task=LLMTask.ASSESSMENT,
                 output_type=AssessmentResult,
-                response=_assessment_result(),
+                response=assessment_result(),
             )
         ]
     )
@@ -127,6 +105,97 @@ async def test_stale_running_operation_is_recovered_then_completes(
         assert operation.status is OperationStatus.PENDING
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
+
+
+async def test_recover_on_startup_with_blocked_worker_completes(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    gate = asyncio.Event()
+
+    class HoldingAssessmentFake(FakeLLM):
+        async def generate_structured(
+            self,
+            messages,
+            output_type,
+            policy,
+            validate_result=None,
+        ):
+            await gate.wait()
+            return await super().generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+
+    fake = HoldingAssessmentFake(
+        [
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            )
+        ]
+    )
+    async with build_test_application(store, fake, recover=False) as runtime:
+        startup = asyncio.create_task(runtime.application.recover_on_startup())
+        await asyncio.sleep(0.01)
+        gate.set()
+        await startup
+        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+    fake.assert_exhausted()
+
+
+async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM([])
+    async with build_test_application(store, fake, recover=False) as runtime:
+        app = runtime.application
+        original_run_store = app._run_store
+        entered_slow_path = asyncio.Event()
+        release_slow_path = asyncio.Event()
+
+        async def gated_run_store(fn, *args, **kwargs):
+            result = await original_run_store(fn, *args, **kwargs)
+            if getattr(fn, "__name__", "") == "load_snapshot_facts":
+                entered_slow_path.set()
+                await release_slow_path.wait()
+            return result
+
+        app._run_store = gated_run_store
+
+        first_update = asyncio.create_task(
+            app.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+        )
+        await asyncio.wait_for(entered_slow_path.wait(), timeout=2.0)
+        blocked_update = asyncio.create_task(
+            app.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Jordan", primary_language="English"),
+                )
+            )
+        )
+        await asyncio.sleep(0.01)
+        app.begin_shutdown()
+        release_slow_path.set()
+        with pytest.raises(Busy, match="shutting down"):
+            await blocked_update
+        await first_update
 
 
 async def test_shutdown_rejects_new_commands(store: SQLiteStore) -> None:
