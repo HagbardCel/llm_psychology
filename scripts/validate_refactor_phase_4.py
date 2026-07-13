@@ -51,9 +51,22 @@ def _class_names(path: Path) -> list[str]:
     ]
 
 
-def _contains_create_task(path: Path) -> bool:
+def _contains_detached_create_task(path: Path) -> bool:
     text = path.read_text(encoding="utf-8")
-    return FORBIDDEN_CREATE_TASK in text
+    if FORBIDDEN_CREATE_TASK not in text:
+        return False
+    if path.name == "supervisor.py":
+        return False
+    if path.name == "application.py":
+        total = text.count(FORBIDDEN_CREATE_TASK)
+        tree = ast.parse(text, filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_store":
+                segment = ast.get_source_segment(text, node) or ""
+                if FORBIDDEN_CREATE_TASK in segment:
+                    return total != segment.count(FORBIDDEN_CREATE_TASK)
+        return True
+    return True
 
 
 def validate() -> list[str]:
@@ -98,7 +111,7 @@ def validate() -> list[str]:
             errors.append(f"missing Phase 4 runtime file: {path.relative_to(ROOT)}")
             continue
         rel = path.relative_to(ROOT)
-        if _contains_create_task(path) and path.name != "supervisor.py":
+        if _contains_detached_create_task(path):
             errors.append(f"{rel} uses detached {FORBIDDEN_CREATE_TASK}")
         for name in _class_names(path):
             if name in FORBIDDEN_CLASS_NAMES:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
 from jung import workflow
@@ -76,6 +76,7 @@ from jung.supervisor import SupervisorClosed, TaskSupervisor
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
+_T = TypeVar("_T")
 
 
 class ChatScheduleOutcomeKind(Enum):
@@ -128,9 +129,36 @@ class TherapyApplication:
         self._shutdown = True
 
     async def _run_store(
-        self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any
-    ) -> Any:
-        return await asyncio.to_thread(fn, *args, **kwargs)
+        self, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
+    ) -> _T:
+        # Bounded shutdown applies around LLM/background work; an already-running
+        # local SQLite call is allowed to finish before the mutation lock releases.
+        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    logger.exception(
+                        "store call failed after caller cancellation function=%s",
+                        getattr(fn, "__name__", repr(fn)),
+                    )
+                    break
+
+            if task.done() and not task.cancelled():
+                try:
+                    task.result()
+                except Exception:
+                    logger.exception(
+                        "store call failed after caller cancellation function=%s",
+                        getattr(fn, "__name__", repr(fn)),
+                    )
+
+            raise cancellation
 
     async def recover_on_startup(self) -> AppSnapshot:
         async with self._mutation_lock:
@@ -290,8 +318,7 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(OperationChanged(operation, snapshot))
-        self._schedule_operation(operation)
+        await self._handoff_pending_operation(operation, snapshot)
         return snapshot
 
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
@@ -312,8 +339,7 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(OperationChanged(operation, snapshot))
-        self._schedule_operation(operation)
+        await self._handoff_pending_operation(operation, snapshot)
         return snapshot
 
     async def submit_message(self, command: SendMessage) -> ChatTurn:
@@ -321,6 +347,7 @@ class TherapyApplication:
         generation_reserved = False
         pending_events: list[Any] = []
         turn: ChatTurn | None = None
+        handoff_on_cancel: ChatTurn | None = None
         try:
             async with self._mutation_lock:
                 self._reject_if_shutdown()
@@ -339,6 +366,15 @@ class TherapyApplication:
                             raise StoredWorkFailure.from_chat_turn(existing)
                         if not await self._chat_retry_structurally_eligible(existing):
                             raise StoredWorkFailure.from_chat_turn(existing)
+                        facts = await self._run_store(self._store.load_snapshot_facts)
+                        if facts.chat_turn_status is ChatTurnStatus.PENDING:
+                            active = await self._run_store(
+                                self._store.get_active_chat_turn
+                            )
+                            if active is not None and active.id != existing.id:
+                                raise Busy("another chat generation is active")
+                        if self._generation_lock.locked():
+                            raise Busy("another chat generation is active")
                         await self._reserve_generation_lock()
                         generation_reserved = True
                         turn = await self._run_store(
@@ -390,10 +426,25 @@ class TherapyApplication:
                         ),
                         SnapshotChanged(snapshot),
                     ]
+        except asyncio.CancelledError:
+            if generation_reserved:
+                if turn is not None:
+                    handoff_on_cancel = turn
+                else:
+                    self._release_generation_lock()
+            raise
         except Exception:
             if generation_reserved:
                 self._release_generation_lock()
             raise
+        finally:
+            if handoff_on_cancel is not None:
+                outcome = self._try_start_chat_worker(
+                    handoff_on_cancel,
+                    request_id=command.request_id,
+                )
+                if outcome.kind is not ChatScheduleOutcomeKind.STARTED:
+                    self._release_generation_lock()
 
         assert turn is not None
         if not pending_events:
@@ -510,6 +561,12 @@ class TherapyApplication:
         if outcome.kind is ChatScheduleOutcomeKind.SUPERVISOR_CLOSED:
             self._release_generation_lock()
             return turn
+        if outcome.kind is ChatScheduleOutcomeKind.UNEXPECTED:
+            logger.error(
+                "failed to schedule chat turn_id=%s",
+                turn.id,
+                exc_info=outcome.error,
+            )
         self._release_generation_lock()
         return await self._persist_chat_schedule_failure(turn)
 
@@ -524,15 +581,51 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(
-            ChatTurnFailed(
-                session_id=turn.session_id,
-                turn_id=turn.id,
-                turn=failed,
+        try:
+            await self._events.publish(
+                ChatTurnFailed(
+                    session_id=turn.session_id,
+                    turn_id=turn.id,
+                    turn=failed,
+                )
             )
-        )
-        await self._events.publish(SnapshotChanged(snapshot))
+            await self._events.publish(SnapshotChanged(snapshot))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "failed to publish chat schedule failure turn_id=%s",
+                turn.id,
+            )
         return failed
+
+    async def _publish_non_authoritative(self, event: Any) -> None:
+        try:
+            await self._events.publish(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "failed to publish non-authoritative event event_type=%s",
+                type(event).__name__,
+            )
+
+    async def _handoff_pending_operation(
+        self,
+        operation: Operation,
+        snapshot: AppSnapshot,
+    ) -> None:
+        try:
+            await self._events.publish(OperationChanged(operation, snapshot))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "failed to publish pending operation event operation_id=%s",
+                operation.id,
+            )
+        finally:
+            self._schedule_operation(operation)
 
     def _operation_task_name(self, operation: Operation) -> str:
         return f"operation:{operation.id}:attempt:{operation.attempt + 1}"
@@ -719,7 +812,7 @@ class TherapyApplication:
             snapshot = await self._assemble_snapshot_locked()
         assistant_message = await self._load_message(session_id, assistant_message_id)
         try:
-            await self._events.publish(
+            await self._publish_non_authoritative(
                 ChatTurnCompleted(
                     session_id=session_id,
                     turn_id=turn_id,
@@ -727,13 +820,10 @@ class TherapyApplication:
                     assistant_message=assistant_message,
                 )
             )
-            await self._events.publish(OperationChanged(operation, snapshot))
-            await self._events.publish(SnapshotChanged(snapshot))
-        except Exception:
-            logger.exception(
-                "failed to publish final intake events turn_id=%s",
-                turn_id,
+            await self._publish_non_authoritative(
+                OperationChanged(operation, snapshot)
             )
+            await self._publish_non_authoritative(SnapshotChanged(snapshot))
         finally:
             self._schedule_operation(operation)
 
