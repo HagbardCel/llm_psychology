@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -75,12 +75,42 @@ def build_correction_messages(
     return [*original_messages, correction]
 
 
+def to_provider_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Narrow a JSON schema dict to the OpenAI strict json_schema subset."""
+
+    def transform(node: Any) -> Any:
+        if not isinstance(node, dict):
+            return node
+        result = dict(node)
+        node_type = result.get("type")
+        if node_type == "object":
+            properties = result.get("properties")
+            if isinstance(properties, dict):
+                result["properties"] = {
+                    key: transform(value) for key, value in properties.items()
+                }
+                result["required"] = sorted(properties.keys())
+            result["additionalProperties"] = False
+        elif node_type == "array":
+            items = result.get("items")
+            if isinstance(items, dict):
+                result["items"] = transform(items)
+        defs = result.get("$defs")
+        if isinstance(defs, dict):
+            result["$defs"] = {
+                key: transform(value) for key, value in defs.items()
+            }
+        return result
+
+    return transform(schema)
+
+
 def response_format_for_mode(
     mode: StructuredOutputMode,
     output_type: type[BaseModel],
 ) -> dict[str, object] | None:
     if mode is StructuredOutputMode.JSON_SCHEMA:
-        schema = output_type.model_json_schema()
+        schema = to_provider_strict_json_schema(output_type.model_json_schema())
         return {
             "type": "json_schema",
             "json_schema": {

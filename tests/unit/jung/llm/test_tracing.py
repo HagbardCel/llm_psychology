@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 import pytest
+
+pytestmark = pytest.mark.asyncio
 from pydantic import BaseModel
 
 from jung.llm.errors import LLMTimeout

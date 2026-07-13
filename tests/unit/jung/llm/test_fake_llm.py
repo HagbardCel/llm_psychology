@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.asyncio
 from pydantic import BaseModel
 
 from jung.llm import (
