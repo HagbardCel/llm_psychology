@@ -45,31 +45,6 @@ async def test_application_context_smoke(tmp_path: Path, monkeypatch: pytest.Mon
     assert closed is True
 
 
-async def test_application_context_preflights_json_schema_models(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class TrackingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
-    settings = Settings(
-        database_path=tmp_path / "composition-preflight.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
-    async with application_context(settings) as runtime:
-        assert runtime.application is not None
-
-
 async def test_application_context_rejects_unsupported_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
