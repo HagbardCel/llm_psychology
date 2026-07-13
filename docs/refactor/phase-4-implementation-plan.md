@@ -143,6 +143,8 @@ Do not:
 
 A small private helper such as `_run_store(callable, *args, **kwargs)` is sufficient.
 
+Round-2 remediation hardens this helper: once a synchronous store call starts, repeated `CancelledError` during `asyncio.shield()` drain cannot release the application mutation lock until the thread-backed task finishes. Bounded shutdown applies around LLM and supervised background work; an already-running local SQLite call is allowed to complete before lock release.
+
 ### 2.5 Keep live events subordinate to durable state
 
 `EventStream` is a local fan-out mechanism for currently connected observers. It is not authoritative.
@@ -700,14 +702,17 @@ It should:
 4. create one concrete OpenAI-compatible client;
 5. wrap it with tracing when enabled;
 6. build all task policies;
-7. load the immutable style catalog;
-8. construct the four processors explicitly;
-9. construct `EventStream`;
-10. enter `TaskSupervisor`;
-11. construct `TherapyApplication`;
-12. run startup recovery;
-13. yield the application/runtime components;
-14. perform bounded shutdown and close the concrete LLM client.
+7. preflight `JSON_SCHEMA` response formats for `IntakeRecordPatch`, `AssessmentResult`, `SessionAnalysisResult`, and `PostSessionResult` before creating the concrete LLM client;
+8. load the immutable style catalog;
+9. construct the four processors explicitly;
+10. construct `EventStream`;
+11. enter `TaskSupervisor`;
+12. construct `TherapyApplication`;
+13. run startup recovery;
+14. yield the application/runtime components;
+15. perform bounded shutdown and close the concrete LLM client.
+
+Strict schema conversion uses a schema-node allowlist: structural keys (`type`, `properties`, `required`, `additionalProperties`, `items`, `$defs`, `$ref`, `anyOf`, `enum`, `description`), constraint keys including `minLength`/`maxLength`, and strips `default`/`title`. Unknown keywords on schema nodes fail preflight with `UnsupportedStrictSchema`.
 
 ### 11.2 Lifecycle shape
 
@@ -948,7 +953,12 @@ When `IntakeTurnPlan.completeness_complete` is true:
 11. release lock;
 12. publish `ChatTurnCompleted`;
 13. publish `OperationChanged` for the pending assessment;
-14. schedule assessment execution.
+14. publish authoritative `SnapshotChanged`;
+15. schedule assessment execution.
+
+Use an explicit publish-then-schedule sequence in `_complete_final_intake()`. Do not route final intake through `_handoff_pending_operation()` — scheduling in that helper's `finally` would allow the assessment worker to publish `OperationChanged(RUNNING/COMPLETE)` before the authoritative `SnapshotChanged(ASSESSMENT)` event.
+
+`_handoff_pending_operation()` is reserved for `end_session()` and `retry_operation()` only: publish pending `OperationChanged`, then schedule in `finally` even when publication fails or is cancelled.
 
 There must be no externally observable committed state in which the intake turn is complete, the processor declared intake complete, but the application remains indefinitely in `INTAKE` without assessment work.
 
@@ -1521,7 +1531,20 @@ Use unit tests for:
 - assessment recommendation lookup;
 - application event construction;
 - recent-summary selection;
-- safe error-message normalization.
+- safe error-message normalization;
+- strict JSON schema allowlist conversion for all four structured output models (`IntakeRecordPatch`, `AssessmentResult`, `SessionAnalysisResult`, `PostSessionResult`).
+
+Integration tests added in round-2 remediation:
+
+- `test_submit_message_cancel_during_store_call_drains_and_releases_lock`;
+- `test_submit_message_cancel_after_turn_assigned_hands_off_worker`;
+- `test_submit_message_cancel_during_accepted_event_publication`;
+- `test_end_session_schedules_operation_when_publish_cancelled`;
+- `test_retry_operation_schedules_operation_when_publish_fails`;
+- `test_application_context_preflights_json_schema_models`;
+- `test_application_context_rejects_unsupported_schema`;
+- `test_full_intake_lifecycle_through_application`;
+- split failed-chat retry matrix (four tests) including busy retry when another turn is `PENDING`.
 
 Do not mock `SQLiteStore` in the main application workflow tests. The real temporary database is part of the Phase 4 contract.
 
