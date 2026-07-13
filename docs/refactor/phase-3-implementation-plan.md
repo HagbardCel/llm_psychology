@@ -2072,17 +2072,46 @@ Required environment variables (fail fast when missing or empty):
 - `PHASE3_SMOKE_BASE_URL` — OpenAI-compatible base URL
 - `PHASE3_SMOKE_MODEL` — exact model identifier loaded on the server
 
-Recommended merge acceptance run uses `PHASE3_SMOKE_TIMEOUT=300`. A `PHASE3_SMOKE_TIMEOUT=900` rerun is diagnostic only on a heavily loaded machine and is not representative performance evidence.
+**Request timeout vs path acceptance budget**
 
-Example:
+- `PHASE3_SMOKE_REQUEST_TIMEOUT` (fallback: `PHASE3_SMOKE_TIMEOUT`) — per provider attempt
+- `PHASE3_SMOKE_THERAPY_MAX_SECONDS`, `PHASE3_SMOKE_ASSESSMENT_MAX_SECONDS`, `PHASE3_SMOKE_POST_SESSION_MAX_SECONDS` — end-to-end path budgets (default 300 each)
+- `PHASE3_SMOKE_STRICT_ACCEPTANCE=1` (default) — enforces aggregate `asyncio.timeout` per path; merge gate
+- `PHASE3_SMOKE_STRICT_ACCEPTANCE=0` — diagnostic mode; records `acceptance_passed` without enforcing aggregate deadline
+
+When request timeout and path budget are both 300 seconds, aggregate cancellation may appear as `path_timeout` / `cancelled` rather than provider `timeout`. For attribution, use `REQUEST_TIMEOUT > path_budget` in diagnostic mode.
+
+**Representative merge acceptance**
+
+Merge acceptance must use the intended deployment model, structured mode, thinking configuration, request extras, and completion-token policies. Smoke-only caps from `PHASE3_SMOKE_MAX_COMPLETION_TOKENS` diagnose timeouts but cannot satisfy the acceptance gate unless equivalent runtime policy is adopted.
+
+Merge acceptance example:
 
 ```bash
+# structured mode, extras, thinking, and token caps must match intended runtime.
+PHASE3_SMOKE_REQUEST_TIMEOUT=300 \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=1 \
+PHASE3_SMOKE_STRUCTURED_MODE=json_schema \
+make smoke-refactor-phase-3-local-llm
+```
+
+Diagnostic example (focused post-session, experimental caps):
+
+```bash
+PHASE3_SMOKE_TARGET="tests/smoke/jung/test_phase3_local_llm.py::test_smoke_post_session_processor" \
+PHASE3_SMOKE_PYTEST_ARGS="-vv -s --log-cli-level=INFO --durations=0" \
+PHASE3_SMOKE_DEBUG=1 \
+PHASE3_SMOKE_LOG_PROMPT_PREVIEWS=0 \
+PHASE3_SMOKE_REQUEST_TIMEOUT=360 \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=0 \
+PHASE3_SMOKE_MAX_COMPLETION_TOKENS='{"post_session_analysis":1400,"post_session_update":1800}' \
 PHASE3_SMOKE_SERVER=llama.cpp \
 PHASE3_SMOKE_BASE_URL=http://host.docker.internal:8080/v1 \
 PHASE3_SMOKE_MODEL='<exact-model-id>' \
-PHASE3_SMOKE_TIMEOUT=300 \
 make smoke-refactor-phase-3-local-llm
 ```
+
+A `PHASE3_SMOKE_TIMEOUT=900` rerun is diagnostic only and is not representative performance evidence. Do not merge on 900-second diagnostic success alone.
 
 It should verify:
 
@@ -2092,18 +2121,24 @@ It should verify:
 - configured structured-output mode;
 - configured request extras such as thinking-mode controls;
 - `gateway.aclose()` cleanup;
-- correction-log counting for structured calls;
-- timeout/error reporting;
+- structured-call and provider-attempt evidence with `call_id` correlation;
+- path status, acceptance fields, and instrumentation integrity;
 - llama.cpp or LM Studio compatibility through the same adapter.
 
 The smoke test must not mutate the database or require the legacy server.
 Emit one machine-extractable terminal line:
 
 ```text
-PHASE3_SMOKE_EVIDENCE={"server":"llama.cpp","base_url":"http://host.docker.internal:8080/v1","model":"<exact-model-id>","structured_mode":"json_schema",...}
+PHASE3_SMOKE_EVIDENCE={"server":"llama.cpp","strict_acceptance":true,"calls":[...],"provider_attempts":[...],...}
 ```
 
-Record a PR evidence table with server implementation, base URL, model, structured mode, measured latencies, correction counts, and configured nonsecret extras. Transport timeout is not performance evidence. Do not record therapeutic content.
+Evidence layers:
+
+- **path** (`therapy`, `assessment`, `post_session`) — `status`, `acceptance_passed`, latency
+- **calls** — structured logical calls (`input_chars`, `output_schema_chars`, `result_chars`)
+- **provider_attempts** — per structured-output request (`prompt_chars`, `correction_trigger`, token usage when available)
+
+Record a PR evidence table with server implementation, base URL, model, structured mode, path budgets, request timeout, effective completion caps, measured latencies, and configured nonsecret extras. Do not record therapeutic content.
 
 ### 22.4 Dependency validation
 

@@ -11,6 +11,8 @@ export HOST_UID ?= $(shell id -u)
 export HOST_GID ?= $(shell id -g)
 CONSOLE_UI_LOG ?= logs/console-ui.log
 CONSOLE_UI_LOG_TEST ?= logs/console-ui-usertest.log
+PHASE3_SMOKE_TARGET ?= tests/smoke/jung/test_phase3_local_llm.py
+PHASE3_SMOKE_PYTEST_ARGS ?= -q
 
 # Default target
 help:
@@ -194,6 +196,7 @@ phase-3-test: prepare-runtime-dirs
 		tests/unit/jung/test_styles.py \
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_processor_store_seams.py \
+		tests/smoke/jung/test_smoke_diagnostics.py \
 		-q
 
 validate-refactor-phase-3: prepare-runtime-dirs
@@ -214,9 +217,18 @@ smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
 		-e PHASE3_SMOKE_BASE_URL \
 		-e PHASE3_SMOKE_MODEL \
 		-e PHASE3_SMOKE_TIMEOUT \
+		-e PHASE3_SMOKE_REQUEST_TIMEOUT \
 		-e PHASE3_SMOKE_STRUCTURED_MODE \
 		-e PHASE3_SMOKE_EXTRA_BODY \
-		test pytest tests/smoke/jung/test_phase3_local_llm.py -m real_llm --no-mocks -q
+		-e PHASE3_SMOKE_MAX_COMPLETION_TOKENS \
+		-e PHASE3_SMOKE_THERAPY_MAX_SECONDS \
+		-e PHASE3_SMOKE_ASSESSMENT_MAX_SECONDS \
+		-e PHASE3_SMOKE_POST_SESSION_MAX_SECONDS \
+		-e PHASE3_SMOKE_STRICT_ACCEPTANCE \
+		-e PHASE3_SMOKE_DEBUG \
+		-e PHASE3_SMOKE_LOG_PROMPT_PREVIEWS \
+		test pytest $(PHASE3_SMOKE_TARGET) \
+			-m real_llm --no-mocks $(PHASE3_SMOKE_PYTEST_ARGS)
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
 hook-commit: lint
