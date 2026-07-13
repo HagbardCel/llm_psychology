@@ -7,19 +7,38 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.commands import EndSession, RetryOperation
-from jung.domain.models import CommandName, OperationStatus, Stage
+from jung.domain.commands import (
+    EndSession,
+    RetryOperation,
+    SendMessage,
+    UpdateProfile,
+)
+from jung.domain.models import (
+    ChatTurnStatus,
+    CommandName,
+    OperationStatus,
+    Profile,
+    Stage,
+)
 from jung.events import OperationChanged
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout
-from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
+from jung.llm.fake import (
+    FailureExpectation,
+    FakeLLM,
+    StreamExpectation,
+    StructuredExpectation,
+)
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
+from jung.phases.intake.models import IntakeRecordPatch
 
 from .application_fixtures import (
     assessment_result,
     build_test_application,
+    completing_intake_patch,
     post_session_expectations,
+    wait_for_chat_turn,
     wait_for_operation_status,
     wait_for_stage,
 )
@@ -348,5 +367,194 @@ async def test_retry_operation_schedules_operation_when_publish_fails(
         await runtime.application.retry_operation(
             RetryOperation(expected_revision=revision, operation_id=operation_id)
         )
+        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+    fake.assert_exhausted()
+
+
+async def test_end_session_schedules_when_assemble_cancelled(
+    store: SQLiteStore,
+) -> None:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=ready.now,
+    )
+    fake = FakeLLM(post_session_expectations())
+    assemble_entered = asyncio.Event()
+    release_assemble = asyncio.Event()
+    gate_next_assemble = False
+
+    async with build_test_application(store, fake) as runtime:
+        original_assemble = runtime.application._assemble_snapshot_locked
+
+        async def gated_assemble():
+            nonlocal gate_next_assemble
+            result = await original_assemble()
+            if gate_next_assemble:
+                gate_next_assemble = False
+                assemble_entered.set()
+                await release_assemble.wait()
+            return result
+
+        runtime.application._assemble_snapshot_locked = gated_assemble
+        revision = (await runtime.application.get_snapshot()).revision
+        gate_next_assemble = True
+        end_task: asyncio.Task | None = None
+        try:
+            end_task = asyncio.create_task(
+                runtime.application.end_session(
+                    EndSession(expected_revision=revision, session_id=therapy_id)
+                )
+            )
+            await asyncio.wait_for(assemble_entered.wait(), timeout=2.0)
+            end_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await end_task
+            await wait_for_stage(runtime.application, Stage.READY)
+        finally:
+            release_assemble.set()
+            if end_task is not None and not end_task.done():
+                end_task.cancel()
+                await asyncio.gather(end_task, return_exceptions=True)
+    fake.assert_exhausted()
+
+
+async def test_retry_operation_schedules_when_assemble_raises(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    fake = FakeLLM(
+        [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMTimeout("timeout"),
+            ),
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            ),
+        ]
+    )
+    gate_next_assemble = False
+
+    async with build_test_application(store, fake) as runtime:
+        original_assemble = runtime.application._assemble_snapshot_locked
+
+        async def failing_assemble():
+            nonlocal gate_next_assemble
+            result = await original_assemble()
+            if gate_next_assemble:
+                gate_next_assemble = False
+                raise RuntimeError("injected assemble failure")
+            return result
+
+        runtime.application._assemble_snapshot_locked = failing_assemble
+        await wait_for_operation_status(
+            runtime.application,
+            operation_id,
+            OperationStatus.FAILED,
+        )
+        revision = (await runtime.application.get_snapshot()).revision
+        gate_next_assemble = True
+        with pytest.raises(RuntimeError, match="injected assemble failure"):
+            await runtime.application.retry_operation(
+                RetryOperation(expected_revision=revision, operation_id=operation_id)
+            )
+        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+    fake.assert_exhausted()
+
+
+async def test_final_intake_schedules_when_load_message_fails(
+    store: SQLiteStore,
+) -> None:
+    turn_messages = ("first turn", "second turn", "third turn")
+    final_message_sequence = 5
+    expectations: list[StructuredExpectation | StreamExpectation] = []
+    for index, content in enumerate(turn_messages, start=1):
+        if index < len(turn_messages):
+            expectations.extend(
+                [
+                    StructuredExpectation(
+                        task=LLMTask.INTAKE_PATCH,
+                        output_type=IntakeRecordPatch,
+                        response=IntakeRecordPatch(),
+                    ),
+                    StreamExpectation(
+                        task=LLMTask.INTAKE_RESPONSE,
+                        chunks=(f"Response {index}.",),
+                    ),
+                ]
+            )
+        else:
+            expectations.extend(
+                [
+                    StructuredExpectation(
+                        task=LLMTask.INTAKE_PATCH,
+                        output_type=IntakeRecordPatch,
+                        response=completing_intake_patch(
+                            message_sequence=final_message_sequence,
+                            quote=content,
+                        ),
+                    ),
+                    StreamExpectation(
+                        task=LLMTask.INTAKE_RESPONSE,
+                        chunks=("Thank you for sharing.",),
+                    ),
+                ]
+            )
+    expectations.append(
+        StructuredExpectation(
+            task=LLMTask.ASSESSMENT,
+            output_type=AssessmentResult,
+            response=assessment_result(),
+        )
+    )
+    fake = FakeLLM(expectations)
+    fail_on_next_load = False
+
+    async with build_test_application(store, fake) as runtime:
+        original_load_message = runtime.application._load_message
+
+        async def failing_load_message(session_id, message_id):
+            if fail_on_next_load:
+                raise RuntimeError("injected post-commit read failure")
+            return await original_load_message(session_id, message_id)
+
+        runtime.application._load_message = failing_load_message
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session_id = (await runtime.application.get_snapshot()).active_session
+        assert session_id is not None
+        for index, content in enumerate(turn_messages):
+            if index == len(turn_messages) - 1:
+                fail_on_next_load = True
+            turn = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session_id.id,
+                    client_message_id=uuid4(),
+                    content=content,
+                )
+            )
+            if index < len(turn_messages) - 1:
+                await wait_for_chat_turn(
+                    runtime.application,
+                    turn.id,
+                    ChatTurnStatus.COMPLETE,
+                )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()

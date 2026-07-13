@@ -98,57 +98,61 @@ async def application_context(
         task_extra_body=settings.llm.task_extra_body,
     )
     llm = OpenAICompatibleLLM(adapter_config)
-    gateway: OpenAICompatibleLLM | TracingLLMGateway = llm
-    if settings.enable_llm_tracing:
-        gateway = TracingLLMGateway(
-            llm,
-            log_prompt_previews=settings.log_prompt_previews,
-        )
+    try:
+        gateway: OpenAICompatibleLLM | TracingLLMGateway = llm
+        if settings.enable_llm_tracing:
+            gateway = TracingLLMGateway(
+                llm,
+                log_prompt_previews=settings.log_prompt_previews,
+            )
 
-    styles = load_styles()
-    intake = IntakeProcessor(
-        gateway,
-        patch_policy=policies[LLMTask.INTAKE_PATCH],
-        response_policy=policies[LLMTask.INTAKE_RESPONSE],
-    )
-    assessment = AssessmentProcessor(
-        gateway,
-        assessment_policy=policies[LLMTask.ASSESSMENT],
-    )
-    therapy = TherapyProcessor(
-        gateway,
-        response_policy=policies[LLMTask.THERAPY_RESPONSE],
-    )
-    post_session = PostSessionProcessor(
-        gateway,
-        analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
-        update_policy=policies[LLMTask.POST_SESSION_UPDATE],
-    )
-    events = EventStream(max_queue_size=settings.event_queue_size)
+        styles = load_styles()
+        intake = IntakeProcessor(
+            gateway,
+            patch_policy=policies[LLMTask.INTAKE_PATCH],
+            response_policy=policies[LLMTask.INTAKE_RESPONSE],
+        )
+        assessment = AssessmentProcessor(
+            gateway,
+            assessment_policy=policies[LLMTask.ASSESSMENT],
+        )
+        therapy = TherapyProcessor(
+            gateway,
+            response_policy=policies[LLMTask.THERAPY_RESPONSE],
+        )
+        post_session = PostSessionProcessor(
+            gateway,
+            analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
+            update_policy=policies[LLMTask.POST_SESSION_UPDATE],
+        )
+        events = EventStream(max_queue_size=settings.event_queue_size)
 
-    async with TaskSupervisor() as supervisor:
-        application = TherapyApplication(
-            store=store,
-            intake=intake,
-            assessment=assessment,
-            therapy=therapy,
-            post_session=post_session,
-            styles=styles,
-            events=events,
-            supervisor=supervisor,
-            now=now or _default_now,
-            new_id=new_id or _default_new_id,
-        )
-        await application.recover_on_startup()
-        runtime = ApplicationRuntime(
-            application=application,
-            events=events,
-            supervisor=supervisor,
-            llm=llm,
-        )
-        try:
-            yield runtime
-        finally:
-            application.begin_shutdown()
-            await supervisor.shutdown(timeout_seconds=settings.shutdown_timeout_seconds)
-            await llm.aclose()
+        async with TaskSupervisor() as supervisor:
+            application = TherapyApplication(
+                store=store,
+                intake=intake,
+                assessment=assessment,
+                therapy=therapy,
+                post_session=post_session,
+                styles=styles,
+                events=events,
+                supervisor=supervisor,
+                now=now or _default_now,
+                new_id=new_id or _default_new_id,
+            )
+            await application.recover_on_startup()
+            runtime = ApplicationRuntime(
+                application=application,
+                events=events,
+                supervisor=supervisor,
+                llm=llm,
+            )
+            try:
+                yield runtime
+            finally:
+                application.begin_shutdown()
+                await supervisor.shutdown(
+                    timeout_seconds=settings.shutdown_timeout_seconds
+                )
+    finally:
+        await llm.aclose()

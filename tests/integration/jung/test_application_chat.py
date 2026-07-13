@@ -402,7 +402,7 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
 
     def gated_accept(*args, **kwargs):
         gate.set()
-        release.wait(timeout=2.0)
+        release.wait()
         return original_accept(*args, **kwargs)
 
     monkeypatch.setattr(store, "accept_chat_message", gated_accept)

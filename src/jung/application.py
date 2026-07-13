@@ -297,46 +297,63 @@ class TherapyApplication:
     async def end_session(self, command: EndSession) -> AppSnapshot:
         self._reject_if_shutdown()
         operation_id = self._new_id()
-        async with self._mutation_lock:
-            self._reject_if_shutdown()
-            facts = await self._run_store(self._store.load_snapshot_facts)
-            workflow.require_command_allowed(CommandName.END_SESSION, facts)
-            active = await self._run_store(self._store.get_active_session)
-            if active is None or active.id != command.session_id:
-                raise InvalidCommand("session_id does not match the active session")
-            if active.kind is not SessionKind.THERAPY:
-                raise InvalidCommand("active session is not therapy")
-            _, operation = await self._run_store(
-                self._store.end_therapy_session,
-                expected_revision=command.expected_revision,
-                session_id=command.session_id,
-                operation_id=operation_id,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        await self._handoff_pending_operation(operation, snapshot)
-        return snapshot
+        operation: Operation | None = None
+        snapshot: AppSnapshot | None = None
+        try:
+            async with self._mutation_lock:
+                self._reject_if_shutdown()
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                workflow.require_command_allowed(CommandName.END_SESSION, facts)
+                active = await self._run_store(self._store.get_active_session)
+                if active is None or active.id != command.session_id:
+                    raise InvalidCommand("session_id does not match the active session")
+                if active.kind is not SessionKind.THERAPY:
+                    raise InvalidCommand("active session is not therapy")
+                _, operation = await self._run_store(
+                    self._store.end_therapy_session,
+                    expected_revision=command.expected_revision,
+                    session_id=command.session_id,
+                    operation_id=operation_id,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+            await self._publish_pending_operation_changed(operation, snapshot)
+            return snapshot
+        finally:
+            if operation is not None:
+                self._schedule_operation(operation)
 
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
         self._reject_if_shutdown()
-        async with self._mutation_lock:
-            self._reject_if_shutdown()
-            facts = await self._run_store(self._store.load_snapshot_facts)
-            workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
-            current = await self._run_store(self._store.get_current_operation)
-            if current is None or current.id != command.operation_id:
-                raise InvalidCommand("operation is not the current failed operation")
-            if current.status is not OperationStatus.FAILED or not current.retryable:
-                raise InvalidCommand("operation is not retryable")
-            operation = await self._run_store(
-                self._store.retry_operation,
-                command.operation_id,
-                expected_revision=command.expected_revision,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        await self._handoff_pending_operation(operation, snapshot)
-        return snapshot
+        operation: Operation | None = None
+        snapshot: AppSnapshot | None = None
+        try:
+            async with self._mutation_lock:
+                self._reject_if_shutdown()
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
+                current = await self._run_store(self._store.get_current_operation)
+                if current is None or current.id != command.operation_id:
+                    raise InvalidCommand(
+                        "operation is not the current failed operation"
+                    )
+                if (
+                    current.status is not OperationStatus.FAILED
+                    or not current.retryable
+                ):
+                    raise InvalidCommand("operation is not retryable")
+                operation = await self._run_store(
+                    self._store.retry_operation,
+                    command.operation_id,
+                    expected_revision=command.expected_revision,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+            await self._publish_pending_operation_changed(operation, snapshot)
+            return snapshot
+        finally:
+            if operation is not None:
+                self._schedule_operation(operation)
 
     async def submit_message(self, command: SendMessage) -> ChatTurn:
         self._reject_if_shutdown()
@@ -606,7 +623,7 @@ class TherapyApplication:
                 type(event).__name__,
             )
 
-    async def _handoff_pending_operation(
+    async def _publish_pending_operation_changed(
         self,
         operation: Operation,
         snapshot: AppSnapshot,
@@ -620,8 +637,6 @@ class TherapyApplication:
                 "failed to publish pending operation event operation_id=%s",
                 operation.id,
             )
-        finally:
-            self._schedule_operation(operation)
 
     def _operation_task_name(self, operation: Operation) -> str:
         return f"operation:{operation.id}:attempt:{operation.attempt + 1}"
@@ -795,19 +810,22 @@ class TherapyApplication:
     ) -> None:
         assistant_message_id = self._new_id()
         operation_id = self._new_id()
-        async with self._mutation_lock:
-            turn, operation, _state = await self._run_store(
-                self._store.complete_final_intake_turn,
-                turn_id,
-                assistant_message_id=assistant_message_id,
-                content=content,
-                intake_record=intake_record.model_dump(mode="json"),
-                operation_id=operation_id,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        assistant_message = await self._load_message(session_id, assistant_message_id)
+        operation: Operation | None = None
         try:
+            async with self._mutation_lock:
+                turn, operation, _state = await self._run_store(
+                    self._store.complete_final_intake_turn,
+                    turn_id,
+                    assistant_message_id=assistant_message_id,
+                    content=content,
+                    intake_record=intake_record.model_dump(mode="json"),
+                    operation_id=operation_id,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+            assistant_message = await self._load_message(
+                session_id, assistant_message_id
+            )
             await self._publish_non_authoritative(
                 ChatTurnCompleted(
                     session_id=session_id,
@@ -821,7 +839,8 @@ class TherapyApplication:
             )
             await self._publish_non_authoritative(SnapshotChanged(snapshot))
         finally:
-            self._schedule_operation(operation)
+            if operation is not None:
+                self._schedule_operation(operation)
 
     async def _persist_chat_failure_if_pending(
         self,

@@ -22,6 +22,8 @@ FORBIDDEN_CLASS_NAMES = (
     "ServiceContainer",
     "AgentFactory",
     "RepositoryFactory",
+    "AgentResponse",
+    "UserContext",
 )
 
 FORBIDDEN_CREATE_TASK = "asyncio.create_task("
@@ -105,6 +107,9 @@ def validate() -> list[str]:
                 errors.append(f"{rel} imports forbidden module {module}")
             if module.startswith("psychoanalyst_app."):
                 errors.append(f"{rel} imports legacy {module}")
+        for name in _class_names(path):
+            if name in FORBIDDEN_CLASS_NAMES:
+                errors.append(f"{rel} defines forbidden class {name}")
 
     for path in PHASE4_RUNTIME:
         if not path.exists():
@@ -113,9 +118,6 @@ def validate() -> list[str]:
         rel = path.relative_to(ROOT)
         if _contains_detached_create_task(path):
             errors.append(f"{rel} uses detached {FORBIDDEN_CREATE_TASK}")
-        for name in _class_names(path):
-            if name in FORBIDDEN_CLASS_NAMES:
-                errors.append(f"{rel} defines forbidden class {name}")
 
     return errors
 

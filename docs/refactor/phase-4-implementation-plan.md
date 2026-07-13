@@ -710,7 +710,7 @@ It should:
 12. construct `TherapyApplication`;
 13. run startup recovery;
 14. yield the application/runtime components;
-15. perform bounded shutdown and close the concrete LLM client.
+15. perform bounded shutdown and close the concrete LLM client in an outer `finally` that begins immediately after client construction (covers startup failures in style loading, processor construction, supervisor entry, application construction, and `recover_on_startup()`).
 
 Strict schema conversion uses a schema-node allowlist: structural keys (`type`, `properties`, `required`, `additionalProperties`, `items`, `$defs`, `$ref`, `anyOf`, `enum`, `description`), constraint keys including `minLength`/`maxLength`, and strips `default`/`title`. Unknown keywords on schema nodes fail preflight with `UnsupportedStrictSchema`.
 
@@ -810,8 +810,10 @@ Flow:
 6. assemble snapshot;
 7. release lock;
 8. publish `OperationChanged` for the pending operation;
-9. schedule operation execution;
+9. schedule operation execution in an outer `finally` that begins once step 5 returns the `Operation` (covers assemble, publication failures, and cancellation after commit);
 10. return snapshot.
+
+Cancellation inside the store write before the `Operation` is returned remains restart-recovery policy.
 
 ### 12.5 `retry_operation`
 
@@ -824,7 +826,7 @@ Flow:
 5. assemble snapshot;
 6. release lock;
 7. publish `OperationChanged`;
-8. schedule the same operation ID;
+8. schedule the same operation ID in an outer `finally` that begins once step 4 returns the `Operation` (covers assemble, publication failures, and cancellation after commit);
 9. return snapshot.
 
 Retry never creates a second operation row and never duplicates result artifacts.
@@ -954,11 +956,13 @@ When `IntakeTurnPlan.completeness_complete` is true:
 12. publish `ChatTurnCompleted`;
 13. publish `OperationChanged` for the pending assessment;
 14. publish authoritative `SnapshotChanged`;
-15. schedule assessment execution.
+15. schedule assessment execution in an outer `finally` that begins once step 7 returns the `Operation` (covers assemble, `_load_message`, and publication failures after commit).
 
-Use an explicit publish-then-schedule sequence in `_complete_final_intake()`. Do not route final intake through `_handoff_pending_operation()` — scheduling in that helper's `finally` would allow the assessment worker to publish `OperationChanged(RUNNING/COMPLETE)` before the authoritative `SnapshotChanged(ASSESSMENT)` event.
+Use an explicit publish-then-schedule sequence in `_complete_final_intake()`. Do not route final intake through `_publish_pending_operation_changed()` — that helper is reserved for `end_session()` and `retry_operation()` only.
 
-`_handoff_pending_operation()` is reserved for `end_session()` and `retry_operation()` only: publish pending `OperationChanged`, then schedule in `finally` even when publication fails or is cancelled.
+`_publish_pending_operation_changed()` publishes pending `OperationChanged` only; callers own scheduling in an outer `finally` even when publication fails or is cancelled. For `end_session()`, `retry_operation()`, and `_complete_final_intake()`, scheduling ownership begins as soon as the durable write returns the `Operation`; no later await may bypass worker admission.
+
+Cancellation inside the store write before the `Operation` is returned remains restart-recovery policy.
 
 There must be no externally observable committed state in which the intake turn is complete, the processor declared intake complete, but the application remains indefinitely in `INTAKE` without assessment work.
 
@@ -1541,6 +1545,11 @@ Integration tests added in round-2 remediation:
 - `test_submit_message_cancel_during_accepted_event_publication`;
 - `test_end_session_schedules_operation_when_publish_cancelled`;
 - `test_retry_operation_schedules_operation_when_publish_fails`;
+- `test_end_session_schedules_when_assemble_cancelled`;
+- `test_retry_operation_schedules_when_assemble_raises`;
+- `test_final_intake_schedules_when_load_message_fails`;
+- `test_application_context_closes_llm_when_load_styles_fails`;
+- `test_application_context_closes_llm_when_recover_on_startup_fails`;
 - `test_application_context_rejects_unsupported_schema`;
 - `test_full_intake_lifecycle_through_application`;
 - `test_failed_chat_retry_uses_persisted_original_content` plus busy-retry and structural-eligibility cases.
