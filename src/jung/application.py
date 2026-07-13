@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum, auto
 from types import MappingProxyType
 from typing import Any
 from uuid import UUID
@@ -67,13 +69,26 @@ from jung.phases.post_session.models import PostSessionInput
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.therapy.processor import TherapyProcessor
-from jung.phases.transcript import TranscriptTurn
+from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
 from jung.supervisor import SupervisorClosed, TaskSupervisor
 
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
+
+
+class ChatScheduleOutcomeKind(Enum):
+    STARTED = auto()
+    SUPERVISOR_CLOSED = auto()
+    DUPLICATE_ACTIVE = auto()
+    UNEXPECTED = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class ChatScheduleOutcome:
+    kind: ChatScheduleOutcomeKind
+    error: BaseException | None = None
 
 
 class TherapyApplication:
@@ -104,7 +119,6 @@ class TherapyApplication:
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
-        self._ready = False
 
     @property
     def is_shutdown(self) -> bool:
@@ -131,8 +145,7 @@ class TherapyApplication:
             snapshot = await self._assemble_snapshot_locked()
         if snapshot.current_operation is not None:
             if snapshot.current_operation.status is OperationStatus.PENDING:
-                self._schedule_operation(snapshot.current_operation.id)
-        self._ready = True
+                self._schedule_operation(snapshot.current_operation)
         return snapshot
 
     async def get_snapshot(self) -> AppSnapshot:
@@ -166,16 +179,19 @@ class TherapyApplication:
         return await self._run_store(self._store.list_sessions)
 
     async def get_session_history(self, session_id: UUID) -> SessionHistory:
-        session = await self._run_store(self._store.get_session, session_id)
-        if session is None:
-            raise NotFound(f"session {session_id}")
-        messages = await self._run_store(self._store.list_messages, session_id)
-        plans = await self._run_store(self._store.list_plans_for_session, session_id)
-        return SessionHistory(
-            session=session,
-            messages=tuple(messages),
-            plans=tuple(plans),
-        )
+        async with self._mutation_lock:
+            session = await self._run_store(self._store.get_session, session_id)
+            if session is None:
+                raise NotFound(f"session {session_id}")
+            messages = await self._run_store(self._store.list_messages, session_id)
+            plans = await self._run_store(
+                self._store.list_plans_for_session, session_id
+            )
+            return SessionHistory(
+                session=session,
+                messages=tuple(messages),
+                plans=tuple(plans),
+            )
 
     async def get_chat_turn(self, turn_id: UUID) -> ChatTurn:
         turn = await self._run_store(self._store.get_chat_turn, turn_id)
@@ -186,6 +202,7 @@ class TherapyApplication:
     async def update_profile(self, command: UpdateProfile) -> AppSnapshot:
         self._reject_if_shutdown()
         async with self._mutation_lock:
+            self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
             await self._run_store(
@@ -203,6 +220,7 @@ class TherapyApplication:
         if command.style_id not in self._styles:
             raise InvalidCommand(f"unknown style: {command.style_id}")
         async with self._mutation_lock:
+            self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.SELECT_STYLE, facts)
             operation = await self._run_store(
@@ -239,6 +257,7 @@ class TherapyApplication:
         self._reject_if_shutdown()
         session_id = self._new_id()
         async with self._mutation_lock:
+            self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.START_SESSION, facts)
             _, session = await self._run_store(
@@ -255,6 +274,7 @@ class TherapyApplication:
         self._reject_if_shutdown()
         operation_id = self._new_id()
         async with self._mutation_lock:
+            self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.END_SESSION, facts)
             active = await self._run_store(self._store.get_active_session)
@@ -271,12 +291,13 @@ class TherapyApplication:
             )
             snapshot = await self._assemble_snapshot_locked()
         await self._events.publish(OperationChanged(operation, snapshot))
-        self._schedule_operation(operation.id)
+        self._schedule_operation(operation)
         return snapshot
 
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
         self._reject_if_shutdown()
         async with self._mutation_lock:
+            self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
             current = await self._run_store(self._store.get_current_operation)
@@ -292,7 +313,7 @@ class TherapyApplication:
             )
             snapshot = await self._assemble_snapshot_locked()
         await self._events.publish(OperationChanged(operation, snapshot))
-        self._schedule_operation(operation.id)
+        self._schedule_operation(operation)
         return snapshot
 
     async def submit_message(self, command: SendMessage) -> ChatTurn:
@@ -302,6 +323,7 @@ class TherapyApplication:
         turn: ChatTurn | None = None
         try:
             async with self._mutation_lock:
+                self._reject_if_shutdown()
                 existing = await self._run_store(
                     self._store.get_chat_turn_by_client_id,
                     command.session_id,
@@ -337,6 +359,10 @@ class TherapyApplication:
 
                 if turn is None:
                     facts = await self._run_store(self._store.load_snapshot_facts)
+                    if facts.chat_turn_status is ChatTurnStatus.PENDING:
+                        raise Busy("another chat generation is active")
+                    if self._generation_lock.locked():
+                        raise Busy("another chat generation is active")
                     workflow.require_command_allowed(CommandName.SEND_MESSAGE, facts)
                     if not command.content.strip():
                         raise InvalidCommand("message content must be non-empty")
@@ -370,10 +396,37 @@ class TherapyApplication:
             raise
 
         assert turn is not None
-        for event in pending_events:
-            await self._events.publish(event)
-        self._schedule_chat(turn.id, turn.session_id, command.request_id)
-        return turn
+        if not pending_events:
+            return turn
+        return await self._handoff_accepted_chat_turn(
+            turn,
+            pending_events,
+            command.request_id,
+        )
+
+    async def _handoff_accepted_chat_turn(
+        self,
+        turn: ChatTurn,
+        pending_events: list[Any],
+        request_id: UUID | None,
+    ) -> ChatTurn:
+        try:
+            for event in pending_events:
+                await self._events.publish(event)
+        except asyncio.CancelledError:
+            outcome = self._try_start_chat_worker(turn, request_id=request_id)
+            if outcome.kind is ChatScheduleOutcomeKind.STARTED:
+                raise
+            self._release_generation_lock()
+            raise
+        except Exception:
+            logger.exception(
+                "failed to publish accepted chat events turn_id=%s",
+                turn.id,
+            )
+
+        outcome = self._try_start_chat_worker(turn, request_id=request_id)
+        return await self._resolve_chat_schedule_outcome(turn, outcome)
 
     async def _assemble_snapshot_locked(self) -> AppSnapshot:
         return await self._run_store(self._build_snapshot)
@@ -423,30 +476,87 @@ class TherapyApplication:
         if self._generation_lock.locked():
             self._generation_lock.release()
 
-    def _schedule_chat(
+    def _try_start_chat_worker(
         self,
-        turn_id: UUID,
-        session_id: UUID,
+        turn: ChatTurn,
+        *,
         request_id: UUID | None,
-    ) -> None:
-        name = f"chat:{turn_id}"
+    ) -> ChatScheduleOutcome:
+        name = f"chat:{turn.id}"
         try:
-            self._supervisor.start(
+            started = self._supervisor.start(
                 name=name,
-                run=lambda: self._run_chat_worker(turn_id, session_id, request_id),
+                run=lambda: self._run_chat_worker(
+                    turn.id,
+                    turn.session_id,
+                    request_id,
+                ),
             )
         except SupervisorClosed:
-            self._release_generation_lock()
+            return ChatScheduleOutcome(ChatScheduleOutcomeKind.SUPERVISOR_CLOSED)
+        except Exception as exc:
+            return ChatScheduleOutcome(ChatScheduleOutcomeKind.UNEXPECTED, exc)
+        if started:
+            return ChatScheduleOutcome(ChatScheduleOutcomeKind.STARTED)
+        return ChatScheduleOutcome(ChatScheduleOutcomeKind.DUPLICATE_ACTIVE)
 
-    def _schedule_operation(self, operation_id: UUID) -> None:
-        name = f"operation:{operation_id}"
-        try:
-            self._supervisor.start(
-                name=name,
-                run=lambda: self._run_operation_worker(operation_id),
+    async def _resolve_chat_schedule_outcome(
+        self,
+        turn: ChatTurn,
+        outcome: ChatScheduleOutcome,
+    ) -> ChatTurn:
+        if outcome.kind is ChatScheduleOutcomeKind.STARTED:
+            return turn
+        if outcome.kind is ChatScheduleOutcomeKind.SUPERVISOR_CLOSED:
+            self._release_generation_lock()
+            return turn
+        self._release_generation_lock()
+        return await self._persist_chat_schedule_failure(turn)
+
+    async def _persist_chat_schedule_failure(self, turn: ChatTurn) -> ChatTurn:
+        async with self._mutation_lock:
+            failed = await self._run_store(
+                self._store.fail_chat_turn,
+                turn.id,
+                error_code="internal_error",
+                error_message="Failed to schedule chat generation",
+                retryable=True,
+                now=self._now(),
             )
+            snapshot = await self._assemble_snapshot_locked()
+        await self._events.publish(
+            ChatTurnFailed(
+                session_id=turn.session_id,
+                turn_id=turn.id,
+                turn=failed,
+            )
+        )
+        await self._events.publish(SnapshotChanged(snapshot))
+        return failed
+
+    def _operation_task_name(self, operation: Operation) -> str:
+        return f"operation:{operation.id}:attempt:{operation.attempt + 1}"
+
+    def _schedule_operation(self, operation: Operation) -> None:
+        name = self._operation_task_name(operation)
+        try:
+            started = self._supervisor.start(
+                name=name,
+                run=lambda: self._run_operation_worker(operation.id),
+            )
+            if not started:
+                logger.debug(
+                    "operation attempt already scheduled operation_id=%s name=%s",
+                    operation.id,
+                    name,
+                )
         except SupervisorClosed:
             return
+        except Exception:
+            logger.exception(
+                "failed to schedule operation operation_id=%s",
+                operation.id,
+            )
 
     async def _run_chat_worker(
         self,
@@ -472,7 +582,7 @@ class TherapyApplication:
                 turn_id,
                 session_id,
             )
-            await self._persist_chat_failure(turn_id, session_id, exc)
+            await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
         finally:
             self._release_generation_lock()
 
@@ -608,19 +718,26 @@ class TherapyApplication:
             )
             snapshot = await self._assemble_snapshot_locked()
         assistant_message = await self._load_message(session_id, assistant_message_id)
-        await self._events.publish(
-            ChatTurnCompleted(
-                session_id=session_id,
-                turn_id=turn_id,
-                turn=turn,
-                assistant_message=assistant_message,
+        try:
+            await self._events.publish(
+                ChatTurnCompleted(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn=turn,
+                    assistant_message=assistant_message,
+                )
             )
-        )
-        await self._events.publish(OperationChanged(operation, snapshot))
-        await self._events.publish(SnapshotChanged(snapshot))
-        self._schedule_operation(operation.id)
+            await self._events.publish(OperationChanged(operation, snapshot))
+            await self._events.publish(SnapshotChanged(snapshot))
+        except Exception:
+            logger.exception(
+                "failed to publish final intake events turn_id=%s",
+                turn_id,
+            )
+        finally:
+            self._schedule_operation(operation)
 
-    async def _persist_chat_failure(
+    async def _persist_chat_failure_if_pending(
         self,
         turn_id: UUID,
         session_id: UUID,
@@ -628,6 +745,14 @@ class TherapyApplication:
     ) -> None:
         code, message, retryable = _classify_worker_error(exc)
         async with self._mutation_lock:
+            current = await self._run_store(self._store.get_chat_turn, turn_id)
+            if current is None or current.status is not ChatTurnStatus.PENDING:
+                logger.exception(
+                    "chat worker failed after turn left pending turn_id=%s",
+                    turn_id,
+                    exc_info=exc,
+                )
+                return
             turn = await self._run_store(
                 self._store.fail_chat_turn,
                 turn_id,
@@ -643,6 +768,7 @@ class TherapyApplication:
         await self._events.publish(SnapshotChanged(snapshot))
 
     async def _run_operation_worker(self, operation_id: UUID) -> None:
+        running_owned = False
         try:
             async with self._mutation_lock:
                 operation = await self._run_store(
@@ -656,8 +782,15 @@ class TherapyApplication:
                     operation_id,
                     now=self._now(),
                 )
+                running_owned = True
                 snapshot = await self._assemble_snapshot_locked()
-            await self._events.publish(OperationChanged(operation, snapshot))
+            try:
+                await self._events.publish(OperationChanged(operation, snapshot))
+            except Exception:
+                logger.exception(
+                    "failed to publish operation running event operation_id=%s",
+                    operation_id,
+                )
 
             if operation.kind is OperationKind.ASSESSMENT:
                 assessment_input = await self._build_assessment_input(operation)
@@ -724,19 +857,33 @@ class TherapyApplication:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception(
-                "operation worker failed operation_id=%s",
-                operation_id,
-            )
-            await self._persist_operation_failure(operation_id, exc)
+            if running_owned:
+                logger.exception(
+                    "operation worker failed operation_id=%s",
+                    operation_id,
+                )
+                await self._persist_operation_failure_if_running(operation_id, exc)
+            else:
+                logger.exception(
+                    "operation ownership transition failed operation_id=%s",
+                    operation_id,
+                )
 
-    async def _persist_operation_failure(
+    async def _persist_operation_failure_if_running(
         self,
         operation_id: UUID,
         exc: Exception,
     ) -> None:
         code, message, retryable = _classify_worker_error(exc)
         async with self._mutation_lock:
+            current = await self._run_store(self._store.get_operation, operation_id)
+            if current is None or current.status is not OperationStatus.RUNNING:
+                logger.exception(
+                    "operation worker failed after row left running operation_id=%s",
+                    operation_id,
+                    exc_info=exc,
+                )
+                return
             operation = await self._run_store(
                 self._store.fail_operation,
                 operation_id,
@@ -746,7 +893,13 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(OperationChanged(operation, snapshot))
+        try:
+            await self._events.publish(OperationChanged(operation, snapshot))
+        except Exception:
+            logger.exception(
+                "failed to publish operation failure event operation_id=%s",
+                operation_id,
+            )
 
     async def _build_intake_turn_input(self, session_id: UUID) -> IntakeTurnInput:
         stored = await self._run_store(self._store.get_profile)
@@ -754,7 +907,7 @@ class TherapyApplication:
         if stored is None or session is None:
             raise NotFound(f"session {session_id}")
         messages = await self._run_store(self._store.list_messages, session_id)
-        transcript = _messages_to_transcript(messages)
+        transcript = messages_to_transcript(messages)
         latest_user = _latest_user_message_content(messages)
         previous_assistant = _previous_assistant_message_content(messages)
         record = _load_intake_record(session)
@@ -780,7 +933,7 @@ class TherapyApplication:
         if style is None:
             raise InvariantViolation(f"unknown style: {plan.selected_style}")
         messages = await self._run_store(self._store.list_messages, session_id)
-        transcript = _messages_to_transcript(messages)
+        transcript = messages_to_transcript(messages)
         latest_user = _latest_user_message_content(messages)
         if latest_user is None:
             raise InvariantViolation("therapy turn requires a user message")
@@ -818,7 +971,7 @@ class TherapyApplication:
         )
         return AssessmentInput(
             intake_record=_load_intake_record(session),
-            transcript=_messages_to_transcript(messages),
+            transcript=messages_to_transcript(messages),
             profile=stored.profile,
             available_styles=tuple(self._styles.values()),
         )
@@ -847,7 +1000,7 @@ class TherapyApplication:
         )
         sessions = await self._run_store(self._store.list_sessions)
         return PostSessionInput(
-            transcript=_messages_to_transcript(messages),
+            transcript=messages_to_transcript(messages),
             current_plan=plan,
             profile=stored.profile,
             derived_profile=stored.derived_profile,
@@ -883,26 +1036,6 @@ class TherapyApplication:
             if message.id == message_id:
                 return message
         raise NotFound(f"message {message_id}")
-
-
-def _messages_to_transcript(messages: list[Message]) -> tuple[TranscriptTurn, ...]:
-    turns: list[TranscriptTurn] = []
-    for message in messages:
-        if message.role is MessageRole.USER:
-            role = "user"
-        elif message.role is MessageRole.ASSISTANT:
-            role = "assistant"
-        else:
-            continue
-        turns.append(
-            TranscriptTurn(
-                message_id=message.id,
-                sequence=message.sequence,
-                role=role,
-                content=message.content,
-            )
-        )
-    return tuple(turns)
 
 
 def _latest_user_message_content(messages: list[Message]) -> str | None:
