@@ -259,7 +259,7 @@ Phase 4 begins only when:
 
 - Phase 2 domain, workflow, and persistence tests pass;
 - Phase 3 gateway, style, and processor tests pass;
-- the Phase 3 local-model acceptance smoke has been recorded for the intended runtime configuration;
+- the Phase 3 strict `json_schema` local-model acceptance smoke has been recorded for the branch commit that changed provider-schema transformation and composition preflight (prior Phase 3 compatibility alone is insufficient once Phase 4 alters the provider payload);
 - no target module imports the legacy runtime;
 - no unresolved ADR-level question remains about application, task, event, or recovery ownership;
 - the target processor contracts are stable;
@@ -1597,11 +1597,25 @@ The Phase 4 PR should also run:
 - Phase 1 characterization tests proving the still-running legacy product was not changed;
 - standard repository finalization once.
 
-A real local model is not required for mandatory Phase 4 CI because Phase 3 already validated provider compatibility. A small optional Phase 4 local smoke may be used to verify full application wiring, but it must not replace deterministic `FakeLLM` integration tests.
+Deterministic Phase 4 CI uses `FakeLLM` and does not require a real local model. For this Phase 4 branch, however, the existing Phase 3 strict-schema smoke is a **manual pre-merge gate** because Phase 4 changed `structured.py` (allowlist, metadata handling) and composition preflight. Run:
 
-## 25. Optional local application smoke
+```bash
+PHASE3_SMOKE_STRUCTURED_MODE=json_schema \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=1 \
+make smoke-refactor-phase-3-local-llm
+```
 
-Provide only if it adds value beyond the Phase 3 processor smoke:
+Attach to the PR:
+
+- the exact `PHASE3_SMOKE_EVIDENCE=...` terminal line;
+- the commit SHA the smoke was run against;
+- key parameters (`structured_mode`, `strict_acceptance`, `server`, `model`, `base_url`).
+
+Re-run smoke when production schema transformation, policy construction, adapter formatting, or model definitions change. Docs, Makefile, and test-only follow-up commits do not require a rerun if smoke already passed on the preceding production-code commit.
+
+## 25. Optional full-application local smoke
+
+A future Phase 4 full-application local-model smoke (`make smoke-refactor-phase-4-local-llm`) is **optional** and does not replace the mandatory Phase 3 strict `json_schema` processor smoke above. Provide only if it adds value beyond the Phase 3 processor smoke:
 
 ```text
 make smoke-refactor-phase-4-local-llm
@@ -1839,6 +1853,7 @@ All criteria are blocking:
 - [ ] Pending operations are scheduled exactly once after startup.
 - [ ] Bounded shutdown leaves interrupted work recoverable.
 - [ ] Full application workflows pass with real `SQLiteStore` and `FakeLLM`.
+- [ ] Strict `json_schema` local-model smoke recorded; `PHASE3_SMOKE_EVIDENCE` attached to PR with commit SHA and parameters.
 - [ ] No target core module imports legacy orchestration, Trio, API, client, or provider-specific code outside `llm/`.
 - [ ] The running legacy product remains unchanged pending Phase 5 cutover.
 

@@ -209,6 +209,7 @@ phase-4-test: prepare-runtime-dirs
 		tests/unit/jung/test_supervisor.py \
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/llm/test_structured_output.py \
 		tests/integration/jung/test_application_workflow.py \
 		tests/integration/jung/test_application_chat.py \
 		tests/integration/jung/test_application_operations.py \
@@ -227,6 +228,7 @@ validate-refactor-phase-4: prepare-runtime-dirs
 		src/jung/events.py \
 		src/jung/supervisor.py \
 		src/jung/composition.py \
+		src/jung/llm/structured.py \
 		src/jung/domain/commands.py \
 		src/jung/domain/errors.py \
 		src/jung/domain/models.py \
@@ -238,6 +240,7 @@ validate-refactor-phase-4: prepare-runtime-dirs
 		tests/unit/jung/test_supervisor.py \
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/llm/test_structured_output.py \
 		tests/integration/jung/application_fixtures.py \
 		tests/integration/jung/scenarios.py \
 		tests/integration/jung/test_application_workflow.py \
