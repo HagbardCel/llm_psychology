@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
-from typing import TypeVar
+from dataclasses import dataclass
+from typing import Literal, TypeVar
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
+from jung.llm.async_compat import is_async_cancellation
 from jung.llm.errors import (
     InvalidLLMOutput,
     LLMProtocolError,
@@ -46,6 +50,30 @@ _FORBIDDEN_EXTRA_BODY_KEYS = frozenset(
         "temperature",
     }
 )
+
+
+class _StructuredValidationFailure(InvalidLLMOutput):
+    def __init__(self, message: str, *, trigger: str) -> None:
+        super().__init__(message)
+        self.trigger = trigger
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptEvent:
+    task: str
+    attempt: Literal["initial", "correction"]
+    status: str
+    latency_seconds: float
+    prompt_chars: int
+    response_format_chars: int | None
+    response_chars: int | None
+    timeout_seconds: float
+    max_completion_tokens: int | None
+    correction_trigger: str | None = None
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    error_type: str | None = None
 
 
 def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
@@ -93,6 +121,18 @@ def _classify_provider_error(exc: Exception) -> Exception:
     return LLMProtocolError(str(exc))
 
 
+def _prompt_chars(messages: Sequence[ChatMessage]) -> int:
+    return sum(len(message.content) for message in messages)
+
+
+def _response_format_chars(
+    response_format: dict[str, object] | None,
+) -> int | None:
+    if response_format is None:
+        return None
+    return len(json.dumps(response_format, separators=(",", ":")))
+
+
 class OpenAICompatibleLLM:
     """Direct async OpenAI SDK adapter for Chat Completions-compatible servers."""
 
@@ -101,6 +141,7 @@ class OpenAICompatibleLLM:
         config: AdapterConfig,
         *,
         client: AsyncOpenAI | None = None,
+        on_provider_attempt: Callable[[ProviderAttemptEvent], None] | None = None,
     ) -> None:
         self._config = config
         self._client = client or AsyncOpenAI(
@@ -109,9 +150,21 @@ class OpenAICompatibleLLM:
             max_retries=0,
             default_headers=config.default_headers,
         )
+        self._on_provider_attempt = on_provider_attempt
 
     async def aclose(self) -> None:
         await self._client.close()
+
+    def _emit_provider_attempt(self, event: ProviderAttemptEvent) -> None:
+        if self._on_provider_attempt is None:
+            return
+        try:
+            self._on_provider_attempt(event)
+        except Exception as exc:
+            logger.error(
+                "llm provider attempt observer failed error_type=%s",
+                type(exc).__name__,
+            )
 
     async def stream_text(
         self,
@@ -150,6 +203,7 @@ class OpenAICompatibleLLM:
                 prepared,
                 policy,
                 output_type,
+                attempt="initial",
             )
             return self._validate_result(
                 output_type,
@@ -157,6 +211,10 @@ class OpenAICompatibleLLM:
                 validate_result,
             )
         except InvalidLLMOutput as first_error:
+            if isinstance(first_error, _StructuredValidationFailure):
+                correction_trigger = first_error.trigger
+            else:
+                correction_trigger = "syntactic_or_schema_validation"
             logger.info(
                 "llm structured correction task=%s model=%s output=%s",
                 policy.task.value,
@@ -173,12 +231,17 @@ class OpenAICompatibleLLM:
                 correction_messages,
                 policy,
                 output_type,
+                attempt="correction",
+                correction_trigger=correction_trigger,
             )
-            return self._validate_result(
-                output_type,
-                corrected,
-                validate_result,
-            )
+            try:
+                return self._validate_result(
+                    output_type,
+                    corrected,
+                    validate_result,
+                )
+            except _StructuredValidationFailure as exc:
+                raise InvalidLLMOutput(str(exc)) from exc
 
     def _validate_result(
         self,
@@ -186,7 +249,13 @@ class OpenAICompatibleLLM:
         text: str,
         validate_result: Callable[[T], T] | None,
     ) -> T:
-        parsed = validate_structured_text(output_type, text)
+        try:
+            parsed = validate_structured_text(output_type, text)
+        except InvalidLLMOutput as exc:
+            raise _StructuredValidationFailure(
+                str(exc),
+                trigger="syntactic_or_schema_validation",
+            ) from exc
         if validate_result is None:
             return parsed
         try:
@@ -194,7 +263,10 @@ class OpenAICompatibleLLM:
         except InvalidLLMOutput:
             raise
         except (ValueError, ValidationError) as exc:
-            raise InvalidLLMOutput(format_semantic_error(exc)) from exc
+            raise _StructuredValidationFailure(
+                format_semantic_error(exc),
+                trigger="semantic_validation",
+            ) from exc
 
     def _prepare_structured_messages(
         self,
@@ -235,6 +307,9 @@ class OpenAICompatibleLLM:
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
         output_type: type[BaseModel],
+        *,
+        attempt: Literal["initial", "correction"],
+        correction_trigger: str | None = None,
     ) -> str:
         request = self._base_request(messages, policy)
         request["stream"] = False
@@ -244,13 +319,100 @@ class OpenAICompatibleLLM:
         )
         if response_format is not None:
             request["response_format"] = response_format
+
+        prompt_char_count = _prompt_chars(messages)
+        format_char_count = _response_format_chars(response_format)
+        started = time.perf_counter()
+        status = "error"
+        error_type: str | None = None
+        response_chars: int | None = None
+        finish_reason: str | None = None
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+
+        logger.info(
+            "llm provider request start task=%s attempt=%s mode=%s "
+            "prompt_chars=%s timeout=%s max_completion_tokens=%s",
+            policy.task.value,
+            attempt,
+            policy.structured_output_mode.value,
+            prompt_char_count,
+            policy.timeout_seconds,
+            policy.max_completion_tokens,
+        )
+
         try:
             response = await self._client.chat.completions.create(**request)
-        except Exception as exc:
-            raise _classify_provider_error(exc) from exc
-        if not response.choices:
-            raise InvalidLLMOutput("empty provider response")
-        content = response.choices[0].message.content
-        if not content or not str(content).strip():
-            raise InvalidLLMOutput("missing text content")
-        return strip_markdown_json_fence(str(content))
+            if not response.choices:
+                raise InvalidLLMOutput("empty provider response")
+            choice = response.choices[0]
+            content = choice.message.content
+            if not content or not str(content).strip():
+                raise InvalidLLMOutput("missing text content")
+            text = strip_markdown_json_fence(str(content))
+            status = "success"
+            response_chars = len(text)
+            finish_reason = choice.finish_reason
+            if response.usage is not None:
+                prompt_tokens = response.usage.prompt_tokens
+                completion_tokens = response.usage.completion_tokens
+            logger.info(
+                "llm provider request complete task=%s attempt=%s elapsed=%.3fs "
+                "response_chars=%s finish_reason=%s prompt_tokens=%s "
+                "completion_tokens=%s",
+                policy.task.value,
+                attempt,
+                time.perf_counter() - started,
+                response_chars,
+                finish_reason,
+                prompt_tokens,
+                completion_tokens,
+            )
+            return text
+        except BaseException as exc:
+            if is_async_cancellation(exc):
+                status = "cancelled"
+                error_type = "CancelledError"
+                logger.error(
+                    "llm provider request failed task=%s attempt=%s elapsed=%.3fs "
+                    "error_type=%s",
+                    policy.task.value,
+                    attempt,
+                    time.perf_counter() - started,
+                    error_type,
+                )
+                raise
+            classified = _classify_provider_error(exc)
+            if isinstance(classified, LLMTimeout):
+                status = "timeout"
+            else:
+                status = "error"
+            error_type = type(classified).__name__
+            logger.error(
+                "llm provider request failed task=%s attempt=%s elapsed=%.3fs "
+                "error_type=%s",
+                policy.task.value,
+                attempt,
+                time.perf_counter() - started,
+                error_type,
+            )
+            raise classified from exc
+        finally:
+            self._emit_provider_attempt(
+                ProviderAttemptEvent(
+                    task=policy.task.value,
+                    attempt=attempt,
+                    status=status,
+                    latency_seconds=time.perf_counter() - started,
+                    prompt_chars=prompt_char_count,
+                    response_format_chars=format_char_count,
+                    response_chars=response_chars,
+                    timeout_seconds=policy.timeout_seconds,
+                    max_completion_tokens=policy.max_completion_tokens,
+                    correction_trigger=correction_trigger,
+                    finish_reason=finish_reason,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    error_type=error_type,
+                )
+            )

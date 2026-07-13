@@ -23,7 +23,7 @@ from jung.llm.gateway import (
     ModelPolicy,
     StructuredOutputMode,
 )
-from jung.llm.openai_compatible import OpenAICompatibleLLM
+from jung.llm.openai_compatible import OpenAICompatibleLLM, ProviderAttemptEvent
 
 
 class _Answer(BaseModel):
@@ -44,11 +44,15 @@ def _client(
     handler: httpx.MockTransport,
     *,
     config: AdapterConfig | None = None,
+    on_provider_attempt: object | None = None,
 ) -> OpenAICompatibleLLM:
     adapter_config = config or AdapterConfig(
         base_url="http://testserver/v1",
         api_key="test",
     )
+    kwargs: dict[str, object] = {}
+    if on_provider_attempt is not None:
+        kwargs["on_provider_attempt"] = on_provider_attempt
     return OpenAICompatibleLLM(
         adapter_config,
         client=AsyncOpenAI(
@@ -57,6 +61,7 @@ def _client(
             http_client=httpx.AsyncClient(transport=handler),
             max_retries=0,
         ),
+        **kwargs,
     )
 
 
@@ -499,3 +504,155 @@ async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -
             _Answer,
             _policy(),
         )
+
+
+@pytest.mark.asyncio
+async def test_provider_attempt_event_emitted_on_initial_success() -> None:
+    events: list[ProviderAttemptEvent] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "finish_reason": "stop",
+                        "index": 0,
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event.attempt == "initial"
+    assert event.status == "success"
+    assert event.response_chars == len('{"value":"ok"}')
+    assert event.finish_reason == "stop"
+    assert event.prompt_tokens == 10
+    assert event.completion_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_correction_trigger_classified_for_semantic_and_schema_failures() -> None:
+    events: list[ProviderAttemptEvent] = []
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            content = '{"value":"bad"}'
+        else:
+            content = '{"value":"ok"}'
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def validator(result: _Answer) -> _Answer:
+        if result.value != "ok":
+            raise ValueError("semantic mismatch")
+        return result
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+        validate_result=validator,
+    )
+    assert len(events) == 2
+    assert events[1].attempt == "correction"
+    assert events[1].correction_trigger == "semantic_validation"
+
+
+@pytest.mark.asyncio
+async def test_unclassified_invalid_output_uses_schema_correction_trigger() -> None:
+    events: list[ProviderAttemptEvent] = []
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        content = '{"value":"ok"}' if calls["count"] == 2 else ""
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    assert len(events) == 2
+    assert events[1].correction_trigger == "syntactic_or_schema_validation"
+
+
+@pytest.mark.asyncio
+async def test_raising_observer_does_not_corrupt_provider_result() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def broken_observer(_event: ProviderAttemptEvent) -> None:
+        raise RuntimeError("observer bug")
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=broken_observer,
+    )
+    result = await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    assert result.value == "ok"
