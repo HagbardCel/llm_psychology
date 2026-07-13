@@ -224,8 +224,9 @@ independent copies of:
 - processor responsibilities;
 - `LLMGateway` method signatures.
 
-Canonical command names are `update_profile`, `send_message`, `finish_intake`,
-`select_style`, `start_session`, `end_session`, and `retry_operation`. Chat
+Canonical client commands are `update_profile`, `send_message`,
+`select_style`, `start_session`, `end_session`, and `retry_operation`. Intake
+completion is processor-driven during chat, not a client command. Chat
 acceptance returns a durable `ChatTurn` from `submit_message`; live token
 events are published through `EventStream` to API adapters.
 

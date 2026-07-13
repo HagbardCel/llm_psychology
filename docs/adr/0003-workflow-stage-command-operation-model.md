@@ -10,7 +10,7 @@ source_of_truth_for: Target workflow, revision, operation, and chat-turn model
 
 ## Decision
 
-Persist one `Stage`: `SETUP → INTAKE → ASSESSMENT → STYLE_SELECTION → READY → THERAPY → POST_SESSION → READY`. Backend-derived commands are `update_profile`, `send_message`, `finish_intake`, `select_style`, `start_session`, `end_session`, and `retry_operation`.
+Persist one `Stage`: `SETUP → INTAKE → ASSESSMENT → STYLE_SELECTION → READY → THERAPY → POST_SESSION → READY`. Client commands are `update_profile`, `send_message`, `select_style`, `start_session`, `end_session`, and `retry_operation`. Intake completion is processor-driven during chat acceptance, not a separate client command.
 
 `Operation` is reserved for assessment and post-session workflow work. A separate durable `ChatTurn` owns a user message and generated reply with `pending`, `complete`, or `failed` status. Every durable mutation increments snapshot revision.
 
