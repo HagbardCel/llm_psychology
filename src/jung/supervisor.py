@@ -41,12 +41,11 @@ class TaskSupervisor:
         if name in self._active:
             return False
         self._active.add(name)
+        coro = self._run_wrapper(name, run)
         try:
-            task = self._task_group.create_task(
-                self._run_wrapper(name, run),
-                name=name,
-            )
+            task = self._task_group.create_task(coro, name=name)
         except BaseException:
+            coro.close()
             self._active.discard(name)
             raise
         self._tasks[name] = task
