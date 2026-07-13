@@ -143,13 +143,9 @@ class TherapyApplication:
                 except asyncio.CancelledError:
                     continue
                 except Exception:
-                    logger.exception(
-                        "store call failed after caller cancellation function=%s",
-                        getattr(fn, "__name__", repr(fn)),
-                    )
                     break
 
-            if task.done() and not task.cancelled():
+            if not task.cancelled():
                 try:
                     task.result()
                 except Exception:
