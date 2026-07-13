@@ -656,3 +656,117 @@ async def test_raising_observer_does_not_corrupt_provider_result() -> None:
         _policy(),
     )
     assert result.value == "ok"
+
+
+class _UnexpectedProviderBug(RuntimeError):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_unexpected_provider_error_propagates_unchanged_structured() -> None:
+    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    async def boom(**_kwargs: object) -> object:
+        raise _UnexpectedProviderBug("sdk defect")
+
+    gateway._client.chat.completions.create = boom  # type: ignore[method-assign]
+
+    with pytest.raises(_UnexpectedProviderBug, match="sdk defect"):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_provider_error_propagates_unchanged_stream() -> None:
+    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    async def boom(**_kwargs: object) -> object:
+        raise _UnexpectedProviderBug("sdk defect")
+
+    gateway._client.chat.completions.create = boom  # type: ignore[method-assign]
+
+    with pytest.raises(_UnexpectedProviderBug, match="sdk defect"):
+        async for _ in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hello")],
+            _policy(mode=StructuredOutputMode.PROMPT),
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_response_chars_measures_raw_content_before_fence_strip() -> None:
+    events: list[ProviderAttemptEvent] = []
+    fenced = '```json\n{"value":"ok"}\n```'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": fenced},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    assert len(events) == 1
+    assert events[0].response_chars == len(fenced)
+    assert events[0].response_chars != len('{"value":"ok"}')
+
+
+@pytest.mark.asyncio
+async def test_validator_invalid_llm_output_records_semantic_correction_trigger() -> None:
+    events: list[ProviderAttemptEvent] = []
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        content = '{"value":"ok"}' if calls["count"] == 2 else '{"value":"bad"}'
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def validator(result: _Answer) -> _Answer:
+        if result.value != "ok":
+            raise InvalidLLMOutput("semantic mismatch")
+        return result
+
+    gateway = _client(
+        httpx.MockTransport(handler),
+        on_provider_attempt=events.append,
+    )
+    result = await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+        validate_result=validator,
+    )
+    assert result.value == "ok"
+    assert len(events) == 2
+    assert events[1].correction_trigger == "semantic_validation"

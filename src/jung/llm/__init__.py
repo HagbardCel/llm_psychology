@@ -23,7 +23,7 @@ from jung.llm.gateway import (
     ModelPolicy,
     StructuredOutputMode,
 )
-from jung.llm.openai_compatible import OpenAICompatibleLLM, ProviderAttemptEvent
+from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
 from jung.llm.tracing import TracingLLMGateway
 
@@ -43,7 +43,6 @@ __all__ = [
     "LLMUnavailable",
     "ModelPolicy",
     "OpenAICompatibleLLM",
-    "ProviderAttemptEvent",
     "StreamExpectation",
     "StructuredExpectation",
     "StructuredOutputMode",

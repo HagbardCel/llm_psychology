@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -12,7 +13,6 @@ from typing import Literal, TypeVar
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from jung.llm.async_compat import is_async_cancellation
 from jung.llm.errors import (
     InvalidLLMOutput,
     LLMProtocolError,
@@ -101,23 +101,12 @@ def _merge_extra_body(
     return merged or None
 
 
-def _classify_provider_error(exc: Exception) -> Exception:
-    if isinstance(
-        exc,
-        (InvalidLLMOutput, LLMUnavailable, LLMTimeout, LLMProtocolError),
-    ):
-        return exc
-    if isinstance(exc, APITimeoutError):
+def _classify_status_error(exc: APIStatusError) -> Exception:
+    status = exc.status_code
+    if status == 408:
         return LLMTimeout(str(exc))
-    if isinstance(exc, APIConnectionError):
+    if status == 429 or status >= 500:
         return LLMUnavailable(str(exc))
-    if isinstance(exc, APIStatusError):
-        status = exc.status_code
-        if status == 408:
-            return LLMTimeout(str(exc))
-        if status == 429 or status >= 500:
-            return LLMUnavailable(str(exc))
-        return LLMProtocolError(str(exc))
     return LLMProtocolError(str(exc))
 
 
@@ -183,8 +172,12 @@ class OpenAICompatibleLLM:
                 text = chunk.choices[0].delta.content
                 if text:
                     yield text
-        except Exception as exc:
-            raise _classify_provider_error(exc) from exc
+        except APITimeoutError as exc:
+            raise LLMTimeout(str(exc)) from exc
+        except APIConnectionError as exc:
+            raise LLMUnavailable(str(exc)) from exc
+        except APIStatusError as exc:
+            raise _classify_status_error(exc) from exc
 
     async def generate_structured(
         self,
@@ -260,8 +253,11 @@ class OpenAICompatibleLLM:
             return parsed
         try:
             return validate_result(parsed)
-        except InvalidLLMOutput:
-            raise
+        except InvalidLLMOutput as exc:
+            raise _StructuredValidationFailure(
+                str(exc),
+                trigger="semantic_validation",
+            ) from exc
         except (ValueError, ValidationError) as exc:
             raise _StructuredValidationFailure(
                 format_semantic_error(exc),
@@ -349,9 +345,10 @@ class OpenAICompatibleLLM:
             content = choice.message.content
             if not content or not str(content).strip():
                 raise InvalidLLMOutput("missing text content")
-            text = strip_markdown_json_fence(str(content))
+            raw_text = str(content)
+            response_chars = len(raw_text)
+            text = strip_markdown_json_fence(raw_text)
             status = "success"
-            response_chars = len(text)
             finish_reason = choice.finish_reason
             if response.usage is not None:
                 prompt_tokens = response.usage.prompt_tokens
@@ -369,41 +366,44 @@ class OpenAICompatibleLLM:
                 completion_tokens,
             )
             return text
-        except BaseException as exc:
-            if is_async_cancellation(exc):
-                status = "cancelled"
-                error_type = "CancelledError"
-                logger.error(
-                    "llm provider request failed task=%s attempt=%s elapsed=%.3fs "
-                    "error_type=%s",
-                    policy.task.value,
-                    attempt,
-                    time.perf_counter() - started,
-                    error_type,
-                )
-                raise
-            classified = _classify_provider_error(exc)
-            if isinstance(classified, LLMTimeout):
-                status = "timeout"
-            else:
-                status = "error"
+        except asyncio.CancelledError as exc:
+            status = "cancelled"
+            error_type = type(exc).__name__
+            raise
+        except InvalidLLMOutput:
+            status = "error"
+            error_type = "InvalidLLMOutput"
+            raise
+        except APITimeoutError as exc:
+            status = "timeout"
+            error_type = "LLMTimeout"
+            raise LLMTimeout(str(exc)) from exc
+        except APIConnectionError as exc:
+            status = "error"
+            error_type = "LLMUnavailable"
+            raise LLMUnavailable(str(exc)) from exc
+        except APIStatusError as exc:
+            classified = _classify_status_error(exc)
+            status = "timeout" if isinstance(classified, LLMTimeout) else "error"
             error_type = type(classified).__name__
-            logger.error(
-                "llm provider request failed task=%s attempt=%s elapsed=%.3fs "
-                "error_type=%s",
-                policy.task.value,
-                attempt,
-                time.perf_counter() - started,
-                error_type,
-            )
             raise classified from exc
         finally:
+            elapsed = time.perf_counter() - started
+            if status != "success" and error_type is not None:
+                logger.error(
+                    "llm provider request failed task=%s attempt=%s "
+                    "elapsed=%.3fs error_type=%s",
+                    policy.task.value,
+                    attempt,
+                    elapsed,
+                    error_type,
+                )
             self._emit_provider_attempt(
                 ProviderAttemptEvent(
                     task=policy.task.value,
                     attempt=attempt,
                     status=status,
-                    latency_seconds=time.perf_counter() - started,
+                    latency_seconds=elapsed,
                     prompt_chars=prompt_char_count,
                     response_format_chars=format_char_count,
                     response_chars=response_chars,

@@ -7,10 +7,8 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from typing import TypeVar
 
-import anyio
 from pydantic import BaseModel
 
-from jung.llm.async_compat import is_async_cancellation
 from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
 
 T = TypeVar("T", bound=BaseModel)
@@ -27,14 +25,10 @@ class TracingLLMGateway:
         *,
         log_prompt_previews: bool = False,
         preview_chars: int = 200,
-        heartbeat_seconds: float | None = None,
     ) -> None:
-        if heartbeat_seconds is not None and heartbeat_seconds <= 0:
-            raise ValueError("heartbeat_seconds must be positive")
         self._inner = inner
         self._log_prompt_previews = log_prompt_previews
         self._preview_chars = preview_chars
-        self._heartbeat_seconds = heartbeat_seconds
 
     async def stream_text(
         self,
@@ -46,56 +40,20 @@ class TracingLLMGateway:
         chunk_count = 0
         char_count = 0
         self._log_start(policy, "stream_text", messages)
-        heartbeat_scope: anyio.CancelScope | None = None
         try:
-            if self._heartbeat_seconds is not None:
-                heartbeat_scope = anyio.CancelScope()
-                async with anyio.create_task_group() as tg:
-
-                    async def run_heartbeat() -> None:
-                        assert heartbeat_scope is not None
-                        with heartbeat_scope:
-                            await self._heartbeat(
-                                call_type="stream_text",
-                                policy=policy,
-                                started=started,
-                            )
-
-                    tg.start_soon(run_heartbeat)
-                    try:
-                        async for chunk in self._inner.stream_text(messages, policy):
-                            if first_chunk_at is None:
-                                first_chunk_at = time.perf_counter()
-                            chunk_count += 1
-                            char_count += len(chunk)
-                            yield chunk
-                    finally:
-                        heartbeat_scope.cancel()
-            else:
-                async for chunk in self._inner.stream_text(messages, policy):
-                    if first_chunk_at is None:
-                        first_chunk_at = time.perf_counter()
-                    chunk_count += 1
-                    char_count += len(chunk)
-                    yield chunk
-        except BaseException as exc:
-            if is_async_cancellation(exc):
-                elapsed = time.perf_counter() - started
-                logger.error(
-                    "llm stream cancelled task=%s model=%s elapsed=%.3fs "
-                    "error_type=%s",
-                    policy.task.value,
-                    policy.model,
-                    elapsed,
-                    "CancelledError",
-                )
-                raise
-            elapsed = time.perf_counter() - started
+            async for chunk in self._inner.stream_text(messages, policy):
+                if first_chunk_at is None:
+                    first_chunk_at = time.perf_counter()
+                chunk_count += 1
+                char_count += len(chunk)
+                yield chunk
+        except Exception as exc:
             logger.error(
-                "llm stream failed task=%s model=%s elapsed=%.3fs error_type=%s",
+                "llm stream failed task=%s model=%s status=error "
+                "elapsed=%.3fs error_type=%s",
                 policy.task.value,
                 policy.model,
-                elapsed,
+                time.perf_counter() - started,
                 type(exc).__name__,
             )
             raise
@@ -112,9 +70,6 @@ class TracingLLMGateway:
                 chunk_count,
                 char_count,
             )
-        finally:
-            if heartbeat_scope is not None:
-                heartbeat_scope.cancel()
 
     async def generate_structured(
         self,
@@ -125,59 +80,21 @@ class TracingLLMGateway:
     ) -> T:
         started = time.perf_counter()
         self._log_start(policy, "generate_structured", messages, output_type.__name__)
-        heartbeat_scope: anyio.CancelScope | None = None
         try:
-            if self._heartbeat_seconds is not None:
-                heartbeat_scope = anyio.CancelScope()
-                async with anyio.create_task_group() as tg:
-
-                    async def run_heartbeat() -> None:
-                        assert heartbeat_scope is not None
-                        with heartbeat_scope:
-                            await self._heartbeat(
-                                call_type="generate_structured",
-                                policy=policy,
-                                started=started,
-                            )
-
-                    tg.start_soon(run_heartbeat)
-                    try:
-                        result = await self._inner.generate_structured(
-                            messages,
-                            output_type,
-                            policy,
-                            validate_result=validate_result,
-                        )
-                    finally:
-                        heartbeat_scope.cancel()
-            else:
-                result = await self._inner.generate_structured(
-                    messages,
-                    output_type,
-                    policy,
-                    validate_result=validate_result,
-                )
-        except BaseException as exc:
-            if is_async_cancellation(exc):
-                elapsed = time.perf_counter() - started
-                logger.error(
-                    "llm structured cancelled task=%s model=%s output=%s "
-                    "elapsed=%.3fs error_type=%s",
-                    policy.task.value,
-                    policy.model,
-                    output_type.__name__,
-                    elapsed,
-                    "CancelledError",
-                )
-                raise
-            elapsed = time.perf_counter() - started
+            result = await self._inner.generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+        except Exception as exc:
             logger.error(
                 "llm structured failed task=%s model=%s output=%s "
-                "elapsed=%.3fs error_type=%s",
+                "status=error elapsed=%.3fs error_type=%s",
                 policy.task.value,
                 policy.model,
                 output_type.__name__,
-                elapsed,
+                time.perf_counter() - started,
                 type(exc).__name__,
             )
             raise
@@ -191,26 +108,6 @@ class TracingLLMGateway:
                 elapsed,
             )
             return result
-        finally:
-            if heartbeat_scope is not None:
-                heartbeat_scope.cancel()
-
-    async def _heartbeat(
-        self,
-        *,
-        call_type: str,
-        policy: ModelPolicy,
-        started: float,
-    ) -> None:
-        assert self._heartbeat_seconds is not None
-        while True:
-            await anyio.sleep(self._heartbeat_seconds)
-            logger.info(
-                "llm call progress type=%s task=%s elapsed=%.0fs",
-                call_type,
-                policy.task.value,
-                time.perf_counter() - started,
-            )
 
     def _log_start(
         self,
