@@ -70,7 +70,12 @@ class SmokeObservingGateway:
                 validate_result=validate_result,
             )
             status = "success"
-            result_chars = len(result.model_dump_json())
+            try:
+                result_chars = len(result.model_dump_json())
+            except Exception as exc:
+                self._collector.instrumentation_errors.append(
+                    f"structured result measurement failed: {type(exc).__name__}"
+                )
             return result
         except asyncio.CancelledError as exc:
             status = "cancelled"

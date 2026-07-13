@@ -390,6 +390,50 @@ def test_smoke_observer_recording_failure_preserves_llm_error(
     asyncio.run(exercise())
 
 
+def test_smoke_observer_result_measurement_failure_preserves_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_on_dump(self, *args, **kwargs) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(_Answer, "model_dump_json", raise_on_dump)
+
+    async def exercise() -> None:
+        collector = SmokeEvidenceCollector()
+        recorder = SmokeAttemptRecorder(collector)
+        gateway = SmokeObservingGateway(
+            _AttemptEmittingGateway(recorder),
+            collector=collector,
+        )
+        policy = _assessment_policy()
+        messages = [ChatMessage(role=ChatRole.USER, content="hi")]
+
+        outer_token = current_smoke_call_id.set("outer-call")
+        try:
+            result = await gateway.generate_structured(
+                messages,
+                _Answer,
+                policy,
+            )
+            assert len(collector.structured_calls) == 1
+            assert len(collector.provider_attempts) == 1
+
+            assert result.value == "ok"
+
+            call = collector.structured_calls[0]
+            assert call.status == "success"
+            assert call.result_chars is None
+
+            assert collector.instrumentation_errors == [
+                "structured result measurement failed: RuntimeError"
+            ]
+            assert current_smoke_call_id.get() == "outer-call"
+        finally:
+            current_smoke_call_id.reset(outer_token)
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     ("strict", "sleep_seconds", "budget", "expect_success", "expect_status"),
     [
