@@ -37,7 +37,6 @@ class Stage(StrEnum):
 class CommandName(StrEnum):
     UPDATE_PROFILE = "update_profile"
     SEND_MESSAGE = "send_message"
-    FINISH_INTAKE = "finish_intake"
     SELECT_STYLE = "select_style"
     START_SESSION = "start_session"
     END_SESSION = "end_session"

@@ -16,32 +16,17 @@ class UpdateProfile(BaseModel):
     profile: Profile
 
 
-class FinishIntake(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    expected_revision: int
-    intake_session_id: UUID
-
-
 class SelectStyle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     expected_revision: int
     style_id: str
-    plan_id: UUID
-    focus: str
-    themes: list[str]
-    goals: list[str]
-    current_progress: str
-    planned_interventions: list[str]
-    revision_recommendations: list[str]
 
 
 class StartSession(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     expected_revision: int
-    session_id: UUID
 
 
 class EndSession(BaseModel):
@@ -49,7 +34,6 @@ class EndSession(BaseModel):
 
     expected_revision: int
     session_id: UUID
-    operation_id: UUID
 
 
 class SendMessage(BaseModel):
@@ -59,8 +43,6 @@ class SendMessage(BaseModel):
     session_id: UUID
     client_message_id: UUID
     content: str
-    turn_id: UUID
-    user_message_id: UUID
     request_id: UUID | None = None
 
 

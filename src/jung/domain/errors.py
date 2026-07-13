@@ -34,3 +34,30 @@ class InvariantViolation(DomainError):
 
 class PersistenceFailure(DomainError):
     """Stable wrapper around an unexpected persistence failure."""
+
+
+class StoredWorkFailure(DomainError):
+    """Durable failed chat or operation surfaced to callers."""
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        retryable: bool,
+    ) -> None:
+        self.code = code
+        self.retryable = retryable
+        super().__init__(message)
+
+    @classmethod
+    def from_chat_turn(cls, turn: object) -> StoredWorkFailure:
+        from jung.domain.models import ChatTurn
+
+        if not isinstance(turn, ChatTurn):
+            raise TypeError("expected ChatTurn")
+        return cls(
+            code=turn.error_code or "operation_failed",
+            message=turn.error_message or "chat turn failed",
+            retryable=turn.retryable,
+        )
