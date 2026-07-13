@@ -17,7 +17,7 @@ from jung.llm.structured import (
 )
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
-from jung.phases.post_session.models import PostSessionResult
+from jung.phases.post_session.models import PostSessionResult, SessionAnalysisResult
 
 
 class _Sample(BaseModel):
@@ -43,6 +43,8 @@ def test_to_provider_strict_json_schema_marks_objects_strict() -> None:
     assert_valid_strict_provider_schema(schema)
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["name"]
+    assert "title" not in schema
+    assert "default" not in schema
 
 
 def test_response_format_uses_strict_provider_schema() -> None:
@@ -57,7 +59,12 @@ def test_response_format_uses_strict_provider_schema() -> None:
 
 @pytest.mark.parametrize(
     "output_type",
-    [IntakeRecordPatch, AssessmentResult, PostSessionResult],
+    [
+        IntakeRecordPatch,
+        AssessmentResult,
+        SessionAnalysisResult,
+        PostSessionResult,
+    ],
 )
 def test_real_output_models_produce_valid_strict_provider_payload(
     output_type: type[BaseModel],
@@ -80,5 +87,15 @@ def test_allof_is_rejected() -> None:
             {
                 "type": "object",
                 "properties": {"value": {"allOf": [{"type": "string"}]}},
+            }
+        )
+
+
+def test_unknown_schema_keyword_is_rejected() -> None:
+    with pytest.raises(UnsupportedStrictSchema, match="examples"):
+        to_provider_strict_json_schema(
+            {
+                "type": "object",
+                "properties": {"value": {"type": "string", "examples": ["x"]}},
             }
         )

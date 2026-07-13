@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
 
+from jung.application import ChatScheduleOutcome, ChatScheduleOutcomeKind
 from jung.domain.commands import EndSession, SendMessage, StartSession, UpdateProfile
 from jung.domain.errors import Busy, StoredWorkFailure
 from jung.domain.models import ChatTurnStatus, MessageRole, Profile, Stage
@@ -197,48 +197,9 @@ async def test_chat_tokens_are_published_during_generation(store: SQLiteStore) -
     fake.assert_exhausted()
 
 
-@dataclass(frozen=True)
-class _FailedChatRetryCase:
-    id: str
-    expect_busy: bool = False
-    expect_stored_failure: bool = False
-
-
-_FAILED_CHAT_RETRY_CASES = (
-    _FailedChatRetryCase(id="valid_retry"),
-    _FailedChatRetryCase(id="closed_session", expect_stored_failure=True),
-    _FailedChatRetryCase(id="busy_during_retry", expect_busy=True),
-    _FailedChatRetryCase(id="different_content_keeps_original"),
-)
-
-
-@pytest.mark.parametrize("case", _FAILED_CHAT_RETRY_CASES, ids=lambda case: case.id)
-async def test_failed_chat_retry_matrix(
-    store: SQLiteStore,
-    case: _FailedChatRetryCase,
-) -> None:
-    retry_gate = asyncio.Event()
-
-    class RetryMatrixFakeLLM(FakeLLM):
-        def __init__(self, expectations: list[object]) -> None:
-            super().__init__(expectations)
-            self._stream_calls = 0
-
-        async def stream_text(self, messages, policy):
-            self._stream_calls += 1
-            if case.id == "busy_during_retry" and self._stream_calls > 1:
-                await retry_gate.wait()
-            async for chunk in super().stream_text(messages, policy):
-                yield chunk
-
-    if case.id == "closed_session":
-        advance_to_ready(store)
-        expectations = [
-            FailureExpectation(task=LLMTask.THERAPY_RESPONSE, error=LLMTimeout("timeout")),
-            *post_session_expectations(),
-        ]
-    else:
-        expectations = [
+async def test_failed_chat_retry_reuses_original_content(store: SQLiteStore) -> None:
+    fake = FakeLLM(
+        [
             StructuredExpectation(
                 task=LLMTask.INTAKE_PATCH,
                 output_type=IntakeRecordPatch,
@@ -247,28 +208,19 @@ async def test_failed_chat_retry_matrix(
             FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
             *intake_message_expectations("Retry response."),
         ]
-    fake = RetryMatrixFakeLLM(expectations)
+    )
     async with build_test_application(store, fake) as runtime:
-        if case.id == "closed_session":
-            revision = (await runtime.application.get_snapshot()).revision
-            session = await runtime.application.start_session(
-                StartSession(expected_revision=revision)
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
             )
-            session_id = session.id
-            original_content = "therapy original"
-        else:
-            await runtime.application.update_profile(
-                UpdateProfile(
-                    expected_revision=0,
-                    profile=Profile(name="Alex", primary_language="English"),
-                )
-            )
-            active = (await runtime.application.get_snapshot()).active_session
-            assert active is not None
-            session_id = active.id
-            original_content = "original content"
-
+        )
+        active = (await runtime.application.get_snapshot()).active_session
+        assert active is not None
+        session_id = active.id
         client_message_id = uuid4()
+        original_content = "original content"
         turn = await runtime.application.submit_message(
             SendMessage(
                 expected_revision=(await runtime.application.get_snapshot()).revision,
@@ -277,76 +229,17 @@ async def test_failed_chat_retry_matrix(
                 content=original_content,
             )
         )
-        failed = await wait_for_chat_turn(
+        await wait_for_chat_turn(
             runtime.application,
             turn.id,
             ChatTurnStatus.FAILED,
-        )
-        assert failed.retryable is True
-
-        if case.id == "closed_session":
-            await runtime.application.end_session(
-                EndSession(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
-                    session_id=session_id,
-                )
-            )
-            with pytest.raises(StoredWorkFailure):
-                await runtime.application.submit_message(
-                    SendMessage(
-                        expected_revision=(
-                            await runtime.application.get_snapshot()
-                        ).revision,
-                        session_id=session_id,
-                        client_message_id=client_message_id,
-                        content="retry",
-                    )
-                )
-            return
-
-        if case.id == "busy_during_retry":
-            retry_task = asyncio.create_task(
-                runtime.application.submit_message(
-                    SendMessage(
-                        expected_revision=(
-                            await runtime.application.get_snapshot()
-                        ).revision,
-                        session_id=session_id,
-                        client_message_id=client_message_id,
-                        content="retry",
-                    )
-                )
-            )
-            await asyncio.sleep(0.01)
-            with pytest.raises(Busy, match="another chat generation is active"):
-                await runtime.application.submit_message(
-                    SendMessage(
-                        expected_revision=(
-                            await runtime.application.get_snapshot()
-                        ).revision,
-                        session_id=session_id,
-                        client_message_id=uuid4(),
-                        content="interrupt",
-                    )
-                )
-            retry_gate.set()
-            retried = await retry_task
-            await wait_for_chat_turn(
-                runtime.application,
-                retried.id,
-                ChatTurnStatus.COMPLETE,
-            )
-            return
-
-        retry_content = (
-            "different retry content" if case.id == "different_content_keeps_original" else "retry"
         )
         retried = await runtime.application.submit_message(
             SendMessage(
                 expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=client_message_id,
-                content=retry_content,
+                content="retry",
             )
         )
         completed = await wait_for_chat_turn(
@@ -359,6 +252,362 @@ async def test_failed_chat_retry_matrix(
         assert len(user_messages) == 1
         assert user_messages[0].content == original_content
         assert completed.status is ChatTurnStatus.COMPLETE
+    fake.assert_exhausted()
+
+
+async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure(
+    store: SQLiteStore,
+) -> None:
+    advance_to_ready(store)
+    fake = FakeLLM(
+        [
+            FailureExpectation(task=LLMTask.THERAPY_RESPONSE, error=LLMTimeout("timeout")),
+            *post_session_expectations(),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        revision = (await runtime.application.get_snapshot()).revision
+        session = await runtime.application.start_session(
+            StartSession(expected_revision=revision)
+        )
+        client_message_id = uuid4()
+        turn = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session.id,
+                client_message_id=client_message_id,
+                content="therapy original",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn.id,
+            ChatTurnStatus.FAILED,
+        )
+        await runtime.application.end_session(
+            EndSession(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session.id,
+            )
+        )
+        with pytest.raises(StoredWorkFailure):
+            await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content="retry",
+                )
+            )
+    fake.assert_exhausted()
+
+
+async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
+    store: SQLiteStore,
+) -> None:
+    stream_gate = asyncio.Event()
+
+    class HoldingFakeLLM(FakeLLM):
+        def __init__(self, expectations: list[object]) -> None:
+            super().__init__(expectations)
+            self._stream_calls = 0
+
+        async def stream_text(self, messages, policy):
+            self._stream_calls += 1
+            if self._stream_calls > 1:
+                await stream_gate.wait()
+            async for chunk in super().stream_text(messages, policy):
+                yield chunk
+
+    fake = HoldingFakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            StreamExpectation(
+                task=LLMTask.INTAKE_RESPONSE,
+                chunks=("Second turn.",),
+            ),
+            *intake_message_expectations("Retry response."),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        active = (await runtime.application.get_snapshot()).active_session
+        assert active is not None
+        session_id = active.id
+        failed_client_id = uuid4()
+        turn_a = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=failed_client_id,
+                content="failed turn",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn_a.id,
+            ChatTurnStatus.FAILED,
+        )
+        await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=uuid4(),
+                content="distinct pending turn",
+            )
+        )
+        snapshot = await runtime.application.get_snapshot()
+        assert snapshot.active_chat_turn is not None
+        with pytest.raises(Busy, match="another chat generation is active"):
+            await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=snapshot.revision,
+                    session_id=session_id,
+                    client_message_id=failed_client_id,
+                    content="retry failed turn",
+                )
+            )
+        stream_gate.set()
+        await wait_for_chat_turn(
+            runtime.application,
+            snapshot.active_chat_turn.id,
+            ChatTurnStatus.COMPLETE,
+        )
+
+
+async def test_failed_chat_retry_with_changed_content_keeps_original(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            *intake_message_expectations("Retry response."),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        active = (await runtime.application.get_snapshot()).active_session
+        assert active is not None
+        session_id = active.id
+        client_message_id = uuid4()
+        original_content = "original content"
+        turn = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                content=original_content,
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn.id,
+            ChatTurnStatus.FAILED,
+        )
+        retried = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                content="different retry content",
+            )
+        )
+        completed = await wait_for_chat_turn(
+            runtime.application,
+            retried.id,
+            ChatTurnStatus.COMPLETE,
+        )
+        messages = runtime.store.list_messages(session_id)
+        user_messages = [message for message in messages if message.role is MessageRole.USER]
+        assert len(user_messages) == 1
+        assert user_messages[0].content == original_content
+        assert completed.status is ChatTurnStatus.COMPLETE
+    fake.assert_exhausted()
+
+
+async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
+    store: SQLiteStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    gate = threading.Event()
+    release = threading.Event()
+    original_accept = store.accept_chat_message
+
+    def gated_accept(*args, **kwargs):
+        gate.set()
+        release.wait(timeout=2.0)
+        return original_accept(*args, **kwargs)
+
+    monkeypatch.setattr(store, "accept_chat_message", gated_accept)
+    fake = FakeLLM(intake_message_expectations("Welcome."))
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session_id = (await runtime.application.get_snapshot()).active_session
+        assert session_id is not None
+        submit_task = asyncio.create_task(
+            runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session_id.id,
+                    client_message_id=uuid4(),
+                    content="hello",
+                )
+            )
+        )
+        await asyncio.to_thread(gate.wait, 2.0)
+        submit_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit_task
+        assert not runtime.application._generation_lock.locked()
+        active_turn = runtime.store.get_active_chat_turn()
+        if active_turn is not None:
+            assert active_turn.status is ChatTurnStatus.PENDING
+
+
+async def test_submit_message_cancel_after_turn_assigned_hands_off_worker(
+    store: SQLiteStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assemble_entered = asyncio.Event()
+    worker_handoff = asyncio.Event()
+    gate_assemble = False
+    fake = FakeLLM(intake_message_expectations("Welcome."))
+    async with build_test_application(store, fake) as runtime:
+        original_assemble = runtime.application._assemble_snapshot_locked
+
+        def try_start(turn, *, request_id):
+            worker_handoff.set()
+            return ChatScheduleOutcome(ChatScheduleOutcomeKind.STARTED)
+
+        monkeypatch.setattr(
+            runtime.application,
+            "_try_start_chat_worker",
+            try_start,
+        )
+
+        async def gated_assemble():
+            nonlocal gate_assemble
+            result = await original_assemble()
+            if gate_assemble:
+                assemble_entered.set()
+                await asyncio.Event().wait()
+            return result
+
+        runtime.application._assemble_snapshot_locked = gated_assemble
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session_id = (await runtime.application.get_snapshot()).active_session
+        assert session_id is not None
+        revision = (await runtime.application.get_snapshot()).revision
+        gate_assemble = True
+        submit_task = asyncio.create_task(
+            runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=revision,
+                    session_id=session_id.id,
+                    client_message_id=uuid4(),
+                    content="hello",
+                )
+            )
+        )
+        await asyncio.wait_for(assemble_entered.wait(), timeout=2.0)
+        submit_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(submit_task, timeout=2.0)
+        await asyncio.wait_for(worker_handoff.wait(), timeout=2.0)
+        assert runtime.application._generation_lock.locked()
+
+
+async def test_submit_message_cancel_during_accepted_event_publication(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(intake_message_expectations("Welcome."))
+    publish_gate = asyncio.Event()
+    release_publish = asyncio.Event()
+
+    class GatedPublishEventStream:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        async def publish(self, event) -> None:
+            if isinstance(event, ChatTurnAccepted):
+                publish_gate.set()
+                await release_publish.wait()
+            await self._inner.publish(event)
+
+        def subscribe(self):
+            return self._inner.subscribe()
+
+    async with build_test_application(store, fake) as runtime:
+        runtime.events = GatedPublishEventStream(runtime.events)
+        runtime.application._events = runtime.events
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session_id = (await runtime.application.get_snapshot()).active_session
+        assert session_id is not None
+        submit_task = asyncio.create_task(
+            runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session_id.id,
+                    client_message_id=uuid4(),
+                    content="hello",
+                )
+            )
+        )
+        await asyncio.wait_for(publish_gate.wait(), timeout=2.0)
+        submit_task.cancel()
+        release_publish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit_task
+        active_turn = runtime.store.get_active_chat_turn()
+        assert active_turn is not None
+        await wait_for_chat_turn(
+            runtime.application,
+            active_turn.id,
+            ChatTurnStatus.COMPLETE,
+        )
     fake.assert_exhausted()
 
 

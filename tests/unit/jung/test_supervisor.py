@@ -37,7 +37,6 @@ async def test_explicit_name_reuse_after_completion() -> None:
     async with TaskSupervisor() as supervisor:
         assert supervisor.start(name="work", run=finish) is True
         await asyncio.wait_for(done.wait(), timeout=1.0)
-        await asyncio.sleep(0.01)
         second_done = asyncio.Event()
         assert supervisor.start(name="work", run=second_done.set) is True
         await asyncio.wait_for(second_done.wait(), timeout=1.0)
@@ -92,6 +91,8 @@ async def test_shutdown_cancels_only_owned_tasks() -> None:
             assert supervisor.start(name="owned", run=owned) is True
             await asyncio.wait_for(owned_started.wait(), timeout=1.0)
             await supervisor.shutdown(timeout_seconds=0.1)
+        assert not unrelated.done()
+        assert not unrelated.cancelled()
         assert not unrelated_cancelled.is_set()
     finally:
         unrelated.cancel()
@@ -118,16 +119,26 @@ async def test_shutdown_timeout_cancels_owned_task() -> None:
     await asyncio.wait_for(cancelled.wait(), timeout=1.0)
 
 
-async def test_create_task_failure_rolls_back_active_name() -> None:
+async def test_create_task_failure_rolls_back_active_name_and_closes_coro() -> None:
     from unittest.mock import patch
+
+    captured: list[object] = []
 
     async with TaskSupervisor() as supervisor:
         assert supervisor._task_group is not None
+        def recording_create_task(coro, *, name=None):
+            captured.append(coro)
+            raise RuntimeError("create failed")
+
         with patch.object(
             supervisor._task_group,
             "create_task",
-            side_effect=RuntimeError("create failed"),
+            side_effect=recording_create_task,
         ):
             with pytest.raises(RuntimeError, match="create failed"):
                 supervisor.start(name="work", run=lambda: asyncio.sleep(0))
         assert "work" not in supervisor._active
+        assert len(captured) == 1
+        coro = captured[0]
+        assert hasattr(coro, "close")
+        assert coro.cr_frame is None

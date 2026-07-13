@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.commands import RetryOperation
+from jung.domain.commands import EndSession, RetryOperation
 from jung.domain.models import CommandName, OperationStatus, Stage
 from jung.events import OperationChanged
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout
@@ -25,6 +25,7 @@ from .application_fixtures import (
 )
 from .scenarios import (
     advance_to_post_session,
+    advance_to_ready,
     complete_intake_for_assessment,
     open_intake,
 )
@@ -244,3 +245,108 @@ async def test_operation_changed_events_are_published(store: SQLiteStore) -> Non
                     seen.append(event)
     assert seen[0].operation.status is OperationStatus.RUNNING
     assert seen[-1].operation.status is OperationStatus.COMPLETE
+
+
+async def test_end_session_schedules_operation_when_publish_cancelled(
+    store: SQLiteStore,
+) -> None:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=ready.now,
+    )
+    fake = FakeLLM(post_session_expectations())
+    publish_gate = asyncio.Event()
+    release_publish = asyncio.Event()
+
+    class GatedPublishEventStream:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        async def publish(self, event) -> None:
+            if isinstance(event, OperationChanged):
+                publish_gate.set()
+                await release_publish.wait()
+            await self._inner.publish(event)
+
+        def subscribe(self):
+            return self._inner.subscribe()
+
+    async with build_test_application(store, fake) as runtime:
+        runtime.events = GatedPublishEventStream(runtime.events)
+        runtime.application._events = runtime.events
+        revision = (await runtime.application.get_snapshot()).revision
+        end_task = asyncio.create_task(
+            runtime.application.end_session(
+                EndSession(expected_revision=revision, session_id=therapy_id)
+            )
+        )
+        await asyncio.wait_for(publish_gate.wait(), timeout=2.0)
+        end_task.cancel()
+        release_publish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await end_task
+        await wait_for_stage(runtime.application, Stage.READY)
+    fake.assert_exhausted()
+
+
+async def test_retry_operation_schedules_operation_when_publish_fails(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    fake = FakeLLM(
+        [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMTimeout("timeout"),
+            ),
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            ),
+        ]
+    )
+
+    class FailingPublishEventStream:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+            self._fail_once = True
+
+        async def publish(self, event) -> None:
+            if self._fail_once and isinstance(event, OperationChanged):
+                operation = event.operation
+                if (
+                    operation.id == operation_id
+                    and operation.status is OperationStatus.PENDING
+                ):
+                    self._fail_once = False
+                    raise RuntimeError("publish failed")
+            await self._inner.publish(event)
+
+        def subscribe(self):
+            return self._inner.subscribe()
+
+    async with build_test_application(store, fake) as runtime:
+        runtime.events = FailingPublishEventStream(runtime.events)
+        runtime.application._events = runtime.events
+        await wait_for_operation_status(
+            runtime.application,
+            operation_id,
+            OperationStatus.FAILED,
+        )
+        revision = (await runtime.application.get_snapshot()).revision
+        await runtime.application.retry_operation(
+            RetryOperation(expected_revision=revision, operation_id=operation_id)
+        )
+        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+    fake.assert_exhausted()
