@@ -1127,6 +1127,7 @@ class SQLiteStore:
         self,
         turn_id: UUID,
         *,
+        expected_revision: int,
         now: datetime,
     ) -> ChatTurn:
         def mutate(conn: sqlite3.Connection) -> None:
@@ -1151,7 +1152,7 @@ class SQLiteStore:
             )
             self._ensure_chat_turn_updated(conn, cursor, turn_id)
 
-        self._write(None, mutate, now=now)
+        self._write(expected_revision, mutate, now=now)
         turn = self.get_chat_turn(turn_id)
         assert turn is not None
         return turn

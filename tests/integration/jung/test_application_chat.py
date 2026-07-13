@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from jung.domain.commands import EndSession, SendMessage, StartSession, UpdateProfile
-from jung.domain.errors import Busy, StoredWorkFailure
+from jung.domain.errors import Busy, RevisionConflict, StoredWorkFailure
 from jung.domain.models import ChatTurn, ChatTurnStatus, MessageRole, Profile, Stage
 from jung.events import ChatTokenGenerated, ChatTurnAccepted, ChatTurnCompleted
 from jung.llm.errors import LLMTimeout
@@ -290,7 +290,7 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
                 session_id=session.id,
             )
         )
-        with pytest.raises(StoredWorkFailure):
+        with pytest.raises(StoredWorkFailure) as exc_info:
             await runtime.application.submit_message(
                 SendMessage(
                     expected_revision=(await runtime.application.get_snapshot()).revision,
@@ -299,6 +299,146 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
                     content="retry",
                 )
             )
+        assert exc_info.value.retryable is False
+    fake.assert_exhausted()
+
+
+async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            StreamExpectation(
+                task=LLMTask.INTAKE_RESPONSE,
+                chunks=("Second turn.",),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        active = (await runtime.application.get_snapshot()).active_session
+        assert active is not None
+        session_id = active.id
+        failed_client_id = uuid4()
+        turn_a = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=failed_client_id,
+                content="failed turn",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn_a.id,
+            ChatTurnStatus.FAILED,
+        )
+        turn_b = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=uuid4(),
+                content="distinct completed turn",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn_b.id,
+            ChatTurnStatus.COMPLETE,
+        )
+        before_messages = runtime.store.list_messages(session_id)
+        with pytest.raises(StoredWorkFailure) as exc_info:
+            await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session_id,
+                    client_message_id=failed_client_id,
+                    content="retry failed turn",
+                )
+            )
+        after_messages = runtime.store.list_messages(session_id)
+        assert exc_info.value.retryable is False
+        assert after_messages == before_messages
+        persisted = await runtime.application.get_chat_turn(turn_a.id)
+        assert persisted.status is ChatTurnStatus.FAILED
+    fake.assert_exhausted()
+
+
+async def test_failed_chat_retry_with_stale_revision_raises_revision_conflict(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        active = (await runtime.application.get_snapshot()).active_session
+        assert active is not None
+        session_id = active.id
+        client_message_id = uuid4()
+        turn = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                content="original content",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn.id,
+            ChatTurnStatus.FAILED,
+        )
+        stale_revision = (await runtime.application.get_snapshot()).revision
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                profile=Profile(name="Alex Updated", primary_language="English"),
+            )
+        )
+        current_revision = (await runtime.application.get_snapshot()).revision
+        with pytest.raises(RevisionConflict):
+            await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=stale_revision,
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    content="retry",
+                )
+            )
+        persisted = await runtime.application.get_chat_turn(turn.id)
+        assert persisted.status is ChatTurnStatus.FAILED
+        assert not runtime.application._generation_lock.locked()
+        snapshot_after = await runtime.application.get_snapshot()
+        assert snapshot_after.revision == current_revision
     fake.assert_exhausted()
 
 

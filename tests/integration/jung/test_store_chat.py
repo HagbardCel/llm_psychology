@@ -384,7 +384,11 @@ def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
     assert session is not None
     assert session.intake_record == first_record
 
-    store.retry_chat_turn(retry_turn_id, now=now)
+    store.retry_chat_turn(
+        retry_turn_id,
+        expected_revision=store.get_app_state().revision,
+        now=now,
+    )
     store.complete_chat_turn(
         retry_turn_id,
         assistant_message_id=uuid4(),

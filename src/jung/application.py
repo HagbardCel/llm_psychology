@@ -377,8 +377,6 @@ class TherapyApplication:
                     if existing.status is ChatTurnStatus.FAILED:
                         if not existing.retryable:
                             raise StoredWorkFailure.from_chat_turn(existing)
-                        if not await self._chat_retry_structurally_eligible(existing):
-                            raise StoredWorkFailure.from_chat_turn(existing)
                         facts = await self._run_store(self._store.load_snapshot_facts)
                         if facts.chat_turn_status is ChatTurnStatus.PENDING:
                             active = await self._run_store(
@@ -388,11 +386,18 @@ class TherapyApplication:
                                 raise Busy("another chat generation is active")
                         if self._generation_lock.locked():
                             raise Busy("another chat generation is active")
+                        if not await self._chat_retry_structurally_eligible(existing):
+                            raise StoredWorkFailure(
+                                code=existing.error_code or "operation_failed",
+                                message=existing.error_message or "chat turn failed",
+                                retryable=False,
+                            )
                         await self._reserve_generation_lock()
                         generation_reserved = True
                         turn = await self._run_store(
                             self._store.retry_chat_turn,
                             existing.id,
+                            expected_revision=command.expected_revision,
                             now=self._now(),
                         )
                         snapshot = await self._assemble_snapshot_locked()
@@ -533,8 +538,15 @@ class TherapyApplication:
             return False
         state = await self._run_store(self._store.get_app_state)
         if state.stage is Stage.INTAKE and session.kind is SessionKind.INTAKE:
-            return True
-        return state.stage is Stage.THERAPY and session.kind is SessionKind.THERAPY
+            pass
+        elif state.stage is Stage.THERAPY and session.kind is SessionKind.THERAPY:
+            pass
+        else:
+            return False
+        messages = await self._run_store(self._store.list_messages, turn.session_id)
+        if not messages or messages[-1].id != turn.user_message_id:
+            return False
+        return True
 
     def _release_generation_lock(self) -> None:
         if self._generation_lock.locked():

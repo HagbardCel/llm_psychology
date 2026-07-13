@@ -842,12 +842,15 @@ Under the mutation lock:
 1. load an existing turn by client ID;
 2. when existing status is `PENDING`, return it without creating or scheduling another task;
 3. when existing status is `COMPLETE`, return it without revision validation or duplicate events;
-4. when existing status is retryable `FAILED`, reserve the generation lock, reset the same turn to `PENDING`, and schedule it with the new request correlation;
-5. when existing status is permanently `FAILED`, raise a stable application error carrying the stored code and retryability;
+4. when existing status is permanently `FAILED`, raise a stable application error carrying the stored code and retryability;
+5. when existing status is retryable `FAILED`:
+   - reject conflicting active generation as `Busy` before structural checks;
+   - reject structural obsolescence (session closed, wrong stage, or later durable messages) as non-retryable `StoredWorkFailure`;
+   - validate `expected_revision`, reserve the generation lock, reset the same turn to `PENDING` through the store, and schedule it with the new request correlation;
 6. for a new turn, raise `Busy` when another chat turn is pending or generation is active; otherwise require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
 7. reserve generation before durable acceptance so a second distinct command cannot pass the same check;
 8. generate turn and user-message IDs;
-9. call `store.accept_chat_message()`;
+9. call `store.accept_chat_message()` with `expected_revision`;
 10. assemble snapshot;
 11. release the mutation lock;
 12. publish `ChatTurnAccepted` and `SnapshotChanged`;
@@ -1440,8 +1443,9 @@ Cover:
 - duplicate after completion;
 - duplicate after retryable failure;
 - duplicate after permanent failure;
-- duplicate with stale expected revision;
-- distinct message while generation active.
+- duplicate with stale expected revision on retryable failed retry;
+- retry after a later completed turn is rejected as non-retryable;
+- distinct message while generation active (`Busy` precedes structural obsolescence for failed-turn retry).
 
 Assertions:
 
@@ -1552,7 +1556,9 @@ Integration tests added in round-2 remediation:
 - `test_application_context_closes_llm_when_recover_on_startup_fails`;
 - `test_application_context_rejects_unsupported_schema`;
 - `test_full_intake_lifecycle_through_application`;
-- `test_failed_chat_retry_uses_persisted_original_content` plus busy-retry and structural-eligibility cases.
+- `test_failed_chat_retry_uses_persisted_original_content` plus busy-retry and structural-eligibility cases;
+- `test_failed_chat_retry_after_later_completed_turn_is_rejected`;
+- `test_failed_chat_retry_with_stale_revision_raises_revision_conflict`.
 
 Do not mock `SQLiteStore` in the main application workflow tests. The real temporary database is part of the Phase 4 contract.
 
