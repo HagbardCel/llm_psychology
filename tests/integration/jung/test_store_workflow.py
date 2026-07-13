@@ -23,7 +23,12 @@ from jung.domain.models import (
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 
-from .scenarios import advance_to_post_session, advance_to_ready, open_intake
+from .scenarios import (
+    advance_to_post_session,
+    advance_to_ready,
+    complete_intake_for_assessment,
+    open_intake,
+)
 
 
 def _plan_content(**overrides: object) -> PlanContent:
@@ -97,18 +102,20 @@ def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) 
         )
 
 
-def test_finish_intake_closes_session_and_creates_assessment(store: SQLiteStore) -> None:
+def test_complete_final_intake_closes_session_and_creates_assessment(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     session = store.get_session(intake_id)
     assert session is not None
-    revision = store.get_app_state().revision
     operation_id = uuid4()
-    state, operation = store.finish_intake_and_create_assessment(
-        expected_revision=revision,
+    _, _, operation = complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
+    state = store.get_app_state()
     assert state.stage == Stage.ASSESSMENT
     closed = store.get_session(session.id)
     assert closed is not None
@@ -121,11 +128,11 @@ def test_finish_intake_closes_session_and_creates_assessment(store: SQLiteStore)
 def test_assessment_completion_advances_to_style_selection(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     state = store.complete_assessment(
@@ -146,11 +153,11 @@ def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
 def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.fail_operation(
@@ -166,11 +173,11 @@ def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
 def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     failed = store.fail_operation(
@@ -317,11 +324,11 @@ def test_complete_assessment_rejects_invalid_json_before_persistence(
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     with pytest.raises(InvariantViolation):
@@ -335,11 +342,11 @@ def test_complete_assessment_rejects_invalid_json_before_persistence(
 def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.complete_assessment(
@@ -361,11 +368,11 @@ def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -
 def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     with pytest.raises(InvariantViolation):
         store.complete_assessment(
@@ -381,11 +388,11 @@ def test_late_operation_callback_rejected(
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.complete_assessment(
@@ -425,14 +432,17 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
 
 
 def test_stale_revision_leaves_database_unchanged(store: SQLiteStore) -> None:
-    open_intake(store)
+    intake_id, now = open_intake(store)
     revision = store.get_app_state().revision
     with pytest.raises(RevisionConflict):
-        store.finish_intake_and_create_assessment(
+        store.accept_chat_message(
             expected_revision=revision - 1,
-            intake_session_id=uuid4(),
-            operation_id=uuid4(),
-            now=datetime.now(UTC),
+            session_id=intake_id,
+            client_message_id=uuid4(),
+            turn_id=uuid4(),
+            user_message_id=uuid4(),
+            content="stale",
+            now=now,
         )
     assert store.get_app_state().revision == revision
     assert store.get_app_state().stage == Stage.INTAKE
@@ -443,11 +453,11 @@ def test_non_retryable_failed_operation_hides_retry_command(
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.fail_operation(
@@ -462,27 +472,17 @@ def test_non_retryable_failed_operation_hides_retry_command(
     assert CommandName.RETRY_OPERATION not in available_commands(facts)
 
 
-def test_finish_intake_is_idempotent_by_session_key(store: SQLiteStore) -> None:
+def test_complete_final_intake_creates_one_assessment_operation(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    revision = store.get_app_state().revision
-    _, first_operation = store.finish_intake_and_create_assessment(
-        expected_revision=revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
+        now=now,
         operation_id=operation_id,
-        now=now,
     )
-    first_state = store.get_app_state()
-    second_state, second_operation = store.finish_intake_and_create_assessment(
-        expected_revision=revision - 1,
-        intake_session_id=intake_id,
-        operation_id=uuid4(),
-        now=now,
-    )
-    assert second_state == first_state
-    assert second_operation.id == first_operation.id
-    assert second_operation.status == first_operation.status
-    assert store.get_app_state().revision == revision + 1
     with sqlite3.connect(store.database_path) as conn:
         count = conn.execute(
             """
@@ -547,11 +547,11 @@ def test_invalid_plan_fields_raise_invariant_violation(
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.complete_assessment(
