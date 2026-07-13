@@ -15,18 +15,41 @@ T = TypeVar("T", bound=BaseModel)
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
 
-_FORBIDDEN_SCHEMA_KEYS = frozenset(
+_STRUCTURAL_SCHEMA_KEYS = frozenset(
     {
-        "allOf",
-        "oneOf",
-        "not",
-        "dependentRequired",
-        "dependentSchemas",
-        "if",
-        "then",
-        "else",
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "$defs",
+        "$ref",
+        "anyOf",
+        "enum",
+        "description",
     }
 )
+
+_CONSTRAINT_SCHEMA_KEYS = frozenset(
+    {
+        "pattern",
+        "format",
+        "minLength",
+        "maxLength",
+        "multipleOf",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minItems",
+        "maxItems",
+        "const",
+    }
+)
+
+_STRIPPED_SCHEMA_KEYS = frozenset({"default", "title"})
+
+_ALLOWED_SCHEMA_KEYS = _STRUCTURAL_SCHEMA_KEYS | _CONSTRAINT_SCHEMA_KEYS
 
 
 class UnsupportedStrictSchema(ValueError):
@@ -92,9 +115,11 @@ def build_correction_messages(
     return [*original_messages, correction]
 
 
-def _reject_forbidden_keys(node: dict[str, Any], *, path: str) -> None:
-    for key in _FORBIDDEN_SCHEMA_KEYS:
-        if key in node:
+def _reject_unknown_schema_keys(node: dict[str, Any], *, path: str) -> None:
+    for key in node:
+        if key in _STRIPPED_SCHEMA_KEYS:
+            continue
+        if key not in _ALLOWED_SCHEMA_KEYS:
             raise UnsupportedStrictSchema(
                 f"unsupported schema keyword {key!r} at {path or 'root'}"
             )
@@ -111,10 +136,12 @@ def to_provider_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     def transform(node: Any, *, path: str) -> Any:
         if not isinstance(node, dict):
             return node
-        _reject_forbidden_keys(node, path=path)
-        result = dict(node)
-        if "default" in result:
-            del result["default"]
+        _reject_unknown_schema_keys(node, path=path)
+        result = {
+            key: value
+            for key, value in node.items()
+            if key not in _STRIPPED_SCHEMA_KEYS
+        }
         node_type = result.get("type")
         if node_type == "object":
             properties = result.get("properties")
@@ -157,7 +184,7 @@ def assert_valid_strict_provider_schema(schema: dict[str, Any]) -> None:
                 raise AssertionError("root schema must be type object")
             if "anyOf" in node:
                 raise AssertionError("root schema must not contain anyOf")
-        _reject_forbidden_keys(node, path=path)
+        _reject_unknown_schema_keys(node, path=path)
         if node.get("type") == "object":
             properties = node.get("properties")
             if not isinstance(properties, dict):

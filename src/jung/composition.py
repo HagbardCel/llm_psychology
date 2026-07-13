@@ -12,13 +12,23 @@ from uuid import UUID, uuid4
 
 from jung.application import TherapyApplication
 from jung.events import EventStream
-from jung.llm.gateway import AdapterConfig, LLMSettings, LLMTask
+from jung.llm.gateway import (
+    AdapterConfig,
+    LLMSettings,
+    LLMTask,
+    ModelPolicy,
+    StructuredOutputMode,
+)
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
+from jung.llm.structured import response_format_for_mode
 from jung.llm.tracing import TracingLLMGateway
 from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.intake.processor import IntakeProcessor
+from jung.phases.post_session.models import PostSessionResult, SessionAnalysisResult
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
@@ -51,6 +61,23 @@ def _default_new_id() -> UUID:
     return uuid4()
 
 
+_SCHEMA_OUTPUT_TYPES = {
+    LLMTask.INTAKE_PATCH: IntakeRecordPatch,
+    LLMTask.ASSESSMENT: AssessmentResult,
+    LLMTask.POST_SESSION_ANALYSIS: SessionAnalysisResult,
+    LLMTask.POST_SESSION_UPDATE: PostSessionResult,
+}
+
+
+def _preflight_json_schema_policies(
+    policies: dict[LLMTask, ModelPolicy],
+) -> None:
+    for task, output_type in _SCHEMA_OUTPUT_TYPES.items():
+        policy = policies[task]
+        if policy.structured_output_mode is StructuredOutputMode.JSON_SCHEMA:
+            response_format_for_mode(StructuredOutputMode.JSON_SCHEMA, output_type)
+
+
 @asynccontextmanager
 async def application_context(
     settings: Settings,
@@ -62,6 +89,7 @@ async def application_context(
     await asyncio.to_thread(store.initialize)
 
     policies = build_model_policies(settings.llm)
+    _preflight_json_schema_policies(policies)
     adapter_config = AdapterConfig(
         base_url=settings.llm.base_url,
         api_key=settings.llm.api_key,
