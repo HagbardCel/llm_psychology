@@ -50,6 +50,9 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
 
     monkeypatch.setattr(store, "list_messages", gated_list_messages)
 
+    new_client_message_id = uuid4()
+    new_content = "new message"
+
     async with build_test_application(store, fake) as runtime:
         mutation_started = asyncio.Event()
 
@@ -59,8 +62,8 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
                 SendMessage(
                     expected_revision=(await runtime.application.get_snapshot()).revision,
                     session_id=therapy_id,
-                    client_message_id=uuid4(),
-                    content="new message",
+                    client_message_id=new_client_message_id,
+                    content=new_content,
                 )
             )
 
@@ -70,12 +73,17 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
         await asyncio.to_thread(gate.wait, 2.0)
         mutation_task = asyncio.create_task(mutate())
         await asyncio.wait_for(mutation_started.wait(), timeout=2.0)
+        assert not mutation_task.done()
         assert not history_task.done()
         proceed.set()
         history = await history_task
         await mutation_task
 
-    message_ids = {message.id for message in history.messages}
-    assert len(message_ids) == len(history.messages)
-    roles = {message.role for message in history.messages}
-    assert roles <= {MessageRole.USER, MessageRole.ASSISTANT}
+        message_ids = {message.id for message in history.messages}
+        assert len(message_ids) == len(history.messages)
+        roles = {message.role for message in history.messages}
+        assert roles <= {MessageRole.USER, MessageRole.ASSISTANT}
+        assert all(message.content != new_content for message in history.messages)
+
+        follow_up_history = await runtime.application.get_session_history(therapy_id)
+        assert any(message.content == new_content for message in follow_up_history.messages)

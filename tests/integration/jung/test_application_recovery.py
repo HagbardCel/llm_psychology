@@ -23,6 +23,7 @@ from jung.phases.assessment.models import AssessmentResult
 from .application_fixtures import (
     assessment_result,
     build_test_application,
+    wait_for_operation_status,
     wait_for_stage,
 )
 from .scenarios import complete_intake_for_assessment, open_intake
@@ -107,7 +108,7 @@ async def test_stale_running_operation_is_recovered_then_completes(
     fake.assert_exhausted()
 
 
-async def test_recover_on_startup_with_blocked_worker_completes(
+async def test_blocked_running_operation_recovers_on_second_runtime(
     store: SQLiteStore,
 ) -> None:
     intake_id, now = open_intake(store)
@@ -136,7 +137,7 @@ async def test_recover_on_startup_with_blocked_worker_completes(
                 validate_result=validate_result,
             )
 
-    fake = HoldingAssessmentFake(
+    blocking_fake = HoldingAssessmentFake(
         [
             StructuredExpectation(
                 task=LLMTask.ASSESSMENT,
@@ -145,13 +146,33 @@ async def test_recover_on_startup_with_blocked_worker_completes(
             )
         ]
     )
-    async with build_test_application(store, fake, recover=False) as runtime:
-        startup = asyncio.create_task(runtime.application.recover_on_startup())
-        await asyncio.sleep(0.01)
+    async with build_test_application(store, blocking_fake, recover=False) as runtime_a:
+        await runtime_a.application.recover_on_startup()
+        await wait_for_operation_status(
+            runtime_a.application,
+            operation_id,
+            OperationStatus.RUNNING,
+        )
+        runtime_a.application.begin_shutdown()
+        await runtime_a.supervisor.shutdown(timeout_seconds=0.05)
         gate.set()
-        await startup
-        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
-    fake.assert_exhausted()
+
+    operation = store.get_operation(operation_id)
+    assert operation is not None
+    assert operation.status is OperationStatus.RUNNING
+
+    success_fake = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            )
+        ]
+    )
+    async with build_test_application(store, success_fake) as runtime_b:
+        await wait_for_stage(runtime_b.application, Stage.STYLE_SELECTION)
+    success_fake.assert_exhausted()
 
 
 async def test_begin_shutdown_while_mutation_lock_held_rejects_command(

@@ -26,7 +26,15 @@ from jung.llm.policies import build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult, StyleRecommendation
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.models import (
+    CopingRecord,
+    GoalsRecord,
+    IntakeEvidence,
+    IntakeRecordPatch,
+    PresentingProblemRecord,
+    SafetyRecord,
+    TimeCourseRecord,
+)
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
     DerivedProfilePatch,
@@ -114,6 +122,53 @@ def intake_message_expectations(
             chunks=(response,),
         ),
     ]
+
+
+def _intake_evidence(
+    value: str,
+    *,
+    quote: str,
+    sequence: int,
+) -> IntakeEvidence:
+    return IntakeEvidence(
+        value=value,
+        evidence_quote=quote,
+        source_message_sequence=sequence,
+        source_role="user",
+        confidence="high",
+    )
+
+
+def completing_intake_patch(
+    *,
+    message_sequence: int,
+    quote: str,
+) -> IntakeRecordPatch:
+    """Patch satisfying intake completion rules for the final patient turn."""
+    def evidence(value: str) -> IntakeEvidence:
+        return _intake_evidence(value, quote=quote, sequence=message_sequence)
+
+    return IntakeRecordPatch(
+        presenting_problem=PresentingProblemRecord(
+            main_concern=evidence("anxiety"),
+            time_course=TimeCourseRecord(
+                duration_or_onset=evidence("3 months"),
+            ),
+            functional_impairment=evidence("work stress"),
+            sleep_impact=evidence("poor sleep"),
+        ),
+        safety=SafetyRecord(
+            self_harm=evidence("none"),
+            harm_to_others=evidence("none"),
+            medical_urgency=evidence("none"),
+        ),
+        coping=CopingRecord(
+            attempted_strategies=(evidence("breathing exercises"),),
+        ),
+        goals=GoalsRecord(
+            preferred_start=evidence("sleep routine"),
+        ),
+    )
 
 
 class ScriptedTaskSupervisor(TaskSupervisor):
@@ -324,6 +379,7 @@ __all__ = [
     "TestApplicationRuntime",
     "assessment_result",
     "build_test_application",
+    "completing_intake_patch",
     "intake_message_expectations",
     "plan_content",
     "post_session_expectations",

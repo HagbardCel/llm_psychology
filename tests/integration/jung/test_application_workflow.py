@@ -26,10 +26,12 @@ from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
+from jung.phases.intake.models import IntakeRecordPatch
 
 from .application_fixtures import (
     assessment_result,
     build_test_application,
+    completing_intake_patch,
     post_session_expectations,
     wait_for_chat_turn,
     wait_for_stage,
@@ -141,6 +143,82 @@ async def test_full_assessment_e2e_with_fake_llm(store: SQLiteStore) -> None:
         ]
     )
     async with build_test_application(store, fake) as runtime:
+        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+        revision = (await runtime.application.get_snapshot()).revision
+        snapshot = await runtime.application.select_style(
+            SelectStyle(expected_revision=revision, style_id="cbt")
+        )
+    assert snapshot.stage is Stage.READY
+    fake.assert_exhausted()
+
+
+async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> None:
+    turn_messages = ("first turn", "second turn", "third turn")
+    final_message_sequence = 5
+    expectations: list[StructuredExpectation | StreamExpectation] = []
+    for index, content in enumerate(turn_messages, start=1):
+        if index < len(turn_messages):
+            expectations.extend(
+                [
+                    StructuredExpectation(
+                        task=LLMTask.INTAKE_PATCH,
+                        output_type=IntakeRecordPatch,
+                        response=IntakeRecordPatch(),
+                    ),
+                    StreamExpectation(
+                        task=LLMTask.INTAKE_RESPONSE,
+                        chunks=(f"Response {index}.",),
+                    ),
+                ]
+            )
+        else:
+            expectations.extend(
+                [
+                    StructuredExpectation(
+                        task=LLMTask.INTAKE_PATCH,
+                        output_type=IntakeRecordPatch,
+                        response=completing_intake_patch(
+                            message_sequence=final_message_sequence,
+                            quote=content,
+                        ),
+                    ),
+                    StreamExpectation(
+                        task=LLMTask.INTAKE_RESPONSE,
+                        chunks=("Thank you for sharing.",),
+                    ),
+                ]
+            )
+    expectations.append(
+        StructuredExpectation(
+            task=LLMTask.ASSESSMENT,
+            output_type=AssessmentResult,
+            response=assessment_result(),
+        )
+    )
+    fake = FakeLLM(expectations)
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session_id = (await runtime.application.get_snapshot()).active_session
+        assert session_id is not None
+        for content in turn_messages:
+            turn = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    session_id=session_id.id,
+                    client_message_id=uuid4(),
+                    content=content,
+                )
+            )
+            await wait_for_chat_turn(
+                runtime.application,
+                turn.id,
+                ChatTurnStatus.COMPLETE,
+            )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
         revision = (await runtime.application.get_snapshot()).revision
         snapshot = await runtime.application.select_style(
