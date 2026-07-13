@@ -120,7 +120,9 @@ markupsafe==3.0.2
 ollama==0.6.2
     # via langchain-ollama
 openai==2.38.0
-    # via langchain-openai
+    # via
+    #   -r requirements.in
+    #   langchain-openai
 orjson==3.11.2
     # via langsmith
 outcome==1.3.0.post0

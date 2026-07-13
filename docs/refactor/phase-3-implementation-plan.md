@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-12
 review_cycle_days: 30
 source_of_truth_for: Detailed implementation plan for architecture refactor Phase 3
@@ -28,7 +28,9 @@ At the end of Phase 3, the new package must contain:
 - one tracing wrapper around the gateway boundary;
 - four independently testable processors with typed inputs and results;
 - pure prompt, context, validation, merge, and policy helpers;
-- no persistence, HTTP, WebSocket, application-task, or workflow-transition implementation.
+- no HTTP, WebSocket, application-task, or workflow-transition implementation.
+
+**Step 0 (prerequisite):** limited completion of Phase 2 processor-facing persistence seams (`PlanContent`, durable intake record on sessions, optional post-session plan revision). This does not move application orchestration or ordinary processor persistence into Phase 3.
 
 Phase 3 preserves product behavior where that behavior is therapeutically useful, but it does not preserve the legacy implementation topology. It deliberately replaces nested agents and generic response metadata with explicit processor contracts.
 
@@ -183,6 +185,8 @@ Phase 3 includes:
 - therapy prompt/context construction and streaming;
 - typed post-session analysis, briefing, profile patch, and plan patch generation;
 - pure merge and no-op detection helpers;
+- shared domain `PlanContent` model;
+- Step 0 store seams: `intake_record_json` on intake sessions, `complete_chat_turn` intake-record persistence, optional post-session plan revision via `NewPlanRevision`, compact store-derived post-session operation result;
 - Phase 3 unit and processor tests;
 - import-boundary validation;
 - optional local-server smoke tests.
@@ -195,8 +199,8 @@ Phase 3 must not implement:
 - application locking or task supervision;
 - `EventStream`;
 - operation scheduling or recovery;
-- chat-turn acceptance or persistence;
-- store transactions;
+- chat-turn acceptance or persistence (other than Step 0 `complete_chat_turn` intake-record extension);
+- store transactions (other than the explicitly listed Step 0 seam corrections);
 - HTTP routes;
 - WebSocket events;
 - FastAPI startup or lifespan;
@@ -206,7 +210,7 @@ Phase 3 must not implement:
 - workflow transitions;
 - selection-command handling;
 - session start/end handling;
-- persistence of intake records, assessment results, profile patches, plans, or briefings;
+- persistence of intake records, assessment results, profile patches, plans, or briefings (other than Step 0 seam corrections for intake record storage and optional post-session plan creation);
 - migration or compatibility logic;
 - deletion of the legacy agents or `LLMService`;
 - production selection of the new package;
@@ -223,7 +227,7 @@ Phase 3 may define typed results that Phase 4 will persist, but it must not crea
 
 ## 4. Entry conditions
 
-Phase 3 starts only after all Phase 2 exit criteria are satisfied.
+Phase 3 starts only after all Phase 2 exit criteria are satisfied. **Step 0** closes the processor/store seams identified during planning (intake record durability, `PlanContent`, optional post-session plan revision).
 
 Required inputs from Phase 2:
 
@@ -264,7 +268,11 @@ src/jung/
 │   ├── structured.py
 │   ├── tracing.py
 │   └── fake.py
-├── styles.py
+├── styles/
+│   ├── __init__.py
+│   ├── jung/
+│   ├── cbt/
+│   └── freud/
 └── phases/
     ├── __init__.py
     ├── intake/
@@ -307,7 +315,7 @@ tests/unit/jung/
 └── test_styles.py
 
 tests/integration/jung/
-└── test_phase_processors.py
+└── test_processor_contracts.py
 ```
 
 This tree is a starting point, not a requirement to create every file immediately.
@@ -408,7 +416,7 @@ class ModelPolicy:
     model: str
     temperature: float
     timeout_seconds: float
-    max_output_tokens: int | None = None
+    max_completion_tokens: int | None = None
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.PROMPT
 ```
 
@@ -1714,6 +1722,22 @@ Use AST/import checks rather than line-count budgets.
 
 ## 20. Implementation sequence
 
+Workstreams use internal names (Step 0, Workstreams A–D) to avoid confusion with architecture-refactor Phases 1–7.
+
+### Step 0 — Persistence seam remediation
+
+Before gateway or processor code:
+
+- add domain `PlanContent` with shared validators; refactor `Plan` to inherit it;
+- refactor `select_style_and_create_initial_plan(content=PlanContent)`;
+- add `sessions.intake_record_json` in fresh `CREATE TABLE` (schema version 3);
+- extend `complete_chat_turn(..., intake_record=None)` for intake sessions;
+- refactor `complete_post_session(..., new_plan: NewPlanRevision | None)` with store-derived compact operation result;
+- add five integration tests for intake and post-session seams;
+- scope `validate-refactor-phase-2` pytest and ruff to Phase 2 paths only.
+
+Validation: `make validate-refactor-phase-2` green.
+
 ### Step 1 — Confirm Phase 2 seams
 
 Before writing model-facing code:
@@ -2010,15 +2034,19 @@ Fewer commits are acceptable if each commit remains coherent. Do not split every
 
 ### 22.1 Fast local loop
 
-Recommended:
+Run the complete Phase 3 target suite under asyncio:
 
 ```bash
-uv run pytest tests/unit/jung/llm tests/unit/jung/phases -q
-uv run pytest tests/integration/jung/test_phase_processors.py -q
-uv run ruff check src/jung/llm src/jung/phases src/jung/styles.py tests/unit/jung tests/integration/jung
+make phase-3-test
 ```
 
-Use the repository's canonical type-check command once Phase 2 has established the target package configuration.
+For lint plus tests:
+
+```bash
+make validate-refactor-phase-3
+```
+
+The Phase 3 Make target explicitly disables the legacy Trio test mode and enables pytest-asyncio.
 
 ### 22.2 PR validation
 
@@ -2032,24 +2060,90 @@ The Phase 3 PR should run:
 
 Do not run a real local model in mandatory hosted CI.
 
-### 22.3 Optional local-model smoke
+### 22.3 Local-model smoke (required before merge)
 
-Add one opt-in command, for example:
+Add one opt-in command:
 
 ```text
 make smoke-refactor-phase-3-local-llm
 ```
 
+Run this against the target local server before merging Phase 3. It remains manual and is not part of mandatory hosted CI.
+
+Required environment variables (fail fast when missing or empty):
+
+- `PHASE3_SMOKE_SERVER` — implementation identity (for example `llama.cpp`), not the HTTP endpoint
+- `PHASE3_SMOKE_BASE_URL` — OpenAI-compatible base URL
+- `PHASE3_SMOKE_MODEL` — exact model identifier loaded on the server
+
+**Request timeout vs path acceptance budget**
+
+- `PHASE3_SMOKE_REQUEST_TIMEOUT` (fallback: `PHASE3_SMOKE_TIMEOUT`) — per provider attempt
+- `PHASE3_SMOKE_THERAPY_MAX_SECONDS`, `PHASE3_SMOKE_ASSESSMENT_MAX_SECONDS`, `PHASE3_SMOKE_POST_SESSION_MAX_SECONDS` — end-to-end path budgets (default 300 each)
+- `PHASE3_SMOKE_STRICT_ACCEPTANCE=1` (default) — enforces aggregate `asyncio.timeout` per path; merge gate
+- `PHASE3_SMOKE_STRICT_ACCEPTANCE=0` — diagnostic mode; records `acceptance_passed` without enforcing aggregate deadline
+
+When request timeout and path budget are both 300 seconds, aggregate cancellation may appear as `path_timeout` / `cancelled` rather than provider `timeout`. For attribution, use `REQUEST_TIMEOUT > path_budget` in diagnostic mode.
+
+**Representative merge acceptance**
+
+Merge acceptance must use the intended deployment model, structured mode, thinking configuration, request extras, and completion-token policies. Smoke-only caps from `PHASE3_SMOKE_MAX_COMPLETION_TOKENS` diagnose timeouts but cannot satisfy the acceptance gate unless equivalent runtime policy is adopted.
+
+Merge acceptance example:
+
+```bash
+# structured mode, extras, thinking, and token caps must match intended runtime.
+PHASE3_SMOKE_REQUEST_TIMEOUT=300 \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=1 \
+PHASE3_SMOKE_STRUCTURED_MODE=json_schema \
+make smoke-refactor-phase-3-local-llm
+```
+
+Diagnostic example (focused post-session, experimental caps):
+
+```bash
+PHASE3_SMOKE_TARGET="tests/smoke/jung/test_phase3_local_llm.py::test_smoke_post_session_processor" \
+PHASE3_SMOKE_PYTEST_ARGS="-vv -s --log-cli-level=INFO --durations=0" \
+PHASE3_SMOKE_LOG_PROMPT_PREVIEWS=0 \
+PHASE3_SMOKE_REQUEST_TIMEOUT=360 \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=0 \
+PHASE3_SMOKE_MAX_COMPLETION_TOKENS='{"post_session_analysis":1400,"post_session_update":1800}' \
+PHASE3_SMOKE_SERVER=llama.cpp \
+PHASE3_SMOKE_BASE_URL=http://host.docker.internal:8080/v1 \
+PHASE3_SMOKE_MODEL='<exact-model-id>' \
+make smoke-refactor-phase-3-local-llm
+```
+
+A `PHASE3_SMOKE_TIMEOUT=900` rerun is diagnostic only and is not representative performance evidence. Do not merge on 900-second diagnostic success alone.
+
 It should verify:
 
-- one short text stream;
-- one small structured result;
+- one short therapy stream via `TherapyProcessor.stream_response()`;
+- one full `AssessmentProcessor.assess()` call with real prompts and styles;
+- one full two-call `PostSessionProcessor.process()` flow;
 - configured structured-output mode;
 - configured request extras such as thinking-mode controls;
-- timeout/error reporting;
+- `gateway.aclose()` cleanup;
+- structured-call and provider-attempt evidence with `call_id` correlation;
+- path status, acceptance fields, and instrumentation integrity;
 - llama.cpp or LM Studio compatibility through the same adapter.
 
 The smoke test must not mutate the database or require the legacy server.
+Emit one machine-extractable terminal line when real smoke metadata is present (`server`, `model`, `base_url`):
+
+```text
+PHASE3_SMOKE_EVIDENCE={"server":"llama.cpp","strict_acceptance":true,"calls":[...],"provider_attempts":[...],...}
+```
+
+Synthetic diagnostic unit tests must not emit this line. Use `PHASE3_SMOKE_PYTEST_ARGS="-vv -s --log-cli-level=INFO --durations=0"` for progress visibility via provider-attempt and tracing logs.
+
+Evidence layers:
+
+- **path** (`therapy`, `assessment`, `post_session`) — `status`, `acceptance_passed`, latency
+- **calls** — structured logical calls (`input_chars`, `output_schema_chars`, `result_chars`)
+- **provider_attempts** — per structured-output request (`prompt_chars`, `correction_trigger`, token usage when available)
+
+Record a PR evidence table with server implementation, base URL, model, structured mode, path budgets, request timeout, effective completion caps, measured latencies, and configured nonsecret extras. Do not record therapeutic content.
 
 ### 22.4 Dependency validation
 

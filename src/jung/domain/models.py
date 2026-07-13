@@ -107,6 +107,7 @@ class Session(BaseModel):
     ended_at: UtcDateTime | None = None
     summary: str | None = None
     briefing: dict[str, Any] | None = None
+    intake_record: dict[str, Any] | None = None
 
 
 class Message(BaseModel):
@@ -128,29 +129,85 @@ class Message(BaseModel):
         return value
 
 
-class Plan(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class PlanContent(BaseModel):
+    """Mutable plan fields shared across assessment, store, and revisions."""
 
-    id: UUID
-    version: int = Field(ge=1)
-    selected_style: str
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     focus: str
     themes: list[str]
     goals: list[str]
     current_progress: str
     planned_interventions: list[str]
     revision_recommendations: list[str]
+
+    @field_validator("focus", "current_progress")
+    @classmethod
+    def non_empty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must be non-empty")
+        return value
+
+    @field_validator(
+        "themes",
+        "goals",
+        "planned_interventions",
+        "revision_recommendations",
+        mode="before",
+    )
+    @classmethod
+    def normalize_string_lists(cls, value: object) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("must be a list or tuple")
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("list items must be strings")
+            text = " ".join(item.split())
+            if not text:
+                raise ValueError("list items must be non-empty")
+            if text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+    @field_validator("goals", "planned_interventions")
+    @classmethod
+    def non_empty_required_lists(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("must contain at least one item")
+        return value
+
+
+class Plan(PlanContent):
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    version: int = Field(ge=1)
+    selected_style: str
     session_briefing: dict[str, Any] | None = None
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
     created_at: UtcDateTime
 
-    @field_validator("focus", "current_progress")
+    @field_validator("selected_style")
     @classmethod
-    def non_empty_text(cls, value: str) -> str:
+    def non_empty_style(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("must be non-empty")
         return value
+
+
+class NewPlanRevision(BaseModel):
+    """Candidate immutable plan revision for post-session completion."""
+
+    model_config = ConfigDict(frozen=True)
+
+    plan_id: UUID
+    content: PlanContent
 
 
 class Operation(BaseModel):

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from jung.domain.models import OperationStatus, Profile, SessionKind, Stage
+from jung.domain.models import OperationStatus, PlanContent, Profile, SessionKind, Stage
 from jung.persistence.sqlite_store import SQLiteStore
 
 
@@ -62,12 +62,14 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
         expected_revision=store.get_app_state().revision,
         style_id="cbt",
         plan_id=plan_id,
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
+        content=PlanContent(
+            focus="anxiety",
+            themes=["worry"],
+            goals=["sleep"],
+            current_progress="baseline",
+            planned_interventions=["grounding"],
+            revision_recommendations=["track sleep"],
+        ),
         intake_session_id=intake_id,
         now=now,
     )

@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at TEXT NULL,
     summary TEXT NULL,
     briefing_json TEXT NULL,
-    FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE RESTRICT
+    intake_record_json TEXT NULL,
+    FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE RESTRICT,
+    CHECK (kind = 'intake' OR intake_record_json IS NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_open

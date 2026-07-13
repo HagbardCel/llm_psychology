@@ -9,6 +9,7 @@ description = "Virtual LLM-driven therapist backend services"
 requires-python = ">=3.11"
 authors = [{ name = "Therapist Team" }]
 dependencies = [
+    "openai>=1.68.0",
     "langchain-core",
     "langchain-google-genai",
     "langchain-ollama==1.0.0",
@@ -40,6 +41,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "psychoanalyst_app" = ["styles/**/*", "prompts/**/*"]
 "jung.persistence" = ["schema.sql"]
+"jung.styles" = ["*/*.txt"]
 
 [tool.black]
 line-length = 88

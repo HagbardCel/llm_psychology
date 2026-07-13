@@ -30,7 +30,7 @@ from jung.domain.models import (
     StoredProfile,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -261,6 +261,7 @@ def row_to_session(row: sqlite3.Row | tuple[Any, ...]) -> Session:
         ended_at=parse_dt(row[4]) if row[4] else None,
         summary=row[5],
         briefing=json_loads(row[6]),
+        intake_record=json_loads(row[7]) if len(row) > 7 else None,
     )
 
 

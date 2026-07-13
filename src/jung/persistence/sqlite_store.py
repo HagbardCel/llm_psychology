@@ -25,10 +25,12 @@ from jung.domain.models import (
     ChatTurnStatus,
     Message,
     MessageRole,
+    NewPlanRevision,
     Operation,
     OperationKind,
     OperationStatus,
     Plan,
+    PlanContent,
     Profile,
     Session,
     SessionKind,
@@ -47,6 +49,30 @@ def _build_plan(**values: object) -> Plan:
         return Plan.model_validate(values, strict=True)
     except ValidationError as exc:
         raise InvariantViolation("invalid plan payload") from exc
+
+
+def _derived_profiles_equal(
+    existing: dict[str, Any] | None,
+    updated: dict[str, Any] | None,
+) -> bool:
+    if existing is None and updated is None:
+        return True
+    if existing is None or updated is None:
+        return False
+    existing_normalized = sql.validate_json_mapping(
+        existing, field_name="derived_profile"
+    )
+    updated_normalized = sql.validate_json_mapping(
+        updated, field_name="derived_profile"
+    )
+    return existing_normalized == updated_normalized
+
+
+_SESSION_SELECT = """
+    SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json,
+           intake_record_json
+    FROM sessions
+"""
 
 
 class SQLiteStore:
@@ -146,21 +172,14 @@ class SQLiteStore:
     def list_sessions(self) -> list[Session]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                FROM sessions
-                ORDER BY started_at DESC
-                """
+                f"{_SESSION_SELECT} ORDER BY started_at DESC"
             ).fetchall()
             return [sql.row_to_session(row) for row in rows]
 
     def get_session(self, session_id: UUID) -> Session | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                FROM sessions WHERE id = ?
-                """,
+                f"{_SESSION_SELECT} WHERE id = ?",
                 (str(session_id),),
             ).fetchone()
             return sql.row_to_session(row) if row else None
@@ -240,11 +259,7 @@ class SQLiteStore:
     def get_active_session(self) -> Session | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                FROM sessions WHERE ended_at IS NULL
-                LIMIT 1
-                """
+                f"{_SESSION_SELECT} WHERE ended_at IS NULL LIMIT 1"
             ).fetchone()
             return sql.row_to_session(row) if row else None
 
@@ -289,8 +304,9 @@ class SQLiteStore:
                 conn.execute(
                     """
                     INSERT INTO sessions (
-                        id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                    ) VALUES (?, ?, NULL, ?, NULL, NULL, NULL)
+                        id, kind, plan_id, started_at, ended_at, summary,
+                        briefing_json, intake_record_json
+                    ) VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL)
                     """,
                     (
                         str(intake_session_id),
@@ -480,12 +496,7 @@ class SQLiteStore:
         expected_revision: int,
         style_id: str,
         plan_id: UUID,
-        focus: str,
-        themes: list[str],
-        goals: list[str],
-        current_progress: str,
-        planned_interventions: list[str],
-        revision_recommendations: list[str],
+        content: PlanContent,
         intake_session_id: UUID,
         now: datetime,
     ) -> tuple[AppState, Plan]:
@@ -493,12 +504,7 @@ class SQLiteStore:
             id=plan_id,
             version=1,
             selected_style=style_id,
-            focus=focus,
-            themes=themes,
-            goals=goals,
-            current_progress=current_progress,
-            planned_interventions=planned_interventions,
-            revision_recommendations=revision_recommendations,
+            **content.model_dump(),
             session_briefing=None,
             source_session_id=intake_session_id,
             supersedes_plan_id=None,
@@ -572,8 +578,11 @@ class SQLiteStore:
                 raise InvariantViolation("current plan is required")
             conn.execute(
                 """
-                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-                VALUES (?, ?, ?, ?, NULL, NULL, NULL)
+                INSERT INTO sessions (
+                    id, kind, plan_id, started_at, ended_at, summary, briefing_json,
+                    intake_record_json
+                )
+                VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL)
                 """,
                 (
                     str(session_id),
@@ -584,10 +593,7 @@ class SQLiteStore:
             )
             self._set_stage(conn, Stage.THERAPY, now)
             row = conn.execute(
-                """
-                SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-                FROM sessions WHERE id = ?
-                """,
+                f"{_SESSION_SELECT} WHERE id = ?",
                 (str(session_id),),
             ).fetchone()
             session_holder["session"] = sql.row_to_session(row)
@@ -648,20 +654,16 @@ class SQLiteStore:
         *,
         summary: str,
         briefing: dict[str, Any],
-        derived_profile: dict[str, Any],
-        plan_id: UUID,
-        focus: str,
-        themes: list[str],
-        goals: list[str],
-        current_progress: str,
-        planned_interventions: list[str],
-        revision_recommendations: list[str],
+        derived_profile: dict[str, Any] | None,
+        new_plan: NewPlanRevision | None,
         now: datetime,
     ) -> AppState:
         validated_briefing = sql.validate_json_mapping(briefing, field_name="briefing")
-        validated_profile = sql.validate_json_mapping(
-            derived_profile, field_name="derived_profile"
-        )
+        validated_profile: dict[str, Any] | None = None
+        if derived_profile is not None:
+            validated_profile = sql.validate_json_mapping(
+                derived_profile, field_name="derived_profile"
+            )
 
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.POST_SESSION})
@@ -680,21 +682,18 @@ class SQLiteStore:
                 raise InvariantViolation("operation must be running")
             source_session_id = UUID(op_row[2])
             current_plan = self._require_current_plan(conn)
-            plan = _build_plan(
-                id=plan_id,
-                version=current_plan.version + 1,
-                selected_style=current_plan.selected_style,
-                focus=focus,
-                themes=themes,
-                goals=goals,
-                current_progress=current_progress,
-                planned_interventions=planned_interventions,
-                revision_recommendations=revision_recommendations,
-                session_briefing=validated_briefing,
-                source_session_id=source_session_id,
-                supersedes_plan_id=current_plan.id,
-                created_at=now,
+            profile_row = conn.execute(
+                "SELECT derived_profile_json, current_plan_id, updated_at "
+                "FROM profile WHERE singleton_id = 1"
+            ).fetchone()
+            existing_profile = (
+                sql.json_loads(profile_row[0]) if profile_row and profile_row[0] else None
             )
+            profile_changed = not _derived_profiles_equal(
+                existing_profile, validated_profile
+            )
+            plan_changed = new_plan is not None
+
             conn.execute(
                 """
                 UPDATE sessions
@@ -703,44 +702,91 @@ class SQLiteStore:
                 """,
                 (summary, sql.json_dumps(validated_briefing), str(source_session_id)),
             )
-            conn.execute(
-                """
-                INSERT INTO plans (
-                    id, version, selected_style, focus, themes_json, goals_json,
-                    current_progress, planned_interventions_json,
-                    revision_recommendations_json, session_briefing_json,
-                    source_session_id, supersedes_plan_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(plan.id),
-                    plan.version,
-                    plan.selected_style,
-                    plan.focus,
-                    sql.json_dumps(plan.themes),
-                    sql.json_dumps(plan.goals),
-                    plan.current_progress,
-                    sql.json_dumps(plan.planned_interventions),
-                    sql.json_dumps(plan.revision_recommendations),
-                    sql.json_dumps(plan.session_briefing),
-                    str(plan.source_session_id),
-                    str(plan.supersedes_plan_id),
-                    sql.dt(plan.created_at),
-                ),
-            )
-            conn.execute(
-                """
-                UPDATE profile
-                SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
-                WHERE singleton_id = 1
-                """,
-                (
-                    sql.json_dumps(validated_profile),
-                    str(plan.id),
-                    sql.dt(now),
-                ),
-            )
-            result = {"plan_id": str(plan.id), "version": plan.version}
+
+            result_plan_id: str | None = None
+            result_plan_version: int | None = None
+            current_plan_id = str(current_plan.id)
+
+            if new_plan is not None:
+                plan = _build_plan(
+                    id=new_plan.plan_id,
+                    version=current_plan.version + 1,
+                    selected_style=current_plan.selected_style,
+                    **new_plan.content.model_dump(),
+                    session_briefing=validated_briefing,
+                    source_session_id=source_session_id,
+                    supersedes_plan_id=current_plan.id,
+                    created_at=now,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO plans (
+                        id, version, selected_style, focus, themes_json, goals_json,
+                        current_progress, planned_interventions_json,
+                        revision_recommendations_json, session_briefing_json,
+                        source_session_id, supersedes_plan_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(plan.id),
+                        plan.version,
+                        plan.selected_style,
+                        plan.focus,
+                        sql.json_dumps(plan.themes),
+                        sql.json_dumps(plan.goals),
+                        plan.current_progress,
+                        sql.json_dumps(plan.planned_interventions),
+                        sql.json_dumps(plan.revision_recommendations),
+                        sql.json_dumps(plan.session_briefing),
+                        str(plan.source_session_id),
+                        str(plan.supersedes_plan_id),
+                        sql.dt(plan.created_at),
+                    ),
+                )
+                result_plan_id = str(plan.id)
+                result_plan_version = plan.version
+                current_plan_id = str(plan.id)
+
+            if profile_changed or plan_changed:
+                if profile_changed and plan_changed:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (
+                            sql.json_dumps(validated_profile),
+                            current_plan_id,
+                            sql.dt(now),
+                        ),
+                    )
+                elif profile_changed:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET derived_profile_json = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (
+                            sql.json_dumps(validated_profile),
+                            sql.dt(now),
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE profile
+                        SET current_plan_id = ?, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (current_plan_id, sql.dt(now)),
+                    )
+            result = {
+                "plan_id": result_plan_id,
+                "plan_version": result_plan_version,
+                "profile_changed": profile_changed,
+            }
             cursor = conn.execute(
                 """
                 UPDATE operations
@@ -851,8 +897,15 @@ class SQLiteStore:
         *,
         assistant_message_id: UUID,
         content: str,
+        intake_record: dict[str, Any] | None = None,
         now: datetime,
     ) -> ChatTurn:
+        validated_intake_record: dict[str, Any] | None = None
+        if intake_record is not None:
+            validated_intake_record = sql.validate_json_mapping(
+                intake_record, field_name="intake_record"
+            )
+
         def mutate(conn: sqlite3.Connection) -> None:
             row = conn.execute(
                 "SELECT session_id FROM chat_turns WHERE id = ?",
@@ -861,6 +914,18 @@ class SQLiteStore:
             if row is None:
                 raise NotFound(f"chat turn {turn_id}")
             session_id = UUID(row[0])
+            session_row = conn.execute(
+                f"{_SESSION_SELECT} WHERE id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if session_row is None:
+                raise NotFound(f"session {session_id}")
+            session_kind = SessionKind(session_row[1])
+            if validated_intake_record is not None:
+                if session_kind is not SessionKind.INTAKE:
+                    raise InvariantViolation(
+                        "intake_record is only allowed for intake sessions"
+                    )
             sequence = self._next_sequence(conn, session_id)
             conn.execute(
                 """
@@ -876,6 +941,18 @@ class SQLiteStore:
                     sql.dt(now),
                 ),
             )
+            if validated_intake_record is not None:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET intake_record_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        sql.json_dumps(validated_intake_record),
+                        str(session_id),
+                    ),
+                )
             cursor = conn.execute(
                 """
                 UPDATE chat_turns
@@ -1253,10 +1330,7 @@ class SQLiteStore:
         self, conn: sqlite3.Connection, session_id: UUID
     ) -> Session:
         row = conn.execute(
-            """
-            SELECT id, kind, plan_id, started_at, ended_at, summary, briefing_json
-            FROM sessions WHERE id = ? AND ended_at IS NULL
-            """,
+            f"{_SESSION_SELECT} WHERE id = ? AND ended_at IS NULL",
             (str(session_id),),
         ).fetchone()
         if row is None:

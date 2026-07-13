@@ -1,5 +1,6 @@
 
 # LLM Abstraction & Interaction
+openai>=1.68.0
 langchain-core
 langchain-google-genai
 langchain-ollama==1.0.0
