@@ -15,6 +15,23 @@ T = TypeVar("T", bound=BaseModel)
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
 
+_FORBIDDEN_SCHEMA_KEYS = frozenset(
+    {
+        "allOf",
+        "oneOf",
+        "not",
+        "dependentRequired",
+        "dependentSchemas",
+        "if",
+        "then",
+        "else",
+    }
+)
+
+
+class UnsupportedStrictSchema(ValueError):
+    """Raised when a model schema cannot be converted to the strict subset."""
+
 
 def strip_markdown_json_fence(text: str) -> str:
     stripped = text.strip()
@@ -75,34 +92,99 @@ def build_correction_messages(
     return [*original_messages, correction]
 
 
+def _reject_forbidden_keys(node: dict[str, Any], *, path: str) -> None:
+    for key in _FORBIDDEN_SCHEMA_KEYS:
+        if key in node:
+            raise UnsupportedStrictSchema(
+                f"unsupported schema keyword {key!r} at {path or 'root'}"
+            )
+
+
 def to_provider_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Narrow a JSON schema dict to the OpenAI strict json_schema subset."""
 
-    def transform(node: Any) -> Any:
+    if "anyOf" in schema:
+        raise UnsupportedStrictSchema("root-level anyOf is not supported")
+    if schema.get("type") != "object":
+        raise UnsupportedStrictSchema("root schema must be type object")
+
+    def transform(node: Any, *, path: str) -> Any:
         if not isinstance(node, dict):
             return node
+        _reject_forbidden_keys(node, path=path)
         result = dict(node)
+        if "default" in result:
+            del result["default"]
         node_type = result.get("type")
         if node_type == "object":
             properties = result.get("properties")
             if isinstance(properties, dict):
                 result["properties"] = {
-                    key: transform(value) for key, value in properties.items()
+                    key: transform(value, path=f"{path}.properties.{key}")
+                    for key, value in properties.items()
                 }
                 result["required"] = sorted(properties.keys())
             result["additionalProperties"] = False
         elif node_type == "array":
             items = result.get("items")
             if isinstance(items, dict):
-                result["items"] = transform(items)
+                result["items"] = transform(items, path=f"{path}.items")
         defs = result.get("$defs")
         if isinstance(defs, dict):
             result["$defs"] = {
-                key: transform(value) for key, value in defs.items()
+                key: transform(value, path=f"{path}.$defs.{key}")
+                for key, value in defs.items()
             }
+        any_of = result.get("anyOf")
+        if isinstance(any_of, list):
+            result["anyOf"] = [
+                transform(branch, path=f"{path}.anyOf[{index}]")
+                for index, branch in enumerate(any_of)
+            ]
         return result
 
-    return transform(schema)
+    return transform(schema, path="root")
+
+
+def assert_valid_strict_provider_schema(schema: dict[str, Any]) -> None:
+    """Validate a provider payload schema against the strict subset rules."""
+
+    def walk(node: Any, *, path: str, is_root: bool) -> None:
+        if not isinstance(node, dict):
+            return
+        if is_root:
+            if node.get("type") != "object":
+                raise AssertionError("root schema must be type object")
+            if "anyOf" in node:
+                raise AssertionError("root schema must not contain anyOf")
+        _reject_forbidden_keys(node, path=path)
+        if node.get("type") == "object":
+            properties = node.get("properties")
+            if not isinstance(properties, dict):
+                raise AssertionError(f"object at {path} must define properties")
+            required = node.get("required")
+            if required != sorted(properties.keys()):
+                raise AssertionError(f"object at {path} must require all properties")
+            if node.get("additionalProperties") is not False:
+                raise AssertionError(
+                    f"object at {path} must set additionalProperties false"
+                )
+            for key, value in properties.items():
+                walk(value, path=f"{path}.properties.{key}", is_root=False)
+        if node.get("type") == "array":
+            items = node.get("items")
+            if isinstance(items, dict):
+                walk(items, path=f"{path}.items", is_root=False)
+        defs = node.get("$defs")
+        if isinstance(defs, dict):
+            for key, value in defs.items():
+                walk(value, path=f"{path}.$defs.{key}", is_root=False)
+        any_of = node.get("anyOf")
+        if isinstance(any_of, list):
+            for index, branch in enumerate(any_of):
+                walk(branch, path=f"{path}.anyOf[{index}]", is_root=False)
+
+    walk(schema, path="root", is_root=True)
 
 
 def response_format_for_mode(
@@ -111,6 +193,7 @@ def response_format_for_mode(
 ) -> dict[str, object] | None:
     if mode is StructuredOutputMode.JSON_SCHEMA:
         schema = to_provider_strict_json_schema(output_type.model_json_schema())
+        assert_valid_strict_provider_schema(schema)
         return {
             "type": "json_schema",
             "json_schema": {
