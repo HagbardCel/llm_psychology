@@ -1536,15 +1536,14 @@ Use unit tests for:
 
 Integration tests added in round-2 remediation:
 
-- `test_submit_message_cancel_during_store_call_drains_and_releases_lock`;
-- `test_submit_message_cancel_after_turn_assigned_hands_off_worker`;
+- `test_submit_message_cancel_during_store_call_drains_and_releases_lock` (repeated cancellation with yielded double cancel);
+- `test_submit_message_cancel_after_turn_assigned_worker_completes_and_releases_lock`;
 - `test_submit_message_cancel_during_accepted_event_publication`;
 - `test_end_session_schedules_operation_when_publish_cancelled`;
 - `test_retry_operation_schedules_operation_when_publish_fails`;
-- `test_application_context_preflights_json_schema_models`;
 - `test_application_context_rejects_unsupported_schema`;
 - `test_full_intake_lifecycle_through_application`;
-- split failed-chat retry matrix (four tests) including busy retry when another turn is `PENDING`.
+- `test_failed_chat_retry_uses_persisted_original_content` plus busy-retry and structural-eligibility cases.
 
 Do not mock `SQLiteStore` in the main application workflow tests. The real temporary database is part of the Phase 4 contract.
 
