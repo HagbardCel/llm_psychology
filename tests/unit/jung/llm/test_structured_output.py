@@ -76,6 +76,21 @@ def test_real_output_models_produce_valid_strict_provider_payload(
     assert_valid_strict_provider_schema(inner)
 
 
+@pytest.mark.parametrize("metadata_key", ["title", "default"])
+def test_strict_provider_schema_rejects_stripped_metadata(
+    metadata_key: str,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+        "additionalProperties": False,
+        metadata_key: "unexpected",
+    }
+    with pytest.raises(UnsupportedStrictSchema, match=metadata_key):
+        assert_valid_strict_provider_schema(schema)
+
+
 def test_root_anyof_is_rejected() -> None:
     with pytest.raises(UnsupportedStrictSchema, match="root-level anyOf"):
         to_provider_strict_json_schema({"anyOf": [{"type": "object"}]})

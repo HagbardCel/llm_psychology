@@ -115,9 +115,19 @@ def build_correction_messages(
     return [*original_messages, correction]
 
 
-def _reject_unknown_schema_keys(node: dict[str, Any], *, path: str) -> None:
+def _reject_unknown_schema_keys(
+    node: dict[str, Any],
+    *,
+    path: str,
+    reject_stripped_metadata: bool = False,
+) -> None:
     for key in node:
         if key in _STRIPPED_SCHEMA_KEYS:
+            if reject_stripped_metadata:
+                raise UnsupportedStrictSchema(
+                    f"stripped schema metadata {key!r} must not remain "
+                    f"at {path or 'root'}"
+                )
             continue
         if key not in _ALLOWED_SCHEMA_KEYS:
             raise UnsupportedStrictSchema(
@@ -184,7 +194,11 @@ def assert_valid_strict_provider_schema(schema: dict[str, Any]) -> None:
                 raise AssertionError("root schema must be type object")
             if "anyOf" in node:
                 raise AssertionError("root schema must not contain anyOf")
-        _reject_unknown_schema_keys(node, path=path)
+        _reject_unknown_schema_keys(
+            node,
+            path=path,
+            reject_stripped_metadata=True,
+        )
         if node.get("type") == "object":
             properties = node.get("properties")
             if not isinstance(properties, dict):
