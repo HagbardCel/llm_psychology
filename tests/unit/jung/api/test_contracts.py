@@ -148,19 +148,38 @@ def _make_failed_operation(*, session_id: UUID, now: datetime) -> Operation:
     )
 
 
-def _make_failed_chat_turn(*, session_id: UUID, now: datetime) -> ChatTurn:
+def _make_chat_turn(
+    *,
+    session_id: UUID,
+    now: datetime,
+    status: ChatTurnStatus,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    retryable: bool = False,
+) -> ChatTurn:
+    if status is ChatTurnStatus.PENDING:
+        assert error_code is None
+        assert error_message is None
+        assert retryable is False
+    elif status is ChatTurnStatus.FAILED:
+        assert error_code is not None
+        assert error_message is not None
+    else:
+        raise AssertionError(f"unsupported test status: {status}")
+
     return ChatTurn(
         id=uuid4(),
         session_id=session_id,
         client_message_id=uuid4(),
-        status=ChatTurnStatus.FAILED,
+        status=status,
         user_message_id=uuid4(),
-        error_code="stale_pending",
-        error_message="The interrupted request can be retried.",
-        retryable=True,
+        assistant_message_id=None,
+        error_code=error_code,
+        error_message=error_message,
+        retryable=retryable,
         created_at=now,
         updated_at=now,
-        completed_at=now,
+        completed_at=now if status is ChatTurnStatus.FAILED else None,
     )
 
 
@@ -196,7 +215,7 @@ def test_profile_requests_reject_top_level_and_nested_extras() -> None:
         )
 
 
-def test_send_message_command_requires_all_fields() -> None:
+def test_send_message_command_validates_complete_payload() -> None:
     command = SendMessageCommand.model_validate(
         {
             "type": "send_message",
@@ -434,11 +453,39 @@ def test_operation_changed_event_shares_mapping_context_request_id() -> None:
     assert event.snapshot.operation.error.request_id == request_id
 
 
-def test_failed_chat_turn_maps_through_snapshot_active_chat_turn() -> None:
+def test_failed_chat_turn_summary_normalizes_internal_error() -> None:
     now = _now()
     session = _make_session(now=now)
-    turn = _make_failed_chat_turn(session_id=session.id, now=now)
     context = MappingContext(request_id=uuid4())
+    turn = _make_chat_turn(
+        session_id=session.id,
+        now=now,
+        status=ChatTurnStatus.FAILED,
+        error_code="stale_pending",
+        error_message="The interrupted request can be retried.",
+        retryable=True,
+    )
+
+    summary = to_chat_turn_summary(turn, context=context)
+
+    assert summary.id == turn.id
+    assert summary.status == "failed"
+    assert summary.error is not None
+    assert summary.error.code == "operation_failed"
+    assert summary.error.message == turn.error_message
+    assert summary.error.retryable is True
+    assert summary.error.request_id == context.request_id
+
+
+def test_pending_chat_turn_maps_to_snapshot_active_chat_turn() -> None:
+    now = _now()
+    session = _make_session(now=now)
+    context = MappingContext(request_id=uuid4())
+    turn = _make_chat_turn(
+        session_id=session.id,
+        now=now,
+        status=ChatTurnStatus.PENDING,
+    )
     snapshot = AppSnapshot(
         revision=2,
         stage=Stage.THERAPY,
@@ -447,15 +494,12 @@ def test_failed_chat_turn_maps_through_snapshot_active_chat_turn() -> None:
         available_commands=frozenset(),
     )
 
-    summary = to_chat_turn_summary(turn, context=context)
     response = to_snapshot_response(snapshot, context=context)
 
-    assert summary.error is not None
-    assert summary.error.code == "operation_failed"
-    assert summary.error.message == turn.error_message
-    assert summary.error.retryable is True
-    assert summary.error.request_id == context.request_id
-    assert response.active_chat_turn == summary
+    assert response.active_chat_turn is not None
+    assert response.active_chat_turn.id == turn.id
+    assert response.active_chat_turn.status == "pending"
+    assert response.active_chat_turn.error is None
 
 
 @pytest.mark.parametrize("model", _contract_wire_models())

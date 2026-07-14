@@ -221,12 +221,14 @@ Duplicate `(session_id, client_message_id)` resolution happens before revision v
 | `busy` | 409 | Conflicting session, mutation, operation, or generation |
 | `not_found` | 404 | Unknown session or resource |
 | `validation_error` | 422 | Request body failed validation |
-| `llm_unavailable` | 503 | Provider unreachable |
-| `llm_timeout` | 504 | Provider timeout |
-| `invalid_llm_output` | 422 | Structured output parse/validation failure |
+| `llm_unavailable` | n/a — durable/WS | Provider was unavailable |
+| `llm_timeout` | n/a — durable/WS | Provider request timed out |
+| `invalid_llm_output` | n/a — durable/WS | Provider output failed validation |
 | `operation_failed` | 409 | Durable operation already failed or cannot be accepted in current state |
 | `internal_error` | 500 | Unexpected server failure |
 | `not_ready` | 503 | API process not initialized or shutting down |
+
+These codes primarily describe durable operation/chat failures and WebSocket error envelopes. V1 exposes no ordinary synchronous HTTP provider invocation. When an existing durable failure is surfaced as `StoredWorkFailure` through an HTTP command boundary, the response status is `409`; the stored public code, sanitized message, and retryability are preserved.
 
 Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider exception text remains in server logs only and is not persisted in `error_message`.
 
