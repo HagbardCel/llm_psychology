@@ -34,6 +34,7 @@ dependencies = [
 [project.scripts]
 psychoanalyst-server = "psychoanalyst_app.server:cli"
 psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"
+jung-api = "jung.api.app:cli"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -70,6 +71,7 @@ select = [
 max-complexity = 32
 
 [tool.ruff.lint.per-file-ignores]
+"src/jung/api/routes.py" = ["B008"]
 "**/prompts.py" = ["E501"]
 "tests/**" = ["C901", "E501", "E402"]
 "src/psychoanalyst_app/orchestration/response_handler.py" = ["C901"]

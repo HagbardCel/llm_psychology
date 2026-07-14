@@ -203,9 +203,11 @@ async def test_chat_tokens_are_published_during_generation(store: SQLiteStore) -
     advance_to_ready(store)
     async with build_test_application(store, fake) as runtime:
         revision = (await runtime.application.get_snapshot()).revision
-        session = await runtime.application.start_session(
+
+        started = await runtime.application.start_session(
             StartSession(expected_revision=revision)
         )
+        session = started.session
         collected: list[object] = []
         async with runtime.events.subscribe() as events:
             turn = await runtime.application.submit_message(
@@ -310,9 +312,11 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
     )
     async with build_test_application(store, fake) as runtime:
         revision = (await runtime.application.get_snapshot()).revision
-        session = await runtime.application.start_session(
+
+        started = await runtime.application.start_session(
             StartSession(expected_revision=revision)
         )
+        session = started.session
         client_message_id = uuid4()
         turn = await runtime.application.submit_message(
             SendMessage(

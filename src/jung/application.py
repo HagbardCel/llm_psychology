@@ -49,6 +49,7 @@ from jung.domain.models import (
 from jung.domain.results import (
     ProfileView,
     SessionHistory,
+    StartedSession,
     StyleOptions,
     StyleRecommendationView,
     StyleSummary,
@@ -330,7 +331,7 @@ class TherapyApplication:
         await self._events.publish(SnapshotChanged(snapshot))
         return snapshot
 
-    async def start_session(self, command: StartSession) -> Session:
+    async def start_session(self, command: StartSession) -> StartedSession:
         self._reject_if_shutdown()
         session_id = self._new_id()
         async with self._mutation_lock:
@@ -344,8 +345,9 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(SnapshotChanged(snapshot))
-        return session
+            started = StartedSession(session=session, snapshot=snapshot)
+        await self._events.publish(SnapshotChanged(started.snapshot))
+        return started
 
     async def end_session(self, command: EndSession) -> AppSnapshot:
         self._reject_if_shutdown()
@@ -357,6 +359,12 @@ class TherapyApplication:
                 self._reject_if_shutdown()
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 workflow.require_command_allowed(CommandName.END_SESSION, facts)
+                session = await self._run_store(
+                    self._store.get_session,
+                    command.session_id,
+                )
+                if session is None:
+                    raise NotFound("session")
                 active = await self._run_store(self._store.get_active_session)
                 if active is None or active.id != command.session_id:
                     raise InvalidCommand("session_id does not match the active session")

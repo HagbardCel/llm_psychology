@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from jung.domain.commands import (
     StartSession,
     UpdateProfile,
 )
+from jung.domain.errors import NotFound
 from jung.domain.models import (
     ChatTurnStatus,
     CommandName,
@@ -94,14 +96,47 @@ async def test_start_session_enters_therapy(store: SQLiteStore) -> None:
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
         revision = (await runtime.application.get_snapshot()).revision
-        session = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
-        snapshot = await runtime.application.get_snapshot()
+        published: list[object] = []
+        async with runtime.events.subscribe() as events:
+
+            async def _collect() -> None:
+                event = await events.__anext__()
+                published.append(event)
+
+            collector = asyncio.create_task(_collect())
+            started = await runtime.application.start_session(
+                StartSession(expected_revision=revision)
+            )
+            await asyncio.wait_for(collector, timeout=1.0)
+        session = started.session
+        snapshot = started.snapshot
+    from jung.events import SnapshotChanged
+
     assert snapshot.stage is Stage.THERAPY
     assert session.kind is SessionKind.THERAPY
     assert snapshot.active_session is not None
     assert snapshot.active_session.id == session.id
+    assert len(published) == 1
+    event = published[0]
+    assert isinstance(event, SnapshotChanged)
+    assert event.snapshot == snapshot
+
+
+async def test_end_session_unknown_session_raises_not_found(store: SQLiteStore) -> None:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=ready.now,
+    )
+    fake = FakeLLM([])
+    async with build_test_application(store, fake) as runtime:
+        revision = (await runtime.application.get_snapshot()).revision
+        with pytest.raises(NotFound):
+            await runtime.application.end_session(
+                EndSession(expected_revision=revision, session_id=uuid4())
+            )
 
 
 async def test_end_session_creates_post_session_operation(store: SQLiteStore) -> None:
@@ -241,9 +276,10 @@ async def test_full_therapy_to_post_session_e2e(store: SQLiteStore) -> None:
     )
     async with build_test_application(store, fake) as runtime:
         revision = (await runtime.application.get_snapshot()).revision
-        session = await runtime.application.start_session(
+        started = await runtime.application.start_session(
             StartSession(expected_revision=revision)
         )
+        session = started.session
         turn = await runtime.application.submit_message(
             SendMessage(
                 expected_revision=(await runtime.application.get_snapshot()).revision,

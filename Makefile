@@ -233,6 +233,7 @@ phase-5-test: prepare-runtime-dirs
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_application_chat.py::test_chat_worker_persists_sanitized_error_message \
 		tests/integration/jung/test_application_operations.py::test_operation_worker_persists_sanitized_error_message \
+		tests/integration/jung/api/ \
 		-q
 
 validate-refactor-phase-4: prepare-runtime-dirs
