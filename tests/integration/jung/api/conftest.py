@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
+import uvicorn
 from httpx import ASGITransport
 
 from jung.api.app import create_app
@@ -77,3 +80,32 @@ async def started_api_client(api_app) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 def fake_llm() -> FakeLLM:
     return FakeLLM([])
+
+
+@pytest_asyncio.fixture
+async def uvicorn_api_urls(
+    api_app,
+) -> AsyncIterator[tuple[str, str]]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    config = uvicorn.Config(
+        app=api_app,
+        host="127.0.0.1",
+        port=port,
+        log_level="error",
+    )
+    server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+
+    http_base = f"http://127.0.0.1:{port}"
+    ws_url = f"ws://127.0.0.1:{port}/api/v1/chat"
+    try:
+        yield http_base, ws_url
+    finally:
+        server.should_exit = True
+        await serve_task
