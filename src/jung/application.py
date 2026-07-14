@@ -12,6 +12,8 @@ from types import MappingProxyType
 from typing import Any, TypeVar
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from jung import workflow
 from jung.domain.commands import (
     EndSession,
@@ -44,7 +46,13 @@ from jung.domain.models import (
     SessionKind,
     Stage,
 )
-from jung.domain.results import ProfileView, SessionHistory, StyleSummary
+from jung.domain.results import (
+    ProfileView,
+    SessionHistory,
+    StyleOptions,
+    StyleRecommendationView,
+    StyleSummary,
+)
 from jung.events import (
     ChatTokenGenerated,
     ChatTurnAccepted,
@@ -62,6 +70,7 @@ from jung.phases.assessment.models import (
     StyleRecommendation,
 )
 from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.assessment.validation import validate_and_normalize_assessment
 from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.merge import merge_derived_profile, merge_plan_content
@@ -181,6 +190,7 @@ class TherapyApplication:
             stored = await self._run_store(self._store.get_profile)
             if stored is None:
                 raise NotFound("profile")
+
             plan = await self._run_store(self._store.get_current_plan)
             snapshot = await self._assemble_snapshot_locked()
             return ProfileView(
@@ -189,15 +199,62 @@ class TherapyApplication:
                 snapshot=snapshot,
             )
 
-    async def list_styles(self) -> tuple[StyleSummary, ...]:
-        return tuple(
-            StyleSummary(
-                id=style.id,
-                name=style.name,
-                description=style.description,
+    async def get_style_options(self) -> StyleOptions:
+        async with self._mutation_lock:
+            assessment = await self._load_completed_assessment_locked()
+            recommendations = (
+                ()
+                if assessment is None
+                else tuple(
+                    _to_style_recommendation_view(item)
+                    for item in assessment.style_recommendations
+                )
             )
-            for style in self._styles.values()
+            return StyleOptions(
+                styles=tuple(
+                    StyleSummary(
+                        id=style.id,
+                        name=style.name,
+                        description=style.description,
+                    )
+                    for style in self._styles.values()
+                ),
+                recommendations=recommendations,
+            )
+
+    async def _load_completed_assessment_locked(
+        self,
+    ) -> AssessmentResult | None:
+        # Completed assessments are validated against the current style catalog
+        # set and order; catalog changes can invalidate stored results.
+        operation = await self._run_store(
+            self._store.get_latest_completed_operation,
+            OperationKind.ASSESSMENT,
         )
+        if operation is None:
+            return None
+        if operation.result is None:
+            raise InvariantViolation("completed assessment result is missing")
+
+        available_style_ids = tuple(self._styles)
+
+        try:
+            assessment = AssessmentResult.model_validate(operation.result)
+            normalized = validate_and_normalize_assessment(
+                assessment,
+                available_style_ids,
+            )
+        except (ValidationError, ValueError) as exc:
+            raise InvariantViolation(
+                "completed assessment result is invalid"
+            ) from exc
+
+        if assessment.style_recommendations != normalized.style_recommendations:
+            raise InvariantViolation(
+                "completed assessment recommendations are not normalized"
+            )
+
+        return assessment
 
     async def list_sessions(self) -> list[Session]:
         return await self._run_store(self._store.list_sessions)
@@ -247,22 +304,18 @@ class TherapyApplication:
             self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.SELECT_STYLE, facts)
-            operation = await self._run_store(
-                self._store.get_latest_completed_operation,
-                OperationKind.ASSESSMENT,
-            )
-            if operation is None or operation.result is None:
+            assessment = await self._load_completed_assessment_locked()
+            if assessment is None:
                 raise InvariantViolation("completed assessment result is required")
-            try:
-                assessment = AssessmentResult.model_validate(operation.result)
-            except Exception as exc:
-                raise InvariantViolation(
-                    "completed assessment result is invalid"
-                ) from exc
             recommendation = _select_style_recommendation(
                 assessment,
                 command.style_id,
             )
+            operation = await self._run_store(
+                self._store.get_latest_completed_operation,
+                OperationKind.ASSESSMENT,
+            )
+            assert operation is not None
             plan_id = self._new_id()
             await self._run_store(
                 self._store.select_style_and_create_initial_plan,
@@ -1183,6 +1236,17 @@ def _load_intake_record(session: Session) -> IntakeRecord:
 
 def _response_has_content(text: str) -> bool:
     return bool(text.strip())
+
+
+def _to_style_recommendation_view(
+    recommendation: StyleRecommendation,
+) -> StyleRecommendationView:
+    return StyleRecommendationView(
+        style_id=recommendation.style_id,
+        score=recommendation.score,
+        rationale=recommendation.rationale,
+        key_topics=recommendation.key_topics,
+    )
 
 
 def _select_style_recommendation(

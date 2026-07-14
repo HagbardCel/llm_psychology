@@ -28,6 +28,14 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `id` | string | yes | Stable style identifier |
 | `name` | string | yes | Human-readable label |
 | `description` | string | yes | Short style summary |
+| **StyleRecommendationSummary** | | | |
+| `style_id` | string | yes | Recommended style identifier |
+| `score` | float | yes | Normalized fit score in `[0, 1]` |
+| `rationale` | string | yes | Short recommendation rationale |
+| `key_topics` | list[string] | yes | Topics supporting the recommendation |
+| **StyleOptionsResponse** | | | |
+| `styles` | list[StyleSummary] | yes | Static style catalog |
+| `recommendations` | list[StyleRecommendationSummary] | yes | Ranked recommendations from the latest completed assessment; empty before assessment completion |
 | **SessionSummary** | | | |
 | `id` | UUID | yes | Session identifier |
 | `kind` | `"intake"` \| `"therapy"` | yes | Session type; do not infer from `plan_id` alone |
@@ -45,7 +53,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `role` | `"user"` \| `"assistant"` \| `"system"` | yes | Speaker role |
 | `content` | string | yes | Message body |
 | `created_at` | datetime | yes | Persistence timestamp |
-| `client_message_id` | UUID \| null | no | Derived idempotency key from the owning chat turn (not stored on `messages`) |
+| `client_message_id` | UUID \| null | no | Derived idempotency key from the owning chat turn on user and assistant messages (not stored on `messages`); `null` for system messages |
 | **PlanSummary** | | | |
 | `id` | UUID | yes | Immutable plan revision identifier |
 | `version` | int | yes | Monotonic plan version |
@@ -87,7 +95,7 @@ All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no g
 | `selected_style` | string \| null | no | Selected therapy style |
 | `active_session` | SessionSummary \| null | no | Current open session |
 | `operation` | OperationSummary \| null | no | Current background operation |
-| `active_chat_turn` | ChatTurnSummary \| null | no | In-flight or last accepted chat turn |
+| `active_chat_turn` | ChatTurnSummary \| null | no | The currently pending durable chat turn, or `null` when no turn is pending. Completed and failed turns are resolved through durable session history and duplicate submission semantics |
 | `available_commands` | list[Command] | yes | Backend-derived permitted commands |
 | **ProfileResponse** | | | |
 | `profile` | Profile | yes | Current profile |
@@ -120,22 +128,25 @@ Policy decisions:
 - `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`.
 - API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
+- `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`.
+- Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`.
+- `GET /api/v1/health` reports **process readiness only**. Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health.
 
 ## 2. Endpoint matrix
 
 | Method/path | Allowed stage | Request | Response | Errors | Revision effect |
 |---|---|---|---|---|---|
 | `GET /api/v1/state` | all | — | `200 AppSnapshot` | — | read only |
-| `GET /api/v1/profile` | all | — | `200 ProfileResponse` | — | read only |
+| `GET /api/v1/profile` | all | — | `200 ProfileResponse` | `404 not_found` if the required profile singleton row is unexpectedly absent | read only |
 | `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdate` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
-| `GET /api/v1/styles` | all | — | `200 {styles: list[StyleSummary]}` | — | read only |
+| `GET /api/v1/styles` | all | — | `200 StyleOptionsResponse` | — | read only |
 | `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
 | `GET /api/v1/sessions` | all | — | `200 {sessions: list[SessionSummary]}` | — | read only |
 | `GET /api/v1/sessions/{session_id}` | all | — | `200 SessionHistoryResponse` | `404 not_found` | read only |
 | `POST /api/v1/sessions` | `READY` | `StartSession { expected_revision }` | `201 {session, snapshot}` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
 | `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | `EndSession { expected_revision }` | `202 AppSnapshot` | `404 not_found`, `409 invalid_command`, `409 state_conflict`, `409 busy` | end session + post-session operation + revision |
 | `POST /api/v1/operations/current/retry` | failed operation visible | `RetryOperation { expected_revision }` | `202 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `409 busy` | requeue same operation |
-| `GET /api/v1/health` | all | — | `200 {status: "healthy"}` | `503` when unavailable | read only |
+| `GET /api/v1/health` | all | — | `200 {status: "healthy"}` | `503` when process not ready | read only |
 | `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | chat acceptance increments revision; completion increments again |
 
 State-changing HTTP requests require `expected_revision`. Non-chat commands are serialized through `expected_revision` and application invariants. A retry after an uncertain response fetches the authoritative snapshot (`GET /api/v1/state` or the conflict envelope's `current_snapshot`). Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
@@ -164,7 +175,7 @@ accepted generation continues.
 | `message_completed` | `session_id`, `turn`, `message` | after final token | assistant message + complete turn stored | incremented at completion |
 | `snapshot_changed` | `snapshot` | after durable mutation | snapshot reread | matches stored revision |
 | `operation_changed` | `operation`, `snapshot` | when operation status changes | operation row updated | matches stored revision |
-| `error` | `error`, optional `session_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
+| `error` | `error`, optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
 
 Chat error revision semantics:
 
@@ -175,6 +186,18 @@ Chat error revision semantics:
 | Ephemeral token delivery failure for one subscriber | none | unchanged |
 
 A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`.
+
+`error` correlation requirements:
+
+| Error category | Required correlation fields |
+|---|---|
+| Command rejected before acceptance | current `request_id`; `session_id` and `client_message_id` when the command parsed successfully |
+| Durable chat failure after acceptance | `session_id`, `turn_id`, `client_message_id`, and a transport `request_id` |
+| Unrelated protocol or connection error | `request_id`; chat identifiers only when known |
+
+Duplicate `(session_id, client_message_id)` retransmission of an existing `PENDING` or `COMPLETE` turn may produce **no new application event**. Clients must not rely on event replay for duplicate-success acknowledgement. When the same ID is retransmitted with different content, the original persisted user message remains authoritative.
+
+Absence from `active_chat_turn` is not evidence that the durable turn row is absent. Completed and failed turns disappear from the snapshot; reconcile through session history and duplicate submission semantics.
 
 Duplicate `(session_id, client_message_id)` resolution happens before revision validation. Precedence:
 
@@ -208,14 +231,32 @@ Genuine bad upstream protocol responses may map to `502` via `internal_error` or
 
 Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.
 
-### Reconnect rules
+### Reconnect and uncertain delivery
 
-Canonical client sequence after any disconnect:
+After any disconnect or uncertain delivery, the client preserves the original `session_id`, `client_message_id`, and message content. Each transmission attempt uses a fresh `request_id` and the latest snapshot `expected_revision`.
 
-1. `GET /api/v1/state`
-2. `GET /api/v1/sessions/{active_session_id}` when history is needed
-3. establish `WS /api/v1/chat`
-4. treat persisted HTTP state and stored messages as authoritative
-5. never reconstruct a completed message from missed `token` events
+One reconciliation invocation performs at most:
+
+1. one initial authoritative HTTP refresh (`GET /state` and `GET /sessions/{session_id}` when needed);
+2. zero or one retransmission of the same logical message;
+3. one bounded wait for a matching `message_in_progress`, `message_completed`, or correlated `error`;
+4. one final authoritative HTTP refresh;
+5. return of a typed outcome to the caller.
+
+A reconciliation call never loops or retransmits indefinitely. The caller decides whether to begin another explicit attempt. No generic retry of state-changing HTTP commands is allowed; chat retransmission is the narrow exception because it reuses the same durable `(session_id, client_message_id)` identity.
+
+Canonical sequence:
+
+1. establish `WS /api/v1/chat` (before authoritative reconciliation, or refresh again after connect);
+2. `GET /api/v1/state`;
+3. `GET /api/v1/sessions/{session_id}` when history is needed (for uncertain delivery, fetch the original command's `session_id`, even if that session is no longer active; a separate active-session read may be used for current UI rendering);
+4. reconcile by `client_message_id`:
+   - matching user and assistant with the same ID → complete;
+   - matching user plus pending turn in snapshot → in progress;
+   - matching user, no assistant, no pending turn → retransmit same ID;
+   - no matching user message → retransmit same ID with latest revision;
+5. when retransmitting, wait for matching `message_in_progress`, `message_completed`, or an error matching the current `request_id` before acceptance or the retained `client_message_id` after durable acceptance;
+6. if no matching event within the bounded acknowledgement interval, fetch state and history again and treat refreshed durable HTTP state as authoritative;
+7. never reconstruct a completed message from missed `token` events.
 
 On reconnect the client resubscribes for live notifications only; there is no event replay buffer.

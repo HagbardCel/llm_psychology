@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import ast
+from importlib.util import resolve_name
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 JUNG_SRC = ROOT / "src" / "jung"
@@ -39,6 +42,49 @@ def _imported_modules(path: Path) -> list[str]:
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.append(node.module)
+    return modules
+
+
+def _module_package_for_path(path: Path) -> str:
+    relative = path.relative_to(JUNG_SRC.parent).with_suffix("")
+    return ".".join(relative.parts[:-1])
+
+
+def _resolve_import_from(
+    package: str,
+    node: ast.ImportFrom,
+) -> list[str]:
+    if node.level:
+        relative_name = "." * node.level + (node.module or "")
+        base = resolve_name(relative_name, package)
+    elif node.module is not None:
+        base = node.module
+    else:
+        return []
+
+    modules = [base]
+    modules.extend(
+        f"{base}.{alias.name}"
+        for alias in node.names
+        if alias.name != "*"
+    )
+    return modules
+
+
+def _resolved_imported_modules(path: Path) -> list[str]:
+    tree = ast.parse(
+        path.read_text(encoding="utf-8"),
+        filename=str(path),
+    )
+    package = _module_package_for_path(path)
+    modules: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.extend(_resolve_import_from(package, node))
+
     return modules
 
 
@@ -152,3 +198,75 @@ def test_phase4_runtime_respects_import_boundaries() -> None:
         forbidden_prefixes=PHASE2_FORBIDDEN_PREFIXES,
     )
     assert violations == []
+
+
+def test_domain_does_not_import_phase_or_application_packages() -> None:
+    forbidden = ("jung.phases", "jung.application")
+    violations: list[str] = []
+
+    for path in sorted((JUNG_SRC / "domain").rglob("*.py")):
+        for module in _resolved_imported_modules(path):
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in forbidden
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "from ..phases.assessment.models import AssessmentResult",
+            "jung.phases.assessment.models",
+        ),
+        (
+            "from .. import application",
+            "jung.application",
+        ),
+        (
+            "from jung import application",
+            "jung.application",
+        ),
+        (
+            "from jung import phases",
+            "jung.phases",
+        ),
+    ],
+)
+def test_import_resolution_handles_forbidden_absolute_and_relative_forms(
+    source: str,
+    expected: str,
+) -> None:
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.ImportFrom)
+
+    modules = _resolve_import_from("jung.domain", node)
+
+    assert expected in modules
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            JUNG_SRC / "domain" / "fake.py",
+            "jung.domain",
+        ),
+        (
+            JUNG_SRC / "domain" / "nested" / "fake.py",
+            "jung.domain.nested",
+        ),
+        (
+            JUNG_SRC / "domain" / "nested" / "__init__.py",
+            "jung.domain.nested",
+        ),
+    ],
+)
+def test_module_package_for_path(
+    path: Path,
+    expected: str,
+) -> None:
+    assert _module_package_for_path(path) == expected
