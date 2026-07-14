@@ -16,7 +16,6 @@ from jung.domain.models import (
     ChatTurn,
     ChatTurnStatus,
     OperationStatus,
-    PlanContent,
     Stage,
 )
 from jung.events import EventStream
@@ -24,7 +23,7 @@ from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.policies import build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
-from jung.phases.assessment.models import AssessmentResult, StyleRecommendation
+from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
 from jung.phases.intake.models import (
     CopingRecord,
@@ -48,36 +47,13 @@ from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
 from jung.supervisor import SupervisorClosed, TaskSupervisor
 
+from .assessment_test_data import assessment_result_data, plan_content
+
 StartScript = bool | type[SupervisorClosed] | BaseException
 
 
-def plan_content() -> PlanContent:
-    return PlanContent(
-        focus="anxiety",
-        themes=["worry"],
-        goals=["sleep"],
-        current_progress="baseline",
-        planned_interventions=["grounding"],
-        revision_recommendations=["track sleep"],
-    )
-
-
 def assessment_result() -> AssessmentResult:
-    return AssessmentResult(
-        formulation="Anxiety presentation",
-        presenting_concerns=("anxiety",),
-        strengths_and_resources=("support",),
-        style_recommendations=tuple(
-            StyleRecommendation(
-                style_id=style_id,
-                score=0.9 if style_id == "cbt" else 0.5,
-                rationale=f"Fit for {style_id}",
-                key_topics=("anxiety",),
-                initial_plan=plan_content(),
-            )
-            for style_id in ("jung", "cbt", "freud")
-        ),
-    )
+    return AssessmentResult.model_validate(assessment_result_data())
 
 
 def post_session_expectations() -> list[StreamExpectation | StructuredExpectation]:

@@ -210,12 +210,14 @@ phase-4-test: prepare-runtime-dirs
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_workflow.py \
 		tests/unit/jung/llm/test_structured_output.py \
+		tests/unit/jung/test_import_boundaries.py::test_domain_does_not_import_phase_or_application_packages \
 		tests/integration/jung/test_application_workflow.py \
 		tests/integration/jung/test_application_chat.py \
 		tests/integration/jung/test_application_operations.py \
 		tests/integration/jung/test_application_recovery.py \
 		tests/integration/jung/test_application_composition.py \
 		tests/integration/jung/test_application_session_history.py \
+		tests/integration/jung/test_application_read_models.py \
 		tests/integration/jung/test_store_workflow.py \
 		tests/integration/jung/test_store_chat.py \
 		tests/integration/jung/test_store_recovery.py \
@@ -242,6 +244,7 @@ validate-refactor-phase-4: prepare-runtime-dirs
 		tests/unit/jung/test_workflow.py \
 		tests/unit/jung/llm/test_structured_output.py \
 		tests/integration/jung/application_fixtures.py \
+		tests/integration/jung/assessment_test_data.py \
 		tests/integration/jung/scenarios.py \
 		tests/integration/jung/test_application_workflow.py \
 		tests/integration/jung/test_application_chat.py \
@@ -249,6 +252,7 @@ validate-refactor-phase-4: prepare-runtime-dirs
 		tests/integration/jung/test_application_recovery.py \
 		tests/integration/jung/test_application_composition.py \
 		tests/integration/jung/test_application_session_history.py \
+		tests/integration/jung/test_application_read_models.py \
 		tests/integration/jung/test_store_workflow.py \
 		tests/integration/jung/test_store_chat.py \
 		tests/integration/jung/test_store_recovery.py \
@@ -340,7 +344,8 @@ test-validate: prepare-runtime-dirs
 		tests/integration/jung/test_application_operations.py \
 		tests/integration/jung/test_application_recovery.py \
 		tests/integration/jung/test_application_composition.py \
-		tests/integration/jung/test_application_session_history.py
+		tests/integration/jung/test_application_session_history.py \
+		tests/integration/jung/test_application_read_models.py
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs

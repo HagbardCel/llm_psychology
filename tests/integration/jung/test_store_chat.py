@@ -60,7 +60,10 @@ def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: st
         now=now,
     )
     assert completed.status == ChatTurnStatus.COMPLETE
-    assert len(store.list_messages(session_id)) == 2
+    messages = store.list_messages(session_id)
+    assert len(messages) == 2
+    assert messages[0].client_message_id == client_message_id
+    assert messages[1].client_message_id == client_message_id
 
 
 def test_duplicate_client_message_id_returns_existing_before_revision_check(
@@ -92,7 +95,10 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
     assert state is None
     assert duplicate.id == turn_id
     assert store.get_app_state().revision == revision + 1
-    assert len(store.list_messages(intake_id)) == 1
+    messages = store.list_messages(intake_id)
+    assert len(messages) == 1
+    assert messages[0].content == "hello"
+    assert messages[0].client_message_id == client_message_id
 
 
 def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
@@ -122,10 +128,11 @@ def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     turn_id = uuid4()
     user_message_id = uuid4()
+    client_message_id = uuid4()
     store.accept_chat_message(
         expected_revision=store.get_app_state().revision,
         session_id=intake_id,
-        client_message_id=uuid4(),
+        client_message_id=client_message_id,
         turn_id=turn_id,
         user_message_id=user_message_id,
         content="hello",
@@ -142,6 +149,53 @@ def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
     messages = store.list_messages(intake_id)
     assert len(messages) == 1
     assert messages[0].id == user_message_id
+    assert messages[0].client_message_id == client_message_id
+
+
+def test_failed_non_retryable_u1_does_not_associate_later_assistant_with_u1(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    u1_client_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=u1_client_id,
+        turn_id=uuid4(),
+        user_message_id=uuid4(),
+        content="first",
+        now=now,
+    )
+    store.fail_chat_turn(
+        store.get_chat_turn_by_client_id(intake_id, u1_client_id).id,
+        error_code="invalid_llm_output",
+        error_message="bad output",
+        retryable=False,
+        now=now,
+    )
+    u2_client_id = uuid4()
+    turn_two = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_id,
+        client_message_id=u2_client_id,
+        turn_id=turn_two,
+        user_message_id=uuid4(),
+        content="second",
+        now=now,
+    )
+    store.complete_chat_turn(
+        turn_two,
+        assistant_message_id=uuid4(),
+        content="reply two",
+        now=now,
+    )
+    messages = store.list_messages(intake_id)
+    assert len(messages) == 3
+    assert messages[0].client_message_id == u1_client_id
+    assert messages[1].client_message_id == u2_client_id
+    assert messages[2].client_message_id == u2_client_id
+    assert messages[2].client_message_id != u1_client_id
 
 
 def test_duplicate_user_message_id_rejected_on_second_accept(store: SQLiteStore) -> None:

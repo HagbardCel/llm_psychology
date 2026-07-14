@@ -17,6 +17,8 @@ from jung.domain.models import (
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.intake.models import IntakeRecord
 
+from .assessment_test_data import assessment_result_data
+
 
 @dataclass(frozen=True)
 class ReadyScenario:
@@ -90,7 +92,7 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
     store.mark_operation_running(operation_id, now=now)
     store.complete_assessment(
         operation_id,
-        result={"initial_plan": {"focus": "anxiety"}},
+        result=assessment_result_data(),
         now=now,
     )
     assert store.get_app_state().stage == Stage.STYLE_SELECTION

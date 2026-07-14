@@ -152,3 +152,18 @@ def test_phase4_runtime_respects_import_boundaries() -> None:
         forbidden_prefixes=PHASE2_FORBIDDEN_PREFIXES,
     )
     assert violations == []
+
+
+def test_domain_does_not_import_phase_or_application_packages() -> None:
+    forbidden = ("jung.phases", "jung.application")
+    violations: list[str] = []
+
+    for path in sorted((JUNG_SRC / "domain").rglob("*.py")):
+        for module in _imported_modules(path):
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in forbidden
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+
+    assert violations == []

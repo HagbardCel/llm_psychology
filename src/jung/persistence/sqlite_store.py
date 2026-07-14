@@ -189,9 +189,16 @@ class SQLiteStore:
             rows = conn.execute(
                 """
                 SELECT m.id, m.session_id, m.sequence, m.role, m.content, m.created_at,
-                       ct.client_message_id
+                       CASE m.role
+                           WHEN 'user' THEN user_turn.client_message_id
+                           WHEN 'assistant' THEN assistant_turn.client_message_id
+                           ELSE NULL
+                       END AS client_message_id
                 FROM messages m
-                LEFT JOIN chat_turns ct ON ct.user_message_id = m.id
+                LEFT JOIN chat_turns user_turn
+                    ON user_turn.user_message_id = m.id
+                LEFT JOIN chat_turns assistant_turn
+                    ON assistant_turn.assistant_message_id = m.id
                 WHERE m.session_id = ?
                 ORDER BY m.sequence ASC
                 """,

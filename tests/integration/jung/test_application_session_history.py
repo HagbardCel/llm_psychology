@@ -20,6 +20,42 @@ from .scenarios import advance_to_ready
 pytestmark = pytest.mark.asyncio
 
 
+async def test_get_session_history_preserves_store_derived_client_message_ids(
+    store: SQLiteStore,
+) -> None:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        now=ready.now,
+    )
+    client_message_id = uuid4()
+    turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=therapy_id,
+        client_message_id=client_message_id,
+        turn_id=turn_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=ready.now,
+    )
+    store.complete_chat_turn(
+        turn_id,
+        assistant_message_id=uuid4(),
+        content="reply",
+        now=ready.now,
+    )
+
+    async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
+        history = await runtime.application.get_session_history(therapy_id)
+
+    assert len(history.messages) == 2
+    assert history.messages[0].client_message_id == client_message_id
+    assert history.messages[1].client_message_id == client_message_id
+
+
 async def test_get_session_history_is_consistent_under_concurrent_mutation(
     store: SQLiteStore,
     monkeypatch: pytest.MonkeyPatch,

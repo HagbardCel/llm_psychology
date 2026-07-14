@@ -345,17 +345,23 @@ Do not serialize domain models directly with `model_dump()` and expose whichever
 
 ### 4.5 Define duplicate chat reconciliation without event replay
 
-The application intentionally returns an existing `PENDING` or `COMPLETE` `ChatTurn` for a duplicate `(session_id, client_message_id)` and does not need to republish historical tokens.
+The application intentionally returns an existing `PENDING` or `COMPLETE` `ChatTurn` for a duplicate `(session_id, client_message_id)` and does not republish historical tokens or success acknowledgement events.
 
 The client contract must therefore use reconciliation rather than a replay subsystem:
 
-1. `JungApiClient.send_message()` sends one `send_message` command with a stable `client_message_id`.
-2. Normal success is observed through `message_in_progress`, followed by completion or failure events.
-3. On connection loss or an acknowledgement timeout, the client does not invent a new ID.
-4. It fetches `/state` and the active session history.
-5. It locates the durable user message by `client_message_id` and the corresponding active/completed turn state.
-6. If the durable turn is absent and the command remains valid, it may reconnect and resend the same command with the same ID and a freshly read revision.
-7. It never reconstructs the assistant response from partial tokens.
+1. Preserve the original `session_id`, `client_message_id`, and message content.
+2. Use a fresh `request_id` and latest snapshot `expected_revision` for each transmission attempt.
+3. Establish `WS /api/v1/chat` before authoritative reconciliation, or refresh state/history again after connect.
+4. Fetch `GET /api/v1/state` and `GET /api/v1/sessions/{session_id}` when history is needed.
+5. Reconcile by shared `client_message_id` on user and assistant messages in session history. Absence from `active_chat_turn` is not evidence that the durable turn row is absent.
+6. When retransmission is required, send the same logical message. Duplicate `PENDING` or `COMPLETE` retransmission may produce **no new application event**.
+7. Wait for matching `message_in_progress`, `message_completed`, or correlated `error` (current `request_id` before acceptance; retained `client_message_id` after durable acceptance).
+8. If no matching event within a bounded acknowledgement interval, fetch state and history again and treat refreshed durable HTTP state as authoritative.
+9. Never reconstruct the assistant response from partial tokens.
+
+One reconciliation invocation performs at most one retransmission and one final HTTP refresh, then returns a typed outcome. The caller decides whether to begin another explicit attempt. Chat retransmission is the narrow exception to the no-silent-retry rule for state-changing HTTP commands.
+
+Do not solve silent duplicate acknowledgement by republishing application events; that would duplicate success events for every observer.
 
 This keeps the backend idempotent without adding a WebSocket replay cache or a second command-receipt model.
 
@@ -840,7 +846,8 @@ For each message:
 - do not stream tokens itself;
 - do not wait for generation completion;
 - map pre-acceptance errors to a WebSocket `error` event;
-- keep the connection open for recoverable command errors.
+- keep the connection open for recoverable command errors;
+- do **not** manufacture duplicate-success acknowledgement events when `submit_message()` returns an existing `PENDING` or `COMPLETE` turn; the client must HTTP-refresh instead.
 
 Malformed JSON, unknown event types, missing fields, and invalid UUIDs produce `validation_error` events with the command request ID when recoverable.
 
@@ -855,7 +862,7 @@ Map application events as follows:
 | `ChatTurnAccepted` | `message_in_progress` |
 | `ChatTokenGenerated` | `token` |
 | `ChatTurnCompleted` | `message_completed` |
-| `ChatTurnFailed` | `error`, then durable `snapshot_changed` from the separately published snapshot event |
+| `ChatTurnFailed` | `error` with `session_id`, `turn_id`, `client_message_id`, and transport `request_id`, then durable `snapshot_changed` from the separately published snapshot event |
 | `SnapshotChanged` | `snapshot_changed` |
 | `OperationChanged` | `operation_changed` |
 
@@ -915,13 +922,14 @@ On disconnect:
 - log a concise disconnect reason;
 - do not mark the active `ChatTurn` failed.
 
-On reconnect, the client follows the canonical sequence:
+On reconnect, the client follows the canonical sequence in [`api-v1-contract.md`](api-v1-contract.md):
 
-1. `GET /state`;
-2. optionally `GET /sessions/{active_session_id}`;
-3. connect `/chat`;
-4. treat durable HTTP state as authoritative;
-5. observe only future live events.
+1. establish `WS /api/v1/chat` (or refresh state/history again immediately after connect);
+2. `GET /api/v1/state`;
+3. `GET /api/v1/sessions/{active_session_id}` when history is needed;
+4. reconcile using shared `client_message_id` and bounded single-invocation rules;
+5. treat persisted HTTP state and stored messages as authoritative;
+6. never reconstruct a completed message from missed `token` events.
 
 ### 11.7 Multiple observers
 
@@ -1029,18 +1037,29 @@ The client:
 Provide one narrow helper for uncertain chat delivery, for example:
 
 ```python
+class ChatReconciliationStatus(StrEnum):
+    COMPLETE = "complete"
+    IN_PROGRESS = "in_progress"
+    FAILED = "failed"
+    UNRESOLVED = "unresolved"
+
 async def reconcile_chat_turn(
     session_id: UUID,
     client_message_id: UUID,
-) -> ReconciledChatTurn | None: ...
+) -> ChatReconciliationResult: ...
 ```
+
+One invocation performs at most: one initial HTTP refresh, zero or one retransmission, one bounded event wait, one final HTTP refresh, then returns a typed result carrying relevant durable state (completed message, pending turn, or public error envelope). It never loops or retransmits indefinitely.
 
 It may combine:
 
 - `GET /state`;
 - `GET /sessions/{session_id}`;
-- lookup of the durable user message by `client_message_id`;
-- snapshot active-turn information.
+- lookup of durable user and assistant messages by shared `client_message_id`;
+- snapshot `active_chat_turn` when pending;
+- correlated `error` events (`request_id` before acceptance; `client_message_id` after durable acceptance).
+
+Chat retransmission is the narrow exception to the rule that state-changing HTTP commands are not silently retried.
 
 Do not add a new backend endpoint solely to avoid two local reads unless profiling or correctness demonstrates a real need.
 
@@ -1383,8 +1402,9 @@ Test:
 - WebSocket event validation;
 - explicit connection closure;
 - reconnect state refresh;
-- uncertain-send reconciliation;
-- no silent retry of state-changing commands.
+- uncertain-send reconciliation with bounded single invocation and post-resend HTTP refresh;
+- no silent retry of state-changing HTTP commands except the documented chat retransmission identity exception;
+- durable `error` events include chat identifiers for post-acceptance failures.
 
 ### 16.6 Console tests
 
