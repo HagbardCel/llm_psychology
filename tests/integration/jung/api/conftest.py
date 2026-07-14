@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport
 
 from jung.api.app import create_app
@@ -55,14 +56,14 @@ def api_app(store: SQLiteStore, fake_llm: FakeLLM, api_settings: ApiSettings):
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def api_client(api_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = ASGITransport(app=api_app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def started_api_client(api_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = ASGITransport(app=api_app, raise_app_exceptions=False)
     async with api_app.router.lifespan_context(api_app):
