@@ -9,6 +9,3 @@ mypy
 pytest
 pytest-asyncio
 pytest-trio
-
-# HTTP client for testing
-httpx

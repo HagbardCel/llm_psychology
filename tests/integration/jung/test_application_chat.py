@@ -11,7 +11,7 @@ from jung.domain.commands import EndSession, SendMessage, StartSession, UpdatePr
 from jung.domain.errors import Busy, RevisionConflict, StoredWorkFailure
 from jung.domain.models import ChatTurn, ChatTurnStatus, MessageRole, Profile, Stage
 from jung.events import ChatTokenGenerated, ChatTurnAccepted, ChatTurnCompleted
-from jung.llm.errors import LLMTimeout
+from jung.llm.errors import LLMTimeout, LLMUnavailable
 from jung.llm.fake import (
     FailureExpectation,
     FakeLLM,
@@ -32,6 +32,49 @@ from .application_fixtures import (
 from .scenarios import advance_to_ready
 
 pytestmark = pytest.mark.asyncio
+
+SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"
+
+
+async def test_chat_worker_persists_sanitized_error_message(store: SQLiteStore) -> None:
+    fake = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.INTAKE_PATCH,
+                output_type=IntakeRecordPatch,
+                response=IntakeRecordPatch(),
+            ),
+            FailureExpectation(
+                task=LLMTask.INTAKE_RESPONSE,
+                error=LLMUnavailable(SECRET_MARKER),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session = (await runtime.application.get_snapshot()).active_session
+        assert session is not None
+        turn = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session.id,
+                client_message_id=uuid4(),
+                content="hello",
+            )
+        )
+        failed = await wait_for_chat_turn(
+            runtime.application,
+            turn.id,
+            ChatTurnStatus.FAILED,
+        )
+    assert failed.error_code == "llm_unavailable"
+    assert failed.error_message == "The language model is currently unavailable."
+    assert SECRET_MARKER not in (failed.error_message or "")
 
 
 async def test_submit_message_completes_intake_turn(store: SQLiteStore) -> None:

@@ -71,21 +71,44 @@ def _resolve_import_from(
     return modules
 
 
-def _resolved_imported_modules(path: Path) -> list[str]:
-    tree = ast.parse(
-        path.read_text(encoding="utf-8"),
-        filename=str(path),
-    )
-    package = _module_package_for_path(path)
+def _resolved_imported_modules_from_source(
+    source: str,
+    *,
+    package: str,
+    filename: str = "<test>",
+) -> list[str]:
+    tree = ast.parse(source, filename=filename)
     modules: list[str] = []
-
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             modules.extend(_resolve_import_from(package, node))
-
     return modules
+
+
+def _resolved_imported_modules(path: Path) -> list[str]:
+    return _resolved_imported_modules_from_source(
+        path.read_text(encoding="utf-8"),
+        package=_module_package_for_path(path),
+        filename=str(path),
+    )
+
+
+def _collect_resolved_violations(
+    paths: list[Path],
+    *,
+    forbidden_prefixes: tuple[str, ...],
+) -> list[str]:
+    violations: list[str] = []
+    for path in paths:
+        for module in _resolved_imported_modules(path):
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in forbidden_prefixes
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    return violations
 
 
 def _collect_violations(
@@ -270,3 +293,53 @@ def test_module_package_for_path(
     expected: str,
 ) -> None:
     assert _module_package_for_path(path) == expected
+
+
+PHASE5_API_FORBIDDEN_PREFIXES = PHASE2_FORBIDDEN_PREFIXES + (
+    "jung.persistence",
+    "jung.phases",
+    "jung.llm",
+)
+
+
+def test_phase5_api_packages_respect_import_boundaries() -> None:
+    api_root = JUNG_SRC / "api"
+    if not api_root.exists():
+        pytest.skip("jung.api package not present yet")
+    paths = sorted(api_root.rglob("*.py"))
+    violations = _collect_resolved_violations(
+        paths,
+        forbidden_prefixes=PHASE5_API_FORBIDDEN_PREFIXES,
+    )
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from jung.persistence.sqlite_store import SQLiteStore",
+        "from jung import llm",
+        "from ..phases import assessment",
+    ],
+)
+def test_phase5_import_boundary_catches_resolved_bypass_imports(source: str) -> None:
+    modules = _resolved_imported_modules_from_source(
+        source,
+        package="jung.api",
+    )
+    violations = [
+        module
+        for module in modules
+        if any(
+            module == prefix or module.startswith(f"{prefix}.")
+            for prefix in PHASE5_API_FORBIDDEN_PREFIXES
+        )
+    ]
+    assert violations
+
+
+def test_phase5_api_init_has_no_imports() -> None:
+    init_path = JUNG_SRC / "api" / "__init__.py"
+    if not init_path.exists():
+        pytest.skip("jung.api package not present yet")
+    assert _resolved_imported_modules(init_path) == []

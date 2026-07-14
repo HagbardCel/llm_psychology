@@ -4,7 +4,7 @@
 .PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm hook-commit hook-push
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm phase-5-test hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -222,6 +222,17 @@ phase-4-test: prepare-runtime-dirs
 		tests/integration/jung/test_store_chat.py \
 		tests/integration/jung/test_store_recovery.py \
 		tests/integration/jung/test_processor_store_seams.py \
+		-q
+
+phase-5-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest \
+		-o trio_mode=false \
+		-o asyncio_mode=auto \
+		tests/unit/jung/api/ \
+		tests/unit/jung/test_application_helpers.py \
+		tests/unit/jung/test_import_boundaries.py \
+		tests/integration/jung/test_application_chat.py::test_chat_worker_persists_sanitized_error_message \
+		tests/integration/jung/test_application_operations.py::test_operation_worker_persists_sanitized_error_message \
 		-q
 
 validate-refactor-phase-4: prepare-runtime-dirs

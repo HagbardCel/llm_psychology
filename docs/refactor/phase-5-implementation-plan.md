@@ -769,15 +769,13 @@ Map:
 | `Busy` | `busy` | 409 | safe message |
 | `NotFound` | `not_found` | 404 | safe message |
 | request validation | `validation_error` | 422 | normalized field details only if contract allows |
-| `StoredWorkFailure` | stored code or `operation_failed` | contract-defined | preserve retryable |
-| `LLMUnavailable` or equivalent | `llm_unavailable` | 503 | no provider diagnostics |
-| `LLMTimeout` or equivalent | `llm_timeout` | 504 | retryable |
-| `InvalidLLMOutput` | `invalid_llm_output` | 422 | non-retryable |
+| `StoredWorkFailure` | stored code | 409 on unexpected HTTP; WebSocket preserves stored safe fields | preserve retryable; do not derive HTTP status from historical stored codes |
 | `InvariantViolation` | `internal_error` | 500 | log details server-side |
 | `PersistenceFailure` | `internal_error` | 500 | log details server-side |
-| unexpected exception | `internal_error` | 500 | generic client message |
+| unexpected exception (including raw provider escape) | `internal_error` | 500 | generic client message |
+| process not ready | `not_ready` | 503 | retryable |
 
-Use the exact current LLM error class names from `jung.llm.errors`; do not catch by message text.
+`jung.api.errors` imports only domain/application error types. Provider failures reach the adapter as `StoredWorkFailure` or stored operation/chat error fields after application-layer classification and public-message sanitization. A raw provider error escaping to the API is an unexpected boundary violation mapped to `internal_error`.
 
 ### 10.2 Revision conflict snapshot
 
@@ -1222,7 +1220,7 @@ Direct database inspection is allowed only after shutdown for test assertions or
 
 ### 15.2 Required deterministic scenarios
 
-Maintain at least these high-value probes:
+Maintain two full deterministic console/API workflow probes:
 
 1. **Fresh setup through ready**
    - fresh database;
@@ -1242,12 +1240,14 @@ Maintain at least these high-value probes:
    - new plan/profile material is durable;
    - final stage `READY`.
 
+Cover the remaining high-value resilience scenarios as focused integration tests (not full workflow probes):
+
 3. **Restart and resume**
    - accept durable work;
    - stop the API at a controlled boundary;
    - restart against the same temporary database;
    - verify operation/chat recovery semantics;
-   - reconnect console through state/history.
+   - reconnect the API client and reconcile through state/history.
 
 4. **Structured generation failure and retry**
    - fail assessment or post-session with a retryable fake error;
@@ -1547,7 +1547,7 @@ Implement in reviewable work packages. Each package should leave tests green and
 - add `StyleRecommendationView` and `StyleOptions` application result models;
 - add `TherapyApplication.get_style_options()`;
 - document style response correction in `api-v1-contract.md`;
-- document `GET /profile` fresh-state `404`;
+- document seeded/partial `GET /profile` reads and defensive `404` only when the singleton row is absent;
 - add focused application tests;
 - confirm no API imports enter the core.
 
@@ -1575,7 +1575,7 @@ Acceptance:
 
 - create `jung.api.errors`;
 - implement typed exception-to-envelope mapping;
-- implement request ID middleware/helper;
+- implement request ID parsing helper (middleware deferred to work package 4);
 - normalize request validation errors;
 - test conflict snapshot enrichment and redaction.
 
@@ -1583,7 +1583,7 @@ Acceptance:
 
 - all documented error codes have deterministic mappings;
 - unexpected errors leak no internals;
-- request IDs appear in body/header/logs.
+- Request-ID parsing and envelope primitives preserve the supplied correlation ID. Header and logging propagation are verified in work package 4.
 
 ### Work package 4 — FastAPI lifespan and HTTP routes
 
@@ -1718,7 +1718,7 @@ The Phase 5 PR should also run:
 - Phase 1 black-box characterization tests while the legacy runtime still exists;
 - standard repository finalization once.
 
-Hosted CI uses `FakeLLM` and an ephemeral real Uvicorn server. It does not require a model server or Docker.
+Hosted CI uses `FakeLLM` and an ephemeral real Uvicorn server in the normal containerized test environment. It does not require an external model server.
 
 Run the optional local-model smoke manually when production API composition, model settings loading, or provider payload behavior changes.
 
@@ -1730,7 +1730,7 @@ Given a fresh database:
 
 - `/health` becomes ready only after initialization;
 - `/state` returns `SETUP`, revision `0` or the schema-defined initial revision, and `update_profile` available;
-- `/profile` returns `404 not_found`;
+- `/profile` returns the seeded profile singleton;
 - no route or schema contains `user_id`.
 
 ### 22.2 Profile to intake
