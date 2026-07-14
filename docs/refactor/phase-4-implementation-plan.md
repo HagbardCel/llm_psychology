@@ -846,7 +846,7 @@ Under the mutation lock:
 5. when existing status is retryable `FAILED`:
    - reject conflicting active generation as `Busy` before structural checks;
    - reject structural obsolescence (session closed, wrong stage, or later durable messages) as non-retryable `StoredWorkFailure`;
-   - validate `expected_revision`, reserve the generation lock, reset the same turn to `PENDING` through the store, and schedule it with the new request correlation;
+   - reserve the generation lock, then call the store to atomically validate `expected_revision` and reset the same turn to `PENDING`; schedule it with the new request correlation;
 6. for a new turn, raise `Busy` when another chat turn is pending or generation is active; otherwise require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
 7. reserve generation before durable acceptance so a second distinct command cannot pass the same check;
 8. generate turn and user-message IDs;
