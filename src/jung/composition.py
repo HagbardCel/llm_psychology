@@ -45,6 +45,23 @@ class Settings:
     event_queue_size: int = 64
 
 
+def build_settings(
+    *,
+    database_path: str | Path,
+    llm_base_url: str,
+    llm_api_key: str,
+    default_model: str,
+) -> Settings:
+    return Settings(
+        database_path=database_path,
+        llm=LLMSettings(
+            default_model=default_model,
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ApplicationRuntime:
     application: TherapyApplication

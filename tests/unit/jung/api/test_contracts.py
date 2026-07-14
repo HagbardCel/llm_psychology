@@ -33,6 +33,7 @@ from jung.api.contracts import (
     to_session_history_response,
     to_session_summary,
     to_snapshot_response,
+    to_start_session_response,
     to_style_options_response,
 )
 from jung.domain.models import (
@@ -54,6 +55,7 @@ from jung.domain.models import (
 from jung.domain.results import (
     ProfileView,
     SessionHistory,
+    StartedSession,
     StyleOptions,
     StyleRecommendationView,
     StyleSummary,
@@ -265,6 +267,32 @@ def test_wire_timestamp_validation_rejects_naive_and_invalid_values() -> None:
                 "started_at": "not-a-datetime",
             }
         )
+
+
+def test_start_session_response_maps_atomic_result() -> None:
+    now = _now()
+    session = Session(
+        id=uuid4(),
+        kind=SessionKind.THERAPY,
+        started_at=now,
+        ended_at=None,
+        plan_id=None,
+        summary=None,
+        briefing=None,
+    )
+    context = MappingContext(request_id=uuid4())
+    snapshot = AppSnapshot(
+        revision=2,
+        stage=Stage.THERAPY,
+        profile_complete=True,
+        active_session=session,
+        available_commands=frozenset({CommandName.END_SESSION}),
+    )
+    started = StartedSession(session=session, snapshot=snapshot)
+    response = to_start_session_response(started, context=context)
+    assert response.session.id == session.id
+    assert response.snapshot.active_session is not None
+    assert response.snapshot.active_session.id == session.id
 
 
 def test_snapshot_maps_current_operation_and_command_order() -> None:

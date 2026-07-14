@@ -20,7 +20,12 @@ from jung.domain.models import (
     Session,
     UtcDateTime,
 )
-from jung.domain.results import ProfileView, SessionHistory, StyleOptions
+from jung.domain.results import (
+    ProfileView,
+    SessionHistory,
+    StartedSession,
+    StyleOptions,
+)
 
 # Internal mapper support — not a wire schema or OpenAPI export.
 COMMAND_ORDER: tuple[CommandName, ...] = (
@@ -311,6 +316,23 @@ class ErrorResponse(BaseModel):
     request_id: UUID
     current_snapshot: AppSnapshotResponse | None = None
     retryable: bool | None = None
+
+
+COMMON_ERROR_RESPONSES = {
+    422: {"model": ErrorResponse, "description": "Validation error"},
+    500: {"model": ErrorResponse, "description": "Unexpected server error"},
+    503: {"model": ErrorResponse, "description": "Service not ready"},
+}
+
+CONFLICT_RESPONSES = {
+    **COMMON_ERROR_RESPONSES,
+    409: {"model": ErrorResponse, "description": "Command rejected or stale revision"},
+}
+
+NOT_FOUND_RESPONSES = {
+    **COMMON_ERROR_RESPONSES,
+    404: {"model": ErrorResponse, "description": "Resource not found"},
+}
 
 
 # --- WebSocket server events ---
@@ -613,6 +635,17 @@ def to_session_history_response(history: SessionHistory) -> SessionHistoryRespon
         session=to_session_detail(history.session),
         messages=[to_message_response(message) for message in history.messages],
         plans=[to_plan_summary(plan) for plan in history.plans],
+    )
+
+
+def to_start_session_response(
+    started: StartedSession,
+    *,
+    context: MappingContext,
+) -> StartSessionResponse:
+    return StartSessionResponse(
+        session=to_session_summary(started.session),
+        snapshot=to_snapshot_response(started.snapshot, context=context),
     )
 
 

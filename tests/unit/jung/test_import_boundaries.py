@@ -295,7 +295,11 @@ def test_module_package_for_path(
     assert _module_package_for_path(path) == expected
 
 
-PHASE5_API_FORBIDDEN_PREFIXES = PHASE2_FORBIDDEN_PREFIXES + (
+PHASE5_API_FORBIDDEN_PREFIXES = tuple(
+    prefix
+    for prefix in PHASE2_FORBIDDEN_PREFIXES
+    if prefix not in {"fastapi", "httpx", "websockets"}
+) + (
     "jung.persistence",
     "jung.phases",
     "jung.llm",

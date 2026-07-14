@@ -45,3 +45,10 @@ class SessionHistory(BaseModel):
     session: Session
     messages: tuple[Message, ...]
     plans: tuple[Plan, ...]
+
+
+class StartedSession(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session: Session
+    snapshot: AppSnapshot
