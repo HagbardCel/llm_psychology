@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Any, Literal, Self, cast, get_args
+from typing import Annotated, Any, Literal, Self, assert_never, cast, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +25,15 @@ from jung.domain.results import (
     SessionHistory,
     StartedSession,
     StyleOptions,
+)
+from jung.events import (
+    ApplicationEvent,
+    ChatTokenGenerated,
+    ChatTurnAccepted,
+    ChatTurnCompleted,
+    ChatTurnFailed,
+    OperationChanged,
+    SnapshotChanged,
 )
 
 # Internal mapper support — not a wire schema or OpenAPI export.
@@ -662,6 +671,105 @@ def to_operation_changed_event(
         operation=operation_summary,
         snapshot=snapshot_response,
     )
+
+
+def to_message_in_progress_event(
+    event: ChatTurnAccepted,
+    *,
+    context: MappingContext,
+) -> MessageInProgressEvent:
+    return MessageInProgressEvent(
+        type="message_in_progress",
+        session_id=event.session_id,
+        turn=to_chat_turn_summary(event.turn, context=context),
+    )
+
+
+def to_token_event(
+    event: ChatTokenGenerated,
+    *,
+    context: MappingContext,
+) -> TokenEvent:
+    return TokenEvent(
+        type="token",
+        session_id=event.session_id,
+        turn_id=event.turn_id,
+        request_id=context.request_id,
+        sequence=event.sequence,
+        text=event.text,
+    )
+
+
+def to_message_completed_event(
+    event: ChatTurnCompleted,
+    *,
+    context: MappingContext,
+) -> MessageCompletedEvent:
+    return MessageCompletedEvent(
+        type="message_completed",
+        session_id=event.session_id,
+        turn=to_chat_turn_summary(event.turn, context=context),
+        message=to_message_response(event.assistant_message),
+    )
+
+
+def to_snapshot_changed_event(
+    event: SnapshotChanged,
+    *,
+    context: MappingContext,
+) -> SnapshotChangedEvent:
+    return SnapshotChangedEvent(
+        type="snapshot_changed",
+        snapshot=to_snapshot_response(event.snapshot, context=context),
+    )
+
+
+def to_chat_turn_failed_event(
+    event: ChatTurnFailed,
+    *,
+    context: MappingContext,
+) -> ErrorEvent:
+    envelope = stored_error_envelope(
+        event.turn.error_code,
+        event.turn.error_message,
+        event.turn.retryable,
+        context=context,
+    )
+    if envelope is None:
+        raise ValueError("ChatTurnFailed requires durable error code and message")
+    return build_error_event(
+        envelope,
+        context=context,
+        session_id=event.session_id,
+        turn_id=event.turn_id,
+        client_message_id=event.turn.client_message_id,
+    )
+
+
+def map_application_event(
+    event: ApplicationEvent,
+    *,
+    context: MappingContext,
+) -> ServerEvent:
+    match event:
+        case ChatTurnAccepted():
+            return to_message_in_progress_event(event, context=context)
+        case ChatTokenGenerated():
+            return to_token_event(event, context=context)
+        case ChatTurnCompleted():
+            return to_message_completed_event(event, context=context)
+        case ChatTurnFailed():
+            return to_chat_turn_failed_event(event, context=context)
+        case SnapshotChanged():
+            return to_snapshot_changed_event(event, context=context)
+        case OperationChanged():
+            return to_operation_changed_event(
+                event.operation,
+                event.snapshot,
+                context=context,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 ErrorEnvelope.model_rebuild()
