@@ -2,12 +2,15 @@
 #    uv pip compile requirements-dev.in -o requirements-dev.txt
 aiofiles==25.1.0
     # via quart
+annotated-doc==0.0.4
+    # via fastapi
 annotated-types==0.7.0
     # via pydantic
 anyio==4.11.0
     # via
     #   httpx
     #   openai
+    #   starlette
 attrs==25.4.0
     # via
     #   outcome
@@ -32,8 +35,11 @@ click==8.1.7
     #   black
     #   flask
     #   quart
+    #   uvicorn
 distro==1.9.0
     # via openai
+fastapi==0.139.0
+    # via -r requirements.in
 filetype==1.2.0
     # via langchain-google-genai
 flask==3.1.2
@@ -61,6 +67,7 @@ h11==0.16.0
     # via
     #   httpcore
     #   hypercorn
+    #   uvicorn
     #   wsproto
 h2==4.3.0
     # via hypercorn
@@ -70,7 +77,7 @@ httpcore==1.0.9
     # via httpx
 httpx==0.28.1
     # via
-    #   -r requirements-dev.in
+    #   -r requirements.in
     #   langsmith
     #   ollama
     #   openai
@@ -176,6 +183,7 @@ pyasn1-modules==0.4.2
 pydantic==2.12.4
     # via
     #   -r requirements.in
+    #   fastapi
     #   langchain-core
     #   langchain-google-genai
     #   langsmith
@@ -235,6 +243,8 @@ sniffio==1.3.1
     #   trio
 sortedcontainers==2.4.0
     # via trio
+starlette==1.3.1
+    # via fastapi
 tenacity==9.1.2
     # via langchain-core
 tiktoken==0.13.0
@@ -254,6 +264,7 @@ typing-extensions==4.15.0
     # via
     #   -r requirements.in
     #   anyio
+    #   fastapi
     #   grpcio
     #   langchain-core
     #   mypy
@@ -261,13 +272,19 @@ typing-extensions==4.15.0
     #   pydantic
     #   pydantic-core
     #   pytest-asyncio
+    #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
     # via
+    #   fastapi
     #   pydantic
     #   pydantic-settings
 urllib3==2.5.0
     # via requests
+uvicorn==0.51.0
+    # via -r requirements.in
+websockets==16.1
+    # via -r requirements.in
 werkzeug==3.1.3
     # via
     #   flask

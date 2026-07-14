@@ -270,3 +270,32 @@ def test_module_package_for_path(
     expected: str,
 ) -> None:
     assert _module_package_for_path(path) == expected
+
+
+PHASE5_API_FORBIDDEN_PREFIXES = PHASE2_FORBIDDEN_PREFIXES + (
+    "jung.persistence",
+    "jung.phases",
+    "jung.llm",
+)
+
+
+def test_phase5_api_packages_respect_import_boundaries() -> None:
+    api_root = JUNG_SRC / "api"
+    if not api_root.exists():
+        pytest.skip("jung.api package not present yet")
+    paths = sorted(api_root.rglob("*.py"))
+    violations = _collect_violations(
+        paths,
+        forbidden_prefixes=PHASE5_API_FORBIDDEN_PREFIXES,
+    )
+    assert violations == []
+
+
+def test_phase5_api_init_is_side_effect_free() -> None:
+    init_path = JUNG_SRC / "api" / "__init__.py"
+    if not init_path.exists():
+        pytest.skip("jung.api package not present yet")
+    text = init_path.read_text(encoding="utf-8")
+    assert "fastapi" not in text.lower()
+    assert "application_context" not in text
+    assert "create_app" not in text

@@ -226,8 +226,11 @@ Duplicate `(session_id, client_message_id)` resolution happens before revision v
 | `invalid_llm_output` | 422 | Structured output parse/validation failure |
 | `operation_failed` | 409 | Durable operation already failed or cannot be accepted in current state |
 | `internal_error` | 500 | Unexpected server failure |
+| `not_ready` | 503 | API process not initialized or shutting down |
 
-Genuine bad upstream protocol responses may map to `502` via `internal_error` or a future provider-specific code; do not overload `llm_unavailable`.
+Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider exception text remains in server logs only and is not persisted in `error_message`.
+
+Malformed `X-Request-ID` request header values produce `422 validation_error` with a newly generated correlation ID in both the response header and error envelope. The malformed header value is never echoed.
 
 Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.
 

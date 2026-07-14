@@ -23,7 +23,12 @@ from jung.domain.models import (
     SessionKind,
     Stage,
 )
-from jung.llm.errors import InvalidLLMOutput, LLMTimeout
+from jung.llm.errors import (
+    InvalidLLMOutput,
+    LLMProtocolError,
+    LLMTimeout,
+    LLMUnavailable,
+)
 from jung.phases.assessment.models import AssessmentResult, StyleRecommendation
 from jung.styles import load_styles
 
@@ -119,21 +124,54 @@ def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
         _validate_snapshot_invariants(snapshot, plan, load_styles())
 
 
-def test_classify_worker_error_maps_llm_errors() -> None:
-    code, message, retryable = _classify_worker_error(LLMTimeout("timed out"))
-    assert code == "llm_timeout"
-    assert message == "timed out"
-    assert retryable is True
+SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"
 
-    code, message, retryable = _classify_worker_error(
-        InvalidLLMOutput("bad output")
-    )
-    assert code == "invalid_llm_output"
-    assert retryable is False
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_message", "expected_retryable"),
+    [
+        (
+            LLMUnavailable(SECRET_MARKER),
+            "llm_unavailable",
+            "The language model is currently unavailable.",
+            True,
+        ),
+        (
+            LLMTimeout(SECRET_MARKER),
+            "llm_timeout",
+            "The language model request timed out.",
+            True,
+        ),
+        (
+            InvalidLLMOutput(SECRET_MARKER),
+            "invalid_llm_output",
+            "The language model returned an invalid response.",
+            False,
+        ),
+        (
+            LLMProtocolError(SECRET_MARKER),
+            "internal_error",
+            "An unexpected error occurred.",
+            False,
+        ),
+    ],
+)
+def test_classify_worker_error_maps_llm_errors_to_public_messages(
+    error: Exception,
+    expected_code: str,
+    expected_message: str,
+    expected_retryable: bool,
+) -> None:
+    code, message, retryable = _classify_worker_error(error)
+    assert code == expected_code
+    assert message == expected_message
+    assert retryable is expected_retryable
+    assert SECRET_MARKER not in message
 
 
 def test_classify_worker_error_maps_unexpected_errors() -> None:
     code, message, retryable = _classify_worker_error(RuntimeError("boom"))
     assert code == "internal_error"
-    assert message == "An unexpected error occurred"
+    assert message == "An unexpected error occurred."
     assert retryable is False
+    assert "boom" not in message

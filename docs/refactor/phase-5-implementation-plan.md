@@ -769,15 +769,13 @@ Map:
 | `Busy` | `busy` | 409 | safe message |
 | `NotFound` | `not_found` | 404 | safe message |
 | request validation | `validation_error` | 422 | normalized field details only if contract allows |
-| `StoredWorkFailure` | stored code or `operation_failed` | contract-defined | preserve retryable |
-| `LLMUnavailable` or equivalent | `llm_unavailable` | 503 | no provider diagnostics |
-| `LLMTimeout` or equivalent | `llm_timeout` | 504 | retryable |
-| `InvalidLLMOutput` | `invalid_llm_output` | 422 | non-retryable |
+| `StoredWorkFailure` | stored code | 409 on unexpected HTTP; WebSocket preserves stored safe fields | preserve retryable; do not derive HTTP status from historical stored codes |
 | `InvariantViolation` | `internal_error` | 500 | log details server-side |
 | `PersistenceFailure` | `internal_error` | 500 | log details server-side |
-| unexpected exception | `internal_error` | 500 | generic client message |
+| unexpected exception (including raw provider escape) | `internal_error` | 500 | generic client message |
+| process not ready | `not_ready` | 503 | retryable |
 
-Use the exact current LLM error class names from `jung.llm.errors`; do not catch by message text.
+`jung.api.errors` imports only domain/application error types. Provider failures reach the adapter as `StoredWorkFailure` or stored operation/chat error fields after application-layer classification and public-message sanitization. A raw provider error escaping to the API is an unexpected boundary violation mapped to `internal_error`.
 
 ### 10.2 Revision conflict snapshot
 
@@ -1547,7 +1545,7 @@ Implement in reviewable work packages. Each package should leave tests green and
 - add `StyleRecommendationView` and `StyleOptions` application result models;
 - add `TherapyApplication.get_style_options()`;
 - document style response correction in `api-v1-contract.md`;
-- document `GET /profile` fresh-state `404`;
+- document seeded/partial `GET /profile` reads and defensive `404` only when the singleton row is absent;
 - add focused application tests;
 - confirm no API imports enter the core.
 
@@ -1730,7 +1728,7 @@ Given a fresh database:
 
 - `/health` becomes ready only after initialization;
 - `/state` returns `SETUP`, revision `0` or the schema-defined initial revision, and `update_profile` available;
-- `/profile` returns `404 not_found`;
+- `/profile` returns the seeded profile singleton;
 - no route or schema contains `user_id`.
 
 ### 22.2 Profile to intake

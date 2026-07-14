@@ -21,7 +21,7 @@ from jung.domain.models import (
     Stage,
 )
 from jung.events import OperationChanged
-from jung.llm.errors import InvalidLLMOutput, LLMTimeout
+from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
 from jung.llm.fake import (
     FailureExpectation,
     FakeLLM,
@@ -50,6 +50,38 @@ from .scenarios import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"
+
+
+async def test_operation_worker_persists_sanitized_error_message(store: SQLiteStore) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    fake = FakeLLM(
+        [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMUnavailable(SECRET_MARKER),
+            )
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        await wait_for_operation_status(
+            runtime.application,
+            operation_id,
+            OperationStatus.FAILED,
+        )
+        operation = runtime.store.get_operation(operation_id)
+    assert operation is not None
+    assert operation.error_code == "llm_unavailable"
+    assert operation.error_message == "The language model is currently unavailable."
+    assert SECRET_MARKER not in (operation.error_message or "")
 
 
 async def test_pending_assessment_operation_completes(store: SQLiteStore) -> None:

@@ -1345,7 +1345,22 @@ def _prior_session_briefing(
     return None
 
 
+_PUBLIC_WORK_ERROR_MESSAGES = {
+    "llm_unavailable": "The language model is currently unavailable.",
+    "llm_timeout": "The language model request timed out.",
+    "invalid_llm_output": "The language model returned an invalid response.",
+    "internal_error": "An unexpected error occurred.",
+}
+
+
 def _classify_worker_error(exc: Exception) -> tuple[str, str, bool]:
     if isinstance(exc, LLMError):
-        return exc.code, str(exc), exc.retryable
-    return "internal_error", "An unexpected error occurred", False
+        return (
+            exc.code,
+            _PUBLIC_WORK_ERROR_MESSAGES.get(
+                exc.code,
+                "The language model request failed.",
+            ),
+            exc.retryable,
+        )
+    return "internal_error", "An unexpected error occurred.", False
