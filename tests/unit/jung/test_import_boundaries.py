@@ -136,3 +136,19 @@ def test_phase3_packages_respect_llm_and_processor_boundaries() -> None:
                         )
 
     assert violations == []
+
+
+PHASE4_RUNTIME_FILES = (
+    JUNG_SRC / "application.py",
+    JUNG_SRC / "events.py",
+    JUNG_SRC / "supervisor.py",
+    JUNG_SRC / "composition.py",
+)
+
+
+def test_phase4_runtime_respects_import_boundaries() -> None:
+    violations = _collect_violations(
+        [path for path in PHASE4_RUNTIME_FILES if path.exists()],
+        forbidden_prefixes=PHASE2_FORBIDDEN_PREFIXES,
+    )
+    assert violations == []

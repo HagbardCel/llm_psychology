@@ -73,7 +73,9 @@ def stage_after_profile_update(
 
 def stage_after_intake_completion(current: Stage) -> Stage:
     if current != Stage.INTAKE:
-        raise InvalidCommand(f"finish_intake is not allowed in stage {current.value}")
+        raise InvalidCommand(
+            f"intake completion is not allowed in stage {current.value}"
+        )
     return Stage.ASSESSMENT
 
 

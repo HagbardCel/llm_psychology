@@ -176,7 +176,16 @@ Chat error revision semantics:
 
 A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`.
 
-Duplicate `(session_id, client_message_id)` resolution happens before revision validation: pending → `message_in_progress`; complete → persisted completion; retryable failed → reuse turn; permanent failed → stored error. `busy` rejects a second distinct active generation.
+Duplicate `(session_id, client_message_id)` resolution happens before revision validation. Precedence:
+
+1. resolve duplicate durable state by `(session_id, client_message_id)`;
+2. `PENDING` and `COMPLETE`: return durable state without revision validation;
+3. permanent `FAILED`: return stored non-retryable error;
+4. retryable `FAILED`: reject conflicting active generation as `busy` before structural checks;
+5. retryable `FAILED` that is structurally obsolete (session closed, wrong stage, or a later durable message exists): return non-retryable stored-work error carrying the original failure code/message;
+6. retryable `FAILED` that remains the latest conversational turn: validate `expected_revision`, then reset the same row to `PENDING` and schedule generation.
+
+`busy` rejects a second distinct active generation.
 
 ## 4. Errors, revisions, and reconnect rules
 

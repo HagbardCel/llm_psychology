@@ -22,19 +22,19 @@ source_of_truth_for: Target workflow, recovery, and concurrency semantics
 | `THERAPY` | one active session | end active session → post-session operation / `POST_SESSION` | therapy chat and end only |
 | `POST_SESSION` | operation pending/running | complete revision → `READY` | no user edits |
 
-Intake is complete only when the durable record meets the processor's required slot/evidence policy. `finish_intake` is an application transition caused by an accepted intake result, not a client-controlled generic state mutation.
+Intake is complete only when the durable record meets the processor's required slot/evidence policy. Intake completion is an internal application transition caused by an accepted intake chat result, not a client command.
 
 ## Command matrix
 
-| Stage | `update_profile` | `send_message` | `finish_intake` | `select_style` | `start_session` | `end_session` | `retry_operation` |
-|---|---|---|---|---|---|---|---|
-| `SETUP` | yes | no | no | no | no | no | no |
-| `INTAKE` | yes | yes | processor only | no | no | no | no |
-| `ASSESSMENT` | no | no | no | no | no | no | failed assessment only |
-| `STYLE_SELECTION` | no | no | no | yes | no | no | no |
-| `READY` | no | no | no | no | yes | no | no |
-| `THERAPY` | no | yes | no | no | no | active session only | no |
-| `POST_SESSION` | no | no | no | no | no | no | failed post-session only |
+| Stage | `update_profile` | `send_message` | `select_style` | `start_session` | `end_session` | `retry_operation` |
+|---|---|---|---|---|---|---|
+| `SETUP` | yes | no | no | no | no | no |
+| `INTAKE` | yes | yes | no | no | no | no |
+| `ASSESSMENT` | no | no | no | no | no | failed assessment only |
+| `STYLE_SELECTION` | no | no | yes | no | no | no |
+| `READY` | no | no | no | yes | no | no |
+| `THERAPY` | no | yes | no | no | active session only | no |
+| `POST_SESSION` | no | no | no | no | no | failed post-session only |
 
 All non-table combinations return `invalid_command`. Commands atomically compare `expected_revision`; stale values return `state_conflict` with a snapshot. Chat idempotency is evaluated first. Conflicting mutation, session, operation, or generation returns `busy`.
 
@@ -43,7 +43,7 @@ All non-table combinations return `invalid_command`. Commands atomically compare
 | Current stage | Command/event | Preconditions | Atomic persisted changes | Resulting stage |
 |---|---|---|---|---|
 | `SETUP` | `update_profile` completes profile | profile passes validation | profile saved; revision incremented | `INTAKE` |
-| `INTAKE` | `finish_intake` (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING`; revision incremented | `ASSESSMENT` |
+| `INTAKE` | intake completion (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING`; revision incremented | `ASSESSMENT` |
 | `ASSESSMENT` | operation completes | structured assessment result valid; includes initial plan material | assessment result saved; operation `COMPLETE`; revision incremented | `STYLE_SELECTION` |
 | `STYLE_SELECTION` | `select_style` | style valid; assessment result contains initial plan material | selected style + initial immutable plan; revision incremented | `READY` |
 | `READY` | `start_session` | no active session/operation/generation | therapy session row; revision incremented | `THERAPY` |

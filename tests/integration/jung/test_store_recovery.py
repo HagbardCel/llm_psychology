@@ -7,17 +7,17 @@ from uuid import uuid4
 from jung.domain.models import ChatTurnStatus, OperationStatus
 from jung.persistence.sqlite_store import SQLiteStore
 
-from .scenarios import open_intake
+from .scenarios import complete_intake_for_assessment, open_intake
 
 
 def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     revision = store.get_app_state().revision

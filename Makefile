@@ -201,6 +201,67 @@ phase-3-test: prepare-runtime-dirs
 		tests/unit/jung/smoke/test_smoke_diagnostics.py \
 		-q
 
+phase-4-test: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest \
+		-o trio_mode=false \
+		-o asyncio_mode=auto \
+		tests/unit/jung/test_events.py \
+		tests/unit/jung/test_supervisor.py \
+		tests/unit/jung/test_application_helpers.py \
+		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/llm/test_structured_output.py \
+		tests/integration/jung/test_application_workflow.py \
+		tests/integration/jung/test_application_chat.py \
+		tests/integration/jung/test_application_operations.py \
+		tests/integration/jung/test_application_recovery.py \
+		tests/integration/jung/test_application_composition.py \
+		tests/integration/jung/test_application_session_history.py \
+		tests/integration/jung/test_store_workflow.py \
+		tests/integration/jung/test_store_chat.py \
+		tests/integration/jung/test_store_recovery.py \
+		tests/integration/jung/test_processor_store_seams.py \
+		-q
+
+validate-refactor-phase-4: prepare-runtime-dirs
+	docker compose --profile test run --rm test ruff check \
+		src/jung/application.py \
+		src/jung/events.py \
+		src/jung/supervisor.py \
+		src/jung/composition.py \
+		src/jung/llm/structured.py \
+		src/jung/domain/commands.py \
+		src/jung/domain/errors.py \
+		src/jung/domain/models.py \
+		src/jung/domain/results.py \
+		src/jung/workflow.py \
+		src/jung/persistence/sqlite_store.py \
+		src/jung/phases/transcript.py \
+		tests/unit/jung/test_events.py \
+		tests/unit/jung/test_supervisor.py \
+		tests/unit/jung/test_application_helpers.py \
+		tests/unit/jung/test_workflow.py \
+		tests/unit/jung/llm/test_structured_output.py \
+		tests/integration/jung/application_fixtures.py \
+		tests/integration/jung/scenarios.py \
+		tests/integration/jung/test_application_workflow.py \
+		tests/integration/jung/test_application_chat.py \
+		tests/integration/jung/test_application_operations.py \
+		tests/integration/jung/test_application_recovery.py \
+		tests/integration/jung/test_application_composition.py \
+		tests/integration/jung/test_application_session_history.py \
+		tests/integration/jung/test_store_workflow.py \
+		tests/integration/jung/test_store_chat.py \
+		tests/integration/jung/test_store_recovery.py \
+		tests/integration/jung/test_processor_store_seams.py \
+		tests/unit/jung/test_import_boundaries.py
+	docker compose --profile test run --rm test python scripts/validate_refactor_phase_4.py
+	$(MAKE) phase-4-test
+
+validate-refactor-target-all: prepare-runtime-dirs
+	$(MAKE) validate-refactor-phase-2
+	$(MAKE) validate-refactor-phase-3
+	$(MAKE) validate-refactor-phase-4
+
 validate-refactor-phase-3: prepare-runtime-dirs
 	docker compose --profile test run --rm test ruff check \
 		src/jung/llm \
@@ -261,7 +322,25 @@ test-validate: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment..."
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
-	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization
+	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization \
+		--ignore=tests/unit/jung/llm \
+		--ignore=tests/unit/jung/test_events.py \
+		--ignore=tests/unit/jung/test_supervisor.py \
+		--ignore=tests/smoke/jung \
+		--ignore-glob='tests/integration/jung/test_application_*.py'
+	docker compose --profile test run --rm test pytest \
+		-o trio_mode=false \
+		-o asyncio_mode=auto \
+		tests/unit/jung/llm \
+		tests/unit/jung/test_events.py \
+		tests/unit/jung/test_supervisor.py \
+		tests/smoke/jung \
+		tests/integration/jung/test_application_workflow.py \
+		tests/integration/jung/test_application_chat.py \
+		tests/integration/jung/test_application_operations.py \
+		tests/integration/jung/test_application_recovery.py \
+		tests/integration/jung/test_application_composition.py \
+		tests/integration/jung/test_application_session_history.py
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs

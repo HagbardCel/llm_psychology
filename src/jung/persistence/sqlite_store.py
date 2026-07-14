@@ -318,52 +318,165 @@ class SQLiteStore:
 
         return self._write(expected_revision, mutate, now=now)
 
-    def finish_intake_and_create_assessment(
+    def get_latest_completed_operation(
+        self, kind: OperationKind
+    ) -> Operation | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, status, source_session_id, attempt, result_json,
+                       error_code, error_message, retryable, created_at, updated_at,
+                       started_at, completed_at
+                FROM operations
+                WHERE kind = ? AND status = ?
+                ORDER BY completed_at DESC
+                LIMIT 1
+                """,
+                (kind.value, OperationStatus.COMPLETE.value),
+            ).fetchone()
+            return sql.row_to_operation(row) if row else None
+
+    def list_plans_for_session(self, session_id: UUID) -> list[Plan]:
+        with self._connect() as conn:
+            session_row = conn.execute(
+                "SELECT plan_id FROM sessions WHERE id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if session_row is None:
+                raise NotFound(f"session {session_id}")
+            plan_ids: list[str] = []
+            if session_row[0]:
+                plan_ids.append(session_row[0])
+            rows = conn.execute(
+                """
+                SELECT id FROM plans
+                WHERE source_session_id = ?
+                ORDER BY version ASC, created_at ASC, id ASC
+                """,
+                (str(session_id),),
+            ).fetchall()
+            for row in rows:
+                if row[0] not in plan_ids:
+                    plan_ids.append(row[0])
+            if not plan_ids:
+                return []
+            placeholders = ",".join("?" for _ in plan_ids)
+            plan_rows = conn.execute(
+                f"""
+                SELECT id, version, selected_style, focus, themes_json, goals_json,
+                       current_progress, planned_interventions_json,
+                       revision_recommendations_json, session_briefing_json,
+                       source_session_id, supersedes_plan_id, created_at
+                FROM plans
+                WHERE id IN ({placeholders})
+                ORDER BY version ASC, created_at ASC, id ASC
+                """,
+                plan_ids,
+            ).fetchall()
+            return [sql.row_to_plan(row) for row in plan_rows]
+
+    def complete_final_intake_turn(
         self,
+        turn_id: UUID,
         *,
-        expected_revision: int,
-        intake_session_id: UUID,
+        assistant_message_id: UUID,
+        content: str,
+        intake_record: dict[str, Any],
         operation_id: UUID,
         now: datetime,
-    ) -> tuple[AppState, Operation]:
+    ) -> tuple[ChatTurn, Operation, AppState]:
+        validated_intake_record = sql.validate_json_mapping(
+            intake_record, field_name="intake_record"
+        )
+        turn_holder: dict[str, ChatTurn] = {}
+        operation_holder: dict[str, Operation] = {}
+
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                turn_row = conn.execute(
+                    "SELECT session_id FROM chat_turns WHERE id = ? AND status = ?",
+                    (str(turn_id), ChatTurnStatus.PENDING.value),
+                ).fetchone()
+                if turn_row is None:
+                    raise NotFound(f"chat turn {turn_id}")
+                session_id = UUID(turn_row[0])
+                session_row = conn.execute(
+                    f"{_SESSION_SELECT} WHERE id = ?",
+                    (str(session_id),),
+                ).fetchone()
+                if session_row is None:
+                    raise NotFound(f"session {session_id}")
+                if SessionKind(session_row[1]) is not SessionKind.INTAKE:
+                    raise InvariantViolation("final intake requires intake session")
+                self._require_stage(conn, {Stage.INTAKE})
+
+                sequence = self._next_sequence(conn, session_id)
+                conn.execute(
+                    """
+                    INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(assistant_message_id),
+                        str(session_id),
+                        sequence,
+                        MessageRole.ASSISTANT.value,
+                        content,
+                        sql.dt(now),
+                    ),
+                )
+                cursor = conn.execute(
+                    """
+                    UPDATE chat_turns
+                    SET status = ?, assistant_message_id = ?, updated_at = ?, completed_at = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                    (
+                        ChatTurnStatus.COMPLETE.value,
+                        str(assistant_message_id),
+                        sql.dt(now),
+                        sql.dt(now),
+                        str(turn_id),
+                        ChatTurnStatus.PENDING.value,
+                    ),
+                )
+                self._ensure_chat_turn_updated(conn, cursor, turn_id)
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET intake_record_json = ?, ended_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        sql.json_dumps(validated_intake_record),
+                        sql.dt(now),
+                        str(session_id),
+                    ),
+                )
                 existing = self._find_operation_by_source(
-                    conn, OperationKind.ASSESSMENT, intake_session_id
+                    conn, OperationKind.ASSESSMENT, session_id
                 )
                 if existing is not None:
-                    state = self._load_app_state(conn)
-                    conn.rollback()
-                    return state, existing
-
-                revision = self._load_revision(conn)
-                if revision != expected_revision:
-                    raise RevisionConflict(expected_revision, revision)
-
-                self._require_stage(conn, {Stage.INTAKE})
-                session = self._require_open_session(conn, intake_session_id)
-                if session.kind != SessionKind.INTAKE:
-                    raise InvariantViolation("session must be intake")
-                conn.execute(
-                    "UPDATE sessions SET ended_at = ? WHERE id = ?",
-                    (sql.dt(now), str(intake_session_id)),
-                )
-                operation = self._insert_pending_operation(
-                    conn,
-                    kind=OperationKind.ASSESSMENT,
-                    source_session_id=intake_session_id,
-                    operation_id=operation_id,
-                    now=now,
-                )
+                    operation_holder["operation"] = existing
+                else:
+                    operation_holder["operation"] = self._insert_pending_operation(
+                        conn,
+                        kind=OperationKind.ASSESSMENT,
+                        source_session_id=session_id,
+                        operation_id=operation_id,
+                        now=now,
+                    )
                 self._set_stage(conn, Stage.ASSESSMENT, now)
                 self._increment_revision(conn, now)
+                turn_holder["turn"] = self._load_chat_turn(conn, turn_id)
+                state = self._load_app_state(conn)
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
                 raise sql.translate_sqlite_error(exc) from exc
 
-        return self.get_app_state(), operation
+        return turn_holder["turn"], operation_holder["operation"], state
 
     def mark_operation_running(
         self,
@@ -1014,6 +1127,7 @@ class SQLiteStore:
         self,
         turn_id: UUID,
         *,
+        expected_revision: int,
         now: datetime,
     ) -> ChatTurn:
         def mutate(conn: sqlite3.Connection) -> None:
@@ -1038,7 +1152,7 @@ class SQLiteStore:
             )
             self._ensure_chat_turn_updated(conn, cursor, turn_id)
 
-        self._write(None, mutate, now=now)
+        self._write(expected_revision, mutate, now=now)
         turn = self.get_chat_turn(turn_id)
         assert turn is not None
         return turn

@@ -13,7 +13,11 @@ from jung.phases.post_session.models import (
     PlanPatch,
 )
 
-from .scenarios import advance_to_post_session, open_intake
+from .scenarios import (
+    advance_to_post_session,
+    complete_intake_for_assessment,
+    open_intake,
+)
 
 
 def _plan_content(**overrides: object) -> PlanContent:
@@ -53,11 +57,11 @@ def test_assessment_initial_plan_round_trips_through_select_style(
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     assessment = _assessment_result()

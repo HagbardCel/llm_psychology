@@ -6,6 +6,8 @@ import json
 
 import httpx
 import pytest
+
+pytestmark = pytest.mark.asyncio
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 

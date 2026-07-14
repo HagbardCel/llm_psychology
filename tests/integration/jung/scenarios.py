@@ -6,8 +6,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from jung.domain.models import OperationStatus, PlanContent, Profile, SessionKind, Stage
+from jung.domain.models import (
+    Operation,
+    OperationStatus,
+    PlanContent,
+    Profile,
+    SessionKind,
+    Stage,
+)
 from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.intake.models import IntakeRecord
 
 
 @dataclass(frozen=True)
@@ -39,15 +47,45 @@ def open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
     return intake.id, now
 
 
+def complete_intake_for_assessment(
+    store: SQLiteStore,
+    *,
+    intake_session_id: UUID,
+    now: datetime,
+    operation_id: UUID | None = None,
+) -> tuple[UUID, UUID, Operation]:
+    """Accept one intake turn and atomically complete intake plus assessment op."""
+    operation_id = operation_id or uuid4()
+    turn_id = uuid4()
+    store.accept_chat_message(
+        expected_revision=store.get_app_state().revision,
+        session_id=intake_session_id,
+        client_message_id=uuid4(),
+        turn_id=turn_id,
+        user_message_id=uuid4(),
+        content="intake message",
+        now=now,
+    )
+    _, operation, _ = store.complete_final_intake_turn(
+        turn_id,
+        assistant_message_id=uuid4(),
+        content="intake response",
+        intake_record=IntakeRecord().model_dump(mode="json"),
+        operation_id=operation_id,
+        now=now,
+    )
+    return turn_id, operation_id, operation
+
+
 def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
     intake_id, now = open_intake(store)
 
     operation_id = uuid4()
-    store.finish_intake_and_create_assessment(
-        expected_revision=store.get_app_state().revision,
+    complete_intake_for_assessment(
+        store,
         intake_session_id=intake_id,
-        operation_id=operation_id,
         now=now,
+        operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
     store.complete_assessment(

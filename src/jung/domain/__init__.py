@@ -1,6 +1,5 @@
 from jung.domain.commands import (
     EndSession,
-    FinishIntake,
     RetryOperation,
     SelectStyle,
     SendMessage,
@@ -14,6 +13,7 @@ from jung.domain.errors import (
     NotFound,
     PersistenceFailure,
     RevisionConflict,
+    StoredWorkFailure,
 )
 from jung.domain.models import (
     AppSnapshot,
@@ -47,7 +47,6 @@ __all__ = [
     "ChatTurnStatus",
     "CommandName",
     "EndSession",
-    "FinishIntake",
     "InvalidCommand",
     "InvariantViolation",
     "Message",
@@ -70,6 +69,7 @@ __all__ = [
     "Stage",
     "StartSession",
     "StoredProfile",
+    "StoredWorkFailure",
     "UpdateProfile",
     "UtcDateTime",
     "WorkflowFacts",

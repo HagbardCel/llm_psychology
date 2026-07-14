@@ -1,6 +1,6 @@
 ---
 owner: engineering
-status: proposed
+status: accepted
 last_reviewed: 2026-07-13
 review_cycle_days: 30
 source_of_truth_for: Detailed implementation plan for architecture refactor Phase 4
@@ -87,12 +87,15 @@ No LLM call starts before the corresponding work is durable.
 
 For chat:
 
-1. validate idempotency, stage, session, revision, and generation availability;
-2. persist the user message and `PENDING` `ChatTurn`;
-3. increment revision;
-4. reserve generation ownership;
-5. schedule supervised generation;
-6. return the accepted durable turn.
+1. validate idempotency, stage, session, revision, and active-generation availability;
+2. reserve generation ownership;
+3. persist the user message and `PENDING` `ChatTurn`;
+4. increment revision;
+5. publish accepted events;
+6. synchronously admit the supervised worker (or place the turn in the defined failed/recoverable state);
+7. return the authoritative durable turn.
+
+Steps 5–6 must guarantee that generation ownership is transferred to a supervised worker or the generation lock is released and the durable turn is placed in the defined recoverable/failed state, even if event publication is interrupted.
 
 For assessment and post-session work:
 
@@ -140,6 +143,8 @@ Do not:
 
 A small private helper such as `_run_store(callable, *args, **kwargs)` is sufficient.
 
+Round-2 remediation hardens this helper: once a synchronous store call starts, repeated `CancelledError` during `asyncio.shield()` drain cannot release the application mutation lock until the thread-backed task finishes. Bounded shutdown applies around LLM and supervised background work; an already-running local SQLite call is allowed to complete before lock release.
+
 ### 2.5 Keep live events subordinate to durable state
 
 `EventStream` is a local fan-out mechanism for currently connected observers. It is not authoritative.
@@ -161,7 +166,7 @@ Expected LLM failures retain the Phase 3 taxonomy:
 - `llm_unavailable` — retryable;
 - `llm_timeout` — retryable;
 - `invalid_llm_output` — not retryable;
-- `internal_error` for unexpected provider-protocol or application failures — not retryable by default.
+- `internal_error` for unexpected provider-protocol or application failures — not retryable by default, except pre-worker chat task-admission failures which use `internal_error` with `retryable=True` because the accepted turn remains valid and no generation attempt occurred.
 
 Processors must not generate friendly fallback text after a failed model call. The application records the failed `ChatTurn` or `Operation`; Phase 5 maps the result to transport errors.
 
@@ -254,7 +259,7 @@ Phase 4 begins only when:
 
 - Phase 2 domain, workflow, and persistence tests pass;
 - Phase 3 gateway, style, and processor tests pass;
-- the Phase 3 local-model acceptance smoke has been recorded for the intended runtime configuration;
+- the Phase 3 strict `json_schema` local-model acceptance smoke has been recorded for the branch commit that changed provider-schema transformation and composition preflight (prior Phase 3 compatibility alone is insufficient once Phase 4 alters the provider payload);
 - no target module imports the legacy runtime;
 - no unresolved ADR-level question remains about application, task, event, or recovery ownership;
 - the target processor contracts are stable;
@@ -576,8 +581,7 @@ Use one bounded queue per subscriber.
 Rules:
 
 - publishing never waits indefinitely for a slow subscriber;
-- token overflow may drop tokens for that subscriber;
-- durable-event overflow closes or evicts the slow subscription rather than blocking accepted work;
+- any subscriber queue overflow evicts that subscription rather than blocking accepted work;
 - unsubscribe removes the queue in `finally`;
 - one subscriber exception does not affect other subscribers;
 - there is no replay;
@@ -635,9 +639,16 @@ Illustrative interface:
 class TaskSupervisor:
     async def __aenter__(self) -> TaskSupervisor: ...
     async def __aexit__(self, exc_type, exc, tb) -> None: ...
-    def start(self, *, name: str, coroutine: Coroutine[Any, Any, None]) -> None: ...
+    def start(
+        self,
+        *,
+        name: str,
+        run: Callable[[], Awaitable[None]],
+    ) -> bool: ...
     async def shutdown(self, *, timeout_seconds: float) -> None: ...
 ```
+
+`start()` tracks owned `asyncio.Task` objects, rolls back active names when `create_task()` fails, and `shutdown()` waits/cancels only owned tasks via `asyncio.wait()`. Shutdown is safely repeatable.
 
 ### 10.2 Failure isolation
 
@@ -691,14 +702,17 @@ It should:
 4. create one concrete OpenAI-compatible client;
 5. wrap it with tracing when enabled;
 6. build all task policies;
-7. load the immutable style catalog;
-8. construct the four processors explicitly;
-9. construct `EventStream`;
-10. enter `TaskSupervisor`;
-11. construct `TherapyApplication`;
-12. run startup recovery;
-13. yield the application/runtime components;
-14. perform bounded shutdown and close the concrete LLM client.
+7. preflight `JSON_SCHEMA` response formats for `IntakeRecordPatch`, `AssessmentResult`, `SessionAnalysisResult`, and `PostSessionResult` before creating the concrete LLM client;
+8. load the immutable style catalog;
+9. construct the four processors explicitly;
+10. construct `EventStream`;
+11. enter `TaskSupervisor`;
+12. construct `TherapyApplication`;
+13. run startup recovery;
+14. yield the application/runtime components;
+15. perform bounded shutdown and close the concrete LLM client in an outer `finally` that begins immediately after client construction (covers startup failures in style loading, processor construction, supervisor entry, application construction, and `recover_on_startup()`).
+
+Strict schema conversion uses a schema-node allowlist: structural keys (`type`, `properties`, `required`, `additionalProperties`, `items`, `$defs`, `$ref`, `anyOf`, `enum`, `description`), constraint keys including `minLength`/`maxLength`, and strips `default`/`title`. Unknown keywords on schema nodes fail preflight with `UnsupportedStrictSchema`.
 
 ### 11.2 Lifecycle shape
 
@@ -796,8 +810,10 @@ Flow:
 6. assemble snapshot;
 7. release lock;
 8. publish `OperationChanged` for the pending operation;
-9. schedule operation execution;
+9. schedule operation execution in an outer `finally` that begins once step 5 returns the `Operation` (covers assemble, publication failures, and cancellation after commit);
 10. return snapshot.
+
+Cancellation inside the store write before the `Operation` is returned remains restart-recovery policy.
 
 ### 12.5 `retry_operation`
 
@@ -810,7 +826,7 @@ Flow:
 5. assemble snapshot;
 6. release lock;
 7. publish `OperationChanged`;
-8. schedule the same operation ID;
+8. schedule the same operation ID in an outer `finally` that begins once step 4 returns the `Operation` (covers assemble, publication failures, and cancellation after commit);
 9. return snapshot.
 
 Retry never creates a second operation row and never duplicates result artifacts.
@@ -826,19 +842,22 @@ Under the mutation lock:
 1. load an existing turn by client ID;
 2. when existing status is `PENDING`, return it without creating or scheduling another task;
 3. when existing status is `COMPLETE`, return it without revision validation or duplicate events;
-4. when existing status is retryable `FAILED`, reserve the generation lock, reset the same turn to `PENDING`, and schedule it with the new request correlation;
-5. when existing status is permanently `FAILED`, raise a stable application error carrying the stored code and retryability;
-6. for a new turn, require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
+4. when existing status is permanently `FAILED`, raise a stable application error carrying the stored code and retryability;
+5. when existing status is retryable `FAILED`:
+   - reject conflicting active generation as `Busy` before structural checks;
+   - reject structural obsolescence (session closed, wrong stage, or later durable messages) as non-retryable `StoredWorkFailure`;
+   - reserve the generation lock, then call the store to atomically validate `expected_revision` and reset the same turn to `PENDING`; schedule it with the new request correlation;
+6. for a new turn, raise `Busy` when another chat turn is pending or generation is active; otherwise require `SEND_MESSAGE`, validate content, and ensure the generation lock is available;
 7. reserve generation before durable acceptance so a second distinct command cannot pass the same check;
 8. generate turn and user-message IDs;
-9. call `store.accept_chat_message()`;
+9. call `store.accept_chat_message()` with `expected_revision`;
 10. assemble snapshot;
 11. release the mutation lock;
 12. publish `ChatTurnAccepted` and `SnapshotChanged`;
 13. schedule the worker;
 14. return the durable turn.
 
-If persistence or scheduling fails after the generation lock is reserved but before the worker owns it, release the lock in a guaranteed cleanup path. If persistence succeeded but scheduling cannot occur, mark the turn failed rather than leaving accepted work silently stranded.
+If persistence or scheduling fails after the generation lock is reserved but before the worker owns it, release the lock in a guaranteed cleanup path. If persistence succeeded but chat task admission returns `False` or raises unexpectedly, mark the turn failed with retryable `internal_error` rather than leaving accepted work silently stranded. Operation scheduling uses attempt-scoped task names `operation:{id}:attempt:{attempt + 1}`; benign duplicate admission for the same attempt is ignored.
 
 ### 13.2 Generation lock ownership
 
@@ -939,7 +958,14 @@ When `IntakeTurnPlan.completeness_complete` is true:
 11. release lock;
 12. publish `ChatTurnCompleted`;
 13. publish `OperationChanged` for the pending assessment;
-14. schedule assessment execution.
+14. publish authoritative `SnapshotChanged`;
+15. schedule assessment execution in an outer `finally` that begins once step 7 returns the `Operation` (covers assemble, `_load_message`, and publication failures after commit).
+
+Use an explicit publish-then-schedule sequence in `_complete_final_intake()`. Do not route final intake through `_publish_pending_operation_changed()` — that helper is reserved for `end_session()` and `retry_operation()` only.
+
+`_publish_pending_operation_changed()` publishes pending `OperationChanged` only; callers own scheduling in an outer `finally` even when publication fails or is cancelled. For `end_session()`, `retry_operation()`, and `_complete_final_intake()`, scheduling ownership begins as soon as the durable write returns the `Operation`; no later await may bypass worker admission.
+
+Cancellation inside the store write before the `Operation` is returned remains restart-recovery policy.
 
 There must be no externally observable committed state in which the intake turn is complete, the processor declared intake complete, but the application remains indefinitely in `INTAKE` without assessment work.
 
@@ -1417,8 +1443,9 @@ Cover:
 - duplicate after completion;
 - duplicate after retryable failure;
 - duplicate after permanent failure;
-- duplicate with stale expected revision;
-- distinct message while generation active.
+- duplicate with stale expected revision on retryable failed retry;
+- retry after a later completed turn is rejected as non-retryable;
+- distinct message while generation active (`Busy` precedes structural obsolescence for failed-turn retry).
 
 Assertions:
 
@@ -1512,7 +1539,26 @@ Use unit tests for:
 - assessment recommendation lookup;
 - application event construction;
 - recent-summary selection;
-- safe error-message normalization.
+- safe error-message normalization;
+- strict JSON schema allowlist conversion for all four structured output models (`IntakeRecordPatch`, `AssessmentResult`, `SessionAnalysisResult`, `PostSessionResult`).
+
+Integration tests added in round-2 remediation:
+
+- `test_submit_message_cancel_during_store_call_drains_and_releases_lock` (repeated cancellation with yielded double cancel);
+- `test_submit_message_cancel_after_turn_assigned_worker_completes_and_releases_lock`;
+- `test_submit_message_cancel_during_accepted_event_publication`;
+- `test_end_session_schedules_operation_when_publish_cancelled`;
+- `test_retry_operation_schedules_operation_when_publish_fails`;
+- `test_end_session_schedules_when_assemble_cancelled`;
+- `test_retry_operation_schedules_when_assemble_raises`;
+- `test_final_intake_schedules_when_load_message_fails`;
+- `test_application_context_closes_llm_when_load_styles_fails`;
+- `test_application_context_closes_llm_when_recover_on_startup_fails`;
+- `test_application_context_rejects_unsupported_schema`;
+- `test_full_intake_lifecycle_through_application`;
+- `test_failed_chat_retry_uses_persisted_original_content` plus busy-retry and structural-eligibility cases;
+- `test_failed_chat_retry_after_later_completed_turn_is_rejected`;
+- `test_failed_chat_retry_with_stale_revision_raises_revision_conflict`.
 
 Do not mock `SQLiteStore` in the main application workflow tests. The real temporary database is part of the Phase 4 contract.
 
@@ -1566,11 +1612,25 @@ The Phase 4 PR should also run:
 - Phase 1 characterization tests proving the still-running legacy product was not changed;
 - standard repository finalization once.
 
-A real local model is not required for mandatory Phase 4 CI because Phase 3 already validated provider compatibility. A small optional Phase 4 local smoke may be used to verify full application wiring, but it must not replace deterministic `FakeLLM` integration tests.
+Deterministic Phase 4 CI uses `FakeLLM` and does not require a real local model. For this Phase 4 branch, however, the existing Phase 3 strict-schema smoke is a **manual pre-merge gate** because Phase 4 changed `structured.py` (allowlist, metadata handling) and composition preflight. Run:
 
-## 25. Optional local application smoke
+```bash
+PHASE3_SMOKE_STRUCTURED_MODE=json_schema \
+PHASE3_SMOKE_STRICT_ACCEPTANCE=1 \
+make smoke-refactor-phase-3-local-llm
+```
 
-Provide only if it adds value beyond the Phase 3 processor smoke:
+Attach to the PR:
+
+- the exact `PHASE3_SMOKE_EVIDENCE=...` terminal line;
+- the commit SHA the smoke was run against;
+- key parameters (`structured_mode`, `strict_acceptance`, `server`, `model`, `base_url`).
+
+Re-run smoke when production schema transformation, policy construction, adapter formatting, or model definitions change. Docs, Makefile, and test-only follow-up commits do not require a rerun if smoke already passed on the preceding production-code commit.
+
+## 25. Optional full-application local smoke
+
+A future Phase 4 full-application local-model smoke (`make smoke-refactor-phase-4-local-llm`) is **optional** and does not replace the mandatory Phase 3 strict `json_schema` processor smoke above. Provide only if it adds value beyond the Phase 3 processor smoke:
 
 ```text
 make smoke-refactor-phase-4-local-llm
@@ -1808,6 +1868,7 @@ All criteria are blocking:
 - [ ] Pending operations are scheduled exactly once after startup.
 - [ ] Bounded shutdown leaves interrupted work recoverable.
 - [ ] Full application workflows pass with real `SQLiteStore` and `FakeLLM`.
+- [ ] Strict `json_schema` local-model smoke recorded; `PHASE3_SMOKE_EVIDENCE` attached to PR with commit SHA and parameters.
 - [ ] No target core module imports legacy orchestration, Trio, API, client, or provider-specific code outside `llm/`.
 - [ ] The running legacy product remains unchanged pending Phase 5 cutover.
 

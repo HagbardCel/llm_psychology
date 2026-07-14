@@ -256,12 +256,13 @@ Commands are explicit application inputs, for example:
 ```text
 update_profile
 send_message
-finish_intake
 select_style
 start_session
 end_session
 retry_operation
 ```
+
+Intake completion is processor-driven during chat acceptance, not a separate client command.
 
 The backend derives `available_commands` from the current snapshot. Clients display and invoke commands but do not implement workflow progression.
 
