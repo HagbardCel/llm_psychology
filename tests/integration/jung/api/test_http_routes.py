@@ -8,8 +8,23 @@ import httpx
 import pytest
 from httpx import AsyncClient
 
+from jung.domain.models import OperationStatus, Stage
+from jung.llm.errors import LLMTimeout
+from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
+from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
-from tests.integration.jung.scenarios import advance_to_ready
+from jung.phases.assessment.models import AssessmentResult
+from tests.integration.jung.api.conftest import _runtime_factory
+from tests.integration.jung.application_fixtures import (
+    assessment_result,
+    wait_for_operation_status,
+    wait_for_stage,
+)
+from tests.integration.jung.scenarios import (
+    advance_to_ready,
+    complete_intake_for_assessment,
+    open_intake,
+)
 
 
 @pytest.mark.asyncio
@@ -20,6 +35,13 @@ async def test_get_state_on_fresh_database(started_api_client: AsyncClient) -> N
     assert payload["stage"] == "setup"
     assert "update_profile" in payload["available_commands"]
     assert response.headers["X-Request-ID"]
+    for optional_field in (
+        "selected_style",
+        "active_session",
+        "operation",
+        "active_chat_turn",
+    ):
+        assert optional_field not in payload
 
 
 @pytest.mark.asyncio
@@ -201,3 +223,59 @@ async def test_cors_preflight_and_cross_origin_get(api_app, store: SQLiteStore) 
                 "http://frontend.test"
             )
             assert malformed.json()["request_id"] == malformed.headers["X-Request-ID"]
+
+
+@pytest.mark.asyncio
+async def test_retry_operation_returns_accepted_snapshot(
+    store: SQLiteStore,
+    api_settings,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    fake_llm = FakeLLM(
+        [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMTimeout("timeout"),
+            ),
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            ),
+        ]
+    )
+    from jung.api.app import create_app
+
+    app = create_app(
+        api_settings,
+        runtime_factory=_runtime_factory(store, fake_llm),
+    )
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            application = app.state.api.runtime.application
+            await wait_for_operation_status(
+                application,
+                operation_id,
+                OperationStatus.FAILED,
+            )
+            revision = (await client.get("/api/v1/state")).json()["revision"]
+            response = await client.post(
+                "/api/v1/operations/current/retry",
+                json={"expected_revision": revision},
+            )
+            await wait_for_stage(application, Stage.STYLE_SELECTION)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert "revision" in payload
+    assert "stage" in payload
+    fake_llm.assert_exhausted()

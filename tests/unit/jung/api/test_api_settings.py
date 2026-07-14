@@ -77,6 +77,20 @@ def test_validate_api_settings_normalizes_log_level() -> None:
     assert validate_api_settings(replaced).log_level == "info"
 
 
+def test_validate_api_settings_normalizes_origins_to_tuple() -> None:
+    normalized = validate_api_settings(
+        _settings(
+            origins=(
+                " https://frontend.test ",
+                "https://frontend.test",
+            )
+        )
+    )
+    assert normalized.allowed_origins == ("https://frontend.test",)
+    assert isinstance(normalized.allowed_origins, tuple)
+    assert validate_api_settings(normalized) == normalized
+
+
 def test_validate_api_settings_rejects_bad_port() -> None:
     with pytest.raises(ValueError, match="port"):
         validate_api_settings(_settings(port=0))

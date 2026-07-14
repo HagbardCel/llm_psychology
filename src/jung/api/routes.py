@@ -10,6 +10,7 @@ from jung.api.contracts import (
     COMMON_ERROR_RESPONSES,
     CONFLICT_RESPONSES,
     NOT_FOUND_RESPONSES,
+    AppSnapshotResponse,
     EndSessionRequest,
     HealthResponse,
     MappingContext,
@@ -49,13 +50,14 @@ def _context(request: Request) -> MappingContext:
 
 @router.get(
     "/state",
+    response_model=AppSnapshotResponse,
     response_model_exclude_none=True,
     responses=COMMON_ERROR_RESPONSES,
 )
 async def get_state(
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
-):
+) -> AppSnapshotResponse:
     context = _context(request)
     snapshot = await runtime.application.get_snapshot()
     return to_snapshot_response(snapshot, context=context)
@@ -77,6 +79,7 @@ async def get_profile(
 
 @router.put(
     "/profile",
+    response_model=AppSnapshotResponse,
     response_model_exclude_none=True,
     responses=CONFLICT_RESPONSES,
 )
@@ -84,7 +87,7 @@ async def update_profile(
     body: ProfileUpdateRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
-):
+) -> AppSnapshotResponse:
     context = _context(request)
     profile = Profile(
         name=body.profile.name,
@@ -112,6 +115,7 @@ async def get_styles(
 
 @router.put(
     "/style",
+    response_model=AppSnapshotResponse,
     response_model_exclude_none=True,
     responses=CONFLICT_RESPONSES,
 )
@@ -119,7 +123,7 @@ async def select_style(
     body: SelectStyleRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
-):
+) -> AppSnapshotResponse:
     context = _context(request)
     snapshot = await runtime.application.select_style(
         SelectStyle(expected_revision=body.expected_revision, style_id=body.style_id)
@@ -177,6 +181,7 @@ async def start_session(
 @router.post(
     "/sessions/{session_id}/end",
     status_code=status.HTTP_202_ACCEPTED,
+    response_model=AppSnapshotResponse,
     response_model_exclude_none=True,
     responses={**NOT_FOUND_RESPONSES, **CONFLICT_RESPONSES},
 )
@@ -185,7 +190,7 @@ async def end_session(
     body: EndSessionRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
-):
+) -> AppSnapshotResponse:
     context = _context(request)
     snapshot = await runtime.application.end_session(
         EndSession(expected_revision=body.expected_revision, session_id=session_id)
@@ -196,6 +201,7 @@ async def end_session(
 @router.post(
     "/operations/current/retry",
     status_code=status.HTTP_202_ACCEPTED,
+    response_model=AppSnapshotResponse,
     response_model_exclude_none=True,
     responses=CONFLICT_RESPONSES,
 )
@@ -203,7 +209,7 @@ async def retry_operation(
     body: RetryOperationRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
-):
+) -> AppSnapshotResponse:
     context = _context(request)
     snapshot = await runtime.application.get_snapshot()
     operation = snapshot.current_operation

@@ -34,15 +34,7 @@ from jung.api.routes import router
 from jung.api.settings import ApiSettings, validate_api_settings
 from jung.composition import Settings as CompositionSettings
 from jung.composition import application_context
-from jung.domain.errors import (
-    Busy,
-    InvalidCommand,
-    InvariantViolation,
-    NotFound,
-    PersistenceFailure,
-    RevisionConflict,
-    StoredWorkFailure,
-)
+from jung.domain.errors import DomainError, RevisionConflict
 
 logger = logging.getLogger(__name__)
 
@@ -108,25 +100,21 @@ def _register_exception_handlers(app: FastAPI) -> None:
             body=body,
         )
 
-    @app.exception_handler(StoredWorkFailure)
-    async def stored_work_failure_handler(request: Request, exc: StoredWorkFailure):
+    @app.exception_handler(DomainError)
+    async def domain_error_handler(request: Request, exc: DomainError):
         request_id = _request_id_from_request(request)
-        body = to_error_response(exc, request_id=request_id)
-        return build_error_response(
-            status=http_status_for_exception(exc),
-            body=body,
-        )
+        status = http_status_for_exception(exc)
 
-    @app.exception_handler(InvalidCommand)
-    @app.exception_handler(Busy)
-    @app.exception_handler(NotFound)
-    @app.exception_handler(InvariantViolation)
-    @app.exception_handler(PersistenceFailure)
-    async def domain_error_handler(request: Request, exc: Exception):
-        request_id = _request_id_from_request(request)
+        if status >= 500:
+            logger.error(
+                "internal domain error",
+                exc_info=exc,
+                extra={"request_id": str(request_id)},
+            )
+
         body = to_error_response(exc, request_id=request_id)
         return build_error_response(
-            status=http_status_for_exception(exc),
+            status=status,
             body=body,
         )
 
@@ -137,7 +125,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
             "unhandled API error",
             extra={"request_id": str(request_id)},
         )
-        body = to_error_response(RuntimeError("unhandled"), request_id=request_id)
+        body = to_error_response(exc, request_id=request_id)
         return build_error_response(status=500, body=body)
 
 
@@ -166,7 +154,7 @@ def create_app(
     *,
     runtime_factory: RuntimeFactory = application_context,
 ) -> FastAPI:
-    validate_api_settings(settings)
+    settings = validate_api_settings(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

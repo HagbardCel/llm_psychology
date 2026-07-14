@@ -84,7 +84,7 @@ def validate_api_settings(settings: ApiSettings) -> ApiSettings:
         host=host,
         port=settings.port,
         log_level=log_level,
-        allowed_origins=origins,
+        allowed_origins=tuple(origins),
         allow_remote_bind=settings.allow_remote_bind,
     )
 
