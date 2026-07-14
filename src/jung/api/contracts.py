@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from jung.domain.models import (
     AppSnapshot,
@@ -18,6 +18,7 @@ from jung.domain.models import (
     Plan,
     Profile,
     Session,
+    UtcDateTime,
 )
 from jung.domain.results import ProfileView, SessionHistory, StyleOptions
 
@@ -54,6 +55,28 @@ ErrorCode = Literal[
     "not_ready",
 ]
 
+_PUBLIC_ERROR_CODES = frozenset(
+    {
+        "invalid_command",
+        "state_conflict",
+        "busy",
+        "not_found",
+        "validation_error",
+        "llm_unavailable",
+        "llm_timeout",
+        "invalid_llm_output",
+        "operation_failed",
+        "internal_error",
+        "not_ready",
+    }
+)
+
+
+def normalize_public_error_code(stored_code: str) -> ErrorCode:
+    if stored_code in _PUBLIC_ERROR_CODES:
+        return cast(ErrorCode, stored_code)
+    return "operation_failed"
+
 SessionKindWire = Literal["intake", "therapy"]
 MessageRoleWire = Literal["user", "assistant", "system"]
 OperationKindWire = Literal["assessment", "post_session"]
@@ -79,7 +102,7 @@ class MappingContext:
 
 
 class ProfileWire(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     primary_language: str
@@ -162,8 +185,8 @@ class SessionSummaryResponse(BaseModel):
 
     id: UUID
     kind: SessionKindWire
-    started_at: Annotated[Any, Field(description="ISO 8601 datetime")]
-    ended_at: Annotated[Any, None] = None
+    started_at: UtcDateTime
+    ended_at: UtcDateTime | None = None
     plan_id: UUID | None = None
 
 
@@ -182,7 +205,7 @@ class MessageResponse(BaseModel):
     sequence: int
     role: MessageRoleWire
     content: str
-    created_at: Annotated[Any, Field(description="ISO 8601 datetime")]
+    created_at: UtcDateTime
     client_message_id: UUID | None = None
 
 
@@ -193,7 +216,7 @@ class PlanSummaryResponse(BaseModel):
     version: int
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
-    created_at: Annotated[Any, Field(description="ISO 8601 datetime")]
+    created_at: UtcDateTime
 
 
 class PlanDetailResponse(BaseModel):
@@ -211,13 +234,13 @@ class PlanDetailResponse(BaseModel):
     session_briefing: dict[str, Any] | None = None
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
-    created_at: Annotated[Any, Field(description="ISO 8601 datetime")]
+    created_at: UtcDateTime
 
 
 class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    code: str
+    code: ErrorCode
     message: str
     request_id: UUID
     current_snapshot: AppSnapshotResponse | None = None
@@ -297,7 +320,7 @@ class HealthResponse(BaseModel):
 class ErrorResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    code: str
+    code: ErrorCode
     message: str
     request_id: UUID
     current_snapshot: AppSnapshotResponse | None = None
@@ -360,6 +383,12 @@ class ErrorEvent(BaseModel):
     turn_id: UUID | None = None
     client_message_id: UUID | None = None
 
+    @model_validator(mode="after")
+    def request_ids_match(self) -> Self:
+        if self.request_id != self.error.request_id:
+            raise ValueError("error.request_id must match request_id")
+        return self
+
 
 ServerEvent = Annotated[
     TokenEvent
@@ -398,7 +427,7 @@ def stored_error_envelope(
     if code is None:
         return None
     return ErrorEnvelope(
-        code=code,
+        code=normalize_public_error_code(code),
         message=message or "Request failed",
         request_id=context.request_id,
         retryable=retryable,
@@ -593,11 +622,7 @@ def to_style_options_response(options: StyleOptions) -> StyleOptionsResponse:
     )
 
 
-def to_session_history_response(
-    history: SessionHistory,
-    *,
-    context: MappingContext,
-) -> SessionHistoryResponse:
+def to_session_history_response(history: SessionHistory) -> SessionHistoryResponse:
     return SessionHistoryResponse(
         session=to_session_detail(history.session),
         messages=[to_message_response(message) for message in history.messages],
@@ -613,10 +638,6 @@ def to_operation_changed_event(
 ) -> OperationChangedEvent:
     operation_summary = to_operation_summary(operation, context=context)
     snapshot_response = to_snapshot_response(snapshot, context=context)
-    if snapshot_response.operation is not None:
-        snapshot_response = snapshot_response.model_copy(
-            update={"operation": operation_summary}
-        )
     return OperationChangedEvent(
         type="operation_changed",
         operation=operation_summary,

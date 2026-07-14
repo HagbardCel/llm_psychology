@@ -6,11 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from jung.api.contracts import (
-    AppSnapshotResponse,
-    MappingContext,
-    to_snapshot_response,
-)
+from jung.api.contracts import MappingContext, to_snapshot_response
 from jung.api.errors import (
     RequestIdError,
     http_status_for_exception,
@@ -40,9 +36,27 @@ def test_parse_request_id_header_accepts_valid_uuid() -> None:
     assert parse_request_id_header(str(value)) == value
 
 
+@pytest.mark.parametrize("value", ["", "   ", "\t"])
+def test_parse_request_id_header_rejects_blank(value: str) -> None:
+    with pytest.raises(RequestIdError):
+        parse_request_id_header(value)
+
+
 def test_parse_request_id_header_rejects_malformed() -> None:
     with pytest.raises(RequestIdError):
         parse_request_id_header("not-a-uuid")
+
+
+def test_request_id_error_maps_to_validation_envelope_and_status() -> None:
+    exc = RequestIdError("bad-id")
+    request_id = uuid4()
+
+    envelope = to_error_envelope(exc, request_id=request_id)
+
+    assert envelope.code == "validation_error"
+    assert envelope.request_id == request_id
+    assert envelope.retryable is False
+    assert http_status_for_exception(exc) == 422
 
 
 def test_to_error_envelope_maps_domain_errors() -> None:
@@ -51,6 +65,24 @@ def test_to_error_envelope_maps_domain_errors() -> None:
     assert envelope.code == "invalid_command"
     assert envelope.request_id == request_id
     assert "revision" not in envelope.message.lower()
+
+
+def test_invalid_command_ignores_current_snapshot() -> None:
+    request_id = uuid4()
+    snapshot = AppSnapshot(
+        revision=4,
+        stage=Stage.SETUP,
+        profile_complete=False,
+        available_commands=frozenset(),
+    )
+    context = MappingContext(request_id=request_id)
+    wire_snapshot = to_snapshot_response(snapshot, context=context)
+    envelope = to_error_envelope(
+        InvalidCommand(),
+        request_id=request_id,
+        current_snapshot=wire_snapshot,
+    )
+    assert envelope.current_snapshot is None
 
 
 def test_http_status_for_stored_work_failure_is_409() -> None:
@@ -75,6 +107,19 @@ def test_stored_work_failure_preserves_safe_message() -> None:
     assert envelope.retryable is True
 
 
+def test_stored_work_failure_normalizes_internal_code() -> None:
+    request_id = uuid4()
+    exc = StoredWorkFailure(
+        code="stale_pending",
+        message="A pending operation was interrupted.",
+        retryable=True,
+    )
+    envelope = to_error_envelope(exc, request_id=request_id)
+    assert envelope.code == "operation_failed"
+    assert envelope.message == "A pending operation was interrupted."
+    assert envelope.retryable is True
+
+
 def test_revision_conflict_can_include_snapshot() -> None:
     request_id = uuid4()
     snapshot = AppSnapshot(
@@ -91,7 +136,7 @@ def test_revision_conflict_can_include_snapshot() -> None:
         current_snapshot=wire_snapshot,
     )
     assert envelope.code == "state_conflict"
-    assert isinstance(envelope.current_snapshot, AppSnapshotResponse)
+    assert envelope.current_snapshot is not None
     assert envelope.current_snapshot.revision == 4
 
 
@@ -118,13 +163,18 @@ def test_to_error_response_wraps_envelope() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exc", "status"),
+    ("exc", "code", "status"),
     [
-        (NotFound(), 404),
-        (InvalidCommand(), 409),
-        (Busy(), 409),
-        (RevisionConflict(1, 2), 409),
+        (NotFound(), "not_found", 404),
+        (InvalidCommand(), "invalid_command", 409),
+        (Busy(), "busy", 409),
+        (RevisionConflict(1, 2), "state_conflict", 409),
+        (RequestIdError("bad"), "validation_error", 422),
     ],
 )
-def test_http_status_mapping(exc: Exception, status: int) -> None:
+def test_error_mapping_table(exc: Exception, code: str, status: int) -> None:
+    request_id = uuid4()
+    envelope = to_error_envelope(exc, request_id=request_id)
+    assert envelope.code == code
+    assert envelope.request_id == request_id
     assert http_status_for_exception(exc) == status

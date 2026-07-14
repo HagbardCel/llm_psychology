@@ -230,6 +230,8 @@ Duplicate `(session_id, client_message_id)` resolution happens before revision v
 
 Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider exception text remains in server logs only and is not persisted in `error_message`.
 
+Durable internal failure codes that are not part of the public API vocabulary are exposed as `operation_failed`. Their sanitized message and retryability are preserved.
+
 Malformed `X-Request-ID` request header values produce `422 validation_error` with a newly generated correlation ID in both the response header and error envelope. The malformed header value is never echoed.
 
 Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.

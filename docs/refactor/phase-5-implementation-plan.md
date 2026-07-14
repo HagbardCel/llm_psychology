@@ -1220,7 +1220,7 @@ Direct database inspection is allowed only after shutdown for test assertions or
 
 ### 15.2 Required deterministic scenarios
 
-Maintain at least these high-value probes:
+Maintain two full deterministic console/API workflow probes:
 
 1. **Fresh setup through ready**
    - fresh database;
@@ -1239,6 +1239,8 @@ Maintain at least these high-value probes:
    - post-session operation completes;
    - new plan/profile material is durable;
    - final stage `READY`.
+
+Cover the remaining high-value resilience scenarios as focused integration tests (not full workflow probes):
 
 3. **Restart and resume**
    - accept durable work;
@@ -1573,7 +1575,7 @@ Acceptance:
 
 - create `jung.api.errors`;
 - implement typed exception-to-envelope mapping;
-- implement request ID middleware/helper;
+- implement request ID parsing helper (middleware deferred to work package 4);
 - normalize request validation errors;
 - test conflict snapshot enrichment and redaction.
 
@@ -1716,7 +1718,7 @@ The Phase 5 PR should also run:
 - Phase 1 black-box characterization tests while the legacy runtime still exists;
 - standard repository finalization once.
 
-Hosted CI uses `FakeLLM` and an ephemeral real Uvicorn server. It does not require a model server or Docker.
+Hosted CI uses `FakeLLM` and an ephemeral real Uvicorn server in the normal containerized test environment. It does not require an external model server.
 
 Run the optional local-model smoke manually when production API composition, model settings loading, or provider payload behavior changes.
 
