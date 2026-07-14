@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +44,8 @@ def _parse_positive_float(name: str, raw: str) -> float:
         value = float(raw.strip())
     except ValueError as exc:
         raise ValueError(f"invalid {name}: {raw!r}") from exc
-    if value <= 0:
-        raise ValueError(f"{name} must be greater than zero")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero")
     return value
 
 
@@ -74,10 +75,16 @@ def validate_api_settings(settings: ApiSettings) -> ApiSettings:
     if not 1 <= settings.port <= 65535:
         raise ValueError("port must be between 1 and 65535")
 
-    if settings.websocket_send_timeout <= 0:
-        raise ValueError("websocket_send_timeout must be greater than zero")
-    if settings.websocket_close_timeout <= 0:
-        raise ValueError("websocket_close_timeout must be greater than zero")
+    send_timeout = settings.websocket_send_timeout
+    if not math.isfinite(send_timeout) or send_timeout <= 0:
+        raise ValueError(
+            "websocket_send_timeout must be a finite number greater than zero"
+        )
+    close_timeout = settings.websocket_close_timeout
+    if not math.isfinite(close_timeout) or close_timeout <= 0:
+        raise ValueError(
+            "websocket_close_timeout must be a finite number greater than zero"
+        )
 
     log_level = settings.log_level.strip().lower()
     if log_level not in _VALID_LOG_LEVELS:

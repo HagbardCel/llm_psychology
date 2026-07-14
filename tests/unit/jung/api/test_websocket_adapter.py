@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,7 +25,11 @@ from jung.api.websocket import (
     recover_request_id,
 )
 from jung.composition import build_settings
-from jung.domain.errors import InvalidCommand
+from jung.domain.errors import (
+    InvalidCommand,
+    InvariantViolation,
+    StoredWorkFailure,
+)
 from jung.domain.models import (
     AppSnapshot,
     ChatTurn,
@@ -113,6 +118,7 @@ class FakeWebSocket:
         self._receive_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._send_gate = asyncio.Event()
         self._send_gate.set()
+        self._sent_condition = asyncio.Condition()
 
     async def accept(self) -> None:
         self.accepted = True
@@ -141,12 +147,94 @@ class FakeWebSocket:
 
     async def send_json(self, data: dict[str, Any]) -> None:
         await self._send_gate.wait()
-        self.sent.append(data)
+        async with self._sent_condition:
+            self.sent.append(data)
+            self._sent_condition.notify_all()
+
+    async def wait_for_snapshot_revision(
+        self,
+        revision: int,
+        *,
+        timeout: float = 1.0,
+    ) -> None:
+        def was_received() -> bool:
+            return any(
+                item.get("type") == "snapshot_changed"
+                and item.get("snapshot", {}).get("revision") == revision
+                for item in self.sent
+            )
+
+        async with asyncio.timeout(timeout):
+            async with self._sent_condition:
+                await self._sent_condition.wait_for(was_received)
+
+
+class SlowFakeWebSocket(FakeWebSocket):
+    def __init__(
+        self,
+        *,
+        api_state: ApiState,
+        api_settings: ApiSettings,
+    ) -> None:
+        super().__init__(api_state=api_state, api_settings=api_settings)
+        self.first_send_started = asyncio.Event()
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        if not self.first_send_started.is_set():
+            self.first_send_started.set()
+        await super().send_json(data)
+
+
+class TrackingEventStream(EventStream):
+    def __init__(self, *, max_queue_size: int = 64) -> None:
+        super().__init__(max_queue_size=max_queue_size)
+        self._subscription_condition = asyncio.Condition()
+        self._active_subscriptions = 0
+
+    @asynccontextmanager
+    async def subscribe(self):
+        async with self._subscription_condition:
+            self._active_subscriptions += 1
+            self._subscription_condition.notify_all()
+        try:
+            async with super().subscribe() as events:
+                yield events
+        finally:
+            async with self._subscription_condition:
+                self._active_subscriptions -= 1
+                self._subscription_condition.notify_all()
+
+    async def wait_for_subscriptions(self, count: int, *, timeout: float = 1.0) -> None:
+        async with asyncio.timeout(timeout):
+            async with self._subscription_condition:
+                await self._subscription_condition.wait_for(
+                    lambda: self._active_subscriptions == count
+                )
+
+
+def _snapshot_event(*, revision: int) -> SnapshotChanged:
+    return SnapshotChanged(
+        AppSnapshot(
+            revision=revision,
+            stage=Stage.SETUP,
+            profile_complete=False,
+            available_commands=frozenset(),
+        )
+    )
+
+
+def snapshot_revisions(fake: FakeWebSocket) -> list[int]:
+    return [
+        event["snapshot"]["revision"]
+        for event in fake.sent
+        if event.get("type") == "snapshot_changed"
+    ]
 
 
 @dataclass
 class MockApplication:
     submit_message: Any = None
+    get_snapshot: Any = None
 
 
 @dataclass
@@ -383,10 +471,14 @@ async def test_domain_error_uses_command_request_id() -> None:
 
 
 async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
-    events = EventStream(max_queue_size=1)
-    settings = _default_settings(send_timeout=30.0, close_timeout=0.5)
+    events = TrackingEventStream(max_queue_size=4)
+    settings = _default_settings(send_timeout=0.05, close_timeout=0.5)
 
-    async def start_observer(fake: FakeWebSocket, *, block_first: bool) -> asyncio.Task[None]:
+    async def start_observer(
+        fake: FakeWebSocket,
+        *,
+        block_first: bool,
+    ) -> asyncio.Task[None]:
         runtime = MockRuntime(application=MockApplication(), events=events)
         fake.app.state.api = ApiState(runtime=runtime, ready=True)  # type: ignore[arg-type]
         if block_first:
@@ -395,7 +487,7 @@ async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
             _handle_chat_connection(fake, runtime, settings)  # type: ignore[arg-type]
         )
 
-    slow = FakeWebSocket(
+    slow = SlowFakeWebSocket(
         api_state=ApiState(runtime=None, ready=True),
         api_settings=settings,
     )
@@ -406,37 +498,34 @@ async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
 
     slow_task = await start_observer(slow, block_first=True)
     healthy_task = await start_observer(healthy, block_first=False)
-    for _ in range(50):
-        if slow.accepted and healthy.accepted:
-            break
-        await asyncio.sleep(0.01)
-    assert slow.accepted and healthy.accepted
 
-    snapshot = AppSnapshot(
-        revision=1,
-        stage=Stage.SETUP,
-        profile_complete=False,
-        available_commands=frozenset(),
-    )
-    for revision in range(2, 7):
-        await events.publish(
-            SnapshotChanged(snapshot.model_copy(update={"revision": revision}))
-        )
-        await asyncio.sleep(0.02)
+    try:
+        await events.wait_for_subscriptions(2)
 
-    slow.unblock_sends()
-    await asyncio.wait({slow_task, healthy_task}, timeout=2.0)
+        await events.publish(_snapshot_event(revision=1))
+        await asyncio.wait_for(slow.first_send_started.wait(), timeout=1.0)
+        await healthy.wait_for_snapshot_revision(1)
 
-    assert slow.closed
-    assert slow.close_code == 1011
-    assert any(item.get("type") == "snapshot_changed" for item in healthy.sent)
+        for revision in range(2, 7):
+            await events.publish(_snapshot_event(revision=revision))
+            await healthy.wait_for_snapshot_revision(revision)
 
-    await events.publish(SnapshotChanged(snapshot.model_copy(update={"revision": 2})))
-    await asyncio.sleep(0.05)
-    snapshot_events = [
-        item for item in healthy.sent if item.get("type") == "snapshot_changed"
-    ]
-    assert len(snapshot_events) >= 2
+        slow.unblock_sends()
+        await asyncio.wait_for(slow_task, timeout=1.0)
+
+        assert snapshot_revisions(slow) == [1]
+        assert snapshot_revisions(healthy) == [1, 2, 3, 4, 5, 6]
+        assert slow.closed
+        assert slow.close_code == 1011
+    finally:
+        if not slow_task.done():
+            slow.queue_disconnect()
+            slow_task.cancel()
+        if not healthy_task.done():
+            healthy.queue_disconnect()
+            healthy_task.cancel()
+        await asyncio.gather(slow_task, healthy_task, return_exceptions=True)
+        await events.wait_for_subscriptions(0)
 
 
 def test_mapping_context_stores_and_pops_turn_ids() -> None:
@@ -590,29 +679,144 @@ async def test_dual_observer_healthy_receives_while_slow_blocked() -> None:
 
 
 class DisconnectOnSendWebSocket(FakeWebSocket):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.send_attempted = asyncio.Event()
+
     async def send_json(self, data: dict[str, Any]) -> None:
+        self.send_attempted.set()
         raise WebSocketDisconnect()
 
 
 async def test_outbound_send_disconnect_terminates_without_propagation() -> None:
-    events = EventStream()
+    events = TrackingEventStream()
     runtime = MockRuntime(application=MockApplication(), events=events)
     fake = DisconnectOnSendWebSocket(
         api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
-    fake.queue_disconnect()
+    settings = _default_settings()
 
-    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    handler = asyncio.create_task(
+        _handle_chat_connection(fake, runtime, settings)  # type: ignore[arg-type]
+    )
 
-    await events.publish(
-        SnapshotChanged(
-            AppSnapshot(
-                revision=1,
-                stage=Stage.SETUP,
-                profile_complete=False,
-                available_commands=frozenset(),
-            )
+    try:
+        await events.wait_for_subscriptions(1)
+        await events.publish(_snapshot_event(revision=1))
+
+        await asyncio.wait_for(fake.send_attempted.wait(), timeout=1.0)
+        await asyncio.wait_for(handler, timeout=1.0)
+
+        assert handler.done()
+        assert not handler.cancelled()
+    finally:
+        if not handler.done():
+            fake.queue_disconnect()
+            handler.cancel()
+
+        await asyncio.gather(handler, return_exceptions=True)
+        await events.wait_for_subscriptions(0)
+
+
+async def test_internal_error_logs_without_sensitive_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_content = "private therapy content"
+    internal_detail = "private invariant detail"
+    request_id = uuid4()
+    session_id = uuid4()
+    client_message_id = uuid4()
+    events = EventStream()
+    runtime = MockRuntime(
+        application=MockApplication(
+            submit_message=AsyncMock(side_effect=InvariantViolation(internal_detail))
+        ),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+                "expected_revision": 0,
+                "content": secret_content,
+            }
         )
     )
-    assert fake.sent == []
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.ERROR, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "Internal WebSocket command error"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert getattr(record, "exception_type", None) == "InvariantViolation"
+    assert getattr(record, "request_id", None) == str(request_id)
+    assert getattr(record, "session_id", None) == str(session_id)
+    assert secret_content not in caplog.text
+    assert internal_detail not in caplog.text
+
+    error = next(item for item in fake.sent if item.get("type") == "error")
+    assert error["error"]["code"] == "internal_error"
+    assert error["error"]["message"] == "An unexpected error occurred."
+
+
+async def test_stored_work_failure_does_not_log_internal_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = uuid4()
+    session_id = uuid4()
+    client_message_id = uuid4()
+    events = EventStream()
+    runtime = MockRuntime(
+        application=MockApplication(
+            submit_message=AsyncMock(
+                side_effect=StoredWorkFailure(
+                    code="internal_error",
+                    message="stored safe message",
+                    retryable=False,
+                )
+            )
+        ),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+                "expected_revision": 0,
+                "content": "hello",
+            }
+        )
+    )
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.ERROR, logger="jung.api.websocket"):
+        caplog.clear()
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "Internal WebSocket command error"
+    ]
+    assert records == []

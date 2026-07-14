@@ -101,24 +101,23 @@ class EventStream:
                 self._subscribers.discard(subscription)
 
     async def publish(self, event: ApplicationEvent) -> None:
+        # Keep membership checks, non-blocking delivery, and eviction atomic
+        # across concurrent publishers.
         async with self._lock:
-            subscribers = list(self._subscribers)
-        for subscriber in subscribers:
-            try:
-                subscriber.queue.put_nowait(event)
-            except asyncio.QueueFull:
-                await self._evict(subscriber)
+            for subscriber in tuple(self._subscribers):
+                try:
+                    subscriber.queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    self._subscribers.discard(subscriber)
+                    _close_subscription_queue(subscriber.queue)
 
-    async def _evict(self, subscription: _Subscription) -> None:
-        async with self._lock:
-            self._subscribers.discard(subscription)
-        queue = subscription.queue
-        if queue.full():
-            try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
+
+def _close_subscription_queue(
+    queue: asyncio.Queue[ApplicationEvent | object],
+) -> None:
+    while True:
         try:
-            queue.put_nowait(_SUBSCRIPTION_CLOSED)
-        except asyncio.QueueFull:
-            pass
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(_SUBSCRIPTION_CLOSED)

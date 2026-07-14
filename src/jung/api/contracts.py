@@ -729,6 +729,13 @@ def to_chat_turn_failed_event(
     *,
     context: MappingContext,
 ) -> ErrorEvent:
+    if (
+        not event.turn.error_code
+        or not event.turn.error_code.strip()
+        or not event.turn.error_message
+        or not event.turn.error_message.strip()
+    ):
+        raise ValueError("ChatTurnFailed requires durable error code and message")
     envelope = stored_error_envelope(
         event.turn.error_code,
         event.turn.error_message,

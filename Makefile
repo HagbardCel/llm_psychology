@@ -228,15 +228,12 @@ phase-5-test: prepare-runtime-dirs
 	docker compose --profile test run --rm test pytest \
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
-		tests/unit/jung/api/test_api_settings.py \
-		tests/unit/jung/api/test_event_mapping.py \
-		tests/unit/jung/api/test_websocket_adapter.py \
 		tests/unit/jung/api/ \
+		tests/unit/jung/test_events.py \
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_application_chat.py::test_chat_worker_persists_sanitized_error_message \
 		tests/integration/jung/test_application_operations.py::test_operation_worker_persists_sanitized_error_message \
-		tests/integration/jung/api/test_websocket_chat.py \
 		tests/integration/jung/api/ \
 		-q
 

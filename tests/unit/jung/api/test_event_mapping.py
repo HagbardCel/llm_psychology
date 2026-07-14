@@ -91,8 +91,28 @@ def test_map_token_preserves_sequence_and_text() -> None:
     assert wire.request_id == request_id
 
 
-def test_map_chat_turn_failed_requires_durable_fields() -> None:
+@pytest.mark.parametrize(
+    ("error_code", "error_message"),
+    [
+        (None, "safe"),
+        ("", "safe"),
+        ("   ", "safe"),
+        ("llm_timeout", None),
+        ("llm_timeout", ""),
+        ("llm_timeout", "   "),
+    ],
+)
+def test_map_chat_turn_failed_requires_durable_fields(
+    error_code: str | None,
+    error_message: str | None,
+) -> None:
     turn = _chat_turn(status=ChatTurnStatus.FAILED)
+    turn = turn.model_copy(
+        update={
+            "error_code": error_code,
+            "error_message": error_message,
+        }
+    )
     event = ChatTurnFailed(session_id=turn.session_id, turn_id=turn.id, turn=turn)
     context = MappingContext(request_id=uuid4())
     with pytest.raises(ValueError, match="durable error"):

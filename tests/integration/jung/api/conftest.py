@@ -88,8 +88,8 @@ async def uvicorn_api_urls(
 ) -> AsyncIterator[tuple[str, str]]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
+    sock.listen()
     port = sock.getsockname()[1]
-    sock.close()
 
     config = uvicorn.Config(
         app=api_app,
@@ -98,14 +98,41 @@ async def uvicorn_api_urls(
         log_level="error",
     )
     server = uvicorn.Server(config)
-    serve_task = asyncio.create_task(server.serve())
-    while not server.started:
-        await asyncio.sleep(0.01)
+    serve_task = asyncio.create_task(server.serve(sockets=[sock]))
 
     http_base = f"http://127.0.0.1:{port}"
     ws_url = f"ws://127.0.0.1:{port}/api/v1/chat"
+
     try:
+        await _wait_for_uvicorn_start(server, serve_task, timeout=5.0)
         yield http_base, ws_url
     finally:
         server.should_exit = True
-        await serve_task
+        try:
+            if serve_task.done():
+                await asyncio.gather(serve_task, return_exceptions=True)
+            else:
+                try:
+                    await asyncio.wait_for(serve_task, timeout=5.0)
+                except TimeoutError:
+                    await asyncio.gather(serve_task, return_exceptions=True)
+        finally:
+            sock.close()
+
+
+async def _wait_for_uvicorn_start(
+    server: uvicorn.Server,
+    serve_task: asyncio.Task[None],
+    *,
+    timeout: float,
+) -> None:
+    deadline = asyncio.get_event_loop().time() + timeout
+    while not server.started:
+        if serve_task.done():
+            await serve_task
+            raise RuntimeError(
+                "Uvicorn exited without an exception before reporting startup"
+            )
+        if asyncio.get_event_loop().time() >= deadline:
+            raise TimeoutError("Uvicorn did not start within timeout")
+        await asyncio.sleep(0.01)

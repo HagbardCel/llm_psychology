@@ -19,12 +19,13 @@ from jung.api.contracts import (
     ServerEvent,
     build_error_event,
     map_application_event,
+    to_snapshot_response,
 )
 from jung.api.deps import ApiNotReady, WebSocketRuntime, get_websocket_runtime
 from jung.api.errors import new_request_id, to_error_envelope
 from jung.api.settings import ApiSettings
 from jung.domain.commands import SendMessage
-from jung.domain.errors import DomainError
+from jung.domain.errors import DomainError, RevisionConflict, StoredWorkFailure
 from jung.events import (
     ApplicationEvent,
     ChatTokenGenerated,
@@ -224,12 +225,56 @@ async def _handle_chat_connection(
                     )
                     try:
                         await runtime.application.submit_message(domain_command)
+                    except RevisionConflict as exc:
+                        context = MappingContext(request_id=command.request_id)
+                        wire_snapshot = None
+                        try:
+                            snapshot = await runtime.application.get_snapshot()
+                            wire_snapshot = to_snapshot_response(
+                                snapshot,
+                                context=context,
+                            )
+                        except Exception as enrichment_exc:
+                            logger.error(
+                                "Failed to enrich WebSocket revision conflict",
+                                extra={
+                                    "connection_id": connection_id,
+                                    "request_id": str(command.request_id),
+                                    "exception_type": type(enrichment_exc).__name__,
+                                },
+                            )
+                        envelope = to_error_envelope(
+                            exc,
+                            request_id=context.request_id,
+                            current_snapshot=wire_snapshot,
+                        )
+                        await send_event(
+                            build_error_event(
+                                envelope,
+                                context=context,
+                                session_id=command.session_id,
+                                client_message_id=command.client_message_id,
+                            )
+                        )
                     except DomainError as exc:
                         context = MappingContext(request_id=command.request_id)
                         envelope = to_error_envelope(
                             exc,
                             request_id=context.request_id,
                         )
+                        if (
+                            envelope.code == "internal_error"
+                            and not isinstance(exc, StoredWorkFailure)
+                        ):
+                            logger.error(
+                                "Internal WebSocket command error",
+                                extra={
+                                    "connection_id": connection_id,
+                                    "request_id": str(command.request_id),
+                                    "session_id": str(command.session_id),
+                                    "exception_type": type(exc).__name__,
+                                },
+                            )
                         await send_event(
                             build_error_event(
                                 envelope,
