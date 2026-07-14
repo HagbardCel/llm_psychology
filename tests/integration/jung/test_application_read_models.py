@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from jung.domain.commands import UpdateProfile
-from jung.domain.errors import InvariantViolation, NotFound
+from jung.domain.errors import InvariantViolation
 from jung.domain.models import Profile, Stage
 from jung.llm.fake import FakeLLM
 from jung.persistence.sqlite_store import SQLiteStore
@@ -219,12 +219,33 @@ async def test_get_style_options_rejects_invalid_assessment_schema(
             await runtime.application.get_style_options()
 
 
-async def test_get_profile_raises_not_found_on_fresh_database(
+async def test_get_profile_returns_seeded_profile_on_fresh_database(
     store: SQLiteStore,
 ) -> None:
     async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
-        with pytest.raises(NotFound):
-            await runtime.application.get_profile()
+        view = await runtime.application.get_profile()
+
+    assert view.profile.name == ""
+    assert view.profile.primary_language == "English"
+    assert view.snapshot.stage is Stage.SETUP
+
+
+async def test_get_profile_returns_incomplete_profile_in_setup(
+    store: SQLiteStore,
+) -> None:
+    async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
+        snapshot = await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language=""),
+            )
+        )
+        assert snapshot.stage is Stage.SETUP
+
+        view = await runtime.application.get_profile()
+
+    assert view.profile.name == "Alex"
+    assert view.profile.primary_language == ""
 
 
 async def test_get_profile_returns_profile_view_after_update(

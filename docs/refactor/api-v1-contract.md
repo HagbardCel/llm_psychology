@@ -128,7 +128,7 @@ Policy decisions:
 - `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`.
 - API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
-- `GET /api/v1/state` is the canonical fresh-start read; `GET /api/v1/profile` returns `404 not_found` in `SETUP` while the profile is incomplete (before the first successful `PUT /profile`).
+- `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`.
 - Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`.
 - `GET /api/v1/health` reports **process readiness only**. Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health.
 
@@ -137,7 +137,7 @@ Policy decisions:
 | Method/path | Allowed stage | Request | Response | Errors | Revision effect |
 |---|---|---|---|---|---|
 | `GET /api/v1/state` | all | — | `200 AppSnapshot` | — | read only |
-| `GET /api/v1/profile` | all | — | `200 ProfileResponse` | `404 not_found` in `SETUP` while profile incomplete | read only |
+| `GET /api/v1/profile` | all | — | `200 ProfileResponse` | `404 not_found` if the required profile singleton row is unexpectedly absent | read only |
 | `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdate` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
 | `GET /api/v1/styles` | all | — | `200 StyleOptionsResponse` | — | read only |
 | `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
@@ -249,7 +249,7 @@ Canonical sequence:
 
 1. establish `WS /api/v1/chat` (before authoritative reconciliation, or refresh again after connect);
 2. `GET /api/v1/state`;
-3. `GET /api/v1/sessions/{active_session_id}` when history is needed;
+3. `GET /api/v1/sessions/{session_id}` when history is needed (for uncertain delivery, fetch the original command's `session_id`, even if that session is no longer active; a separate active-session read may be used for current UI rendering);
 4. reconcile by `client_message_id`:
    - matching user and assistant with the same ID → complete;
    - matching user plus pending turn in snapshot → in progress;

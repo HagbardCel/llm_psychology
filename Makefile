@@ -210,7 +210,7 @@ phase-4-test: prepare-runtime-dirs
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_workflow.py \
 		tests/unit/jung/llm/test_structured_output.py \
-		tests/unit/jung/test_import_boundaries.py::test_domain_does_not_import_phase_or_application_packages \
+		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_application_workflow.py \
 		tests/integration/jung/test_application_chat.py \
 		tests/integration/jung/test_application_operations.py \

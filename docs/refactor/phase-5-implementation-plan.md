@@ -316,17 +316,18 @@ Do not expose the full stored assessment JSON merely because it already exists.
 
 ### 4.3 Resolve fresh-setup profile reads
 
-`TherapyApplication.get_profile()` currently raises `NotFound` before a profile row exists, while the API contract marks `GET /profile` as valid in all stages with no documented error.
+Database initialization seeds a persistent profile singleton (`name=""`, `primary_language="English"`). `PUT /profile` updates that singleton; it does not create the row.
 
 Use the lean final behavior:
 
-- `GET /api/v1/profile` returns `404 not_found` while the application is in `SETUP` and no profile exists;
+- `GET /api/v1/profile` returns the seeded profile and any subsequently persisted partial or complete profile;
+- partial profiles persisted in `SETUP` remain readable via `GET /profile`;
 - `GET /api/v1/state` remains the canonical fresh-start read;
-- the client creates the initial profile through `PUT /api/v1/profile` using the current snapshot revision;
-- `ProfileResponse.profile` remains non-null once a profile exists;
-- update the endpoint matrix in `api-v1-contract.md` to document the `404`.
+- the client fills or replaces the seeded profile through `PUT /api/v1/profile` using the current snapshot revision;
+- `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent;
+- update the endpoint matrix in `api-v1-contract.md` to document the defensive `404`.
 
-Do not create a synthetic empty `Profile` that violates profile validation, and do not make all profile fields nullable solely to avoid a legitimate absence state.
+The application and API must return the persisted seeded profile singleton; they must not synthesize a replacement profile at read time. An unexpectedly missing singleton maps to the documented defensive `404 not_found`.
 
 ### 4.4 Confirm domain-to-wire naming differences are adapter mappings
 
@@ -926,7 +927,7 @@ On reconnect, the client follows the canonical sequence in [`api-v1-contract.md`
 
 1. establish `WS /api/v1/chat` (or refresh state/history again immediately after connect);
 2. `GET /api/v1/state`;
-3. `GET /api/v1/sessions/{active_session_id}` when history is needed;
+3. `GET /api/v1/sessions/{session_id}` when history is needed (for uncertain delivery, fetch the original command's `session_id`, even if that session is no longer active; a separate active-session read may be used for current UI rendering);
 4. reconcile using shared `client_message_id` and bounded single-invocation rules;
 5. treat persisted HTTP state and stored messages as authoritative;
 6. never reconstruct a completed message from missed `token` events.

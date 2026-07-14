@@ -45,7 +45,6 @@ from jung.domain.models import (
     Session,
     SessionKind,
     Stage,
-    is_profile_complete,
 )
 from jung.domain.results import (
     ProfileView,
@@ -189,13 +188,11 @@ class TherapyApplication:
     async def get_profile(self) -> ProfileView:
         async with self._mutation_lock:
             stored = await self._run_store(self._store.get_profile)
-            snapshot = await self._assemble_snapshot_locked()
-            if stored is None or (
-                snapshot.stage is Stage.SETUP
-                and not is_profile_complete(stored.profile)
-            ):
+            if stored is None:
                 raise NotFound("profile")
+
             plan = await self._run_store(self._store.get_current_plan)
+            snapshot = await self._assemble_snapshot_locked()
             return ProfileView(
                 profile=stored.profile,
                 current_plan=plan,
