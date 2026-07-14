@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 
 from jung.api.contracts import (
     COMMON_ERROR_RESPONSES,
@@ -41,7 +42,22 @@ from jung.domain.commands import (
 from jung.domain.errors import InvalidCommand
 from jung.domain.models import OperationStatus, Profile
 
-router = APIRouter(prefix="/api/v1")
+RequestIdHeader = Annotated[
+    str | None,
+    Header(alias="X-Request-ID"),
+]
+
+
+async def document_request_id_header(
+    _request_id: RequestIdHeader = None,
+) -> None:
+    pass
+
+
+router = APIRouter(
+    prefix="/api/v1",
+    dependencies=[Depends(document_request_id_header)],
+)
 
 
 def _context(request: Request) -> MappingContext:

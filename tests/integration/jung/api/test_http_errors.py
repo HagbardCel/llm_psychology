@@ -293,6 +293,24 @@ def test_openapi_documents_error_response_not_http_validation(
     assert response_schema["$ref"].endswith("ErrorResponse")
 
 
+@pytest.mark.parametrize("method,path", sorted(EXPECTED_OPERATIONS))
+def test_openapi_documents_optional_request_id_header(
+    api_app,
+    method: str,
+    path: str,
+) -> None:
+    schema = api_app.openapi()
+    operation = schema["paths"][path][method]
+    parameters = operation.get("parameters", [])
+
+    assert any(
+        parameter["in"] == "header"
+        and parameter["name"].lower() == "x-request-id"
+        and parameter.get("required") is False
+        for parameter in parameters
+    )
+
+
 @pytest.mark.parametrize("method,path,status_code", SNAPSHOT_OPERATIONS)
 def test_openapi_snapshot_success_schema(
     api_app,
