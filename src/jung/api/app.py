@@ -57,6 +57,21 @@ def _request_id_from_request(request: Request) -> UUID:
     return request_id
 
 
+def _log_safe_exception(
+    message: str,
+    *,
+    request_id: UUID,
+    exc: Exception,
+) -> None:
+    logger.error(
+        message,
+        extra={
+            "request_id": str(request_id),
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+
 def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiNotReady)
     async def api_not_ready_handler(
@@ -85,10 +100,11 @@ def _register_exception_handlers(app: FastAPI) -> None:
             runtime = get_runtime_from_state(request.app.state.api)
             snapshot = await runtime.application.get_snapshot()
             wire_snapshot = to_snapshot_response(snapshot, context=context)
-        except Exception:
-            logger.exception(
+        except Exception as enrichment_exc:
+            _log_safe_exception(
                 "failed to enrich revision conflict snapshot",
-                extra={"request_id": str(request_id)},
+                request_id=request_id,
+                exc=enrichment_exc,
             )
         body = to_error_response(
             exc,
@@ -106,10 +122,10 @@ def _register_exception_handlers(app: FastAPI) -> None:
         status = http_status_for_exception(exc)
 
         if status >= 500:
-            logger.error(
+            _log_safe_exception(
                 "internal domain error",
-                exc_info=exc,
-                extra={"request_id": str(request_id)},
+                request_id=request_id,
+                exc=exc,
             )
 
         body = to_error_response(exc, request_id=request_id)
@@ -117,16 +133,6 @@ def _register_exception_handlers(app: FastAPI) -> None:
             status=status,
             body=body,
         )
-
-    @app.exception_handler(Exception)
-    async def unhandled_exception_handler(request: Request, exc: Exception):
-        request_id = _request_id_from_request(request)
-        logger.exception(
-            "unhandled API error",
-            extra={"request_id": str(request_id)},
-        )
-        body = to_error_response(exc, request_id=request_id)
-        return build_error_response(status=500, body=body)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -144,7 +150,20 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             return build_error_response(status=422, body=body)
 
         request.state.request_id = request_id
-        response = await call_next(request)
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            _log_safe_exception(
+                "unhandled API error",
+                request_id=request_id,
+                exc=exc,
+            )
+            response = build_error_response(
+                status=500,
+                body=to_error_response(exc, request_id=request_id),
+            )
+
         response.headers["X-Request-ID"] = str(request_id)
         return response
 

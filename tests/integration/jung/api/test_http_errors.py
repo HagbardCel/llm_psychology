@@ -36,6 +36,25 @@ SNAPSHOT_OPERATIONS = (
 )
 
 
+def _assert_safe_error_log(
+    records: list[logging.LogRecord],
+    *,
+    message: str,
+    request_id: str,
+    exception_type: str,
+) -> None:
+    matching = [
+        record
+        for record in records
+        if record.getMessage() == message
+        and getattr(record, "request_id", None) == request_id
+        and getattr(record, "exception_type", None) == exception_type
+    ]
+
+    assert len(matching) == 1
+    assert matching[0].exc_info is None
+
+
 @pytest.mark.asyncio
 async def test_success_generates_request_id(started_api_client: AsyncClient) -> None:
     response = await started_api_client.get("/api/v1/state")
@@ -52,20 +71,6 @@ async def test_success_preserves_valid_request_id(started_api_client: AsyncClien
     )
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == request_id
-
-
-@pytest.mark.asyncio
-async def test_malformed_request_id_returns_422_before_route(
-    api_client: AsyncClient,
-) -> None:
-    response = await api_client.get(
-        "/api/v1/state",
-        headers={"X-Request-ID": "not-a-uuid"},
-    )
-    assert response.status_code == 422
-    body = response.json()
-    assert body["code"] == "validation_error"
-    assert body["request_id"] == response.headers["X-Request-ID"]
 
 
 @pytest.mark.asyncio
@@ -105,7 +110,7 @@ async def test_unexpected_exception_returns_sanitized_internal_error(
     )
 
     async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             application = app.state.api.runtime.application
 
@@ -121,14 +126,13 @@ async def test_unexpected_exception_returns_sanitized_internal_error(
     assert body["code"] == "internal_error"
     assert body["request_id"] == response.headers["X-Request-ID"]
     assert secret not in response.text
-    assert any(
-        record.levelname == "ERROR" and "unhandled API error" in record.message
-        for record in caplog.records
+    _assert_safe_error_log(
+        caplog.records,
+        message="unhandled API error",
+        request_id=str(body["request_id"]),
+        exception_type="RuntimeError",
     )
-    assert any(
-        getattr(record, "request_id", None) == str(body["request_id"])
-        for record in caplog.records
-    )
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -161,14 +165,13 @@ async def test_internal_domain_error_is_logged_and_sanitized(
     assert body["code"] == "internal_error"
     assert body["request_id"] == response.headers["X-Request-ID"]
     assert secret not in response.text
-    assert any(
-        record.levelname == "ERROR" and "internal domain error" in record.message
-        for record in caplog.records
+    _assert_safe_error_log(
+        caplog.records,
+        message="internal domain error",
+        request_id=str(body["request_id"]),
+        exception_type="InvariantViolation",
     )
-    assert any(
-        getattr(record, "request_id", None) == str(body["request_id"])
-        for record in caplog.records
-    )
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -202,6 +205,7 @@ async def test_revision_conflict_enrichment_failure_keeps_409(
     api_settings,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    secret = "secret enrichment detail"
     app = create_app(
         api_settings,
         runtime_factory=_runtime_factory(store, fake_llm),
@@ -214,7 +218,7 @@ async def test_revision_conflict_enrichment_failure_keeps_409(
             application = app.state.api.runtime.application
 
             async def failing_get_snapshot():
-                raise RuntimeError("snapshot enrichment failed")
+                raise RuntimeError(secret)
 
             application.get_snapshot = failing_get_snapshot  # type: ignore[method-assign]
             with caplog.at_level(logging.ERROR, logger="jung.api.app"):
@@ -236,10 +240,17 @@ async def test_revision_conflict_enrichment_failure_keeps_409(
     assert body["code"] == "state_conflict"
     assert body["current_snapshot"] is None
     assert body["request_id"] == response.headers["X-Request-ID"]
-    assert any(
-        "failed to enrich revision conflict snapshot" in record.message
-        for record in caplog.records
+    _assert_safe_error_log(
+        caplog.records,
+        message="failed to enrich revision conflict snapshot",
+        request_id=str(body["request_id"]),
+        exception_type="RuntimeError",
     )
+    assert secret not in caplog.text
+
+
+def test_no_generic_exception_handler_registered(api_app) -> None:
+    assert Exception not in api_app.exception_handlers
 
 
 def test_openapi_operation_inventory(api_app) -> None:
@@ -267,14 +278,19 @@ def test_openapi_route_surface(api_app) -> None:
     assert "/openapi.json" not in paths
 
 
-def test_openapi_documents_error_response_not_http_validation(api_app) -> None:
+@pytest.mark.parametrize("method,path", sorted(EXPECTED_OPERATIONS))
+def test_openapi_documents_error_response_not_http_validation(
+    api_app,
+    method: str,
+    path: str,
+) -> None:
     schema = api_app.openapi()
-    state_get = schema["paths"]["/api/v1/state"]["get"]
-    assert "HTTPValidationError" not in str(state_get.get("responses", {}))
-    assert "422" in state_get["responses"]
-    assert state_get["responses"]["422"]["content"]["application/json"]["schema"][
-        "$ref"
-    ].endswith("ErrorResponse")
+    operation = schema["paths"][path][method]
+    responses = operation.get("responses", {})
+    assert "HTTPValidationError" not in str(responses)
+    assert "422" in responses
+    response_schema = responses["422"]["content"]["application/json"]["schema"]
+    assert response_schema["$ref"].endswith("ErrorResponse")
 
 
 @pytest.mark.parametrize("method,path,status_code", SNAPSHOT_OPERATIONS)

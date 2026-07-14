@@ -272,10 +272,13 @@ async def test_retry_operation_returns_accepted_snapshot(
                 "/api/v1/operations/current/retry",
                 json={"expected_revision": revision},
             )
+
+            assert response.status_code == 202
+            payload = response.json()
+            assert payload["stage"] == "assessment"
+            assert payload["operation"]["id"] == str(operation_id)
+            assert payload["operation"]["status"] == "pending"
+
             await wait_for_stage(application, Stage.STYLE_SELECTION)
 
-    assert response.status_code == 202
-    payload = response.json()
-    assert "revision" in payload
-    assert "stage" in payload
     fake_llm.assert_exhausted()

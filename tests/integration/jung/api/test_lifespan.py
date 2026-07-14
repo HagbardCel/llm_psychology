@@ -24,7 +24,9 @@ async def test_malformed_request_id_before_lifespan_returns_422(
         headers={"X-Request-ID": "bad"},
     )
     assert response.status_code == 422
-    assert response.json()["code"] == "validation_error"
+    body = response.json()
+    assert body["code"] == "validation_error"
+    assert body["request_id"] == response.headers["X-Request-ID"]
 
 
 @pytest.mark.asyncio
