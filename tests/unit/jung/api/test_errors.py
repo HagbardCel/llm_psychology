@@ -18,12 +18,22 @@ from jung.api.errors import (
 )
 from jung.domain.errors import (
     Busy,
+    DomainError,
     InvalidCommand,
+    InvariantViolation,
     NotFound,
+    PersistenceFailure,
     RevisionConflict,
     StoredWorkFailure,
 )
 from jung.domain.models import AppSnapshot, Stage
+
+_SECRET_MARKER = "secret-marker"
+_INTERNAL_MESSAGE = "An unexpected error occurred."
+
+
+class CustomDomainError(DomainError):
+    pass
 
 
 def test_parse_request_id_header_generates_when_absent() -> None:
@@ -47,26 +57,6 @@ def test_parse_request_id_header_rejects_malformed() -> None:
         parse_request_id_header("not-a-uuid")
 
 
-def test_request_id_error_maps_to_validation_envelope_and_status() -> None:
-    exc = RequestIdError("bad-id")
-    request_id = uuid4()
-
-    envelope = to_error_envelope(exc, request_id=request_id)
-
-    assert envelope.code == "validation_error"
-    assert envelope.request_id == request_id
-    assert envelope.retryable is False
-    assert http_status_for_exception(exc) == 422
-
-
-def test_to_error_envelope_maps_domain_errors() -> None:
-    request_id = uuid4()
-    envelope = to_error_envelope(InvalidCommand(), request_id=request_id)
-    assert envelope.code == "invalid_command"
-    assert envelope.request_id == request_id
-    assert "revision" not in envelope.message.lower()
-
-
 def test_invalid_command_ignores_current_snapshot() -> None:
     request_id = uuid4()
     snapshot = AppSnapshot(
@@ -85,15 +75,6 @@ def test_invalid_command_ignores_current_snapshot() -> None:
     assert envelope.current_snapshot is None
 
 
-def test_http_status_for_stored_work_failure_is_409() -> None:
-    exc = StoredWorkFailure(
-        code="llm_timeout",
-        message="The language model request timed out.",
-        retryable=True,
-    )
-    assert http_status_for_exception(exc) == 409
-
-
 def test_stored_work_failure_preserves_safe_message() -> None:
     request_id = uuid4()
     exc = StoredWorkFailure(
@@ -105,6 +86,7 @@ def test_stored_work_failure_preserves_safe_message() -> None:
     assert envelope.code == "llm_unavailable"
     assert envelope.message == "The language model is currently unavailable."
     assert envelope.retryable is True
+    assert http_status_for_exception(exc) == 409
 
 
 def test_stored_work_failure_normalizes_internal_code() -> None:
@@ -163,18 +145,85 @@ def test_to_error_response_wraps_envelope() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exc", "code", "status"),
+    ("exc", "expected_code", "expected_status", "expected_retryable", "expected_message"),
     [
-        (NotFound(), "not_found", 404),
-        (InvalidCommand(), "invalid_command", 409),
-        (Busy(), "busy", 409),
-        (RevisionConflict(1, 2), "state_conflict", 409),
-        (RequestIdError("bad"), "validation_error", 422),
+        (
+            RequestIdError("bad"),
+            "validation_error",
+            422,
+            False,
+            "The request ID header is malformed.",
+        ),
+        (
+            InvalidCommand(),
+            "invalid_command",
+            409,
+            False,
+            "Command is not permitted in the current workflow state.",
+        ),
+        (
+            RevisionConflict(1, 2),
+            "state_conflict",
+            409,
+            False,
+            "The request used a stale revision.",
+        ),
+        (
+            Busy(),
+            "busy",
+            409,
+            False,
+            "The application is busy with conflicting work.",
+        ),
+        (
+            NotFound(),
+            "not_found",
+            404,
+            False,
+            "The requested resource was not found.",
+        ),
+        (
+            InvariantViolation(_SECRET_MARKER),
+            "internal_error",
+            500,
+            False,
+            _INTERNAL_MESSAGE,
+        ),
+        (
+            PersistenceFailure(_SECRET_MARKER),
+            "internal_error",
+            500,
+            False,
+            _INTERNAL_MESSAGE,
+        ),
+        (
+            CustomDomainError(_SECRET_MARKER),
+            "internal_error",
+            500,
+            False,
+            _INTERNAL_MESSAGE,
+        ),
+        (
+            RuntimeError(_SECRET_MARKER),
+            "internal_error",
+            500,
+            False,
+            _INTERNAL_MESSAGE,
+        ),
     ],
 )
-def test_error_mapping_table(exc: Exception, code: str, status: int) -> None:
+def test_error_mapping_table(
+    exc: Exception,
+    expected_code: str,
+    expected_status: int,
+    expected_retryable: bool,
+    expected_message: str,
+) -> None:
     request_id = uuid4()
     envelope = to_error_envelope(exc, request_id=request_id)
-    assert envelope.code == code
+    assert envelope.code == expected_code
     assert envelope.request_id == request_id
-    assert http_status_for_exception(exc) == status
+    assert envelope.retryable is expected_retryable
+    assert envelope.message == expected_message
+    assert http_status_for_exception(exc) == expected_status
+    assert _SECRET_MARKER not in envelope.message

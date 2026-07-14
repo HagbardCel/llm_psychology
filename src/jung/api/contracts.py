@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Any, Literal, Self, cast
+from typing import Annotated, Any, Literal, Self, cast, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,21 +55,7 @@ ErrorCode = Literal[
     "not_ready",
 ]
 
-_PUBLIC_ERROR_CODES = frozenset(
-    {
-        "invalid_command",
-        "state_conflict",
-        "busy",
-        "not_found",
-        "validation_error",
-        "llm_unavailable",
-        "llm_timeout",
-        "invalid_llm_output",
-        "operation_failed",
-        "internal_error",
-        "not_ready",
-    }
-)
+_PUBLIC_ERROR_CODES: frozenset[str] = frozenset(get_args(ErrorCode))
 
 
 def normalize_public_error_code(stored_code: str) -> ErrorCode:

@@ -1247,7 +1247,7 @@ Cover the remaining high-value resilience scenarios as focused integration tests
    - stop the API at a controlled boundary;
    - restart against the same temporary database;
    - verify operation/chat recovery semantics;
-   - reconnect console through state/history.
+   - reconnect the API client and reconcile through state/history.
 
 4. **Structured generation failure and retry**
    - fail assessment or post-session with a retryable fake error;
@@ -1583,7 +1583,7 @@ Acceptance:
 
 - all documented error codes have deterministic mappings;
 - unexpected errors leak no internals;
-- request IDs appear in body/header/logs.
+- Request-ID parsing and envelope primitives preserve the supplied correlation ID. Header and logging propagation are verified in work package 4.
 
 ### Work package 4 — FastAPI lifespan and HTTP routes
 

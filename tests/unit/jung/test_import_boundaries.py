@@ -343,13 +343,3 @@ def test_phase5_api_init_has_no_imports() -> None:
     if not init_path.exists():
         pytest.skip("jung.api package not present yet")
     assert _resolved_imported_modules(init_path) == []
-
-
-def test_phase5_api_init_is_side_effect_free() -> None:
-    init_path = JUNG_SRC / "api" / "__init__.py"
-    if not init_path.exists():
-        pytest.skip("jung.api package not present yet")
-    text = init_path.read_text(encoding="utf-8")
-    assert "fastapi" not in text.lower()
-    assert "application_context" not in text
-    assert "create_app" not in text
