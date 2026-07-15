@@ -1,7 +1,7 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
 .PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean
 .PHONY: ui-console ui-console-test
-.PHONY: probe probe-console-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
+.PHONY: probe probe-console-deterministic probe-console-v1-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
 .PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm phase-5-test hook-commit hook-push
@@ -53,6 +53,7 @@ help:
 	@echo "  ui-console-test   - Run console UI service in usertest mode"
 	@echo "  probe             - Run local-LLM full-stack console workflow probe"
 	@echo "  probe-console-deterministic - Run deterministic full-stack console workflow probe"
+	@echo "  probe-console-v1-deterministic - Run Phase 5 Jung console deterministic probes"
 	@echo "  probe-console-intake-notes - Run gate-enabled intake note tracking deterministic probe"
 	@echo "  probe-logs        - Print latest workflow probe summary"
 	@echo "  probe-db          - Print rows created by latest workflow probe"
@@ -237,7 +238,24 @@ phase-5-test: prepare-runtime-dirs
 		tests/integration/jung/test_application_operations.py::test_operation_worker_persists_sanitized_error_message \
 		tests/integration/jung/api/ \
 		tests/integration/jung/client/ \
+		tests/e2e/test_console_v1_workflow.py \
 		-q
+
+.PHONY: probe-console-v1-deterministic
+
+PROBE_V1_OUTPUT_DIR ?= logs/workflow-probes/phase-5-v1
+PROBE_V1_ABS_OUTPUT_DIR := $(abspath $(PROBE_V1_OUTPUT_DIR))
+
+probe-console-v1-deterministic: prepare-runtime-dirs
+	@mkdir -p "$(PROBE_V1_ABS_OUTPUT_DIR)"
+	docker compose --profile test run --rm \
+		-v "$(PROBE_V1_ABS_OUTPUT_DIR):/app/probe-output" \
+		-e PROBE_OUTPUT_DIR=/app/probe-output \
+		test pytest \
+			-o trio_mode=false \
+			-o asyncio_mode=auto \
+			tests/e2e/test_console_v1_workflow.py \
+			-v
 
 validate-refactor-phase-4: prepare-runtime-dirs
 	docker compose --profile test run --rm test ruff check \
@@ -342,6 +360,7 @@ test-validate: prepare-runtime-dirs
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
 	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization \
+		--ignore=tests/e2e \
 		--ignore=tests/unit/jung/llm \
 		--ignore=tests/unit/jung/api \
 		--ignore=tests/unit/jung/client \
@@ -368,7 +387,8 @@ test-validate: prepare-runtime-dirs
 		tests/integration/jung/test_application_session_history.py \
 		tests/integration/jung/test_application_read_models.py \
 		tests/integration/jung/api/ \
-		tests/integration/jung/client/
+		tests/integration/jung/client/ \
+		tests/e2e/
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs
