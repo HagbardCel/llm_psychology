@@ -36,6 +36,20 @@ class ChatEventIdentity:
     turn_id: UUID | None = None
 
 
+class ChatOutcomeKind(StrEnum):
+    PROGRESS = "progress"
+    COMPLETION = "completion"
+    COMMAND_ERROR = "command_error"
+    DURABLE_ERROR = "durable_error"
+
+
+@dataclass(frozen=True)
+class ChatEventOutcome:
+    kind: ChatOutcomeKind
+    identity: ChatEventIdentity
+    event: MessageInProgressEvent | MessageCompletedEvent | ErrorEvent
+
+
 def matches_progress(
     event: MessageInProgressEvent,
     identity: ChatEventIdentity,
@@ -54,6 +68,10 @@ def identity_after_progress(
     event: MessageInProgressEvent,
     identity: ChatEventIdentity,
 ) -> ChatEventIdentity:
+    if identity.turn_id is not None and identity.turn_id != event.turn.id:
+        raise ChatEventViolation(
+            expected_model="consistent turn_id across progress events",
+        )
     return replace(identity, turn_id=event.turn.id)
 
 

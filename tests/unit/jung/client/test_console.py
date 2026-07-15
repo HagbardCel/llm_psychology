@@ -25,6 +25,7 @@ from jung.api.contracts import (
     ProfileResponse,
     ProfileUpdateRequest,
     ProfileWire,
+    RetryOperationRequest,
     SelectStyleRequest,
     SendMessageCommand,
     SessionDetailResponse,
@@ -38,7 +39,10 @@ from jung.api.contracts import (
 )
 from jung.client._chat_events import (
     ChatEventIdentity,
+    ChatEventViolation,
+    ChatOutcomeKind,
     classify_error,
+    identity_after_progress,
 )
 from jung.client.api_client import (
     ChatReconciliationResult,
@@ -52,12 +56,14 @@ from jung.client.api_client import (
     JungTransportError,
 )
 from jung.client.console import (
+    ChatRenderState,
     ConsoleApp,
     ConsoleChatFailed,
     ConsoleExitRequested,
     ConsoleOperationFailed,
     ConsoleUncertainDelivery,
     ErrorDisplay,
+    HumanInputProvider,
     PendingTurnContext,
     PromptSpec,
     _async_cli,
@@ -93,7 +99,13 @@ class RecordingOutput:
     def __init__(self) -> None:
         self.snapshots: list[AppSnapshotResponse] = []
         self.messages: list[tuple[str, str]] = []
-        self.tokens: list[str] = []
+        self.assistant_tokens: list[str] = []
+        self.assistant_begins = 0
+        self.assistant_finishes = 0
+        self.assistant_replacements: list[str] = []
+        self.assistant_direct: list[str] = []
+        self.assistant_discards = 0
+        self.style_options: list[StyleOptionsResponse] = []
         self.system: list[str] = []
         self.command_rejections: list[ErrorEnvelope] = []
         self.chat_failures: list[ErrorEnvelope] = []
@@ -109,11 +121,23 @@ class RecordingOutput:
     def render_message(self, role: str, content: str) -> None:
         self.messages.append((role, content))
 
-    def render_token(self, text: str) -> None:
-        self.tokens.append(text)
+    def begin_assistant_message(self) -> None:
+        self.assistant_begins += 1
 
-    def render_newline(self) -> None:
-        self.messages.append(("newline", ""))
+    def append_assistant_token(self, text: str) -> None:
+        self.assistant_tokens.append(text)
+
+    def finish_assistant_stream(self) -> None:
+        self.assistant_finishes += 1
+
+    def replace_partial_assistant_message(self, content: str) -> None:
+        self.assistant_replacements.append(content)
+
+    def render_assistant_message(self, content: str) -> None:
+        self.assistant_direct.append(content)
+
+    def discard_partial_assistant_message(self) -> None:
+        self.assistant_discards += 1
 
     def render_system(self, message: str) -> None:
         self.system.append(message)
@@ -126,6 +150,9 @@ class RecordingOutput:
 
     def render_operation_failure(self, error: ErrorDisplay) -> None:
         self.operation_failures.append(error)
+
+    def render_style_options(self, options: StyleOptionsResponse) -> None:
+        self.style_options.append(options)
 
     def render_identity_conflict(
         self,
@@ -622,13 +649,14 @@ async def test_completion_advances_high_water_mark() -> None:
     client_message_id = uuid4()
     turn_id = uuid4()
     app = _app(client)
+    state = ChatRenderState()
     completion = _completion_event(
         session_id=session.id,
         client_message_id=client_message_id,
         turn_id=turn_id,
         sequence=4,
     )
-    app._finalize_completion(completion)
+    app._finalize_turn_completion(state, completion)
     assert app._last_rendered_sequence[session.id] == 4
 
 
@@ -646,10 +674,15 @@ async def test_before_turn_id_progress_establishes_identity() -> None:
         client_message_id=client_message_id,
     )
     app = _app(_mock_client())
-    outcome = app._process_chat_event(progress, identity=identity, accepted=False)
+    state = ChatRenderState()
+    outcome = app._process_chat_event(
+        progress,
+        identity=identity,
+        render_state=state,
+    )
     assert outcome is not None
-    assert outcome[0] == "progress"
-    assert outcome[2].turn_id == progress.turn.id
+    assert outcome.kind is ChatOutcomeKind.PROGRESS
+    assert outcome.identity.turn_id == progress.turn.id
 
 
 async def test_after_turn_id_wrong_turn_raises_violation() -> None:
@@ -668,8 +701,13 @@ async def test_after_turn_id_wrong_turn_raises_violation() -> None:
         turn_id=uuid4(),
     )
     app = _app(_mock_client())
+    state = ChatRenderState()
     with pytest.raises(JungProtocolError):
-        app._process_chat_event(wrong_turn, identity=identity, accepted=True)
+        app._process_chat_event(
+            wrong_turn,
+            identity=identity,
+            render_state=state,
+        )
 
 
 async def test_different_pending_turn_not_adopted() -> None:
@@ -1081,8 +1119,9 @@ async def test_token_matches_request_id_before_turn_id() -> None:
         text="hi",
     )
     app = _app(_mock_client())
-    app._process_chat_event(token, identity=identity, accepted=False)
-    assert app._output.tokens == ["hi"]
+    state = ChatRenderState()
+    app._process_chat_event(token, identity=identity, render_state=state)
+    assert app._output.assistant_tokens == ["hi"]
 
 
 async def test_style_selection_uses_snapshot_revision() -> None:
@@ -1119,3 +1158,389 @@ async def test_start_session_uses_snapshot_revision() -> None:
     request = client.start_session.await_args.args[0]
     assert isinstance(request, StartSessionRequest)
     assert request.expected_revision == 4
+
+
+async def test_human_input_provider_eof_raises() -> None:
+    provider = HumanInputProvider()
+    with patch("sys.stdin.readline", return_value=""):
+        with pytest.raises(EOFError):
+            await provider.read(PromptSpec(text="> "))
+
+
+async def test_duplicate_progress_turn_id_raises_violation() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    identity = ChatEventIdentity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=uuid4(),
+        turn_id=uuid4(),
+    )
+    progress = _progress_event(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        turn_id=uuid4(),
+    )
+    with pytest.raises(ChatEventViolation):
+        identity_after_progress(progress, identity)
+
+
+async def test_repeated_progress_same_turn_id_is_harmless() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    turn_id = uuid4()
+    identity = ChatEventIdentity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=uuid4(),
+        turn_id=turn_id,
+    )
+    progress = _progress_event(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        turn_id=turn_id,
+    )
+    updated = identity_after_progress(progress, identity)
+    assert updated.turn_id == turn_id
+
+
+async def test_ack_timeout_before_progress_reconciles_once() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+    client.settings = ClientSettings(
+        "http://localhost:8000",
+        acknowledgement_timeout=0.01,
+    )
+
+    @asynccontextmanager
+    async def slow_chat():
+        chat = MagicMock()
+        chat.send = AsyncMock()
+
+        async def empty_events():
+            if False:
+                yield None  # pragma: no cover
+
+        chat.events = lambda: empty_events()
+        yield chat
+
+    client.open_chat = slow_chat
+    history = _history(session_id=session.id, client_message_id=uuid4())
+    client.reconcile_chat_turn = AsyncMock(
+        return_value=ChatReconciliationResult(
+            status=ChatReconciliationStatus.COMPLETE,
+            snapshot=_snapshot(stage="intake", session=session, revision=2),
+            history=history,
+            completed_message=history.messages[-1],
+        )
+    )
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    await app._handle_chat_turn(snapshot, content="hello")
+    client.reconcile_chat_turn.assert_awaited_once()
+    assert output.assistant_discards == 0
+
+
+async def test_completion_during_ack_skips_completion_wait() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+
+    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+        progress = _progress_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+        )
+        completion = _completion_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=progress.turn.id,
+        )
+        return _event_stream(progress, completion)
+
+    client.open_chat = _open_chat_from_send(build_events)
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    await app._handle_chat_turn(snapshot, content="hello")
+    assert output.assistant_direct == ["reply"]
+
+
+async def test_token_before_progress_then_completion() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+
+    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+        turn_id = uuid4()
+        token = TokenEvent(
+            type="token",
+            session_id=session.id,
+            turn_id=turn_id,
+            request_id=command.request_id,
+            sequence=1,
+            text="Hel",
+        )
+        progress = _progress_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=turn_id,
+        )
+        token2 = TokenEvent(
+            type="token",
+            session_id=session.id,
+            turn_id=turn_id,
+            request_id=command.request_id,
+            sequence=2,
+            text="lo",
+        )
+        completion = _completion_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=turn_id,
+            content="Hello",
+        )
+        return _event_stream(token, progress, token2, completion)
+
+    client.open_chat = _open_chat_from_send(build_events)
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    await app._handle_chat_turn(snapshot, content="hello")
+    assert output.assistant_begins == 1
+    assert output.assistant_tokens == ["Hel", "lo"]
+    assert output.assistant_finishes == 1
+
+
+async def test_progress_completion_without_tokens_renders_direct() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+
+    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+        progress = _progress_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+        )
+        completion = _completion_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=progress.turn.id,
+            content="Canonical only",
+        )
+        return _event_stream(progress, completion)
+
+    client.open_chat = _open_chat_from_send(build_events)
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    await app._handle_chat_turn(snapshot, content="hello")
+    assert output.assistant_direct == ["Canonical only"]
+
+
+async def test_streamed_text_differs_uses_correction() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+
+    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+        turn_id = uuid4()
+        progress = _progress_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=turn_id,
+        )
+        token = TokenEvent(
+            type="token",
+            session_id=session.id,
+            turn_id=turn_id,
+            request_id=command.request_id,
+            sequence=1,
+            text="Partial",
+        )
+        completion = _completion_event(
+            session_id=session.id,
+            client_message_id=command.client_message_id,
+            turn_id=turn_id,
+            content="Canonical durable response",
+        )
+        return _event_stream(progress, token, completion)
+
+    client.open_chat = _open_chat_from_send(build_events)
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    await app._handle_chat_turn(snapshot, content="hello")
+    assert output.assistant_replacements == ["Canonical durable response"]
+
+
+async def test_duplicate_token_sequence_is_ignored() -> None:
+    app = _app(_mock_client(), output=RecordingOutput())
+    state = ChatRenderState()
+    identity = ChatEventIdentity(
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        request_id=uuid4(),
+        turn_id=uuid4(),
+    )
+    token = TokenEvent(
+        type="token",
+        session_id=identity.session_id,
+        turn_id=identity.turn_id,
+        request_id=identity.request_id,
+        sequence=1,
+        text="a",
+    )
+    app._process_chat_event(token, identity=identity, render_state=state)
+    app._process_chat_event(token, identity=identity, render_state=state)
+    assert app._output.assistant_tokens == ["a"]
+
+
+async def test_failed_reconciliation_without_turn_id_is_command_rejection() -> None:
+    client = _mock_client()
+    session = _session()
+    intent = client.new_chat_intent(session.id, "hello")
+    adopted = _snapshot(revision=9, session=session)
+    request_id = uuid4()
+    error = ErrorEvent(
+        type="error",
+        request_id=request_id,
+        error=ErrorEnvelope(
+            code="state_conflict",
+            message="stale revision",
+            request_id=request_id,
+            retryable=False,
+            current_snapshot=adopted,
+        ),
+        session_id=session.id,
+        client_message_id=intent.client_message_id,
+    )
+    history = _history(session_id=session.id, client_message_id=intent.client_message_id)
+    result = ChatReconciliationResult(
+        status=ChatReconciliationStatus.FAILED,
+        snapshot=adopted,
+        history=history,
+        error_event=error,
+    )
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    snapshot = await app._apply_reconciliation_result(result, intent)
+    assert snapshot.revision == 9
+    assert output.command_rejections
+    assert not output.chat_failures
+
+
+@pytest.mark.parametrize(
+    ("method_name", "call"),
+    [
+        (
+            "update_profile",
+            lambda app, snapshot: app._handle_setup(),
+        ),
+        (
+            "select_style",
+            lambda app, snapshot: app._handle_style_selection(snapshot),
+        ),
+        (
+            "start_session",
+            lambda app, snapshot: app._apply_mutation(
+                app._client.start_session(
+                    StartSessionRequest(expected_revision=snapshot.revision)
+                ),
+                snapshot_of=lambda response: response.snapshot,
+            ),
+        ),
+        (
+            "end_session",
+            lambda app, snapshot: app._end_active_session(snapshot),
+        ),
+        (
+            "retry_current_operation",
+            lambda app, snapshot: app._apply_mutation(
+                app._client.retry_current_operation(
+                    RetryOperationRequest(expected_revision=snapshot.revision)
+                ),
+                snapshot_of=lambda adopted: adopted,
+            ),
+        ),
+    ],
+)
+async def test_http_state_conflict_adopts_snapshot(method_name: str, call) -> None:
+    client = _mock_client()
+    session = _session()
+    adopted = _snapshot(revision=11, session=session)
+    request_id = uuid4()
+    conflict = JungApiError(
+        status=409,
+        error=ErrorResponse(
+            code="state_conflict",
+            message="stale",
+            request_id=request_id,
+            retryable=False,
+            current_snapshot=adopted,
+        ),
+    )
+
+    if method_name == "update_profile":
+        client.get_profile = AsyncMock(
+            return_value=ProfileResponse(
+                profile=ProfileWire(name="Alex", primary_language="English"),
+                snapshot=_snapshot(stage="setup", revision=0, commands=["update_profile"]),
+            )
+        )
+        client.update_profile = AsyncMock(side_effect=conflict)
+    elif method_name == "select_style":
+        client.get_styles = AsyncMock(
+            return_value=StyleOptionsResponse(styles=[], recommendations=[])
+        )
+        client.select_style = AsyncMock(side_effect=conflict)
+    elif method_name == "start_session":
+        client.start_session = AsyncMock(side_effect=conflict)
+    elif method_name == "end_session":
+        client.end_session = AsyncMock(side_effect=conflict)
+    else:
+        client.retry_current_operation = AsyncMock(side_effect=conflict)
+
+    snapshot = _snapshot(
+        stage="ready" if method_name == "start_session" else "style_selection",
+        revision=5,
+        session=session,
+        commands=["start_session", "select_style", "end_session", "retry_operation"],
+    )
+    if method_name == "end_session":
+        snapshot = _snapshot(
+            stage="therapy",
+            revision=5,
+            session=_session(kind="therapy"),
+            commands=["end_session"],
+        )
+    if method_name == "retry_current_operation":
+        snapshot = _snapshot(
+            stage="assessment",
+            revision=5,
+            commands=["retry_operation"],
+            operation=OperationSummaryResponse(
+                id=uuid4(),
+                kind="assessment",
+                status="failed",
+                error=ErrorEnvelope(
+                    code="llm_timeout",
+                    message="x",
+                    request_id=uuid4(),
+                    retryable=True,
+                ),
+            ),
+        )
+
+    output = RecordingOutput()
+    if method_name == "update_profile":
+        app = _app(client, inputs=ScriptedInput("Name", "Lang"), output=output)
+    elif method_name == "select_style":
+        app = _app(client, inputs=ScriptedInput("cbt"), output=output)
+    else:
+        app = _app(client, output=output)
+    result = await call(app, snapshot)
+    assert result.revision == 11
+    assert output.command_rejections
+    assert output.command_rejections[0].request_id == request_id

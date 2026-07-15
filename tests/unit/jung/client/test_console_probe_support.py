@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.console_probe_support import ProbeRecorder
+from tests.console_probe_support import ProbeRecorder, assert_successful_timeline
 
 
 def test_artifacts_include_failure_summary(tmp_path: Path) -> None:
@@ -23,6 +23,14 @@ def test_artifacts_include_failure_summary(tmp_path: Path) -> None:
 def test_artifacts_emit_complete_named_set(tmp_path: Path) -> None:
     recorder = ProbeRecorder("scenario-b")
     recorder.record("snapshot", stage="ready", revision=9)
+    recorder.record(
+        "chat_send",
+        request_id="req-1",
+        client_message_id="msg-1",
+    )
+    recorder.record("ws_event", type="message_in_progress", turn_id="turn-1")
+    recorder.record("ws_event", type="token", sequence=1)
+    recorder.record("ws_event", type="message_completed", client_message_id="msg-1")
     recorder.write_artifacts(tmp_path, failure=None)
 
     for name in ProbeRecorder.ARTIFACT_NAMES:
@@ -30,6 +38,7 @@ def test_artifacts_emit_complete_named_set(tmp_path: Path) -> None:
     assert not (tmp_path / ProbeRecorder.FAILURE_ARTIFACT).exists()
 
     timeline = (tmp_path / "timeline.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    assert len(timeline) == 1
+    assert len(timeline) == 5
+    assert_successful_timeline(recorder.timeline)
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "success" in summary

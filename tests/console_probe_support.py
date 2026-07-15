@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jung.api.contracts import SessionHistoryResponse
 from jung.client.console import ConsoleObserver, PromptSpec
 
 
@@ -27,8 +28,7 @@ class ScriptedInputProvider:
     async def read(self, prompt: PromptSpec) -> str:
         if not self.responses:
             raise EOFError("scripted input exhausted")
-        value = self.responses.popleft()
-        return value if value.endswith("\n") else f"{value}\n"
+        return self.responses.popleft().rstrip("\r\n")
 
 
 class ProbeRecorder(ConsoleObserver):
@@ -48,6 +48,7 @@ class ProbeRecorder(ConsoleObserver):
         self.started_at = datetime.now(UTC)
         self.timeline: list[dict[str, Any]] = []
         self.transcript_lines: list[str] = []
+        self.durable_transcript: list[tuple[str, str]] | None = None
         self._log_handler: logging.Handler | None = None
 
     def record(self, event: str, **fields: object) -> None:
@@ -63,6 +64,16 @@ class ProbeRecorder(ConsoleObserver):
             role = "user" if event == "user_message" else "assistant"
             content = str(fields.get("content", ""))
             self.transcript_lines.append(f"**{role.title()}**: {content}")
+
+    def set_transcript_from_histories(
+        self,
+        *histories: SessionHistoryResponse,
+    ) -> None:
+        lines: list[tuple[str, str]] = []
+        for history in histories:
+            for message in history.messages:
+                lines.append((message.role, message.content))
+        self.durable_transcript = lines
 
     def attach_server_logging(self, logger_name: str = "uvicorn") -> None:
         if self._log_handler is not None:
@@ -107,11 +118,17 @@ class ProbeRecorder(ConsoleObserver):
             for entry in self.timeline:
                 handle.write(json.dumps(entry, default=str) + "\n")
 
-        transcript = (
-            "\n\n".join(self.transcript_lines)
-            if self.transcript_lines
-            else "_No transcript captured._"
-        )
+        if self.durable_transcript is not None:
+            transcript = "\n\n".join(
+                f"**{role.title()}**: {content}"
+                for role, content in self.durable_transcript
+            )
+        else:
+            transcript = (
+                "\n\n".join(self.transcript_lines)
+                if self.transcript_lines
+                else "_No transcript captured._"
+            )
         (scenario_dir / "transcript.md").write_text(transcript + "\n", encoding="utf-8")
 
         log_lines = [
@@ -146,6 +163,39 @@ class ProbeRecorder(ConsoleObserver):
                 failure_summary,
                 encoding="utf-8",
             )
+
+
+def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
+    categories = {entry.get("category") for entry in timeline}
+    assert "snapshot" in categories
+    assert "chat_send" in categories
+    assert any(
+        entry.get("category") == "ws_event"
+        and entry.get("type") == "message_in_progress"
+        for entry in timeline
+    )
+    assert any(
+        entry.get("category") == "ws_event"
+        and entry.get("sequence") is not None
+        for entry in timeline
+    )
+    assert any(
+        entry.get("category") == "ws_event"
+        and entry.get("type") == "message_completed"
+        for entry in timeline
+    )
+    assert any(
+        entry.get("category") == "snapshot"
+        and entry.get("revision") is not None
+        and entry.get("stage") is not None
+        for entry in timeline
+    )
+    assert any(
+        entry.get("category") == "chat_send"
+        and entry.get("request_id")
+        and entry.get("client_message_id")
+        for entry in timeline
+    )
 
 
 class _ProbeLogHandler(logging.Handler):

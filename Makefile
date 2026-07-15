@@ -244,14 +244,18 @@ phase-5-test: prepare-runtime-dirs
 .PHONY: probe-console-v1-deterministic
 
 PROBE_V1_OUTPUT_DIR ?= logs/workflow-probes/phase-5-v1
+PROBE_V1_ABS_OUTPUT_DIR := $(abspath $(PROBE_V1_OUTPUT_DIR))
 
 probe-console-v1-deterministic: prepare-runtime-dirs
-	PROBE_OUTPUT_DIR="$(PROBE_V1_OUTPUT_DIR)" \
-	docker compose --profile test run --rm test pytest \
-		-o trio_mode=false \
-		-o asyncio_mode=auto \
-		tests/e2e/test_console_v1_workflow.py \
-		-v
+	@mkdir -p "$(PROBE_V1_ABS_OUTPUT_DIR)"
+	docker compose --profile test run --rm \
+		-v "$(PROBE_V1_ABS_OUTPUT_DIR):/app/probe-output" \
+		-e PROBE_OUTPUT_DIR=/app/probe-output \
+		test pytest \
+			-o trio_mode=false \
+			-o asyncio_mode=auto \
+			tests/e2e/test_console_v1_workflow.py \
+			-v
 
 validate-refactor-phase-4: prepare-runtime-dirs
 	docker compose --profile test run --rm test ruff check \
