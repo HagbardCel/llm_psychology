@@ -899,6 +899,7 @@ async def test_disallowed_origin_never_subscribes() -> None:
     await asyncio.wait_for(chat_websocket(fake), timeout=1.0)  # type: ignore[arg-type]
 
     assert not fake.accepted
+    assert fake.closed
     assert fake.close_code == 1008
     assert events.total_subscription_entries == 0
 

@@ -92,6 +92,30 @@ async def _recv_matching_progress(
     )
 
 
+async def _recv_matching_token(
+    ws,
+    *,
+    request_id: UUID,
+    timeout: float = 5.0,
+) -> dict:
+    try:
+        async with asyncio.timeout(timeout):
+            for _ in range(15):
+                event = await _recv_json(ws, timeout=timeout)
+                if (
+                    event["type"] == "token"
+                    and event["request_id"] == str(request_id)
+                ):
+                    return event
+    except TimeoutError:
+        pytest.fail(
+            "timed out waiting for token correlated to "
+            f"request_id={request_id}"
+        )
+
+    pytest.fail("matching token was not observed within the event limit")
+
+
 async def _setup_intake_http(http_base: str) -> tuple[str, int]:
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         revision = (await client.get("/api/v1/state")).json()["revision"]
@@ -700,11 +724,7 @@ async def test_revision_conflict_includes_snapshot_and_retransmit_succeeds(
         assert progress["turn"]["client_message_id"] == str(client_message_id)
         assert progress["turn"]["session_id"] == session_id
 
-        token_event = None
-        for _ in range(15):
-            event = await _recv_json(ws)
-            if event["type"] == "token":
-                token_event = event
-                break
-        assert token_event is not None
-        assert token_event["request_id"] == str(corrected_request_id)
+        await _recv_matching_token(
+            ws,
+            request_id=corrected_request_id,
+        )
