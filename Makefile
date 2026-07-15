@@ -229,12 +229,14 @@ phase-5-test: prepare-runtime-dirs
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/api/ \
+		tests/unit/jung/client/ \
 		tests/unit/jung/test_events.py \
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_import_boundaries.py \
 		tests/integration/jung/test_application_chat.py::test_chat_worker_persists_sanitized_error_message \
 		tests/integration/jung/test_application_operations.py::test_operation_worker_persists_sanitized_error_message \
 		tests/integration/jung/api/ \
+		tests/integration/jung/client/ \
 		-q
 
 validate-refactor-phase-4: prepare-runtime-dirs
@@ -342,15 +344,18 @@ test-validate: prepare-runtime-dirs
 	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization \
 		--ignore=tests/unit/jung/llm \
 		--ignore=tests/unit/jung/api \
+		--ignore=tests/unit/jung/client \
 		--ignore=tests/unit/jung/test_events.py \
 		--ignore=tests/unit/jung/test_supervisor.py \
 		--ignore=tests/smoke/jung \
 		--ignore=tests/integration/jung/api \
+		--ignore=tests/integration/jung/client \
 		--ignore-glob='tests/integration/jung/test_application_*.py'
 	docker compose --profile test run --rm test pytest \
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/api/ \
+		tests/unit/jung/client/ \
 		tests/unit/jung/llm \
 		tests/unit/jung/test_events.py \
 		tests/unit/jung/test_supervisor.py \
@@ -362,7 +367,8 @@ test-validate: prepare-runtime-dirs
 		tests/integration/jung/test_application_composition.py \
 		tests/integration/jung/test_application_session_history.py \
 		tests/integration/jung/test_application_read_models.py \
-		tests/integration/jung/api/
+		tests/integration/jung/api/ \
+		tests/integration/jung/client/
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs

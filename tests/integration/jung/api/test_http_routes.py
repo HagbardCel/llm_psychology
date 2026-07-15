@@ -14,12 +14,12 @@ from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
-from tests.integration.jung.api.conftest import _runtime_factory
 from tests.integration.jung.application_fixtures import (
     assessment_result,
     wait_for_operation_status,
     wait_for_stage,
 )
+from tests.integration.jung.conftest import _runtime_factory
 from tests.integration.jung.scenarios import (
     advance_to_ready,
     complete_intake_for_assessment,

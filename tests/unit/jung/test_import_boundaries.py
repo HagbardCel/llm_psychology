@@ -13,6 +13,7 @@ JUNG_SRC = ROOT / "src" / "jung"
 LLM_SRC = JUNG_SRC / "llm"
 PHASES_SRC = JUNG_SRC / "phases"
 STYLES_SRC = JUNG_SRC / "styles"
+CLIENT_SRC = JUNG_SRC / "client"
 
 PHASE2_FORBIDDEN_PREFIXES = (
     "psychoanalyst_app",
@@ -347,3 +348,24 @@ def test_phase5_api_init_has_no_imports() -> None:
     if not init_path.exists():
         pytest.skip("jung.api package not present yet")
     assert _resolved_imported_modules(init_path) == []
+
+
+def test_phase5_client_uses_contract_only_jung_import_allow_list() -> None:
+    if not CLIENT_SRC.exists():
+        pytest.skip("jung.client package not present yet")
+
+    violations: list[str] = []
+    forbidden_external_roots = {"trio", "quart", "quart_trio", "fastapi", "uvicorn"}
+    for path in sorted(CLIENT_SRC.rglob("*.py")):
+        for module in _resolved_imported_modules(path):
+            if module.startswith("jung.") and not (
+                module == "jung.api.contracts"
+                or module.startswith("jung.api.contracts.")
+                or module == "jung.client"
+                or module.startswith("jung.client.")
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+            if module.split(".")[0] in forbidden_external_roots:
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+
+    assert violations == []

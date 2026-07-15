@@ -11,7 +11,7 @@ from httpx import AsyncClient
 
 from jung.api.app import create_app
 from jung.domain.errors import InvariantViolation
-from tests.integration.jung.api.conftest import _runtime_factory
+from tests.integration.jung.conftest import _runtime_factory
 
 EXPECTED_OPERATIONS = {
     ("get", "/api/v1/state"),
