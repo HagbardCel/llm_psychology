@@ -360,6 +360,7 @@ test-validate: prepare-runtime-dirs
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
 	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization \
+		--ignore=tests/e2e \
 		--ignore=tests/unit/jung/llm \
 		--ignore=tests/unit/jung/api \
 		--ignore=tests/unit/jung/client \
@@ -386,7 +387,8 @@ test-validate: prepare-runtime-dirs
 		tests/integration/jung/test_application_session_history.py \
 		tests/integration/jung/test_application_read_models.py \
 		tests/integration/jung/api/ \
-		tests/integration/jung/client/
+		tests/integration/jung/client/ \
+		tests/e2e/
 
 # Full isolated Docker tests without mocks (uses real services)
 test-validate-no-mocks: prepare-runtime-dirs
