@@ -52,6 +52,7 @@ from jung.client.api_client import (
     ProtocolErrorKind,
 )
 from jung.client.console import (
+    ChatOutcomeKind,
     ChatRenderState,
     ConsoleApp,
     ConsoleChatFailed,
@@ -394,6 +395,28 @@ def _identity(
         session_id=session_id,
         client_message_id=client_message_id or uuid4(),
         request_id=request_id or uuid4(),
+        turn_id=turn_id,
+    )
+
+
+def _error_event(
+    *,
+    session_id: UUID,
+    client_message_id: UUID,
+    request_id: UUID,
+    turn_id: UUID | None = None,
+) -> ErrorEvent:
+    return ErrorEvent(
+        type="error",
+        request_id=request_id,
+        error=ErrorEnvelope(
+            code="llm_timeout" if turn_id is not None else "state_conflict",
+            message="failed",
+            request_id=request_id,
+            retryable=False,
+        ),
+        session_id=session_id,
+        client_message_id=client_message_id,
         turn_id=turn_id,
     )
 
@@ -823,6 +846,115 @@ async def test_conflicting_pre_progress_tokens_raise_protocol_error() -> None:
             render_state=state,
         )
     assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+async def test_token_then_conflicting_durable_error_raises_protocol_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    turn_b = uuid4()
+    identity = _identity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    with pytest.raises(JungProtocolError) as exc_info:
+        app._process_chat_event(
+            _error_event(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=uuid4(),
+                turn_id=turn_b,
+            ),
+            identity=identity,
+            render_state=state,
+        )
+    assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+async def test_token_then_command_rejection_raises_protocol_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    identity = _identity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    with pytest.raises(JungProtocolError) as exc_info:
+        app._process_chat_event(
+            _error_event(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+                turn_id=None,
+            ),
+            identity=identity,
+            render_state=state,
+        )
+    assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+async def test_token_then_matching_durable_error_returns_outcome() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    identity = _identity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    error = _error_event(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=uuid4(),
+        turn_id=turn_a,
+    )
+    outcome = app._process_chat_event(
+        error,
+        identity=identity,
+        render_state=state,
+    )
+    assert outcome is not None
+    assert outcome.kind is ChatOutcomeKind.DURABLE_ERROR
+    assert outcome.event is error
+    assert state.turn_id == turn_a
 
 
 async def test_different_pending_turn_not_adopted() -> None:

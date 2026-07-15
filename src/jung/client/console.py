@@ -990,11 +990,26 @@ class ConsoleApp:
                 if correlation is ErrorCorrelation.UNRELATED:
                     return None
                 if correlation is ErrorCorrelation.COMMAND_REJECTED:
+                    if (
+                        render_state.turn_id is not None
+                        or identity.turn_id is not None
+                    ):
+                        raise ChatEventViolation(
+                            expected_model=(
+                                "command ErrorEvent before durable acceptance"
+                            )
+                        )
                     return ChatEventOutcome(
                         kind=ChatOutcomeKind.COMMAND_ERROR,
                         identity=identity,
                         event=event,
                     )
+                turn_id = event.turn_id
+                if turn_id is None:
+                    raise ChatEventViolation(
+                        expected_model="durable ErrorEvent turn_id",
+                    )
+                _bind_stream_turn(render_state, turn_id)
                 return ChatEventOutcome(
                     kind=ChatOutcomeKind.DURABLE_ERROR,
                     identity=identity,
