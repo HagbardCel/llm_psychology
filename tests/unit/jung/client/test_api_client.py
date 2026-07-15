@@ -21,6 +21,7 @@ from jung.api.contracts import (
     HealthResponse,
     MessageResponse,
     OperationSummaryResponse,
+    SendMessageCommand,
     SessionDetailResponse,
     SessionHistoryResponse,
 )
@@ -129,6 +130,10 @@ async def _install_transport(client: JungApiClient, handler) -> None:
         "http://localhost:8000/service",
         "http://localhost:8000?query=yes",
         "http://localhost:8000#fragment",
+        "http://localhost:8000?",
+        "http://localhost:8000#",
+        "http://localhost:8000/?",
+        "http://localhost:8000/#",
     ],
 )
 def test_client_settings_reject_non_origin_urls_without_echoing_them(
@@ -376,6 +381,49 @@ async def test_invalid_websocket_frame_diagnostics_are_sanitized() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("send", "receive"))
+async def test_transport_failure_makes_chat_unusable_and_still_closes(
+    operation: str,
+) -> None:
+    class FailingWebSocket:
+        def __init__(self) -> None:
+            self.close = AsyncMock()
+
+        async def send(self, _payload: str) -> None:
+            raise OSError("transport failed")
+
+        async def recv(self) -> str:
+            raise OSError("transport failed")
+
+    websocket = FailingWebSocket()
+    chat = JungChatConnection(websocket)
+    command = SendMessageCommand(
+        type="send_message",
+        request_id=uuid4(),
+        expected_revision=1,
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        content="hello",
+    )
+
+    if operation == "send":
+        with pytest.raises(JungTransportError):
+            await chat.send(command)
+    else:
+        events = chat.events()
+        with pytest.raises(JungTransportError):
+            await anext(events)
+
+    with pytest.raises(RuntimeError):
+        await chat.send(command)
+    with pytest.raises(RuntimeError):
+        await anext(chat.events())
+    await chat.aclose()
+    await chat.aclose()
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_classification_complete_pending_conflict_and_unresolved() -> None:
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         session_id = uuid4()
@@ -498,17 +546,87 @@ async def test_durable_failure_requires_turn_identity() -> None:
                 retryable=True,
             ),
             request_id=failure_request_id,
-            session_id=session_id,
-            client_message_id=client_message_id,
+            session_id=None,
+            client_message_id=None,
+            turn_id=uuid4(),
         )
         with pytest.raises(JungProtocolError) as raised:
-            client._decisive_error(
+            client._match_decisive_event(
                 event,
                 intent=intent,
                 command=command,
-                expected_turn_id=None,
             )
         assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_id", "client_message_id"),
+    ((None, None), (None, "retained"), ("retained", None), ("other", "retained"), ("retained", "other")),
+)
+async def test_correlated_no_turn_error_requires_exact_identity(
+    session_id: UUID | None | str,
+    client_message_id: UUID | None | str,
+) -> None:
+    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
+        intent = client.new_chat_intent(uuid4(), "hello")
+        command = client.new_message_command(intent, expected_revision=1)
+        event = ErrorEvent(
+            type="error",
+            error=ErrorEnvelope(
+                code="state_conflict",
+                message="Revision changed",
+                request_id=command.request_id,
+                retryable=True,
+            ),
+            request_id=command.request_id,
+            session_id=(
+                intent.session_id if session_id == "retained" else uuid4()
+                if session_id == "other"
+                else None
+            ),
+            client_message_id=(
+                intent.client_message_id
+                if client_message_id == "retained"
+                else uuid4()
+                if client_message_id == "other"
+                else None
+            ),
+        )
+
+        with pytest.raises(JungProtocolError) as raised:
+            client._match_decisive_event(event, intent=intent, command=command)
+        assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("matching_identity", (True, False))
+async def test_no_turn_error_with_different_request_id_is_ignored(
+    matching_identity: bool,
+) -> None:
+    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
+        intent = client.new_chat_intent(uuid4(), "hello")
+        command = client.new_message_command(intent, expected_revision=1)
+        request_id = uuid4()
+        event = ErrorEvent(
+            type="error",
+            error=ErrorEnvelope(
+                code="state_conflict",
+                message="Revision changed",
+                request_id=request_id,
+                retryable=True,
+            ),
+            request_id=request_id,
+            session_id=intent.session_id if matching_identity else uuid4(),
+            client_message_id=(
+                intent.client_message_id if matching_identity else uuid4()
+            ),
+        )
+
+        assert client._match_decisive_event(event, intent=intent, command=command) == (
+            False,
+            None,
+        )
 
 
 async def _reconciliation_harness(monkeypatch, client: JungApiClient, chat) -> None:
@@ -759,11 +877,10 @@ async def test_durable_failure_matches_without_request_id_continuity() -> None:
             turn_id=uuid4(),
         )
 
-        decisive, matched = client._decisive_error(
+        decisive, matched = client._match_decisive_event(
             event,
             intent=intent,
             command=command,
-            expected_turn_id=None,
         )
 
         assert decisive is True

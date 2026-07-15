@@ -6,6 +6,7 @@ import asyncio
 import socket
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,20 @@ from jung.composition import Settings as CompositionSettings
 from jung.composition import build_settings
 from jung.llm.fake import FakeLLM
 from jung.persistence.sqlite_store import SQLiteStore
-from tests.integration.jung.application_fixtures import build_test_application
+from tests.integration.jung.application_fixtures import (
+    TestApplicationRuntime,
+    build_test_application,
+)
+
+
+@dataclass
+class RuntimeProbe:
+    runtime: TestApplicationRuntime | None = None
+
+
+@pytest.fixture
+def runtime_probe() -> RuntimeProbe:
+    return RuntimeProbe()
 
 
 @pytest.fixture
@@ -52,22 +66,34 @@ def api_settings(store_path: Path) -> ApiSettings:
 def _runtime_factory(
     store: SQLiteStore,
     fake_llm: FakeLLM,
+    runtime_probe: RuntimeProbe | None = None,
 ) -> Callable[[CompositionSettings], Any]:
     @asynccontextmanager
     async def factory(
         _settings: CompositionSettings,
     ) -> AsyncIterator[object]:
         async with build_test_application(store, fake_llm) as runtime:
-            yield runtime
+            if runtime_probe is not None:
+                runtime_probe.runtime = runtime
+            try:
+                yield runtime
+            finally:
+                if runtime_probe is not None:
+                    runtime_probe.runtime = None
 
     return factory
 
 
 @pytest.fixture
-def api_app(store: SQLiteStore, fake_llm: FakeLLM, api_settings: ApiSettings):
+def api_app(
+    store: SQLiteStore,
+    fake_llm: FakeLLM,
+    api_settings: ApiSettings,
+    runtime_probe: RuntimeProbe,
+):
     return create_app(
         api_settings,
-        runtime_factory=_runtime_factory(store, fake_llm),
+        runtime_factory=_runtime_factory(store, fake_llm, runtime_probe),
     )
 
 

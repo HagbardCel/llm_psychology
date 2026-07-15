@@ -58,6 +58,8 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def _validated_origin(value: str) -> httpx.URL:
+    if "?" in value or "#" in value:
+        raise ValueError("base_url must be a valid HTTP(S) origin")
     try:
         url = httpx.URL(value)
     except Exception:
@@ -290,21 +292,23 @@ def _nested_error_envelopes(value: object) -> Iterator[ErrorEnvelope]:
 class JungChatConnection:
     def __init__(self, websocket: ClientConnection) -> None:
         self._websocket = websocket
-        self._closed = False
+        self._unusable = False
+        self._close_attempted = False
         self._consumer_active = False
 
     def _ensure_open(self) -> None:
-        if self._closed:
-            raise RuntimeError("chat connection is closed")
+        if self._unusable:
+            raise RuntimeError("chat connection is unusable")
 
     async def send(self, command: SendMessageCommand) -> None:
         self._ensure_open()
         try:
             await self._websocket.send(command.model_dump_json())
         except ConnectionClosed as exc:
-            self._closed = True
+            self._unusable = True
             raise JungConnectionClosed(code=exc.code, reason=exc.reason) from None
         except (OSError, WebSocketException):
+            self._unusable = True
             raise JungTransportError("WebSocket send") from None
 
     async def events(self) -> AsyncIterator[ServerEvent]:
@@ -317,12 +321,13 @@ class JungChatConnection:
                 try:
                     raw = await self._websocket.recv()
                 except ConnectionClosed as exc:
-                    self._closed = True
+                    self._unusable = True
                     raise JungConnectionClosed(
                         code=exc.code,
                         reason=exc.reason,
                     ) from None
                 except (OSError, WebSocketException):
+                    self._unusable = True
                     raise JungTransportError("WebSocket receive") from None
 
                 if not isinstance(raw, str):
@@ -354,9 +359,10 @@ class JungChatConnection:
             self._consumer_active = False
 
     async def aclose(self) -> None:
-        if self._closed:
+        if self._close_attempted:
             return
-        self._closed = True
+        self._close_attempted = True
+        self._unusable = True
         try:
             await self._websocket.close()
         except asyncio.CancelledError:
@@ -789,13 +795,12 @@ class JungApiClient:
             )
         return None
 
-    def _decisive_error(
+    def _match_decisive_event(
         self,
         event: ServerEvent,
         *,
         intent: ChatSendIntent,
         command: SendMessageCommand,
-        expected_turn_id: UUID | None,
     ) -> tuple[bool, ErrorEvent | None]:
         if isinstance(event, MessageInProgressEvent):
             matches = (
@@ -831,28 +836,19 @@ class JungApiClient:
                 or event.client_message_id != intent.client_message_id
             ):
                 return False, None
-            if expected_turn_id is not None and event.turn_id != expected_turn_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="durable ErrorEvent",
-                )
             return True, event
 
-        same_identity = event.session_id in {
-            None,
-            intent.session_id,
-        } and event.client_message_id in {None, intent.client_message_id}
-        if event.request_id == command.request_id and same_identity:
-            return True, event
+        if event.request_id != command.request_id:
+            return False, None
         if (
-            event.session_id == intent.session_id
-            and event.client_message_id == intent.client_message_id
+            event.session_id != intent.session_id
+            or event.client_message_id != intent.client_message_id
         ):
             raise JungProtocolError(
                 kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                expected_model="durable ErrorEvent",
+                expected_model="correlated command ErrorEvent",
             )
-        return False, None
+        return True, event
 
     async def _wait_for_decisive_event(
         self,
@@ -865,11 +861,10 @@ class JungApiClient:
         try:
             async with asyncio.timeout(acknowledgement_timeout):
                 async for event in chat.events():
-                    decisive, error = self._decisive_error(
+                    decisive, error = self._match_decisive_event(
                         event,
                         intent=intent,
                         command=command,
-                        expected_turn_id=None,
                     )
                     if decisive:
                         return error

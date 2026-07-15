@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from importlib.util import resolve_name
 from pathlib import Path
 
@@ -350,22 +351,74 @@ def test_phase5_api_init_has_no_imports() -> None:
     assert _resolved_imported_modules(init_path) == []
 
 
-def test_phase5_client_uses_contract_only_jung_import_allow_list() -> None:
+def _client_import_violations(modules: list[str]) -> list[str]:
+    violations: list[str] = []
+    allowed_external_roots = {"httpx", "pydantic", "websockets"}
+    for module in modules:
+        root = module.split(".")[0]
+        if root == "__future__" or root in sys.stdlib_module_names:
+            continue
+        if root in allowed_external_roots:
+            continue
+        if module == "jung.api.contracts" or module.startswith(
+            "jung.api.contracts."
+        ):
+            continue
+        if module == "jung.client" or module.startswith("jung.client."):
+            continue
+        violations.append(module)
+    return violations
+
+
+def test_phase5_client_uses_contract_only_import_allow_list() -> None:
     if not CLIENT_SRC.exists():
         pytest.skip("jung.client package not present yet")
 
     violations: list[str] = []
-    forbidden_external_roots = {"trio", "quart", "quart_trio", "fastapi", "uvicorn"}
     for path in sorted(CLIENT_SRC.rglob("*.py")):
-        for module in _resolved_imported_modules(path):
-            if module.startswith("jung.") and not (
-                module == "jung.api.contracts"
-                or module.startswith("jung.api.contracts.")
-                or module == "jung.client"
-                or module.startswith("jung.client.")
-            ):
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-            if module.split(".")[0] in forbidden_external_roots:
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+        violations.extend(
+            f"{path.relative_to(ROOT)} imports {module}"
+            for module in _client_import_violations(_resolved_imported_modules(path))
+        )
 
     assert violations == []
+
+
+def test_phase5_client_import_allow_list_accepts_resolved_supported_imports() -> None:
+    modules = _resolved_imported_modules_from_source(
+        "\n".join(
+            (
+                "from __future__ import annotations",
+                "import asyncio",
+                "import httpx",
+                "import pydantic",
+                "import websockets",
+                "from jung.api.contracts import AppSnapshotResponse",
+                "from .api_client import JungApiClient",
+            )
+        ),
+        package="jung.client",
+    )
+
+    assert _client_import_violations(modules) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import requests",
+        "import tenacity",
+        "import openai",
+        "from jung.application import TherapyApplication",
+        "from ..application import TherapyApplication",
+    ),
+)
+def test_phase5_client_import_allow_list_rejects_unsupported_imports(
+    source: str,
+) -> None:
+    modules = _resolved_imported_modules_from_source(
+        source,
+        package="jung.client",
+    )
+
+    assert _client_import_violations(modules)
