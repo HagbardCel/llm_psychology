@@ -116,6 +116,13 @@ async def _recv_matching_token(
     pytest.fail("matching token was not observed within the event limit")
 
 
+async def _warm_websocket(ws) -> None:
+    await ws.send("not-json")
+    event = await _recv_json(ws, timeout=5.0)
+    assert event["type"] == "error"
+    assert event["error"]["code"] == "validation_error"
+
+
 async def _setup_intake_http(http_base: str) -> tuple[str, int]:
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         revision = (await client.get("/api/v1/state")).json()["revision"]
@@ -310,6 +317,10 @@ async def test_two_observers_receive_completion(
     }
 
     async with ws_connect(ws_url) as first, ws_connect(ws_url) as second:
+        await asyncio.gather(
+            _warm_websocket(first),
+            _warm_websocket(second),
+        )
         await first.send(json.dumps(command))
 
         async def wait_completed(ws) -> bool:
