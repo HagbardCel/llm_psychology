@@ -6,10 +6,11 @@ import json
 import logging
 import traceback
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from jung.api.contracts import SessionHistoryResponse
 from jung.client.console import ConsoleObserver, PromptSpec
@@ -195,6 +196,45 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
         and entry.get("request_id")
         and entry.get("client_message_id")
         for entry in timeline
+    )
+
+
+_ItemT = TypeVar("_ItemT")
+
+
+def assert_subsequence(
+    items: Sequence[_ItemT],
+    expected: Sequence[_ItemT],
+) -> None:
+    iterator = iter(items)
+    for wanted in expected:
+        if not any(item == wanted for item in iterator):
+            raise AssertionError(
+                f"{list(expected)!r} is not a subsequence of {list(items)!r}"
+            )
+
+
+def snapshot_stages(timeline: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(entry["stage"])
+        for entry in timeline
+        if entry.get("category") == "snapshot" and entry.get("stage") is not None
+    ]
+
+
+def assert_setup_timeline(timeline: list[dict[str, Any]]) -> None:
+    assert_successful_timeline(timeline)
+    assert_subsequence(
+        snapshot_stages(timeline),
+        ["setup", "intake", "style_selection", "ready"],
+    )
+
+
+def assert_therapy_timeline(timeline: list[dict[str, Any]]) -> None:
+    assert_successful_timeline(timeline)
+    assert_subsequence(
+        snapshot_stages(timeline),
+        ["therapy", "post_session", "ready"],
     )
 
 

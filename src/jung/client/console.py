@@ -30,9 +30,7 @@ from jung.api.contracts import (
 )
 from jung.client._chat_events import (
     ChatEventIdentity,
-    ChatEventOutcome,
     ChatEventViolation,
-    ChatOutcomeKind,
     ErrorCorrelation,
     classify_error,
     identity_after_progress,
@@ -118,6 +116,20 @@ class ChatRenderState:
     @property
     def streamed_text(self) -> str:
         return "".join(self.streamed_parts)
+
+
+class ChatOutcomeKind(StrEnum):
+    PROGRESS = "progress"
+    COMPLETION = "completion"
+    COMMAND_ERROR = "command_error"
+    DURABLE_ERROR = "durable_error"
+
+
+@dataclass(frozen=True)
+class ChatEventOutcome:
+    kind: ChatOutcomeKind
+    identity: ChatEventIdentity
+    event: MessageInProgressEvent | MessageCompletedEvent | ErrorEvent
 
 
 class ConsoleObserver(Protocol):
@@ -620,8 +632,10 @@ class ConsoleApp:
                     context.intent.client_message_id,
                 )
                 if assistant is not None:
-                    self._render_session_history(history)
-                    return snapshot
+                    return await self._complete_from_history(
+                        intent=context.intent,
+                        history=history,
+                    )
                 continue
 
             history = await self._client.get_session(context.intent.session_id)
@@ -630,8 +644,10 @@ class ConsoleApp:
                 context.intent.client_message_id,
             )
             if assistant is not None:
-                self._render_session_history(history)
-                return snapshot
+                return await self._complete_from_history(
+                    intent=context.intent,
+                    history=history,
+                )
 
             if context.reconciliation_attempted:
                 self._output.render_uncertain_delivery(
@@ -652,9 +668,10 @@ class ConsoleApp:
     ) -> AppSnapshotResponse:
         match result.status:
             case ChatReconciliationStatus.COMPLETE:
-                if result.completed_message is not None:
-                    self._render_session_history(result.history)
-                return result.snapshot
+                return await self._complete_from_history(
+                    intent=intent,
+                    history=result.history,
+                )
             case ChatReconciliationStatus.FAILED:
                 error_event = result.error_event
                 if error_event is None:
@@ -719,6 +736,16 @@ class ConsoleApp:
                 expected_model="at most one assistant per client_message_id",
             )
         return assistants[0] if assistants else None
+
+    async def _complete_from_history(
+        self,
+        *,
+        intent: ChatSendIntent,
+        history: SessionHistoryResponse,
+    ) -> AppSnapshotResponse:
+        self._render_session_history(history)
+        self._locally_submitted_client_ids.discard(intent.client_message_id)
+        return await self._client.get_state()
 
     async def _render_session_history_if_needed(
         self,
@@ -913,10 +940,7 @@ class ConsoleApp:
         self._ensure_output_started(state)
         if event.sequence <= state.last_token_sequence:
             return
-        if (
-            state.last_token_sequence
-            and event.sequence > state.last_token_sequence + 1
-        ):
+        if event.sequence > state.last_token_sequence + 1:
             self._observer.record(
                 "token_gap",
                 expected=state.last_token_sequence + 1,

@@ -36,20 +36,6 @@ class ChatEventIdentity:
     turn_id: UUID | None = None
 
 
-class ChatOutcomeKind(StrEnum):
-    PROGRESS = "progress"
-    COMPLETION = "completion"
-    COMMAND_ERROR = "command_error"
-    DURABLE_ERROR = "durable_error"
-
-
-@dataclass(frozen=True)
-class ChatEventOutcome:
-    kind: ChatOutcomeKind
-    identity: ChatEventIdentity
-    event: MessageInProgressEvent | MessageCompletedEvent | ErrorEvent
-
-
 def matches_progress(
     event: MessageInProgressEvent,
     identity: ChatEventIdentity,
@@ -77,11 +63,21 @@ def identity_after_progress(
 
 def matches_token(event: TokenEvent, identity: ChatEventIdentity) -> bool:
     if identity.turn_id is None:
-        return event.request_id == identity.request_id
-    return (
-        event.session_id == identity.session_id
-        and event.turn_id == identity.turn_id
-    )
+        if event.request_id != identity.request_id:
+            return False
+        if event.session_id != identity.session_id:
+            raise ChatEventViolation(
+                expected_model="TokenEvent matching correlated session_id",
+            )
+        return True
+
+    if event.turn_id != identity.turn_id:
+        return False
+    if event.session_id != identity.session_id:
+        raise ChatEventViolation(
+            expected_model="TokenEvent matching captured session_id",
+        )
+    return True
 
 
 def matches_completion(

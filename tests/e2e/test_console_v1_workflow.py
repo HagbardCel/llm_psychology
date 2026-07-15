@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
 
@@ -14,7 +15,7 @@ import pytest
 
 from jung.client.api_client import ClientSettings, JungApiClient
 from jung.client.console import ConsoleApp, ConsoleExitRequested, TerminalConsoleOutput
-from jung.domain.models import OperationKind, OperationStatus
+from jung.domain.models import OperationKind, OperationStatus, SessionKind
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
@@ -23,7 +24,8 @@ from jung.phases.intake.models import IntakeRecordPatch
 from tests.console_probe_support import (
     ProbeRecorder,
     ScriptedInputProvider,
-    assert_successful_timeline,
+    assert_setup_timeline,
+    assert_therapy_timeline,
 )
 from tests.integration.jung.application_fixtures import (
     assessment_result,
@@ -133,7 +135,7 @@ def _group_messages_by_client_id(messages: list) -> dict[UUID, list]:
     return grouped
 
 
-async def _assert_setup_ready_api(http_base: str, store: SQLiteStore) -> None:
+async def _assert_setup_ready_api(http_base: str) -> None:
     settings = ClientSettings(base_url=http_base)
     async with JungApiClient(settings) as client:
         snapshot = await client.get_state()
@@ -177,6 +179,8 @@ async def _assert_setup_ready_api(http_base: str, store: SQLiteStore) -> None:
         client_ids = [message.client_message_id for message in user_messages]
         assert len(client_ids) == len(set(client_ids))
 
+
+def _assert_setup_ready_store(store: SQLiteStore) -> None:
     assessment_op = store.get_latest_completed_operation(OperationKind.ASSESSMENT)
     assert assessment_op is not None
     assert assessment_op.status is OperationStatus.COMPLETE
@@ -184,7 +188,6 @@ async def _assert_setup_ready_api(http_base: str, store: SQLiteStore) -> None:
 
 async def _assert_therapy_ready_api(
     http_base: str,
-    store: SQLiteStore,
     *,
     recorder: ProbeRecorder,
 ) -> None:
@@ -194,12 +197,6 @@ async def _assert_therapy_ready_api(
         assert snapshot.stage == "ready"
         assert snapshot.operation is None
         assert snapshot.active_chat_turn is None
-
-        profile = await client.get_profile()
-        assert profile.current_plan is not None
-        plan = profile.current_plan
-        assert plan.current_progress == "some progress"
-        assert plan.version >= 2
 
         sessions = await client.list_sessions()
         therapy_sessions = [item for item in sessions if item.kind == "therapy"]
@@ -222,25 +219,50 @@ async def _assert_therapy_ready_api(
         ]
         grouped = _group_messages_by_client_id(therapy_messages)
         assert len(grouped) == 1
-        for client_message_id, messages in grouped.items():
-            assert [message.role for message in messages] == ["user", "assistant"]
-            assert messages[0].sequence < messages[1].sequence
-            assert messages[0].content == "I slept badly again."
-            del client_message_id
+
+        pair = next(iter(grouped.values()))
+        assert len(pair) == 2
+
+        user_message, assistant_message = pair
+
+        assert user_message.role == "user"
+        assert assistant_message.role == "assistant"
+        assert user_message.sequence < assistant_message.sequence
+        assert user_message.content == "I slept badly again."
+        assert assistant_message.content == "Let's explore that."
 
         intake_sessions = [item for item in sessions if item.kind == "intake"]
         assert intake_sessions
-        assert plan.supersedes_plan_id is not None
-        assert plan.source_session_id == therapy_session.id
 
         recorder.set_transcript_from_histories(
             await client.get_session(intake_sessions[-1].id),
             history,
         )
 
-    post_session_op = store.get_latest_completed_operation(
-        OperationKind.POST_SESSION
-    )
+
+def _assert_therapy_ready_store(store: SQLiteStore) -> None:
+    therapy_sessions = [
+        session
+        for session in store.list_sessions()
+        if session.kind is SessionKind.THERAPY
+    ]
+    assert len(therapy_sessions) == 1
+    therapy_session = therapy_sessions[0]
+
+    plans = store.list_plans_for_session(therapy_session.id)
+    assert [plan.version for plan in plans] == [1, 2]
+
+    initial_plan, revised_plan = plans
+
+    assert revised_plan.supersedes_plan_id == initial_plan.id
+    assert revised_plan.source_session_id == therapy_session.id
+    assert revised_plan.current_progress == "some progress"
+
+    current_plan = store.get_current_plan()
+    assert current_plan is not None
+    assert current_plan.id == revised_plan.id
+
+    post_session_op = store.get_latest_completed_operation(OperationKind.POST_SESSION)
     assert post_session_op is not None
     assert post_session_op.status is OperationStatus.COMPLETE
 
@@ -271,7 +293,9 @@ async def _run_scenario(
     fake_llm: FakeLLM,
     scenario_id: str,
     inputs: list[str],
-    assert_api,
+    assert_api: Callable,
+    assert_store: Callable[[], None],
+    assert_timeline: Callable[[list], None],
     probe_root: Path,
 ) -> ProbeRecorder:
     scenario_dir = probe_root / scenario_id
@@ -287,9 +311,13 @@ async def _run_scenario(
                     await _run_console(http_base, inputs, recorder)
                 except ConsoleExitRequested:
                     pass
+
                 await assert_api(http_base, recorder)
-        fake_llm.assert_exhausted()
-        assert_successful_timeline(recorder.timeline)
+
+            assert_store()
+            fake_llm.assert_exhausted()
+            assert_timeline(recorder.timeline)
+            assert recorder.durable_transcript
     except BaseException as exc:
         failure = exc
         raise
@@ -302,10 +330,7 @@ async def _run_scenario(
                 raise
         finally:
             recorder.detach_server_logging()
-    assert failure is None
-    assert not (scenario_dir / ProbeRecorder.FAILURE_ARTIFACT).exists()
-    transcript = (scenario_dir / "transcript.md").read_text(encoding="utf-8")
-    assert "_No transcript captured._" not in transcript
+
     return recorder
 
 
@@ -321,7 +346,7 @@ async def test_setup_to_ready_deterministic(
     probe_root: Path,
 ) -> None:
     async def assert_api(http_base: str, recorder: ProbeRecorder) -> None:
-        await _assert_setup_ready_api(http_base, store)
+        await _assert_setup_ready_api(http_base)
         async with JungApiClient(ClientSettings(base_url=http_base)) as client:
             sessions = await client.list_sessions()
             intake_sessions = [item for item in sessions if item.kind == "intake"]
@@ -334,6 +359,8 @@ async def test_setup_to_ready_deterministic(
         scenario_id="setup_to_ready",
         inputs=_setup_to_ready_inputs(),
         assert_api=assert_api,
+        assert_store=lambda: _assert_setup_ready_store(store),
+        assert_timeline=assert_setup_timeline,
         probe_root=probe_root,
     )
 
@@ -350,7 +377,7 @@ async def test_therapy_to_ready_deterministic(
     probe_root: Path,
 ) -> None:
     async def assert_api(http_base: str, recorder: ProbeRecorder) -> None:
-        await _assert_therapy_ready_api(http_base, store, recorder=recorder)
+        await _assert_therapy_ready_api(http_base, recorder=recorder)
 
     await _run_scenario(
         api_app=api_app,
@@ -358,5 +385,7 @@ async def test_therapy_to_ready_deterministic(
         scenario_id="therapy_to_ready",
         inputs=_therapy_to_ready_inputs(),
         assert_api=assert_api,
+        assert_store=lambda: _assert_therapy_ready_store(store),
+        assert_timeline=assert_therapy_timeline,
         probe_root=probe_root,
     )

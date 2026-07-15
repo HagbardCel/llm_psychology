@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import ast
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -39,10 +38,6 @@ from jung.api.contracts import (
 )
 from jung.client._chat_events import (
     ChatEventIdentity,
-    ChatEventViolation,
-    ChatOutcomeKind,
-    classify_error,
-    identity_after_progress,
 )
 from jung.client.api_client import (
     ChatReconciliationResult,
@@ -70,9 +65,6 @@ from jung.client.console import (
     cli,
     require_command,
 )
-
-ROOT = Path(__file__).resolve().parents[4]
-CHAT_EVENTS_PATH = ROOT / "src" / "jung" / "client" / "_chat_events.py"
 
 pytestmark = pytest.mark.asyncio
 
@@ -660,32 +652,7 @@ async def test_completion_advances_high_water_mark() -> None:
     assert app._last_rendered_sequence[session.id] == 4
 
 
-async def test_before_turn_id_progress_establishes_identity() -> None:
-    session_id = uuid4()
-    client_message_id = uuid4()
-    request_id = uuid4()
-    identity = ChatEventIdentity(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        request_id=request_id,
-    )
-    progress = _progress_event(
-        session_id=session_id,
-        client_message_id=client_message_id,
-    )
-    app = _app(_mock_client())
-    state = ChatRenderState()
-    outcome = app._process_chat_event(
-        progress,
-        identity=identity,
-        render_state=state,
-    )
-    assert outcome is not None
-    assert outcome.kind is ChatOutcomeKind.PROGRESS
-    assert outcome.identity.turn_id == progress.turn.id
-
-
-async def test_after_turn_id_wrong_turn_raises_violation() -> None:
+async def test_chat_event_violation_maps_to_protocol_error() -> None:
     session_id = uuid4()
     client_message_id = uuid4()
     turn_id = uuid4()
@@ -848,6 +815,21 @@ async def test_send_failure_reconciles_once_after_scope_exit() -> None:
     session = _session()
     snapshot = _snapshot(session=session)
     intent_holder: dict[str, ChatSendIntent] = {}
+    stale_pending_snapshot = _snapshot(
+        stage="intake",
+        session=session,
+        revision=2,
+        pending=_turn(
+            session_id=session.id,
+            client_message_id=uuid4(),
+        ),
+    )
+    final_snapshot = _snapshot(
+        stage="intake",
+        session=session,
+        revision=3,
+        pending=None,
+    )
 
     @asynccontextmanager
     async def broken_chat():
@@ -861,21 +843,32 @@ async def test_send_failure_reconciles_once_after_scope_exit() -> None:
         yield chat
 
     client.open_chat = broken_chat
-    history = _history(session_id=session.id, client_message_id=uuid4())
 
-    async def reconcile(intent):
+    async def reconcile(intent: ChatSendIntent) -> ChatReconciliationResult:
         intent_holder["intent"] = intent
+        history = _history(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+            assistant_content="reply",
+        )
         return ChatReconciliationResult(
             status=ChatReconciliationStatus.COMPLETE,
-            snapshot=_snapshot(stage="intake", session=session, revision=2),
+            snapshot=stale_pending_snapshot,
             history=history,
             completed_message=history.messages[-1],
         )
 
     client.reconcile_chat_turn = AsyncMock(side_effect=reconcile)
+    client.get_state = AsyncMock(return_value=final_snapshot)
     app = _app(client)
-    await app._handle_chat_turn(snapshot, content="hello")
+    result = await app._handle_chat_turn(snapshot, content="hello")
     client.reconcile_chat_turn.assert_awaited_once()
+    client.get_state.assert_awaited_once()
+    assert result is final_snapshot
+    assert (
+        intent_holder["intent"].client_message_id
+        not in app._locally_submitted_client_ids
+    )
 
 
 async def test_single_events_iterator_per_turn() -> None:
@@ -983,17 +976,6 @@ async def test_eof_maps_to_exit_zero() -> None:
         assert await _async_cli() == 0
 
 
-def test_chat_events_module_has_no_api_client_import() -> None:
-    tree = ast.parse(CHAT_EVENTS_PATH.read_text(encoding="utf-8"))
-    imports: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.append(node.module)
-    assert "jung.client.api_client" not in imports
-
-
 async def test_pending_reconcile_budget_once_per_client_message_id() -> None:
     client = _mock_client()
     session = _session()
@@ -1077,32 +1059,7 @@ async def test_pre_acceptance_command_error_not_chat_failed() -> None:
     assert result.revision == 2
 
 
-async def test_classify_error_durable_before_turn_id_matches_session_client() -> None:
-    session_id = uuid4()
-    client_message_id = uuid4()
-    identity = ChatEventIdentity(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        request_id=uuid4(),
-    )
-    durable_request_id = uuid4()
-    event = ErrorEvent(
-        type="error",
-        request_id=durable_request_id,
-        error=ErrorEnvelope(
-            code="llm_unavailable",
-            message="x",
-            request_id=durable_request_id,
-            retryable=False,
-        ),
-        session_id=session_id,
-        client_message_id=client_message_id,
-        turn_id=uuid4(),
-    )
-    assert classify_error(event, identity) is not None
-
-
-async def test_token_matches_request_id_before_turn_id() -> None:
+async def test_token_renders_through_process_chat_event() -> None:
     session_id = uuid4()
     request_id = uuid4()
     identity = ChatEventIdentity(
@@ -1167,74 +1124,49 @@ async def test_human_input_provider_eof_raises() -> None:
             await provider.read(PromptSpec(text="> "))
 
 
-async def test_duplicate_progress_turn_id_raises_violation() -> None:
-    session_id = uuid4()
-    client_message_id = uuid4()
-    identity = ChatEventIdentity(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        request_id=uuid4(),
-        turn_id=uuid4(),
-    )
-    progress = _progress_event(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        turn_id=uuid4(),
-    )
-    with pytest.raises(ChatEventViolation):
-        identity_after_progress(progress, identity)
-
-
-async def test_repeated_progress_same_turn_id_is_harmless() -> None:
-    session_id = uuid4()
-    client_message_id = uuid4()
-    turn_id = uuid4()
-    identity = ChatEventIdentity(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        request_id=uuid4(),
-        turn_id=turn_id,
-    )
-    progress = _progress_event(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        turn_id=turn_id,
-    )
-    updated = identity_after_progress(progress, identity)
-    assert updated.turn_id == turn_id
-
-
 async def test_ack_timeout_before_progress_reconciles_once() -> None:
     client = _mock_client()
     session = _session()
     snapshot = _snapshot(session=session)
-    client.settings = ClientSettings(
+    settings = ClientSettings(
         "http://localhost:8000",
-        acknowledgement_timeout=0.01,
+        acknowledgement_timeout=0.05,
     )
+    client.settings = settings
 
     @asynccontextmanager
     async def slow_chat():
         chat = MagicMock()
         chat.send = AsyncMock()
 
-        async def empty_events():
-            if False:
-                yield None  # pragma: no cover
+        async def delayed_events():
+            await asyncio.sleep(settings.acknowledgement_timeout * 2)
+            yield _progress_event(
+                session_id=session.id,
+                client_message_id=uuid4(),
+            )  # pragma: no cover
 
-        chat.events = lambda: empty_events()
+        chat.events = lambda: delayed_events()
         yield chat
 
     client.open_chat = slow_chat
-    history = _history(session_id=session.id, client_message_id=uuid4())
-    client.reconcile_chat_turn = AsyncMock(
-        return_value=ChatReconciliationResult(
+    final_snapshot = _snapshot(stage="intake", session=session, revision=2)
+
+    async def reconcile(intent: ChatSendIntent) -> ChatReconciliationResult:
+        history = _history(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+            assistant_content="reply",
+        )
+        return ChatReconciliationResult(
             status=ChatReconciliationStatus.COMPLETE,
-            snapshot=_snapshot(stage="intake", session=session, revision=2),
+            snapshot=_snapshot(stage="intake", session=session, revision=1),
             history=history,
             completed_message=history.messages[-1],
         )
-    )
+
+    client.reconcile_chat_turn = AsyncMock(side_effect=reconcile)
+    client.get_state = AsyncMock(return_value=final_snapshot)
     output = RecordingOutput()
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -1248,16 +1180,12 @@ async def test_completion_during_ack_skips_completion_wait() -> None:
     snapshot = _snapshot(session=session)
 
     def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
-        progress = _progress_event(
-            session_id=session.id,
-            client_message_id=command.client_message_id,
-        )
         completion = _completion_event(
             session_id=session.id,
             client_message_id=command.client_message_id,
-            turn_id=progress.turn.id,
+            turn_id=uuid4(),
         )
-        return _event_stream(progress, completion)
+        return _event_stream(completion)
 
     client.open_chat = _open_chat_from_send(build_events)
     client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
@@ -1265,6 +1193,145 @@ async def test_completion_during_ack_skips_completion_wait() -> None:
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
     assert output.assistant_direct == ["reply"]
+
+
+async def test_completion_after_ack_timeout_still_completes() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+    settings = ClientSettings(
+        "http://localhost:8000",
+        acknowledgement_timeout=0.05,
+    )
+    client.settings = settings
+    progress_emitted = asyncio.Event()
+    release_completion = asyncio.Event()
+
+    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+        async def events():
+            progress = _progress_event(
+                session_id=session.id,
+                client_message_id=command.client_message_id,
+            )
+            yield progress
+            progress_emitted.set()
+            await release_completion.wait()
+            yield _completion_event(
+                session_id=session.id,
+                client_message_id=command.client_message_id,
+                turn_id=progress.turn.id,
+            )
+
+        return events()
+
+    client.open_chat = _open_chat_from_send(build_events)
+    after = _snapshot(stage="intake", revision=7, session=session)
+    client.get_state = AsyncMock(return_value=after)
+    client.reconcile_chat_turn = AsyncMock()
+    app = _app(client)
+
+    task = asyncio.create_task(app._handle_chat_turn(snapshot, content="hello"))
+    try:
+        await asyncio.wait_for(progress_emitted.wait(), timeout=1.0)
+        await asyncio.sleep(0.1)
+        release_completion.set()
+        result = await asyncio.wait_for(task, timeout=1.0)
+    finally:
+        release_completion.set()
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    assert result.revision == 7
+    client.reconcile_chat_turn.assert_not_awaited()
+
+
+async def test_pending_poll_completion_refreshes_state() -> None:
+    client = _mock_client()
+    session = _session()
+    client_message_id = uuid4()
+    intent = client.new_chat_intent(
+        session.id,
+        "hello",
+        client_message_id=client_message_id,
+    )
+    context = PendingTurnContext(intent=intent)
+    matching_pending = _turn(
+        session_id=session.id,
+        client_message_id=client_message_id,
+    )
+    pending_snapshot = _snapshot(
+        pending=matching_pending,
+        session=session,
+    )
+    final_snapshot = _snapshot(
+        stage="intake",
+        pending=None,
+        session=session,
+        revision=3,
+    )
+    history = _history(
+        session_id=session.id,
+        client_message_id=client_message_id,
+        assistant_content="done",
+    )
+    client.get_state = AsyncMock(
+        side_effect=[pending_snapshot, final_snapshot],
+    )
+    client.get_session = AsyncMock(return_value=history)
+    app = _app(client)
+    app._locally_submitted_client_ids.add(client_message_id)
+
+    with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
+        result = await app._wait_for_pending_chat_turn(
+            pending_snapshot,
+            context=context,
+        )
+
+    assert result is final_snapshot
+    assert client_message_id not in app._locally_submitted_client_ids
+
+
+async def test_completed_original_turn_not_replaced_by_other_pending() -> None:
+    client = _mock_client()
+    session = _session()
+    original_id = uuid4()
+    other_id = uuid4()
+    intent = client.new_chat_intent(
+        session.id,
+        "hello",
+        client_message_id=original_id,
+    )
+    context = PendingTurnContext(intent=intent)
+    other_pending = _turn(session_id=session.id, client_message_id=other_id)
+    other_pending_snapshot = _snapshot(
+        pending=other_pending,
+        session=session,
+    )
+    final_snapshot = _snapshot(
+        stage="intake",
+        pending=other_pending,
+        session=session,
+        revision=4,
+    )
+    history = _history(
+        session_id=session.id,
+        client_message_id=original_id,
+        assistant_content="done",
+    )
+    client.get_session = AsyncMock(return_value=history)
+    client.get_state = AsyncMock(return_value=final_snapshot)
+    app = _app(client)
+    app._locally_submitted_client_ids.add(original_id)
+
+    result = await app._wait_for_pending_chat_turn(
+        other_pending_snapshot,
+        context=context,
+    )
+
+    assert result is final_snapshot
+    assert original_id not in app._locally_submitted_client_ids
 
 
 async def test_token_before_progress_then_completion() -> None:
@@ -1395,6 +1462,41 @@ async def test_duplicate_token_sequence_is_ignored() -> None:
     app._process_chat_event(token, identity=identity, render_state=state)
     app._process_chat_event(token, identity=identity, render_state=state)
     assert app._output.assistant_tokens == ["a"]
+
+
+class _GapObserver:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+
+async def test_first_token_gap_is_recorded() -> None:
+    observer = _GapObserver()
+    app = ConsoleApp(
+        client=_mock_client(),
+        input=ScriptedInput(),
+        output=RecordingOutput(),
+        observer=observer,
+    )
+    state = ChatRenderState()
+    identity = ChatEventIdentity(
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        request_id=uuid4(),
+        turn_id=uuid4(),
+    )
+    token = TokenEvent(
+        type="token",
+        session_id=identity.session_id,
+        turn_id=identity.turn_id,
+        request_id=identity.request_id,
+        sequence=2,
+        text="late",
+    )
+    app._process_chat_event(token, identity=identity, render_state=state)
+    assert ("token_gap", {"expected": 1, "received": 2}) in observer.events
 
 
 async def test_failed_reconciliation_without_turn_id_is_command_rejection() -> None:

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.console_probe_support import ProbeRecorder, assert_successful_timeline
+from tests.console_probe_support import (
+    ProbeRecorder,
+    assert_setup_timeline,
+    assert_subsequence,
+    assert_successful_timeline,
+    assert_therapy_timeline,
+    snapshot_stages,
+)
 
 
 def test_artifacts_include_failure_summary(tmp_path: Path) -> None:
@@ -42,3 +49,29 @@ def test_artifacts_emit_complete_named_set(tmp_path: Path) -> None:
     assert_successful_timeline(recorder.timeline)
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "success" in summary
+
+
+def test_timeline_subsequence_helpers() -> None:
+    setup_timeline = [
+        {"category": "snapshot", "stage": "setup", "revision": 0},
+        {"category": "snapshot", "stage": "intake", "revision": 1},
+        {"category": "snapshot", "stage": "style_selection", "revision": 2},
+        {"category": "snapshot", "stage": "ready", "revision": 3},
+        {"category": "chat_send", "request_id": "r", "client_message_id": "m"},
+        {"category": "ws_event", "type": "message_in_progress", "turn_id": "t"},
+        {"category": "ws_event", "type": "token", "sequence": 1},
+        {"category": "ws_event", "type": "message_completed", "client_message_id": "m"},
+    ]
+    assert_setup_timeline(setup_timeline)
+
+    therapy_timeline = [
+        {"category": "snapshot", "stage": "therapy", "revision": 1},
+        {"category": "chat_send", "request_id": "r", "client_message_id": "m"},
+        {"category": "ws_event", "type": "message_in_progress", "turn_id": "t"},
+        {"category": "ws_event", "type": "token", "sequence": 1},
+        {"category": "ws_event", "type": "message_completed", "client_message_id": "m"},
+        {"category": "snapshot", "stage": "post_session", "revision": 2},
+        {"category": "snapshot", "stage": "ready", "revision": 3},
+    ]
+    assert_therapy_timeline(therapy_timeline)
+    assert_subsequence(snapshot_stages(therapy_timeline), ["therapy", "ready"])
