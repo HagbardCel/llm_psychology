@@ -160,6 +160,13 @@ Application-owned generation publishes through
 translate to the wire union below. Disconnect unsubscribes one client only;
 accepted generation continues.
 
+Browser WebSocket handshakes containing an `Origin` header are accepted only when
+that exact HTTP(S) Origin is present in `JUNG_API_ALLOWED_ORIGINS`. Native clients
+without an `Origin` header remain accepted. The literal `Origin: null` value is
+always rejected. This is browser cross-origin protection, not authentication. Use
+complete HTTP(S) origins including the port where applicable; paths, WebSocket
+URLs, and the string `null` are not valid trusted origins.
+
 ### Client
 
 | Message | Fields | Semantics |

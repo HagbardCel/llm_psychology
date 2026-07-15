@@ -32,6 +32,7 @@ from jung.api.errors import (
 )
 from jung.api.routes import router
 from jung.api.settings import ApiSettings, validate_api_settings
+from jung.api.websocket import router as websocket_router
 from jung.composition import Settings as CompositionSettings
 from jung.composition import application_context
 from jung.domain.errors import DomainError, RevisionConflict
@@ -198,6 +199,7 @@ def create_app(
         openapi_url="/api/v1/openapi.json",
     )
     app.state.api = ApiState()
+    app.state.api_settings = settings
 
     _register_exception_handlers(app)
     app.add_middleware(RequestIdMiddleware)
@@ -213,6 +215,7 @@ def create_app(
         )
 
     app.include_router(router)
+    app.include_router(websocket_router)
     return app
 
 

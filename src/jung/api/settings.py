@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,8 @@ class ApiSettings:
     log_level: str = "info"
     allowed_origins: tuple[str, ...] = ()
     allow_remote_bind: bool = False
+    websocket_send_timeout: float = 5.0
+    websocket_close_timeout: float = 2.0
 
 
 def _parse_bool(value: str) -> bool:
@@ -34,6 +37,16 @@ def _parse_bool(value: str) -> bool:
     if normalized in {"false", "0", "no"}:
         return False
     raise ValueError(f"invalid boolean value: {value!r}")
+
+
+def _parse_positive_float(name: str, raw: str) -> float:
+    try:
+        value = float(raw.strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid {name}: {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero")
+    return value
 
 
 def _parse_origins(raw: str | None) -> tuple[str, ...]:
@@ -62,6 +75,17 @@ def validate_api_settings(settings: ApiSettings) -> ApiSettings:
     if not 1 <= settings.port <= 65535:
         raise ValueError("port must be between 1 and 65535")
 
+    send_timeout = settings.websocket_send_timeout
+    if not math.isfinite(send_timeout) or send_timeout <= 0:
+        raise ValueError(
+            "websocket_send_timeout must be a finite number greater than zero"
+        )
+    close_timeout = settings.websocket_close_timeout
+    if not math.isfinite(close_timeout) or close_timeout <= 0:
+        raise ValueError(
+            "websocket_close_timeout must be a finite number greater than zero"
+        )
+
     log_level = settings.log_level.strip().lower()
     if log_level not in _VALID_LOG_LEVELS:
         raise ValueError(f"invalid log level: {settings.log_level!r}")
@@ -86,6 +110,8 @@ def validate_api_settings(settings: ApiSettings) -> ApiSettings:
         log_level=log_level,
         allowed_origins=tuple(origins),
         allow_remote_bind=settings.allow_remote_bind,
+        websocket_send_timeout=settings.websocket_send_timeout,
+        websocket_close_timeout=settings.websocket_close_timeout,
     )
 
 
@@ -128,6 +154,14 @@ def load_api_settings() -> ApiSettings:
     allow_remote_bind = _parse_bool(
         os.environ.get("JUNG_API_ALLOW_REMOTE_BIND", "false")
     )
+    websocket_send_timeout = _parse_positive_float(
+        "JUNG_WS_SEND_TIMEOUT",
+        os.environ.get("JUNG_WS_SEND_TIMEOUT", "5.0"),
+    )
+    websocket_close_timeout = _parse_positive_float(
+        "JUNG_WS_CLOSE_TIMEOUT",
+        os.environ.get("JUNG_WS_CLOSE_TIMEOUT", "2.0"),
+    )
 
     try:
         port = int(port_raw)
@@ -146,5 +180,7 @@ def load_api_settings() -> ApiSettings:
         log_level=log_level,
         allowed_origins=origins,
         allow_remote_bind=allow_remote_bind,
+        websocket_send_timeout=websocket_send_timeout,
+        websocket_close_timeout=websocket_close_timeout,
     )
     return validate_api_settings(settings)
