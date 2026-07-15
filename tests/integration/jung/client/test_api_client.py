@@ -410,13 +410,18 @@ async def test_reconcile_event_silent_duplicate_uses_final_http_refresh(
         intent = client.new_chat_intent(state.active_session.id, "hello")
         real_open_chat = client.open_chat
         sent_commands = []
+        observed_events = []
+        decisive_events = []
+        acknowledgement_wait_cancelled = False
 
         class SeedBeforeSend:
             def __init__(self, chat) -> None:
                 self._chat = chat
+                self._command = None
 
             async def send(self, command) -> None:
                 sent_commands.append(command)
+                self._command = command
                 turn_id = uuid4()
                 user_message_id = uuid4()
                 store.accept_chat_message(
@@ -437,8 +442,22 @@ async def test_reconcile_event_silent_duplicate_uses_final_http_refresh(
                     )
                 await self._chat.send(command)
 
-            def events(self):
-                return self._chat.events()
+            async def events(self):
+                nonlocal acknowledgement_wait_cancelled
+                try:
+                    async for event in self._chat.events():
+                        observed_events.append(event)
+                        decisive, _error = client._match_decisive_event(
+                            event,
+                            intent=intent,
+                            command=self._command,
+                        )
+                        if decisive:
+                            decisive_events.append(event)
+                        yield event
+                except asyncio.CancelledError:
+                    acknowledgement_wait_cancelled = True
+                    raise
 
             async def aclose(self) -> None:
                 await self._chat.aclose()
@@ -453,6 +472,9 @@ async def test_reconcile_event_silent_duplicate_uses_final_http_refresh(
 
     assert result.status is expected_status
     assert len(sent_commands) == 1
+    assert acknowledgement_wait_cancelled is True
+    assert decisive_events == []
+    assert all(event not in decisive_events for event in observed_events)
     matching_users = [
         message
         for message in result.history.messages

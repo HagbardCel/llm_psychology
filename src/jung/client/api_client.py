@@ -58,7 +58,7 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def _validated_origin(value: str) -> httpx.URL:
-    if "?" in value or "#" in value:
+    if not isinstance(value, str) or "?" in value or "#" in value:
         raise ValueError("base_url must be a valid HTTP(S) origin")
     try:
         url = httpx.URL(value)
@@ -803,19 +803,31 @@ class JungApiClient:
         command: SendMessageCommand,
     ) -> tuple[bool, ErrorEvent | None]:
         if isinstance(event, MessageInProgressEvent):
-            matches = (
-                event.session_id == intent.session_id
-                and event.turn.session_id == intent.session_id
-                and event.turn.client_message_id == intent.client_message_id
+            if event.session_id != event.turn.session_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="internally consistent MessageInProgressEvent",
+                )
+            return (
+                event.turn.session_id == intent.session_id
+                and event.turn.client_message_id == intent.client_message_id,
+                None,
             )
-            return matches, None
         if isinstance(event, MessageCompletedEvent):
-            matches = (
+            if (
+                event.session_id != event.turn.session_id
+                or event.session_id != event.message.session_id
+                or event.turn.client_message_id != event.message.client_message_id
+            ):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="internally consistent MessageCompletedEvent",
+                )
+            return (
                 event.session_id == intent.session_id
-                and event.message.session_id == intent.session_id
-                and event.message.client_message_id == intent.client_message_id
+                and event.turn.client_message_id == intent.client_message_id,
+                None,
             )
-            return matches, None
         if isinstance(
             event,
             (TokenEvent, SnapshotChangedEvent, OperationChangedEvent),

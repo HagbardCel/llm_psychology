@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import ValidationError
+from websockets.exceptions import ConnectionClosed
 
 from jung.api.contracts import (
     AppSnapshotResponse,
@@ -19,6 +20,8 @@ from jung.api.contracts import (
     ErrorEnvelope,
     ErrorEvent,
     HealthResponse,
+    MessageCompletedEvent,
+    MessageInProgressEvent,
     MessageResponse,
     OperationSummaryResponse,
     SendMessageCommand,
@@ -69,6 +72,16 @@ def _message(
         content=content,
         created_at=datetime.now(UTC),
         client_message_id=client_message_id,
+    )
+
+
+def _turn(*, session_id: UUID, client_message_id: UUID) -> ChatTurnSummaryResponse:
+    return ChatTurnSummaryResponse(
+        id=uuid4(),
+        session_id=session_id,
+        client_message_id=client_message_id,
+        status="pending",
+        user_message_id=uuid4(),
     )
 
 
@@ -142,6 +155,14 @@ def test_client_settings_reject_non_origin_urls_without_echoing_them(
     with pytest.raises(ValueError) as raised:
         ClientSettings(base_url)
     assert base_url not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+@pytest.mark.parametrize("base_url", (None, 42, object()))
+def test_client_settings_reject_non_string_origins(base_url: object) -> None:
+    with pytest.raises(ValueError) as raised:
+        ClientSettings(base_url)  # type: ignore[arg-type]
+    assert str(raised.value) == "base_url must be a valid HTTP(S) origin"
     assert raised.value.__cause__ is None
 
 
@@ -424,6 +445,71 @@ async def test_transport_failure_makes_chat_unusable_and_still_closes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("send", "receive"))
+async def test_remote_closure_makes_chat_unusable_and_still_closes(
+    operation: str,
+) -> None:
+    class RemoteClosedWebSocket:
+        def __init__(self) -> None:
+            self.close = AsyncMock()
+
+        async def send(self, _payload: str) -> None:
+            raise ConnectionClosed(None, None, None)
+
+        async def recv(self) -> str:
+            raise ConnectionClosed(None, None, None)
+
+    websocket = RemoteClosedWebSocket()
+    chat = JungChatConnection(websocket)
+    command = SendMessageCommand(
+        type="send_message",
+        request_id=uuid4(),
+        expected_revision=1,
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        content="hello",
+    )
+
+    if operation == "send":
+        with pytest.raises(JungConnectionClosed):
+            await chat.send(command)
+    else:
+        events = chat.events()
+        with pytest.raises(JungConnectionClosed):
+            await anext(events)
+
+    with pytest.raises(RuntimeError):
+        await chat.send(command)
+    with pytest.raises(RuntimeError):
+        await anext(chat.events())
+    await chat.aclose()
+    await chat.aclose()
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_explicit_chat_close_makes_connection_unusable() -> None:
+    websocket = SimpleNamespace(close=AsyncMock())
+    chat = JungChatConnection(websocket)
+    command = SendMessageCommand(
+        type="send_message",
+        request_id=uuid4(),
+        expected_revision=1,
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        content="hello",
+    )
+
+    await chat.aclose()
+    await chat.aclose()
+    with pytest.raises(RuntimeError):
+        await chat.send(command)
+    with pytest.raises(RuntimeError):
+        await anext(chat.events())
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_classification_complete_pending_conflict_and_unresolved() -> None:
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         session_id = uuid4()
@@ -627,6 +713,184 @@ async def test_no_turn_error_with_different_request_id_is_ignored(
             False,
             None,
         )
+
+
+@pytest.mark.asyncio
+async def test_progress_events_require_internal_consistency_then_match_intent() -> None:
+    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
+        intent = client.new_chat_intent(uuid4(), "hello")
+        command = client.new_message_command(intent, expected_revision=1)
+        exact = MessageInProgressEvent(
+            type="message_in_progress",
+            session_id=intent.session_id,
+            turn=_turn(
+                session_id=intent.session_id,
+                client_message_id=intent.client_message_id,
+            ),
+        )
+        same_session_other_message = MessageInProgressEvent(
+            type="message_in_progress",
+            session_id=intent.session_id,
+            turn=_turn(session_id=intent.session_id, client_message_id=uuid4()),
+        )
+        other_session_id = uuid4()
+        other_session = MessageInProgressEvent(
+            type="message_in_progress",
+            session_id=other_session_id,
+            turn=_turn(session_id=other_session_id, client_message_id=uuid4()),
+        )
+        inconsistent = MessageInProgressEvent(
+            type="message_in_progress",
+            session_id=intent.session_id,
+            turn=_turn(session_id=uuid4(), client_message_id=uuid4()),
+        )
+
+        assert client._match_decisive_event(
+            exact, intent=intent, command=command
+        ) == (True, None)
+        assert client._match_decisive_event(
+            same_session_other_message,
+            intent=intent,
+            command=command,
+        ) == (False, None)
+        assert client._match_decisive_event(
+            other_session, intent=intent, command=command
+        ) == (False, None)
+        with pytest.raises(JungProtocolError) as raised:
+            client._match_decisive_event(
+                inconsistent, intent=intent, command=command
+            )
+        assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+@pytest.mark.asyncio
+async def test_completion_events_require_internal_consistency_then_match_intent() -> None:
+    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
+        intent = client.new_chat_intent(uuid4(), "hello")
+        command = client.new_message_command(intent, expected_revision=1)
+
+        def completed(*, session_id: UUID, client_message_id: UUID) -> MessageCompletedEvent:
+            return MessageCompletedEvent(
+                type="message_completed",
+                session_id=session_id,
+                turn=_turn(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                ),
+                message=_message(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    role="assistant",
+                    content="reply",
+                    sequence=2,
+                ),
+            )
+
+        exact = completed(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+        )
+        same_session_other_message = completed(
+            session_id=intent.session_id,
+            client_message_id=uuid4(),
+        )
+        other_session = completed(session_id=uuid4(), client_message_id=uuid4())
+        wrong_turn_session = completed(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+        ).model_copy(
+            update={"turn": _turn(session_id=uuid4(), client_message_id=uuid4())}
+        )
+        wrong_message_session = completed(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+        ).model_copy(
+            update={
+                "message": _message(
+                    session_id=uuid4(),
+                    client_message_id=intent.client_message_id,
+                    role="assistant",
+                    content="reply",
+                    sequence=2,
+                )
+            }
+        )
+        wrong_client_message = completed(
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+        ).model_copy(
+            update={
+                "message": _message(
+                    session_id=intent.session_id,
+                    client_message_id=uuid4(),
+                    role="assistant",
+                    content="reply",
+                    sequence=2,
+                )
+            }
+        )
+
+        assert client._match_decisive_event(
+            exact, intent=intent, command=command
+        ) == (True, None)
+        assert client._match_decisive_event(
+            same_session_other_message,
+            intent=intent,
+            command=command,
+        ) == (False, None)
+        assert client._match_decisive_event(
+            other_session, intent=intent, command=command
+        ) == (False, None)
+        for inconsistent in (
+            wrong_turn_session,
+            wrong_message_session,
+            wrong_client_message,
+        ):
+            with pytest.raises(JungProtocolError) as raised:
+                client._match_decisive_event(
+                    inconsistent, intent=intent, command=command
+                )
+            assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+@pytest.mark.asyncio
+async def test_exact_no_turn_error_matches_and_durable_other_identity_is_ignored() -> None:
+    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
+        intent = client.new_chat_intent(uuid4(), "hello")
+        command = client.new_message_command(intent, expected_revision=1)
+        command_error = ErrorEvent(
+            type="error",
+            error=ErrorEnvelope(
+                code="state_conflict",
+                message="Revision changed",
+                request_id=command.request_id,
+                retryable=True,
+            ),
+            request_id=command.request_id,
+            session_id=intent.session_id,
+            client_message_id=intent.client_message_id,
+        )
+        failure_request_id = uuid4()
+        other_durable_error = ErrorEvent(
+            type="error",
+            error=ErrorEnvelope(
+                code="llm_timeout",
+                message="Generation failed",
+                request_id=failure_request_id,
+                retryable=True,
+            ),
+            request_id=failure_request_id,
+            session_id=uuid4(),
+            client_message_id=uuid4(),
+            turn_id=uuid4(),
+        )
+
+        assert client._match_decisive_event(
+            command_error, intent=intent, command=command
+        ) == (True, command_error)
+        assert client._match_decisive_event(
+            other_durable_error, intent=intent, command=command
+        ) == (False, None)
 
 
 async def _reconciliation_harness(monkeypatch, client: JungApiClient, chat) -> None:
