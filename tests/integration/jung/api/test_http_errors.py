@@ -11,7 +11,7 @@ from httpx import AsyncClient
 
 from jung.api.app import create_app
 from jung.domain.errors import InvariantViolation
-from tests.integration.jung.conftest import _runtime_factory
+from tests.jung_api_fixtures import runtime_factory
 
 EXPECTED_OPERATIONS = {
     ("get", "/api/v1/state"),
@@ -106,7 +106,7 @@ async def test_unexpected_exception_returns_sanitized_internal_error(
     secret = "secret internal detail"
     app = create_app(
         api_settings,
-        runtime_factory=_runtime_factory(store, fake_llm),
+        runtime_factory=runtime_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
@@ -145,7 +145,7 @@ async def test_internal_domain_error_is_logged_and_sanitized(
     secret = "invariant secret detail"
     app = create_app(
         api_settings,
-        runtime_factory=_runtime_factory(store, fake_llm),
+        runtime_factory=runtime_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
@@ -208,7 +208,7 @@ async def test_revision_conflict_enrichment_failure_keeps_409(
     secret = "secret enrichment detail"
     app = create_app(
         api_settings,
-        runtime_factory=_runtime_factory(store, fake_llm),
+        runtime_factory=runtime_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):

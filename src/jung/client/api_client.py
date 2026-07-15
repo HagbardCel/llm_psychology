@@ -33,10 +33,7 @@ from jung.api.contracts import (
     ErrorEvent,
     ErrorResponse,
     HealthResponse,
-    MessageCompletedEvent,
-    MessageInProgressEvent,
     MessageResponse,
-    OperationChangedEvent,
     ProfileResponse,
     ProfileUpdateRequest,
     RetryOperationRequest,
@@ -46,11 +43,14 @@ from jung.api.contracts import (
     SessionHistoryResponse,
     SessionListResponse,
     SessionSummaryResponse,
-    SnapshotChangedEvent,
     StartSessionRequest,
     StartSessionResponse,
     StyleOptionsResponse,
-    TokenEvent,
+)
+from jung.client._chat_events import (
+    ChatEventIdentity,
+    ChatEventViolation,
+    matches_decisive_event,
 )
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -802,65 +802,20 @@ class JungApiClient:
         intent: ChatSendIntent,
         command: SendMessageCommand,
     ) -> tuple[bool, ErrorEvent | None]:
-        if isinstance(event, MessageInProgressEvent):
-            if event.session_id != event.turn.session_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="internally consistent MessageInProgressEvent",
-                )
-            return (
-                event.turn.session_id == intent.session_id
-                and event.turn.client_message_id == intent.client_message_id,
-                None,
+        try:
+            return matches_decisive_event(
+                event,
+                identity=ChatEventIdentity(
+                    session_id=intent.session_id,
+                    client_message_id=intent.client_message_id,
+                    request_id=command.request_id,
+                ),
             )
-        if isinstance(event, MessageCompletedEvent):
-            if (
-                event.session_id != event.turn.session_id
-                or event.session_id != event.message.session_id
-                or event.turn.client_message_id != event.message.client_message_id
-            ):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="internally consistent MessageCompletedEvent",
-                )
-            return (
-                event.session_id == intent.session_id
-                and event.turn.client_message_id == intent.client_message_id,
-                None,
-            )
-        if isinstance(
-            event,
-            (TokenEvent, SnapshotChangedEvent, OperationChangedEvent),
-        ):
-            return False, None
-
-        if not isinstance(event, ErrorEvent):
-            return False, None
-
-        if event.turn_id is not None:
-            if event.session_id is None or event.client_message_id is None:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="durable ErrorEvent",
-                )
-            if (
-                event.session_id != intent.session_id
-                or event.client_message_id != intent.client_message_id
-            ):
-                return False, None
-            return True, event
-
-        if event.request_id != command.request_id:
-            return False, None
-        if (
-            event.session_id != intent.session_id
-            or event.client_message_id != intent.client_message_id
-        ):
+        except ChatEventViolation as exc:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                expected_model="correlated command ErrorEvent",
-            )
-        return True, event
+                expected_model=exc.expected_model,
+            ) from None
 
     async def _wait_for_decisive_event(
         self,

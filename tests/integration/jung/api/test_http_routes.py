@@ -19,12 +19,12 @@ from tests.integration.jung.application_fixtures import (
     wait_for_operation_status,
     wait_for_stage,
 )
-from tests.integration.jung.conftest import _runtime_factory
 from tests.integration.jung.scenarios import (
     advance_to_ready,
     complete_intake_for_assessment,
     open_intake,
 )
+from tests.jung_api_fixtures import runtime_factory
 
 
 @pytest.mark.asyncio
@@ -255,7 +255,7 @@ async def test_retry_operation_returns_accepted_snapshot(
 
     app = create_app(
         api_settings,
-        runtime_factory=_runtime_factory(store, fake_llm),
+        runtime_factory=runtime_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
