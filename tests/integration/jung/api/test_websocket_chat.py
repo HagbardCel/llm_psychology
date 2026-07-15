@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import InvalidHandshake
 
 from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import (
@@ -63,6 +64,34 @@ def _assert_normal_chat_event_shape(events: list[dict]) -> None:
     assert all(event_type == "token" for event_type in types[2:-2])
 
 
+async def _recv_matching_progress(
+    ws,
+    *,
+    session_id: str,
+    client_message_id: UUID,
+    timeout: float = 5.0,
+) -> dict:
+    try:
+        async with asyncio.timeout(timeout):
+            for _ in range(15):
+                event = await _recv_json(ws, timeout=timeout)
+                if (
+                    event["type"] == "message_in_progress"
+                    and event["session_id"] == session_id
+                    and event["turn"]["client_message_id"] == str(client_message_id)
+                ):
+                    return event
+    except TimeoutError:
+        pytest.fail(
+            "timed out waiting for matching message_in_progress "
+            f"for client_message_id={client_message_id}"
+        )
+
+    pytest.fail(
+        "matching message_in_progress was not observed within the event limit"
+    )
+
+
 async def _setup_intake_http(http_base: str) -> tuple[str, int]:
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         revision = (await client.get("/api/v1/state")).json()["revision"]
@@ -87,6 +116,19 @@ async def test_ready_websocket_handshake(uvicorn_api_urls) -> None:
     _http_base, ws_url = uvicorn_api_urls
     async with ws_connect(ws_url):
         return
+
+
+async def test_websocket_accepts_configured_browser_origin(uvicorn_api_urls) -> None:
+    _http_base, ws_url = uvicorn_api_urls
+    async with ws_connect(ws_url, origin="http://frontend.test"):
+        return
+
+
+async def test_websocket_rejects_disallowed_browser_origin(uvicorn_api_urls) -> None:
+    _http_base, ws_url = uvicorn_api_urls
+    with pytest.raises(InvalidHandshake):
+        async with ws_connect(ws_url, origin="http://evil.test"):
+            pytest.fail("disallowed Origin was accepted")
 
 
 async def test_invalid_then_valid_command_on_same_socket(
@@ -180,7 +222,7 @@ async def test_durable_chat_failure_sanitized_message(
         ),
     ]
     session_id, revision = await _setup_intake_http(http_base)
-    initial_revision = revision
+    client_message_id = uuid4()
 
     async with ws_connect(ws_url) as ws:
         await ws.send(
@@ -188,7 +230,7 @@ async def test_durable_chat_failure_sanitized_message(
                 {
                     "type": "send_message",
                     "session_id": session_id,
-                    "client_message_id": str(uuid4()),
+                    "client_message_id": str(client_message_id),
                     "request_id": str(uuid4()),
                     "expected_revision": revision,
                     "content": "trigger failure",
@@ -210,12 +252,19 @@ async def test_durable_chat_failure_sanitized_message(
         assert all(event_type == "token" for event_type in types[2:-1])
         assert types[-1] == "error"
 
+        progress = events[0]
+        acceptance_snapshot = events[1]["snapshot"]
+
+        assert error_event["session_id"] == session_id
+        assert error_event["turn_id"] == progress["turn"]["id"]
+        assert error_event["client_message_id"] == str(client_message_id)
+
         assert secret not in json.dumps(error_event)
         assert "language model" in error_event["error"]["message"].lower()
 
         trailing = await _recv_json(ws)
         assert trailing["type"] == "snapshot_changed"
-        assert trailing["snapshot"]["revision"] > initial_revision
+        assert trailing["snapshot"]["revision"] > acceptance_snapshot["revision"]
         assert trailing["snapshot"]["active_chat_turn"] is None
         assert trailing["snapshot"]["stage"] == "intake"
 
@@ -507,18 +556,21 @@ async def test_final_intake_schedules_assessment_operation(
                 break
 
         types = [event["type"] for event in final_events]
-        progress_index = types.index("message_in_progress")
-        snapshot_after_progress = types.index("snapshot_changed", progress_index + 1)
-        token_start = snapshot_after_progress + 1
-        completion_index = types.index("message_completed", token_start)
-        operation_index = types.index("operation_changed", completion_index + 1)
-        assessment_snapshot_index = types.index("snapshot_changed", operation_index + 1)
 
-        assert all(event_type == "token" for event_type in types[token_start:completion_index])
-        operation_event = final_events[operation_index]
-        assert operation_event["operation"]["status"] == "pending"
+        assert len(types) >= 6
+        assert types[:2] == ["message_in_progress", "snapshot_changed"]
+        assert types[-3:] == ["message_completed", "operation_changed", "snapshot_changed"]
+        assert types[2:-3]
+        assert all(event_type == "token" for event_type in types[2:-3])
+
+        operation_event = final_events[-2]
+        trailing = final_events[-1]
+
         assert operation_event["operation"]["kind"] == "assessment"
-        assert final_events[assessment_snapshot_index]["snapshot"]["stage"] == "assessment"
+        assert operation_event["operation"]["status"] == "pending"
+        assert operation_event["snapshot"]["stage"] == "assessment"
+        assert trailing["snapshot"]["stage"] == "assessment"
+        assert trailing["snapshot"]["revision"] == operation_event["snapshot"]["revision"]
         assert saw_assessment_snapshot
 
 
@@ -617,17 +669,16 @@ async def test_revision_conflict_includes_snapshot_and_retransmit_succeeds(
             == authoritative_revision
         )
 
-    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
-        history = await client.get(f"/api/v1/sessions/{session_id}")
-        assert not any(
-            message["client_message_id"] == str(client_message_id)
-            for message in history.json()["messages"]
-        )
+        async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
+            history = await client.get(f"/api/v1/sessions/{session_id}")
+            assert not any(
+                message["client_message_id"] == str(client_message_id)
+                for message in history.json()["messages"]
+            )
 
-    corrected_request_id = uuid4()
-    assert corrected_request_id != stale_request_id
+        corrected_request_id = uuid4()
+        assert corrected_request_id != stale_request_id
 
-    async with ws_connect(ws_url) as ws:
         await ws.send(
             json.dumps(
                 {
@@ -640,8 +691,20 @@ async def test_revision_conflict_includes_snapshot_and_retransmit_succeeds(
                 }
             )
         )
-        progress = await _recv_json(ws)
-        assert progress["type"] == "message_in_progress"
+        progress = await _recv_matching_progress(
+            ws,
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
         assert progress["session_id"] == session_id
         assert progress["turn"]["client_message_id"] == str(client_message_id)
         assert progress["turn"]["session_id"] == session_id
+
+        token_event = None
+        for _ in range(15):
+            event = await _recv_json(ws)
+            if event["type"] == "token":
+                token_event = event
+                break
+        assert token_event is not None
+        assert token_event["request_id"] == str(corrected_request_id)

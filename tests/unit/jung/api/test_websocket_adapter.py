@@ -14,12 +14,14 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from starlette.datastructures import Headers
 from starlette.websockets import WebSocketDisconnect
 
 from jung.api.app import ApiState
 from jung.api.settings import ApiSettings
 from jung.api.websocket import (
     _handle_chat_connection,
+    _origin_is_allowed,
     chat_websocket,
     mapping_context_for_event,
     recover_request_id,
@@ -28,6 +30,7 @@ from jung.composition import build_settings
 from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
+    RevisionConflict,
     StoredWorkFailure,
 )
 from jung.domain.models import (
@@ -88,6 +91,7 @@ def _default_settings(
     *,
     send_timeout: float = 5.0,
     close_timeout: float = 2.0,
+    allowed_origins: tuple[str, ...] = (),
 ) -> ApiSettings:
     return ApiSettings(
         application=build_settings(
@@ -96,6 +100,7 @@ def _default_settings(
             llm_api_key="",
             default_model="local-model",
         ),
+        allowed_origins=allowed_origins,
         websocket_send_timeout=send_timeout,
         websocket_close_timeout=close_timeout,
     )
@@ -107,7 +112,9 @@ class FakeWebSocket:
         *,
         api_state: ApiState,
         api_settings: ApiSettings,
+        headers: dict[str, str] | None = None,
     ) -> None:
+        self.headers = Headers(headers=headers or {})
         self.app = SimpleNamespace(
             state=SimpleNamespace(api=api_state, api_settings=api_settings)
         )
@@ -175,8 +182,13 @@ class SlowFakeWebSocket(FakeWebSocket):
         *,
         api_state: ApiState,
         api_settings: ApiSettings,
+        headers: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(api_state=api_state, api_settings=api_settings)
+        super().__init__(
+            api_state=api_state,
+            api_settings=api_settings,
+            headers=headers,
+        )
         self.first_send_started = asyncio.Event()
 
     async def send_json(self, data: dict[str, Any]) -> None:
@@ -190,19 +202,28 @@ class TrackingEventStream(EventStream):
         super().__init__(max_queue_size=max_queue_size)
         self._subscription_condition = asyncio.Condition()
         self._active_subscriptions = 0
+        self._subscription_entries = 0
+
+    @property
+    def total_subscription_entries(self) -> int:
+        return self._subscription_entries
 
     @asynccontextmanager
     async def subscribe(self):
-        async with self._subscription_condition:
-            self._active_subscriptions += 1
-            self._subscription_condition.notify_all()
+        registered = False
         try:
             async with super().subscribe() as events:
+                async with self._subscription_condition:
+                    self._active_subscriptions += 1
+                    self._subscription_entries += 1
+                    registered = True
+                    self._subscription_condition.notify_all()
                 yield events
         finally:
-            async with self._subscription_condition:
-                self._active_subscriptions -= 1
-                self._subscription_condition.notify_all()
+            if registered:
+                async with self._subscription_condition:
+                    self._active_subscriptions -= 1
+                    self._subscription_condition.notify_all()
 
     async def wait_for_subscriptions(self, count: int, *, timeout: float = 1.0) -> None:
         async with asyncio.timeout(timeout):
@@ -472,7 +493,7 @@ async def test_domain_error_uses_command_request_id() -> None:
 
 async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
     events = TrackingEventStream(max_queue_size=4)
-    settings = _default_settings(send_timeout=0.05, close_timeout=0.5)
+    settings = _default_settings(send_timeout=30.0, close_timeout=0.5)
 
     async def start_observer(
         fake: FakeWebSocket,
@@ -637,7 +658,7 @@ async def test_duplicate_pending_submit_emits_no_immediate_adapter_events() -> N
 
 
 async def test_dual_observer_healthy_receives_while_slow_blocked() -> None:
-    events = EventStream()
+    events = TrackingEventStream()
     settings = _default_settings(send_timeout=30.0)
 
     async def start_observer(fake: FakeWebSocket, *, block_first: bool) -> asyncio.Task[None]:
@@ -659,23 +680,22 @@ async def test_dual_observer_healthy_receives_while_slow_blocked() -> None:
     )
     slow_task = await start_observer(slow, block_first=True)
     healthy_task = await start_observer(healthy, block_first=False)
-    while not (slow.accepted and healthy.accepted):
-        await asyncio.sleep(0.01)
 
-    snapshot = AppSnapshot(
-        revision=1,
-        stage=Stage.SETUP,
-        profile_complete=False,
-        available_commands=frozenset(),
-    )
-    await events.publish(SnapshotChanged(snapshot))
-    await asyncio.sleep(0.05)
-
-    assert any(item.get("type") == "snapshot_changed" for item in healthy.sent)
-    slow.unblock_sends()
-    slow.queue_disconnect()
-    healthy.queue_disconnect()
-    await asyncio.gather(slow_task, healthy_task)
+    try:
+        await events.wait_for_subscriptions(2)
+        await events.publish(_snapshot_event(revision=1))
+        await healthy.wait_for_snapshot_revision(1)
+        assert any(item.get("type") == "snapshot_changed" for item in healthy.sent)
+    finally:
+        slow.unblock_sends()
+        if not slow_task.done():
+            slow.queue_disconnect()
+            slow_task.cancel()
+        if not healthy_task.done():
+            healthy.queue_disconnect()
+            healthy_task.cancel()
+        await asyncio.gather(slow_task, healthy_task, return_exceptions=True)
+        await events.wait_for_subscriptions(0)
 
 
 class DisconnectOnSendWebSocket(FakeWebSocket):
@@ -820,3 +840,157 @@ async def test_stored_work_failure_does_not_log_internal_error(
         if record.message == "Internal WebSocket command error"
     ]
     assert records == []
+
+
+@pytest.mark.parametrize(
+    ("origin", "allowed_origins", "expected"),
+    [
+        (None, (), True),
+        (None, ("http://frontend.test",), True),
+        ("http://frontend.test", ("http://frontend.test",), True),
+        ("http://evil.test", ("http://frontend.test",), False),
+        ("http://evil.test", (), False),
+        ("null", (), False),
+        ("null", ("null",), False),
+    ],
+)
+def test_origin_is_allowed_policy(
+    origin: str | None,
+    allowed_origins: tuple[str, ...],
+    expected: bool,
+) -> None:
+    headers = {"Origin": origin} if origin is not None else {}
+    fake = FakeWebSocket(
+        headers=headers,
+        api_state=ApiState(runtime=None, ready=False),
+        api_settings=_default_settings(allowed_origins=allowed_origins),
+    )
+    assert _origin_is_allowed(fake, fake.app.state.api_settings) is expected
+
+
+async def test_disallowed_origin_is_rejected_before_runtime_lookup() -> None:
+    fake = FakeWebSocket(
+        headers={"Origin": "http://evil.test"},
+        api_state=ApiState(runtime=None, ready=False),
+        api_settings=_default_settings(allowed_origins=("http://frontend.test",)),
+    )
+
+    await chat_websocket(fake)  # type: ignore[arg-type]
+
+    assert not fake.accepted
+    assert fake.closed
+    assert fake.close_code == 1008
+
+
+async def test_disallowed_origin_never_subscribes() -> None:
+    events = TrackingEventStream()
+    runtime = MockRuntime(
+        application=MockApplication(),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        headers={"Origin": "http://evil.test"},
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(allowed_origins=("http://frontend.test",)),
+    )
+
+    fake.queue_disconnect()
+
+    await asyncio.wait_for(chat_websocket(fake), timeout=1.0)  # type: ignore[arg-type]
+
+    assert not fake.accepted
+    assert fake.close_code == 1008
+    assert events.total_subscription_entries == 0
+
+
+async def test_allowed_configured_origin_subscribes_to_event_stream() -> None:
+    events = TrackingEventStream()
+    runtime = MockRuntime(
+        application=MockApplication(),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        headers={"Origin": "http://frontend.test"},
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(allowed_origins=("http://frontend.test",)),
+    )
+
+    task = asyncio.create_task(chat_websocket(fake))  # type: ignore[arg-type]
+    try:
+        await events.wait_for_subscriptions(1)
+        assert fake.accepted
+    finally:
+        fake.queue_disconnect()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await events.wait_for_subscriptions(0)
+
+
+async def test_revision_conflict_enrichment_failure_preserves_conflict_and_continues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stale_request_id = uuid4()
+    session_id = uuid4()
+    client_message_id = uuid4()
+    second_request_id = uuid4()
+    secret = "secret enrichment detail"
+    events = EventStream()
+    submit_message = AsyncMock(side_effect=[RevisionConflict(1, 2), None])
+    get_snapshot = AsyncMock(side_effect=RuntimeError(secret))
+    runtime = MockRuntime(
+        application=MockApplication(
+            submit_message=submit_message,
+            get_snapshot=get_snapshot,
+        ),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    stale_command = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "request_id": str(stale_request_id),
+            "expected_revision": 1,
+            "content": "stale",
+        }
+    )
+    second_command = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(uuid4()),
+            "request_id": str(second_request_id),
+            "expected_revision": 2,
+            "content": "retry",
+        }
+    )
+    fake.queue_text(stale_command)
+    fake.queue_text(second_command)
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.ERROR, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    assert submit_message.await_count == 2
+    assert get_snapshot.await_count == 1
+
+    error = next(item for item in fake.sent if item.get("type") == "error")
+    assert error["error"]["code"] == "state_conflict"
+    assert error["error"]["current_snapshot"] is None
+    assert secret not in caplog.text
+    assert secret not in json.dumps(fake.sent)
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "Failed to enrich WebSocket revision conflict"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert getattr(record, "exception_type", None) == "RuntimeError"
+    assert getattr(record, "request_id", None) == str(stale_request_id)

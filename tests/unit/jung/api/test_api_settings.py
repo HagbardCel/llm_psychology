@@ -178,23 +178,22 @@ def test_load_api_settings_websocket_timeout_overrides(
 
 
 @pytest.mark.parametrize(
-    ("env_value", "match"),
-    [
-        ("nan", "JUNG_WS_SEND_TIMEOUT"),
-        ("inf", "JUNG_WS_SEND_TIMEOUT"),
-        ("+inf", "JUNG_WS_SEND_TIMEOUT"),
-        ("-inf", "JUNG_WS_SEND_TIMEOUT"),
-    ],
+    "env_name",
+    ["JUNG_WS_SEND_TIMEOUT", "JUNG_WS_CLOSE_TIMEOUT"],
 )
-def test_load_api_settings_rejects_non_finite_websocket_timeout_env(
+@pytest.mark.parametrize(
+    "env_value",
+    ["nan", "inf", "+inf", "-inf"],
+)
+def test_load_api_settings_rejects_non_finite_ws_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    env_name: str,
     env_value: str,
-    match: str,
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("JUNG_WS_SEND_TIMEOUT", env_value)
-    with pytest.raises(ValueError, match=match):
+    monkeypatch.setenv(env_name, env_value)
+    with pytest.raises(ValueError, match=env_name):
         load_api_settings()
 
 

@@ -124,14 +124,32 @@ def _validation_envelope(request_id: UUID) -> ErrorEnvelope:
     )
 
 
+def _origin_is_allowed(websocket: WebSocket, settings: ApiSettings) -> bool:
+    origin = websocket.headers.get("origin")
+
+    if origin is None:
+        return True
+
+    if origin == "null":
+        return False
+
+    return origin in settings.allowed_origins
+
+
 @router.websocket("/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
+    settings: ApiSettings = websocket.app.state.api_settings
+
+    if not _origin_is_allowed(websocket, settings):
+        await websocket.close(code=1008)
+        return
+
     try:
         runtime = get_websocket_runtime(websocket.app.state.api)
     except ApiNotReady:
         await websocket.close()
         return
-    settings: ApiSettings = websocket.app.state.api_settings
+
     await _handle_chat_connection(websocket, runtime, settings)
 
 
