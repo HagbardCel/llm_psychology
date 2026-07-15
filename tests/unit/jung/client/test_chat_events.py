@@ -231,6 +231,32 @@ def test_token_unrelated_request_id_ignored() -> None:
     assert matches_token(token, identity) is False
 
 
+def test_token_matching_captured_turn_rejects_wrong_request_id() -> None:
+    session_id = uuid4()
+    turn_id = uuid4()
+    request_id = uuid4()
+    identity = ChatEventIdentity(
+        session_id=session_id,
+        client_message_id=uuid4(),
+        request_id=request_id,
+        turn_id=turn_id,
+    )
+    token = TokenEvent(
+        type="token",
+        session_id=session_id,
+        turn_id=turn_id,
+        request_id=uuid4(),
+        sequence=1,
+        text="hi",
+    )
+    with pytest.raises(ChatEventViolation) as exc_info:
+        matches_token(token, identity)
+    assert (
+        exc_info.value.expected_model
+        == "TokenEvent matching correlated request_id"
+    )
+
+
 def test_token_unrelated_turn_id_ignored() -> None:
     session_id = uuid4()
     turn_id = uuid4()

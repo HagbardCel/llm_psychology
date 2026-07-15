@@ -77,6 +77,10 @@ def matches_token(event: TokenEvent, identity: ChatEventIdentity) -> bool:
         raise ChatEventViolation(
             expected_model="TokenEvent matching captured session_id",
         )
+    if event.request_id != identity.request_id:
+        raise ChatEventViolation(
+            expected_model="TokenEvent matching correlated request_id",
+        )
     return True
 
 

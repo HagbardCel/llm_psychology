@@ -71,16 +71,6 @@ class ConsoleUncertainDelivery(Exception):
     """Outcome cannot safely be established."""
 
 
-class PromptKind(StrEnum):
-    CHAT_MESSAGE = "chat_message"
-    SETUP_NAME = "setup_name"
-    SETUP_LANGUAGE = "setup_language"
-    STYLE_SELECTION = "style_selection"
-    READY_ACTION = "ready_action"
-    OPERATION_RETRY = "operation_retry"
-    THERAPY_ACTION = "therapy_action"
-
-
 @dataclass(frozen=True)
 class ErrorDisplay:
     code: str
@@ -103,7 +93,6 @@ class LoadedPendingTurn:
 @dataclass(frozen=True)
 class PromptSpec:
     text: str
-    kind: PromptKind = PromptKind.CHAT_MESSAGE
 
 
 @dataclass
@@ -266,6 +255,19 @@ class TerminalConsoleOutput:
         print(f"\nClient error: {error}")
 
 
+def _bind_stream_turn(
+    state: ChatRenderState,
+    turn_id: UUID,
+) -> None:
+    if state.turn_id is None:
+        state.turn_id = turn_id
+        return
+    if state.turn_id != turn_id:
+        raise ChatEventViolation(
+            expected_model="consistent turn_id across correlated chat events",
+        )
+
+
 def require_command(commands: set[str], command: str) -> None:
     if command not in commands:
         raise JungProtocolError(
@@ -304,12 +306,9 @@ class ConsoleApp:
 
     async def read_input(self, prompt: PromptSpec) -> str:
         try:
-            value = await self._input.read(prompt)
+            return await self._input.read(prompt)
         except EOFError:
             raise ConsoleExitRequested from None
-        if prompt.kind is PromptKind.CHAT_MESSAGE:
-            self._observer.record("user_message", content=value)
-        return value
 
     async def _apply_mutation(
         self,
@@ -356,10 +355,7 @@ class ConsoleApp:
                     await self._render_session_history_if_needed(snapshot)
                     require_command(commands, "send_message")
                     content = await self.read_input(
-                        PromptSpec(
-                            text="\nYour message: ",
-                            kind=PromptKind.CHAT_MESSAGE,
-                        )
+                        PromptSpec(text="\nYour message: ")
                     )
                     snapshot = await self._handle_chat_turn(
                         snapshot,
@@ -377,7 +373,6 @@ class ConsoleApp:
                                 "\nEnter 'start' to begin therapy or "
                                 "'/exit' to quit: "
                             ),
-                            kind=PromptKind.READY_ACTION,
                         )
                     )
                     if action.strip() == "/exit":
@@ -403,7 +398,6 @@ class ConsoleApp:
                             text=(
                                 "\nYour message (or /quit to end session): "
                             ),
-                            kind=PromptKind.THERAPY_ACTION,
                         )
                     )
                     if action.strip() == "/quit":
@@ -429,15 +423,8 @@ class ConsoleApp:
             set(profile_snapshot.available_commands),
             "update_profile",
         )
-        name = await self.read_input(
-            PromptSpec(text="\nYour name: ", kind=PromptKind.SETUP_NAME)
-        )
-        language = await self.read_input(
-            PromptSpec(
-                text="Primary language: ",
-                kind=PromptKind.SETUP_LANGUAGE,
-            )
-        )
+        name = await self.read_input(PromptSpec(text="\nYour name: "))
+        language = await self.read_input(PromptSpec(text="Primary language: "))
         updated = ProfileWire(
             name=name.strip() or current.profile.name,
             primary_language=language.strip() or current.profile.primary_language,
@@ -461,10 +448,7 @@ class ConsoleApp:
         options = await self._client.get_styles()
         self._output.render_style_options(options)
         style_id = await self.read_input(
-            PromptSpec(
-                text="\nStyle id to select: ",
-                kind=PromptKind.STYLE_SELECTION,
-            )
+            PromptSpec(text="\nStyle id to select: ")
         )
         return await self._apply_mutation(
             self._client.select_style(
@@ -524,10 +508,7 @@ class ConsoleApp:
             while True:
                 action = (
                     await self.read_input(
-                        PromptSpec(
-                            text="\nEnter /retry or /exit: ",
-                            kind=PromptKind.OPERATION_RETRY,
-                        )
+                        PromptSpec(text="\nEnter /retry or /exit: ")
                     )
                 ).strip()
                 if action == "/retry":
@@ -786,6 +767,7 @@ class ConsoleApp:
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
                 expected_model="active session for chat",
             )
+        self._observer.record("user_message", content=content)
         intent = self._client.new_chat_intent(session.id, content)
         command = self._client.new_message_command(
             intent,
@@ -968,6 +950,7 @@ class ConsoleApp:
         try:
             if isinstance(event, MessageInProgressEvent):
                 if matches_progress(event, identity):
+                    _bind_stream_turn(render_state, event.turn.id)
                     new_identity = identity_after_progress(event, identity)
                     self._observer.record(
                         "ws_event",
@@ -983,6 +966,7 @@ class ConsoleApp:
 
             if isinstance(event, TokenEvent):
                 if matches_token(event, identity):
+                    _bind_stream_turn(render_state, event.turn_id)
                     self._append_token(render_state, event)
                     self._observer.record(
                         "ws_event",
@@ -993,6 +977,7 @@ class ConsoleApp:
 
             if isinstance(event, MessageCompletedEvent):
                 if matches_completion(event, identity):
+                    _bind_stream_turn(render_state, event.turn.id)
                     return ChatEventOutcome(
                         kind=ChatOutcomeKind.COMPLETION,
                         identity=identity,

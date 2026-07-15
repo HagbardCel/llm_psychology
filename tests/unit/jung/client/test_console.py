@@ -49,6 +49,7 @@ from jung.client.api_client import (
     JungConnectionClosed,
     JungProtocolError,
     JungTransportError,
+    ProtocolErrorKind,
 )
 from jung.client.console import (
     ChatRenderState,
@@ -162,6 +163,14 @@ class RecordingOutput:
 
     def render_client_error(self, error: Exception) -> None:
         self.client_errors.append(error)
+
+
+class RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record(self, event: str, **fields: object) -> None:
+        self.events.append((event, dict(fields)))
 
 
 class ScriptedInput:
@@ -346,11 +355,46 @@ def _app(
     *,
     inputs: ScriptedInput | None = None,
     output: RecordingOutput | None = None,
+    observer: RecordingObserver | None = None,
 ) -> ConsoleApp:
     return ConsoleApp(
         client=client,
         input=inputs or ScriptedInput(),
         output=output or RecordingOutput(),
+        observer=observer,
+    )
+
+
+def _token_event(
+    *,
+    session_id: UUID,
+    request_id: UUID,
+    turn_id: UUID,
+    sequence: int = 1,
+    text: str = "hi",
+) -> TokenEvent:
+    return TokenEvent(
+        type="token",
+        session_id=session_id,
+        turn_id=turn_id,
+        request_id=request_id,
+        sequence=sequence,
+        text=text,
+    )
+
+
+def _identity(
+    *,
+    session_id: UUID,
+    client_message_id: UUID | None = None,
+    request_id: UUID | None = None,
+    turn_id: UUID | None = None,
+) -> ChatEventIdentity:
+    return ChatEventIdentity(
+        session_id=session_id,
+        client_message_id=client_message_id or uuid4(),
+        request_id=request_id or uuid4(),
+        turn_id=turn_id,
     )
 
 
@@ -488,7 +532,8 @@ async def test_therapy_quit_command_vs_word_quit() -> None:
         session=session,
         commands=["send_message", "end_session"],
     )
-    app = _app(client, inputs=ScriptedInput("/quit"))
+    observer = RecordingObserver()
+    app = _app(client, inputs=ScriptedInput("/quit"), observer=observer)
     action = (await app.read_input(PromptSpec(text="> "))).strip()
     assert action == "/quit"
     with patch.object(app, "_end_active_session", AsyncMock(return_value=therapy)) as end:
@@ -498,8 +543,10 @@ async def test_therapy_quit_command_vs_word_quit() -> None:
                 await app._end_active_session(therapy)
             chat.assert_not_awaited()
             end.assert_awaited_once()
+    assert not any(event == "user_message" for event, _ in observer.events)
 
-    app = _app(client, inputs=ScriptedInput("quit"))
+    observer = RecordingObserver()
+    app = _app(client, inputs=ScriptedInput("quit"), observer=observer)
     action = (await app.read_input(PromptSpec(text="> "))).strip()
     assert action == "quit"
     with patch.object(app, "_handle_chat_turn", AsyncMock(return_value=therapy)) as chat:
@@ -675,6 +722,107 @@ async def test_chat_event_violation_maps_to_protocol_error() -> None:
             identity=identity,
             render_state=state,
         )
+
+
+async def test_token_then_conflicting_progress_raises_protocol_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    turn_b = uuid4()
+    identity = _identity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    with pytest.raises(JungProtocolError) as exc_info:
+        app._process_chat_event(
+            _progress_event(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                turn_id=turn_b,
+            ),
+            identity=identity,
+            render_state=state,
+        )
+    assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+async def test_token_then_conflicting_completion_raises_protocol_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    turn_b = uuid4()
+    identity = _identity(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    with pytest.raises(JungProtocolError) as exc_info:
+        app._process_chat_event(
+            _completion_event(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                turn_id=turn_b,
+            ),
+            identity=identity,
+            render_state=state,
+        )
+    assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
+
+
+async def test_conflicting_pre_progress_tokens_raise_protocol_error() -> None:
+    session_id = uuid4()
+    request_id = uuid4()
+    turn_a = uuid4()
+    turn_b = uuid4()
+    identity = _identity(session_id=session_id, request_id=request_id)
+    app = _app(_mock_client())
+    state = ChatRenderState()
+    app._process_chat_event(
+        _token_event(
+            session_id=session_id,
+            request_id=request_id,
+            turn_id=turn_a,
+        ),
+        identity=identity,
+        render_state=state,
+    )
+    with pytest.raises(JungProtocolError) as exc_info:
+        app._process_chat_event(
+            _token_event(
+                session_id=session_id,
+                request_id=request_id,
+                turn_id=turn_b,
+                sequence=2,
+            ),
+            identity=identity,
+            render_state=state,
+        )
+    assert exc_info.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
 
 
 async def test_different_pending_turn_not_adopted() -> None:
@@ -1004,12 +1152,14 @@ async def test_profile_setup_preserves_optional_fields() -> None:
     )
     client.get_profile = AsyncMock(return_value=profile)
     client.update_profile = AsyncMock(return_value=_snapshot(stage="intake", revision=1))
-    app = _app(client, inputs=ScriptedInput("New Name", "French"))
+    observer = RecordingObserver()
+    app = _app(client, inputs=ScriptedInput("New Name", "French"), observer=observer)
     await app._handle_setup()
     request = client.update_profile.await_args.args[0]
     assert isinstance(request, ProfileUpdateRequest)
     assert request.profile.date_of_birth == date(1990, 1, 2)
     assert request.profile.notes == "keep me"
+    assert not any(event == "user_message" for event, _ in observer.events)
 
 
 async def test_read_input_eof_raises_console_exit_requested() -> None:
@@ -1091,11 +1241,13 @@ async def test_style_selection_uses_snapshot_revision() -> None:
         )
     )
     client.select_style = AsyncMock(return_value=_snapshot(stage="ready", revision=6))
-    app = _app(client, inputs=ScriptedInput("cbt"))
+    observer = RecordingObserver()
+    app = _app(client, inputs=ScriptedInput("cbt"), observer=observer)
     await app._handle_style_selection(snapshot)
     request = client.select_style.await_args.args[0]
     assert isinstance(request, SelectStyleRequest)
     assert request.expected_revision == 5
+    assert not any(event == "user_message" for event, _ in observer.events)
 
 
 async def test_start_session_uses_snapshot_revision() -> None:
@@ -1228,7 +1380,8 @@ async def test_completion_after_ack_timeout_still_completes() -> None:
     after = _snapshot(stage="intake", revision=7, session=session)
     client.get_state = AsyncMock(return_value=after)
     client.reconcile_chat_turn = AsyncMock()
-    app = _app(client)
+    output = RecordingOutput()
+    app = _app(client, output=output)
 
     task = asyncio.create_task(app._handle_chat_turn(snapshot, content="hello"))
     try:
@@ -1245,6 +1398,41 @@ async def test_completion_after_ack_timeout_still_completes() -> None:
 
     assert result.revision == 7
     client.reconcile_chat_turn.assert_not_awaited()
+    assert output.assistant_direct == ["reply"]
+
+
+async def test_chat_input_recorded_before_transport_failure() -> None:
+    client = _mock_client()
+    session = _session(kind="therapy")
+    snapshot = _snapshot(
+        stage="therapy",
+        session=session,
+        commands=["send_message"],
+    )
+    observer = RecordingObserver()
+
+    @asynccontextmanager
+    async def failing_open_chat():
+        raise JungTransportError("WebSocket handshake")
+        yield  # pragma: no cover
+
+    client.open_chat = failing_open_chat
+    app = _app(client, observer=observer)
+
+    with pytest.raises(JungTransportError):
+        await app._handle_chat_turn(
+            snapshot,
+            content="I slept badly again.",
+        )
+
+    user_events = [
+        (event, fields)
+        for event, fields in observer.events
+        if event == "user_message"
+    ]
+    assert user_events == [
+        ("user_message", {"content": "I slept badly again."}),
+    ]
 
 
 async def test_pending_poll_completion_refreshes_state() -> None:
