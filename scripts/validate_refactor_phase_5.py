@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import tempfile
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args, get_origin
@@ -134,13 +135,17 @@ def _extract_http_operations(app: object) -> frozenset[tuple[str, str]]:
 
 def _extract_websocket_paths(app: object) -> tuple[str, ...]:
     paths: set[str] = set()
-    for route in getattr(app, "routes", ()):
-        router = getattr(route, "original_router", None)
-        if router is None:
-            continue
-        for subroute in router.routes:
-            if type(subroute).__name__ == "APIWebSocketRoute":
-                paths.add(subroute.path)
+
+    def collect(routes: Iterable[object]) -> None:
+        for route in routes:
+            if type(route).__name__ == "APIWebSocketRoute":
+                paths.add(route.path)
+
+            included = getattr(route, "original_router", None)
+            included_routes = getattr(included, "routes", ())
+            collect(included_routes)
+
+    collect(getattr(app, "routes", ()))
     return tuple(sorted(paths))
 
 

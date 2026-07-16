@@ -20,6 +20,7 @@ REQUIRED_PUBLIC_FILES = _MODULE.REQUIRED_PUBLIC_FILES
 REQUIRED_PHASE_5_TEST_FILES = _MODULE.REQUIRED_PHASE_5_TEST_FILES
 RuntimeContract = _MODULE.RuntimeContract
 _collect_schema_semantics = _MODULE._collect_schema_semantics
+_extract_websocket_paths = _MODULE._extract_websocket_paths
 extract_runtime_contract = _MODULE.extract_runtime_contract
 validate_repository = _MODULE.validate_repository
 validate_runtime_contract = _MODULE.validate_runtime_contract
@@ -80,6 +81,31 @@ def test_extract_runtime_contract_does_not_invoke_runtime_factory() -> None:
     assert contract.websocket_paths == ("/api/v1/chat",)
     assert "send_message" in contract.command_discriminators
     assert "token" in contract.event_discriminators
+
+
+def test_extract_websocket_paths_retains_direct_and_nested_routes() -> None:
+    from fastapi import APIRouter, FastAPI, WebSocket
+
+    app = FastAPI()
+
+    outer = APIRouter(prefix="/api/v1")
+    inner = APIRouter()
+
+    @inner.websocket("/chat")
+    async def included_chat(_websocket: WebSocket) -> None:
+        pass
+
+    outer.include_router(inner)
+    app.include_router(outer)
+
+    @app.websocket("/extra")
+    async def direct_extra(_websocket: WebSocket) -> None:
+        pass
+
+    assert _extract_websocket_paths(app) == (
+        "/chat",
+        "/extra",
+    )
 
 
 def test_valid_static_tree_passes(tmp_path: Path) -> None:
@@ -268,6 +294,20 @@ def test_schema_user_id_discriminator_mapping_key_is_flagged() -> None:
     assert any(reason == "discriminator mapping key user_id" for _, reason in hits)
 
 
+def test_schema_user_id_mapping_value_is_flagged() -> None:
+    schema = {
+        "discriminator": {
+            "propertyName": "type",
+            "mapping": {"profile": "#/components/schemas/user_id"},
+        },
+    }
+    hits = _collect_schema_semantics(schema)
+    assert any(
+        reason == "discriminator mapping value terminal user_id"
+        for _, reason in hits
+    )
+
+
 def test_schema_user_id_ref_terminal_is_flagged() -> None:
     schema = {"$ref": "#/components/schemas/user_id"}
     hits = _collect_schema_semantics(schema)
@@ -319,3 +359,19 @@ def test_validate_runtime_contract_reports_discriminator_mismatch() -> None:
         "unexpected command discriminator: other_command" in message
         for message in messages
     )
+
+
+def test_validate_runtime_contract_reports_event_discriminator_mismatch() -> None:
+    contract = RuntimeContract(
+        http_operations=_MODULE.EXPECTED_HTTP_OPERATIONS,
+        websocket_paths=("/api/v1/chat",),
+        command_discriminators=frozenset({"send_message"}),
+        event_discriminators=(
+            _MODULE.EXPECTED_EVENT_DISCRIMINATORS - {"token"}
+        ) | {"unexpected_event"},
+        openapi_schemas={},
+        ws_schemas={},
+    )
+    messages = [item.message for item in validate_runtime_contract(contract)]
+    assert "missing event discriminator: token" in messages
+    assert "unexpected event discriminator: unexpected_event" in messages

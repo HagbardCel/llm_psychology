@@ -279,7 +279,8 @@ validate-refactor-phase-5: prepare-runtime-dirs
 		tests/integration/jung/client \
 		scripts/validate_refactor_phase_5.py \
 		tests/unit/test_validate_refactor_phase_5.py \
-		tests/unit/test_recording_fake_llm.py
+		tests/unit/test_recording_fake_llm.py \
+		tests/unit/jung/test_import_boundaries.py
 	docker compose --profile test run --rm \
 		-v "$(PWD)/Makefile:/app/Makefile:ro" \
 		test python scripts/validate_refactor_phase_5.py
