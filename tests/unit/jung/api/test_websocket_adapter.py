@@ -778,10 +778,13 @@ async def test_internal_error_logs_without_sensitive_content(
     records = [
         record
         for record in caplog.records
-        if record.message == "Internal WebSocket command error"
+        if record.message == "websocket_command_rejected"
+        and getattr(record, "request_id", None) == str(request_id)
+        and getattr(record, "error_code", None) == "internal_error"
     ]
     assert len(records) == 1
     record = records[0]
+    assert record.levelno == logging.ERROR
     assert getattr(record, "exception_type", None) == "InvariantViolation"
     assert getattr(record, "request_id", None) == str(request_id)
     assert getattr(record, "session_id", None) == str(session_id)
@@ -837,7 +840,8 @@ async def test_stored_work_failure_does_not_log_internal_error(
     records = [
         record
         for record in caplog.records
-        if record.message == "Internal WebSocket command error"
+        if record.message == "websocket_command_rejected"
+        and getattr(record, "error_code", None) == "internal_error"
     ]
     assert records == []
 
@@ -937,7 +941,9 @@ async def test_revision_conflict_enrichment_failure_preserves_conflict_and_conti
     second_request_id = uuid4()
     secret = "secret enrichment detail"
     events = EventStream()
-    submit_message = AsyncMock(side_effect=[RevisionConflict(1, 2), None])
+    submit_message = AsyncMock(
+        side_effect=[RevisionConflict(1, 2), _chat_turn(status=ChatTurnStatus.PENDING)]
+    )
     get_snapshot = AsyncMock(side_effect=RuntimeError(secret))
     runtime = MockRuntime(
         application=MockApplication(
@@ -995,3 +1001,152 @@ async def test_revision_conflict_enrichment_failure_preserves_conflict_and_conti
     record = records[0]
     assert getattr(record, "exception_type", None) == "RuntimeError"
     assert getattr(record, "request_id", None) == str(stale_request_id)
+
+
+async def test_websocket_lifecycle_logs_connected_and_disconnected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events = EventStream()
+    runtime = MockRuntime(application=MockApplication(), events=events)
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.INFO, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    connected = [
+        record
+        for record in caplog.records
+        if record.message == "websocket_connected"
+    ]
+    disconnected = [
+        record
+        for record in caplog.records
+        if record.message == "websocket_disconnected"
+    ]
+    assert len(connected) == 1
+    assert len(disconnected) == 1
+    connection_id = getattr(connected[0], "connection_id", None)
+    assert connection_id is not None
+    assert getattr(disconnected[0], "connection_id", None) == connection_id
+    assert getattr(disconnected[0], "duration_ms", None) is not None
+
+
+async def test_chat_command_resolved_logs_turn_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = uuid4()
+    turn = _chat_turn(status=ChatTurnStatus.PENDING)
+    events = EventStream()
+    runtime = MockRuntime(
+        application=MockApplication(
+            submit_message=AsyncMock(return_value=turn),
+        ),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(turn.session_id),
+                "client_message_id": str(turn.client_message_id),
+                "request_id": str(request_id),
+                "expected_revision": 0,
+                "content": "hello",
+            }
+        )
+    )
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.INFO, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "chat_command_resolved"
+        and getattr(record, "request_id", None) == str(request_id)
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert getattr(record, "turn_id", None) == str(turn.id)
+    assert getattr(record, "turn_status", None) == "pending"
+    assert getattr(record, "session_id", None) == str(turn.session_id)
+    assert getattr(record, "client_message_id", None) == str(turn.client_message_id)
+
+
+async def test_malformed_json_logs_websocket_protocol_rejected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events = EventStream()
+    runtime = MockRuntime(application=MockApplication(), events=events)
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text("not-json")
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.INFO, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "websocket_protocol_rejected"
+    ]
+    assert len(records) == 1
+    assert getattr(records[0], "error_code", None) == "validation_error"
+    assert getattr(records[0], "request_id", None) is not None
+
+
+async def test_domain_error_logs_websocket_command_rejected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    command_id = uuid4()
+    session_id = uuid4()
+    client_message_id = uuid4()
+    events = EventStream()
+    runtime = MockRuntime(
+        application=MockApplication(
+            submit_message=AsyncMock(side_effect=InvalidCommand("nope"))
+        ),
+        events=events,
+    )
+    fake = FakeWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(command_id),
+                "expected_revision": 0,
+                "content": "hello",
+            }
+        )
+    )
+    fake.queue_disconnect()
+
+    with caplog.at_level(logging.INFO, logger="jung.api.websocket"):
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "websocket_command_rejected"
+        and getattr(record, "error_code", None) == "invalid_command"
+        and getattr(record, "request_id", None) == str(command_id)
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
