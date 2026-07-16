@@ -322,6 +322,9 @@ class ConsoleApp:
             if exc.code == "state_conflict" and exc.current_snapshot is not None:
                 self._output.render_command_rejection(_envelope_from_api_error(exc))
                 return exc.current_snapshot
+            if exc.code == "invalid_command":
+                self._output.render_command_rejection(_envelope_from_api_error(exc))
+                return exc.current_snapshot or await self._client.get_state()
             raise
         return snapshot_of(result)
 

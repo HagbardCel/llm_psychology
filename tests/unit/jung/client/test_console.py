@@ -1363,6 +1363,55 @@ async def test_token_renders_through_process_chat_event() -> None:
     assert app._output.assistant_tokens == ["hi"]
 
 
+async def test_style_selection_recovers_from_invalid_command_through_run() -> None:
+    client = _mock_client()
+    styles = StyleOptionsResponse(
+        styles=[StyleSummaryResponse(id="cbt", name="CBT", description="")],
+        recommendations=[],
+    )
+    initial = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    refreshed = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    ready = _snapshot(stage="ready", revision=6, commands=["start_session"])
+
+    client.get_state = AsyncMock(side_effect=[initial, refreshed])
+    client.get_styles = AsyncMock(return_value=styles)
+    client.select_style = AsyncMock(
+        side_effect=[
+            JungApiError(
+                status=409,
+                error=ErrorResponse(
+                    code="invalid_command",
+                    message="unknown style",
+                    request_id=uuid4(),
+                    retryable=False,
+                    current_snapshot=None,
+                ),
+            ),
+            ready,
+        ]
+    )
+
+    output = RecordingOutput()
+    app = _app(
+        client,
+        inputs=ScriptedInput("unknown", "cbt", "/exit"),
+        output=output,
+    )
+
+    with pytest.raises(ConsoleExitRequested):
+        await app.run()
+
+    assert len(output.command_rejections) == 1
+    assert client.get_state.await_count == 2
+    assert client.get_styles.await_count == 2
+    assert client.select_style.await_count == 2
+    second_request = client.select_style.await_args_list[1].args[0]
+    assert isinstance(second_request, SelectStyleRequest)
+    assert second_request.expected_revision == refreshed.revision
+    assert any(snap.stage == "ready" for snap in output.snapshots)
+    assert output.snapshots[-1].stage == "ready"
+
+
 async def test_style_selection_uses_snapshot_revision() -> None:
     client = _mock_client()
     snapshot = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
