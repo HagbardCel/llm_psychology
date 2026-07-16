@@ -121,6 +121,7 @@ services:
       - ./schemas:/app/schemas:ro
       - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./Makefile:/app/Makefile:ro
       - ./pytest.ini:/app/pytest.ini:ro
       - test-data:/app/data
     environment:

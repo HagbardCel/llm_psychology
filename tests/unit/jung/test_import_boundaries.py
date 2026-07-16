@@ -422,3 +422,27 @@ def test_phase5_client_import_allow_list_rejects_unsupported_imports(
     )
 
     assert _client_import_violations(modules)
+
+
+def test_phase5_core_does_not_import_adapter_frameworks() -> None:
+    forbidden_roots = {
+        "fastapi",
+        "httpx",
+        "starlette",
+        "uvicorn",
+        "websockets",
+    }
+    violations: list[str] = []
+
+    for path in sorted(JUNG_SRC.rglob("*.py")):
+        relative = path.relative_to(JUNG_SRC)
+        if relative.parts[0] in {"api", "client"}:
+            continue
+
+        for module in _resolved_imported_modules(path):
+            if module.split(".", 1)[0] in forbidden_roots:
+                violations.append(
+                    f"{path.relative_to(ROOT)} imports {module}"
+                )
+
+    assert violations == []

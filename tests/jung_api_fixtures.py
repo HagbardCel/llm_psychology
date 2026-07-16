@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 import pytest
 import pytest_asyncio
 import uvicorn
+from fastapi import FastAPI
 from httpx import ASGITransport
 
 from jung.api.app import create_app
@@ -21,11 +22,121 @@ from jung.api.settings import ApiSettings
 from jung.composition import Settings as CompositionSettings
 from jung.composition import build_settings
 from jung.llm.fake import Expectation, FakeLLM
+from jung.llm.gateway import ChatMessage, LLMTask, ModelPolicy
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.jung.application_fixtures import (
     TestApplicationRuntime,
     build_test_application,
 )
+
+T = TypeVar("T", bound=object)
+
+
+class RecordingFakeLLM:
+    """Test-only wrapper; records LLMTask at outermost client-facing entry only."""
+
+    def __init__(self, delegate: FakeLLM) -> None:
+        self._delegate = delegate
+        self._recorded_tasks: list[LLMTask] = []
+
+    @property
+    def recorded_tasks(self) -> tuple[LLMTask, ...]:
+        return tuple(self._recorded_tasks)
+
+    async def generate_structured(
+        self,
+        messages: Sequence[ChatMessage],
+        output_type: type[T],
+        policy: ModelPolicy,
+        validate_result: Callable[[T], T] | None = None,
+    ) -> T:
+        self._recorded_tasks.append(policy.task)
+        return await self._delegate.generate_structured(
+            messages=messages,
+            output_type=output_type,
+            policy=policy,
+            validate_result=validate_result,
+        )
+
+    async def stream_text(
+        self,
+        messages: Sequence[ChatMessage],
+        policy: ModelPolicy,
+    ) -> AsyncIterator[str]:
+        self._recorded_tasks.append(policy.task)
+        async for chunk in self._delegate.stream_text(messages, policy):
+            yield chunk
+
+    def assert_exhausted(self) -> None:
+        self._delegate.assert_exhausted()
+
+    async def aclose(self) -> None:
+        close = getattr(self._delegate, "aclose", None)
+        if close is not None:
+            await close()
+
+
+class HoldingFakeLLM(FakeLLM):
+    """FakeLLM delegate that holds after the first streamed chunk."""
+
+    def __init__(
+        self,
+        expectations: Sequence[Expectation],
+        *,
+        release_event: asyncio.Event | None = None,
+    ) -> None:
+        super().__init__(expectations)
+        self._release_event = release_event or asyncio.Event()
+        self.first_chunk_emitted = asyncio.Event()
+
+    def release(self) -> None:
+        self._release_event.set()
+
+    async def stream_text(
+        self,
+        messages: Sequence[ChatMessage],
+        policy: ModelPolicy,
+    ) -> AsyncIterator[str]:
+        held = False
+        async for chunk in super().stream_text(messages, policy):
+            yield chunk
+            if not held:
+                held = True
+                self.first_chunk_emitted.set()
+                await self._release_event.wait()
+
+
+@dataclass(frozen=True)
+class TestApiApp:
+    app: FastAPI
+    fake_llm: RecordingFakeLLM
+    store_path: Path
+
+
+def create_test_api_app(
+    *,
+    store: SQLiteStore,
+    fake_llm: RecordingFakeLLM,
+    api_settings: ApiSettings | None = None,
+) -> TestApiApp:
+    settings = api_settings or ApiSettings(
+        application=build_settings(
+            database_path=store.database_path,
+            llm_base_url="http://fake.test/v1",
+            llm_api_key="fake",
+            default_model="fake",
+        ),
+        allowed_origins=("http://frontend.test",),
+    )
+    app = create_app(
+        settings,
+        runtime_factory=runtime_factory(store, fake_llm),
+    )
+    return TestApiApp(
+        app=app,
+        fake_llm=fake_llm,
+        store_path=store.database_path,
+    )
 
 
 @dataclass
@@ -65,7 +176,7 @@ def api_settings(store_path: Path) -> ApiSettings:
 
 def runtime_factory(
     store: SQLiteStore,
-    fake_llm: FakeLLM,
+    fake_llm: FakeLLM | RecordingFakeLLM,
     runtime_probe: RuntimeProbe | None = None,
 ) -> Callable[[CompositionSettings], Any]:
     @asynccontextmanager
