@@ -481,6 +481,8 @@ Expose the new application through the final API and switch the console to it.
 
 ## Phase 6 — Cutover and legacy deletion
 
+Phase 5 handoff: the authoritative deletion checklist lives in [deletion-inventory.md](deletion-inventory.md), grouped by **Owner PR** with **Confidence** ratings. Run `make validate-refactor-phase-5` before starting Phase 6 slices; do not delete legacy runtime paths until the corresponding inventory row’s blocker is cleared and characterization coverage exists.
+
 ### Goal
 
 Remove the old architecture completely and make the new implementation the only runtime.

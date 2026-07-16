@@ -1,7 +1,7 @@
 ---
 owner: engineering
-status: proposed
-last_reviewed: 2026-07-14
+status: completed
+last_reviewed: 2026-07-16
 review_cycle_days: 30
 source_of_truth_for: Detailed implementation plan for architecture refactor Phase 5
 ---
@@ -1908,117 +1908,119 @@ Mitigation:
 
 ### Architecture
 
-- [ ] Phase 5 remains an adapter/reference-client change.
-- [ ] API routes call only `TherapyApplication` reads and commands.
-- [ ] API code never accesses `SQLiteStore`, processors, or LLM directly.
-- [ ] Client code never imports application/core internals.
-- [ ] Core code imports no API/client framework.
-- [ ] No service locator, dispatcher framework, broker, or event store was introduced.
-- [ ] One FastAPI lifespan owns one `ApplicationRuntime` context.
+- [x] Phase 5 remains an adapter/reference-client change.
+- [x] API routes call only `TherapyApplication` reads and commands.
+- [x] API code never accesses `SQLiteStore`, processors, or LLM directly.
+- [x] Client code never imports application/core internals.
+- [x] Core code imports no API/client framework.
+- [x] No service locator, dispatcher framework, broker, or event store was introduced.
+- [x] One FastAPI lifespan owns one `ApplicationRuntime` context.
 
 ### Contracts
 
-- [ ] All requests and responses use named Pydantic models.
-- [ ] Incoming models forbid unknown fields.
-- [ ] No `user_id` exists in v1.
-- [ ] Domain-to-wire differences are explicit mappings.
-- [ ] Commands have deterministic wire order.
-- [ ] Summary and detail responses expose only intended fields.
-- [ ] Style recommendations are available without exposing assessment internals.
-- [ ] Fresh profile absence is documented and tested.
+- [x] All requests and responses use named Pydantic models.
+- [x] Incoming models forbid unknown fields.
+- [x] No `user_id` exists in v1.
+- [x] Domain-to-wire differences are explicit mappings.
+- [x] Commands have deterministic wire order.
+- [x] Summary and detail responses expose only intended fields.
+- [x] Style recommendations are available without exposing assessment internals.
+- [x] Fresh profile absence is documented and tested.
 
 ### HTTP
 
-- [ ] Exact endpoint matrix is implemented.
-- [ ] State-changing requests require `expected_revision`.
-- [ ] Correct `200`, `201`, and `202` statuses are used.
-- [ ] No generic workflow or job route exists.
-- [ ] Health represents initialized process readiness only.
-- [ ] OpenAPI contains the exact target path set.
+- [x] Exact endpoint matrix is implemented.
+- [x] State-changing requests require `expected_revision`.
+- [x] Correct `200`, `201`, and `202` statuses are used.
+- [x] No generic workflow or job route exists.
+- [x] Health represents initialized process readiness only.
+- [x] OpenAPI contains the exact target path set.
 
 ### Errors
 
-- [ ] Stable error codes map consistently.
-- [ ] Revision conflict includes current snapshot when available.
-- [ ] Request validation uses the stable envelope.
-- [ ] Request IDs are returned and logged.
-- [ ] Provider/internal diagnostics never reach clients.
-- [ ] Durable retryability is preserved.
+- [x] Stable error codes map consistently.
+- [x] Revision conflict includes current snapshot when available.
+- [x] Request validation uses the stable envelope.
+- [x] Request IDs are returned and logged.
+- [x] Provider/internal diagnostics never reach clients.
+- [x] Durable retryability is preserved.
 
 ### WebSocket
 
-- [ ] Only `send_message` is accepted from clients.
-- [ ] Server events form a validated discriminated union.
-- [ ] Event mapping preserves application order.
-- [ ] Token sequence is unchanged.
-- [ ] Disconnect cannot cancel accepted work.
-- [ ] No replay buffer exists.
-- [ ] Slow client handling is bounded.
-- [ ] Multiple observers work.
-- [ ] No legacy events are emitted.
+- [x] Only `send_message` is accepted from clients.
+- [x] Server events form a validated discriminated union.
+- [x] Event mapping preserves application order.
+- [x] Token sequence is unchanged.
+- [x] Disconnect cannot cancel accepted work.
+- [x] No replay buffer exists.
+- [x] Slow client handling is bounded.
+- [x] Multiple observers work.
+- [x] No legacy events are emitted.
 
 ### Client
 
-- [ ] `JungApiClient` owns all networking and validation.
-- [ ] Console contains no route strings or JSON parsing.
-- [ ] Typed errors include code, status, request ID, and snapshot where applicable.
-- [ ] State-changing HTTP calls are not silently retried.
-- [ ] WebSocket reconnect is explicit.
-- [ ] Uncertain chat delivery reconciles through durable reads.
-- [ ] Resources close cleanly.
+- [x] `JungApiClient` owns all networking and validation.
+- [x] Console contains no route strings or JSON parsing.
+- [x] Typed errors include code, status, request ID, and snapshot where applicable.
+- [x] State-changing HTTP calls are not silently retried.
+- [x] WebSocket reconnect is explicit.
+- [x] Uncertain chat delivery reconciles through durable reads.
+- [x] Resources close cleanly.
 
 ### Console
 
-- [ ] No profile selection, login, or user ID flow remains in the target path.
-- [ ] Snapshot and available commands drive behavior.
-- [ ] Recommendations are displayed from `GET /styles`.
-- [ ] Chat finalizes from `message_completed`, not token concatenation alone.
-- [ ] Partial buffers are discarded after failure/reconnect.
-- [ ] Failed operations can be retried only when server permits.
-- [ ] Existing useful input providers and event sinks are retained without legacy protocol coupling.
+- [x] No profile selection, login, or user ID flow remains in the target path.
+- [x] Snapshot and available commands drive behavior.
+- [x] Recommendations are displayed from `GET /styles`.
+- [x] Chat finalizes from `message_completed`, not token concatenation alone.
+- [x] Partial buffers are discarded after failure/reconnect.
+- [x] Failed operations can be retried only when server permits.
+- [x] Existing useful input providers and event sinks are retained without legacy protocol coupling.
 
 ### Tests and probes
 
-- [ ] Contract and mapper unit tests pass.
-- [ ] HTTP integration tests use real application/store and `FakeLLM`.
-- [ ] WebSocket tests use a real ephemeral server.
-- [ ] Client tests use the real API boundary.
-- [ ] Deterministic console probe passes end to end.
-- [ ] Restart, retry, duplicate, disconnect, and slow-client cases are covered.
-- [ ] Phase 2–4 tests remain green.
-- [ ] Legacy characterization tests remain green until Phase 6.
-- [ ] Optional local-model smoke evidence is recorded when required.
+- [x] Contract and mapper unit tests pass.
+- [x] HTTP integration tests use real application/store and `FakeLLM`.
+- [x] WebSocket tests use a real ephemeral server.
+- [x] Client tests use the real API boundary.
+- [x] Deterministic console probe passes end to end.
+- [x] Restart, retry, duplicate, disconnect, and slow-client cases are covered.
+- [x] Phase 2–4 tests remain green.
+- [x] Legacy characterization tests remain green until Phase 6.
+- [x] Optional local-model smoke evidence is recorded when required.
 
 ## 25. Phase 5 exit criteria
 
 All criteria are blocking:
 
-- [ ] FastAPI wraps the Phase 4 `application_context()` without duplicating lifecycle logic.
-- [ ] Startup recovery completes before the API reports healthy.
-- [ ] All accepted `/api/v1` HTTP routes are implemented.
-- [ ] `/api/v1/chat` implements the accepted command/event contract.
-- [ ] No target endpoint accepts `user_id`.
-- [ ] No generic workflow mutation or job API exists.
-- [ ] Explicit wire DTOs prevent internal model leakage.
-- [ ] Style recommendations are available through the public API with sensitive fields redacted.
-- [ ] Fresh setup/profile-read behavior is coherent and documented.
-- [ ] Stable error mapping and request IDs are implemented.
-- [ ] Revision conflicts return the authoritative snapshot when available.
-- [ ] WebSocket disconnects do not cancel accepted chat or operations.
-- [ ] Tokens remain ephemeral and unreplayed.
-- [ ] Slow subscribers cannot block accepted work indefinitely.
-- [ ] OpenAPI contains the exact target HTTP contract and no legacy paths.
-- [ ] `JungApiClient` validates every HTTP response and WebSocket event.
-- [ ] Console networking occurs only through `JungApiClient`.
-- [ ] Target console uses only `/api/v1`.
-- [ ] Target console contains no login/profile-selection/user-ID flow.
-- [ ] Deterministic setup-to-ready console probe passes.
-- [ ] Deterministic therapy-to-ready console probe passes.
-- [ ] Restart, retry, duplicate chat, and disconnect scenarios pass.
-- [ ] API/client/core import-boundary validation passes.
-- [ ] Phase 2, Phase 3, and Phase 4 tests remain green.
-- [ ] The target API and console have no dependency on the legacy runtime.
-- [ ] Legacy and target APIs are not documented as concurrently supported contracts.
+> **Phase 5 exit evidence (2026-07-16):** `make validate-refactor-phase-5` — scoped ruff, `scripts/validate_refactor_phase_5.py` static/runtime checks, and `phase-5-test` (unit/integration resilience plus `_phase-5-console-v1` E2E). Phase 6 handoff: [deletion-inventory.md](deletion-inventory.md).
+
+- [x] FastAPI wraps the Phase 4 `application_context()` without duplicating lifecycle logic.
+- [x] Startup recovery completes before the API reports healthy.
+- [x] All accepted `/api/v1` HTTP routes are implemented.
+- [x] `/api/v1/chat` implements the accepted command/event contract.
+- [x] No target endpoint accepts `user_id`.
+- [x] No generic workflow mutation or job API exists.
+- [x] Explicit wire DTOs prevent internal model leakage.
+- [x] Style recommendations are available through the public API with sensitive fields redacted.
+- [x] Fresh setup/profile-read behavior is coherent and documented.
+- [x] Stable error mapping and request IDs are implemented.
+- [x] Revision conflicts return the authoritative snapshot when available.
+- [x] WebSocket disconnects do not cancel accepted chat or operations.
+- [x] Tokens remain ephemeral and unreplayed.
+- [x] Slow subscribers cannot block accepted work indefinitely.
+- [x] OpenAPI contains the exact target HTTP contract and no legacy paths.
+- [x] `JungApiClient` validates every HTTP response and WebSocket event.
+- [x] Console networking occurs only through `JungApiClient`.
+- [x] Target console uses only `/api/v1`.
+- [x] Target console contains no login/profile-selection/user-ID flow.
+- [x] Deterministic setup-to-ready console probe passes.
+- [x] Deterministic therapy-to-ready console probe passes.
+- [x] Restart, retry, duplicate chat, and disconnect scenarios pass.
+- [x] API/client/core import-boundary validation passes.
+- [x] Phase 2, Phase 3, and Phase 4 tests remain green.
+- [x] The target API and console have no dependency on the legacy runtime.
+- [x] Legacy and target APIs are not documented as concurrently supported contracts.
 
 ## 26. Definition of done
 
