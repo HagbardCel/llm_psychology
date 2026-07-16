@@ -285,6 +285,8 @@ validate-refactor-phase-5: prepare-runtime-dirs
 		tests/integration/jung/test_application_composition.py \
 		tests/unit/jung/test_composition_settings.py \
 		tests/unit/jung/llm/test_openai_compatible.py \
+		tests/unit/jung/api \
+		tests/unit/jung/client \
 		scripts/validate_refactor_phase_5.py \
 		tests/unit/test_validate_refactor_phase_5.py \
 		tests/unit/test_recording_fake_llm.py \

@@ -203,6 +203,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     )
 
     async with application_context(settings) as runtime:
+        raw_llm = runtime.llm
         snapshot = await runtime.application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
 
@@ -212,6 +213,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     assert config.extra_body == {"global_flag": True}
     assert config.task_extra_body == {LLMTask.THERAPY_RESPONSE: {"task_flag": False}}
     assert len(tracing_calls) == 1
+    assert tracing_calls[0][0] is raw_llm
     assert tracing_calls[0][1] is True
 
 

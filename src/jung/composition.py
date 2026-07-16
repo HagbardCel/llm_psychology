@@ -79,9 +79,14 @@ class Settings:
         if (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout)
             or timeout <= 0
         ):
+            raise ValueError("shutdown_timeout_seconds must be finite and positive")
+        try:
+            finite_timeout = math.isfinite(float(timeout))
+        except OverflowError:
+            finite_timeout = False
+        if not finite_timeout:
             raise ValueError("shutdown_timeout_seconds must be finite and positive")
 
         queue_size = self.event_queue_size
@@ -91,6 +96,9 @@ class Settings:
             or queue_size <= 0
         ):
             raise ValueError("event_queue_size must be a positive integer")
+
+        if self.log_prompt_previews and not self.enable_llm_tracing:
+            raise ValueError("log_prompt_previews requires enable_llm_tracing")
 
 
 def _parse_default_headers(
@@ -115,6 +123,21 @@ def _reject_null(path: str, value: object) -> None:
         raise ValueError(f"{path} must not be null")
 
 
+def _coerce_finite_float(path: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a finite number")
+
+    try:
+        result = float(value)
+    except OverflowError:
+        raise ValueError(f"{path} must be a finite number") from None
+
+    if not math.isfinite(result):
+        raise ValueError(f"{path} must be a finite number")
+
+    return result
+
+
 def _parse_task_model(path: str, value: object) -> str:
     _reject_null(path, value)
     if not isinstance(value, str):
@@ -127,20 +150,16 @@ def _parse_task_model(path: str, value: object) -> str:
 
 def _parse_task_temperature(path: str, value: object) -> float:
     _reject_null(path, value)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{path} must be a finite number")
-    temperature = float(value)
-    if not math.isfinite(temperature) or not 0.0 <= temperature <= 2.0:
+    temperature = _coerce_finite_float(path, value)
+    if not 0.0 <= temperature <= 2.0:
         raise ValueError(f"{path} must be a finite number between 0 and 2")
     return temperature
 
 
 def _parse_task_timeout(path: str, value: object) -> float:
     _reject_null(path, value)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{path} must be a finite positive number")
-    timeout = float(value)
-    if not math.isfinite(timeout) or timeout <= 0:
+    timeout = _coerce_finite_float(path, value)
+    if timeout <= 0:
         raise ValueError(f"{path} must be a finite positive number")
     return timeout
 
@@ -232,7 +251,9 @@ def _parse_task_config(
                     task=task,
                 )
             elif field_name == "extra_body":
-                task_extra_body[task] = _parse_task_extra_body(path, field_value)
+                parsed_extra_body = _parse_task_extra_body(path, field_value)
+                if parsed_extra_body:
+                    task_extra_body[task] = parsed_extra_body
 
     return (
         task_models or None,
@@ -280,10 +301,6 @@ def load_composition_settings(
         environ.get("JUNG_LOG_PROMPT_PREVIEWS"),
         default=False,
     )
-    if log_prompt_previews and not enable_llm_tracing:
-        raise ValueError(
-            "JUNG_LOG_PROMPT_PREVIEWS requires JUNG_ENABLE_LLM_TRACING=true"
-        )
 
     extra_body = parse_optional_json_object(
         "JUNG_LLM_EXTRA_BODY_JSON",

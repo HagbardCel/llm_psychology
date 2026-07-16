@@ -345,10 +345,50 @@ def test_extra_body_rejects_non_finite_numbers(payload: str) -> None:
 
 
 def test_log_prompt_previews_requires_tracing() -> None:
-    with pytest.raises(ValueError, match="JUNG_LOG_PROMPT_PREVIEWS"):
+    with pytest.raises(ValueError, match="log_prompt_previews requires enable_llm_tracing"):
         load_composition_settings(
             {"JUNG_LOG_PROMPT_PREVIEWS": "true"},
             database_path="data/jung.db",
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["temperature", "timeout_seconds"],
+)
+def test_task_numeric_huge_integer_raises_value_error(field: str) -> None:
+    huge_int = 10**400
+    with pytest.raises(ValueError) as exc_info:
+        load_composition_settings(
+            {
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                    {"assessment": {field: huge_int}}
+                ),
+            },
+            database_path="data/jung.db",
+        )
+    assert f"JUNG_LLM_TASK_CONFIG_JSON.assessment.{field}" in str(exc_info.value)
+
+
+def test_empty_task_extra_body_is_omitted() -> None:
+    settings = load_composition_settings(
+        {
+            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                {"assessment": {"extra_body": {}}}
+            ),
+        },
+        database_path="data/jung.db",
+    )
+    assert settings.llm.task_extra_body is None
+
+
+def test_settings_post_init_rejects_prompt_previews_without_tracing() -> None:
+    with pytest.raises(ValueError, match="log_prompt_previews requires enable_llm_tracing"):
+        Settings(
+            database_path="data/jung.db",
+            llm=_valid_llm(),
+            enable_llm_tracing=False,
+            log_prompt_previews=True,
         )
 
 
@@ -367,4 +407,13 @@ def test_settings_post_init_rejects_invalid_shutdown_timeout() -> None:
             database_path="data/jung.db",
             llm=_valid_llm(),
             shutdown_timeout_seconds=0,
+        )
+
+
+def test_settings_rejects_huge_shutdown_timeout() -> None:
+    with pytest.raises(ValueError, match="shutdown_timeout_seconds"):
+        Settings(
+            database_path="data/jung.db",
+            llm=_valid_llm(),
+            shutdown_timeout_seconds=10**400,
         )

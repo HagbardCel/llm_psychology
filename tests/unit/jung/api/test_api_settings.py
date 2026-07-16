@@ -15,6 +15,36 @@ from jung.api.settings import (
 )
 from jung.composition import build_settings
 
+API_ENV_NAMES = (
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
+    "MODEL_NAME",
+    "JUNG_DATA_DIR",
+    "JUNG_API_HOST",
+    "JUNG_API_PORT",
+    "JUNG_API_LOG_LEVEL",
+    "JUNG_API_ALLOWED_ORIGINS",
+    "JUNG_API_ALLOW_REMOTE_BIND",
+    "JUNG_WS_SEND_TIMEOUT",
+    "JUNG_WS_CLOSE_TIMEOUT",
+    "JUNG_SHUTDOWN_TIMEOUT",
+    "JUNG_EVENT_QUEUE_SIZE",
+    "JUNG_ENABLE_LLM_TRACING",
+    "JUNG_LOG_PROMPT_PREVIEWS",
+    "JUNG_LLM_EXTRA_BODY_JSON",
+    "JUNG_LLM_TASK_CONFIG_JSON",
+    "JUNG_LLM_DEFAULT_HEADERS_JSON",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_api_settings_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
+    for name in API_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
 
 def _settings(
     *,
@@ -137,7 +167,6 @@ def test_load_api_settings_uses_jung_data_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     settings = load_api_settings()
     assert settings.application.database_path == tmp_path / "jung.db"
@@ -147,7 +176,6 @@ def test_load_api_settings_delegates_composition_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JUNG_EVENT_QUEUE_SIZE", "96")
     monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
