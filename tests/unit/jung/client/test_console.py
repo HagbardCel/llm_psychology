@@ -20,6 +20,7 @@ from jung.api.contracts import (
     MessageCompletedEvent,
     MessageInProgressEvent,
     MessageResponse,
+    OperationChangedEvent,
     OperationSummaryResponse,
     ProfileResponse,
     ProfileUpdateRequest,
@@ -1361,6 +1362,41 @@ async def test_token_renders_through_process_chat_event() -> None:
     state = ChatRenderState()
     app._process_chat_event(token, identity=identity, render_state=state)
     assert app._output.assistant_tokens == ["hi"]
+
+
+async def test_operation_changed_observer_records_operation_fields() -> None:
+    observer = RecordingObserver()
+    app = _app(_mock_client(), observer=observer)
+    state = ChatRenderState()
+    identity = ChatEventIdentity(
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        request_id=uuid4(),
+    )
+    snapshot = _snapshot(stage="assessment", revision=3)
+    operation = OperationSummaryResponse(
+        id=uuid4(),
+        kind="assessment",
+        status="running",
+    )
+    event = OperationChangedEvent(
+        type="operation_changed",
+        operation=operation,
+        snapshot=snapshot,
+    )
+    assert app._process_chat_event(event, identity=identity, render_state=state) is None
+    assert observer.events == [
+        (
+            "ws_event",
+            {
+                "type": "operation_changed",
+                "operation_kind": "assessment",
+                "operation_status": "running",
+                "revision": 3,
+                "stage": "assessment",
+            },
+        )
+    ]
 
 
 async def test_style_selection_recovers_from_invalid_command_through_run() -> None:

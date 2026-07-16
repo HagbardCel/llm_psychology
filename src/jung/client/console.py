@@ -18,12 +18,14 @@ from jung.api.contracts import (
     ErrorEvent,
     MessageCompletedEvent,
     MessageInProgressEvent,
+    OperationChangedEvent,
     ProfileUpdateRequest,
     ProfileWire,
     RetryOperationRequest,
     SelectStyleRequest,
     ServerEvent,
     SessionHistoryResponse,
+    SnapshotChangedEvent,
     StartSessionRequest,
     StyleOptionsResponse,
     TokenEvent,
@@ -34,7 +36,6 @@ from jung.client._chat_events import (
     ErrorCorrelation,
     classify_error,
     identity_after_progress,
-    is_ignorable_event,
     matches_completion,
     matches_progress,
     matches_token,
@@ -1019,29 +1020,24 @@ class ConsoleApp:
                     event=event,
                 )
 
-            if is_ignorable_event(event):
-                if hasattr(event, "snapshot"):
-                    self._observer.record(
-                        "ws_event",
-                        type=event.type,
-                        revision=event.snapshot.revision,
-                        stage=event.snapshot.stage,
-                    )
-                elif hasattr(event, "operation"):
-                    self._observer.record(
-                        "ws_event",
-                        type=event.type,
-                        operation_kind=getattr(
-                            event.operation,
-                            "kind",
-                            None,
-                        ),
-                        operation_status=getattr(
-                            event.operation,
-                            "status",
-                            None,
-                        ),
-                    )
+            if isinstance(event, OperationChangedEvent):
+                self._observer.record(
+                    "ws_event",
+                    type=event.type,
+                    operation_kind=event.operation.kind,
+                    operation_status=event.operation.status,
+                    revision=event.snapshot.revision,
+                    stage=event.snapshot.stage,
+                )
+                return None
+
+            if isinstance(event, SnapshotChangedEvent):
+                self._observer.record(
+                    "ws_event",
+                    type=event.type,
+                    revision=event.snapshot.revision,
+                    stage=event.snapshot.stage,
+                )
                 return None
         except ChatEventViolation as exc:
             raise JungProtocolError(
