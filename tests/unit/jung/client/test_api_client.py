@@ -510,6 +510,33 @@ async def test_explicit_chat_close_makes_connection_unusable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_close_retries_after_cancellation() -> None:
+    close_attempts = 0
+
+    class CancellingWebSocket:
+        async def close(self) -> None:
+            nonlocal close_attempts
+            close_attempts += 1
+            if close_attempts == 1:
+                raise asyncio.CancelledError
+
+    websocket = CancellingWebSocket()
+    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.CancelledError):
+        await chat.aclose()
+
+    assert chat._unusable is True
+    assert chat._close_attempted is False
+
+    await chat.aclose()
+    assert close_attempts == 2
+
+    await chat.aclose()
+    assert close_attempts == 2
+
+
+@pytest.mark.asyncio
 async def test_classification_complete_pending_conflict_and_unresolved() -> None:
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         session_id = uuid4()

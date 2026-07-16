@@ -366,6 +366,7 @@ class JungChatConnection:
         try:
             await self._websocket.close()
         except asyncio.CancelledError:
+            self._close_attempted = False
             raise
         except (OSError, WebSocketException):
             return
