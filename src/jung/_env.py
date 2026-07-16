@@ -87,15 +87,12 @@ def parse_optional_json_object(name: str, raw: str | None) -> dict[str, object] 
     if raw is None or not raw.strip():
         return None
     try:
-        parsed = json.loads(raw, parse_constant=_reject_json_constant)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{name} must be a JSON object") from exc
+        parsed = json.loads(
+            raw,
+            parse_constant=_reject_json_constant,
+        )
     except ValueError as exc:
-        if str(exc) == "invalid JSON constant":
-            raise ValueError(f"{name} must be a JSON object") from exc
-        raise
-    if parsed is None:
-        raise ValueError(f"{name} must be a JSON object")
+        raise ValueError(f"{name} must be a JSON object") from exc
     if not isinstance(parsed, dict):
         raise ValueError(f"{name} must be a JSON object")
     assert_finite_json_numbers(parsed, path=name)

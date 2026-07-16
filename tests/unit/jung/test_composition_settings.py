@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
+from jung._env import parse_optional_json_object
 from jung.composition import Settings, load_composition_settings
 from jung.llm.gateway import LLMSettings, LLMTask, StructuredOutputMode
 from jung.llm.policies import build_model_policies
@@ -285,6 +287,75 @@ def test_non_object_task_entry_rejected() -> None:
             },
             database_path="data/jung.db",
         )
+
+
+def test_oversized_json_integer_error_is_path_aware() -> None:
+    limit = sys.get_int_max_str_digits()
+    if limit == 0:
+        pytest.skip("Python integer-string digit limit is disabled")
+
+    huge_integer = "9" * (limit + 1)
+    raw = f'{{"scale":{huge_integer}}}'
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_optional_json_object("JUNG_LLM_EXTRA_BODY_JSON", raw)
+
+    message = str(exc_info.value)
+    assert message == "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object"
+    assert huge_integer not in message
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_path"),
+    [
+        ({"not_a_task": {}}, "JUNG_LLM_TASK_CONFIG_JSON.not_a_task"),
+        (
+            {"assessment": {"not_a_field": 1}},
+            "JUNG_LLM_TASK_CONFIG_JSON.assessment.not_a_field",
+        ),
+    ],
+)
+def test_task_config_rejects_unknown_schema_entries(
+    payload: dict[str, object],
+    expected_path: str,
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        load_composition_settings(
+            {"JUNG_LLM_TASK_CONFIG_JSON": json.dumps(payload)},
+            database_path="data/jung.db",
+        )
+
+    assert expected_path in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "null",
+        "[]",
+        '"string"',
+        "123",
+    ],
+)
+def test_extra_body_rejects_non_object_top_level_json(raw: str) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        load_composition_settings(
+            {"JUNG_LLM_EXTRA_BODY_JSON": raw},
+            database_path="data/jung.db",
+        )
+
+    assert str(exc_info.value) == "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object"
+
+
+@pytest.mark.parametrize("name", ["LLM_BASE_URL", "MODEL_NAME"])
+def test_blank_required_string_rejected(name: str) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        load_composition_settings(
+            {name: "   "},
+            database_path="data/jung.db",
+        )
+
+    assert str(exc_info.value) == f"{name} must be non-empty"
 
 
 def test_blank_optional_json_treated_as_unset() -> None:
