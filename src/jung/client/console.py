@@ -38,6 +38,10 @@ from jung.client._chat_events import (
     matches_progress,
     matches_token,
 )
+from jung.client._durable_chat import (
+    DurableChatViolation,
+    inspect_durable_chat_messages,
+)
 from jung.client.api_client import (
     ChatReconciliationStatus,
     ChatSendIntent,
@@ -462,23 +466,23 @@ class ConsoleApp:
                 expected_model="pending active chat turn",
             )
         history = await self._client.get_session(turn.session_id)
-        if history.session.id != turn.session_id:
+        try:
+            durable = inspect_durable_chat_messages(
+                history,
+                expected_session_id=turn.session_id,
+                client_message_id=turn.client_message_id,
+            )
+        except DurableChatViolation as exc:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="session history for pending turn",
-            )
-        matching_users = [
-            message
-            for message in history.messages
-            if message.role == "user"
-            and message.client_message_id == turn.client_message_id
-        ]
-        if len(matching_users) != 1:
+                expected_model=exc.expected_model,
+            ) from None
+        if durable.user is None:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
                 expected_model="one durable user message for pending turn",
             )
-        user_message = matching_users[0]
+        user_message = durable.user
         intent = self._client.new_chat_intent(
             turn.session_id,
             user_message.content,
@@ -608,18 +612,18 @@ class ConsoleApp:
         history: SessionHistoryResponse,
         client_message_id: UUID,
     ):
-        assistants = [
-            message
-            for message in history.messages
-            if message.role == "assistant"
-            and message.client_message_id == client_message_id
-        ]
-        if len(assistants) > 1:
+        try:
+            durable = inspect_durable_chat_messages(
+                history,
+                expected_session_id=history.session.id,
+                client_message_id=client_message_id,
+            )
+        except DurableChatViolation as exc:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="at most one assistant per client_message_id",
-            )
-        return assistants[0] if assistants else None
+                expected_model=exc.expected_model,
+            ) from None
+        return durable.assistant
 
     async def _complete_from_history(
         self,

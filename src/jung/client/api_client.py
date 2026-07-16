@@ -53,6 +53,10 @@ from jung.client._chat_events import (
     ChatEventViolation,
     matches_decisive_event,
 )
+from jung.client._durable_chat import (
+    DurableChatViolation,
+    inspect_durable_chat_messages,
+)
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -768,42 +772,36 @@ class JungApiClient:
                 expected_model="SessionHistoryResponse",
             )
 
-        users = [
-            message
-            for message in history.messages
-            if message.client_message_id == intent.client_message_id
-            and message.role == "user"
-        ]
-        assistants = [
-            message
-            for message in history.messages
-            if message.client_message_id == intent.client_message_id
-            and message.role == "assistant"
-        ]
-        if len(users) > 1 or len(assistants) > 1 or (assistants and not users):
+        try:
+            durable = inspect_durable_chat_messages(
+                history,
+                expected_session_id=intent.session_id,
+                client_message_id=intent.client_message_id,
+            )
+        except DurableChatViolation as exc:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="SessionHistoryResponse",
-            )
+                expected_model=exc.expected_model,
+            ) from None
 
-        if users and users[0].content != intent.content:
+        if durable.user and durable.user.content != intent.content:
             return ChatReconciliationResult(
                 status=ChatReconciliationStatus.IDENTITY_CONFLICT,
                 snapshot=snapshot,
                 history=history,
-                conflicting_user_message=users[0],
+                conflicting_user_message=durable.user,
             )
-        if users and assistants:
+        if durable.user and durable.assistant:
             return ChatReconciliationResult(
                 status=ChatReconciliationStatus.COMPLETE,
                 snapshot=snapshot,
                 history=history,
-                completed_message=assistants[0],
+                completed_message=durable.assistant,
             )
 
         pending = snapshot.active_chat_turn
         if (
-            users
+            durable.user
             and pending is not None
             and pending.session_id == intent.session_id
             and pending.client_message_id == intent.client_message_id
