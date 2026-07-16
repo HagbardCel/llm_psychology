@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import ast
-import re
-import sys
+import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args, get_origin
@@ -13,13 +13,13 @@ from typing import get_args, get_origin
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_PUBLIC_FILES = (
-    REPO_ROOT / "src/jung/api/app.py",
-    REPO_ROOT / "src/jung/api/routes.py",
-    REPO_ROOT / "src/jung/api/websocket.py",
-    REPO_ROOT / "src/jung/api/contracts.py",
-    REPO_ROOT / "src/jung/api/errors.py",
-    REPO_ROOT / "src/jung/client/api_client.py",
-    REPO_ROOT / "src/jung/client/console.py",
+    Path("src/jung/api/app.py"),
+    Path("src/jung/api/routes.py"),
+    Path("src/jung/api/websocket.py"),
+    Path("src/jung/api/contracts.py"),
+    Path("src/jung/api/errors.py"),
+    Path("src/jung/client/api_client.py"),
+    Path("src/jung/client/console.py"),
 )
 
 REQUIRED_PHASE_5_TEST_FILES = (
@@ -80,26 +80,7 @@ LEGACY_WS_EVENT_NAMES = frozenset(
     }
 )
 
-API_FORBIDDEN_IMPORT_PREFIXES = (
-    "jung.llm",
-    "jung.persistence",
-    "jung.phases",
-    "psychoanalyst_app",
-    "quart",
-    "trio",
-)
-
-CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "websockets"})
-
-CORE_FORBIDDEN_IMPORT_ROOTS = frozenset(
-    {
-        "fastapi",
-        "httpx",
-        "starlette",
-        "uvicorn",
-        "websockets",
-    }
-)
+USER_ID = "user_id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +96,6 @@ class RuntimeContract:
     event_discriminators: frozenset[str]
     openapi_schemas: dict[str, object]
     ws_schemas: dict[str, object]
-    database_path: Path | None = None
 
 
 def _python_files(directory: Path) -> list[Path]:
@@ -126,14 +106,19 @@ def _read_ast(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def _imported_modules(path: Path) -> list[str]:
-    modules: list[str] = []
-    for node in ast.walk(_read_ast(path)):
-        if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.append(node.module)
-    return modules
+def _display_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _terminal_component(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
+def _ref_terminal(ref: str) -> str:
+    return ref.rstrip("/").rsplit("/", 1)[-1]
 
 
 def _extract_http_operations(app: object) -> frozenset[tuple[str, str]]:
@@ -170,23 +155,68 @@ def _collect_schema_semantics(
     *,
     path: tuple[str, ...] = (),
 ) -> list[tuple[tuple[str, ...], str]]:
+    """Flag user_id only in semantic schema positions, not prose fields."""
     hits: list[tuple[tuple[str, ...], str]] = []
     if isinstance(schema, dict):
-        for key, value in schema.items():
-            next_path = (*path, key)
-            if key == "user_id":
-                hits.append((next_path, "property name user_id"))
-            if key in {"properties", "required", "discriminator", "mapping"}:
-                if isinstance(value, dict):
-                    for child_key in value:
-                        if child_key == "user_id":
-                            hits.append(
-                                (
-                                    (*next_path, child_key),
-                                    f"schema semantics reference user_id in {key}",
-                                )
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and USER_ID in properties:
+            hits.append(
+                (
+                    (*path, "properties", USER_ID),
+                    "property name user_id",
+                )
+            )
+
+        required = schema.get("required")
+        if isinstance(required, list):
+            for index, item in enumerate(required):
+                if item == USER_ID:
+                    hits.append(
+                        (
+                            (*path, "required", str(index)),
+                            "required entry user_id",
+                        )
+                    )
+
+        discriminator = schema.get("discriminator")
+        if isinstance(discriminator, dict):
+            property_name = discriminator.get("propertyName")
+            if property_name == USER_ID:
+                hits.append(
+                    (
+                        (*path, "discriminator", "propertyName"),
+                        "discriminator propertyName user_id",
+                    )
+                )
+            mapping = discriminator.get("mapping")
+            if isinstance(mapping, dict):
+                for map_key, map_value in mapping.items():
+                    if map_key == USER_ID:
+                        hits.append(
+                            (
+                                (*path, "discriminator", "mapping", map_key),
+                                "discriminator mapping key user_id",
                             )
-            hits.extend(_collect_schema_semantics(value, path=next_path))
+                        )
+                    if isinstance(map_value, str) and (
+                        _ref_terminal(map_value) == USER_ID
+                        or _terminal_component(map_value) == USER_ID
+                    ):
+                        hits.append(
+                            (
+                                (*path, "discriminator", "mapping", str(map_key)),
+                                "discriminator mapping value terminal user_id",
+                            )
+                        )
+
+        ref = schema.get("$ref")
+        if isinstance(ref, str) and _ref_terminal(ref) == USER_ID:
+            hits.append(((*path, "$ref"), "$ref terminal user_id"))
+
+        for key, value in schema.items():
+            hits.extend(
+                _collect_schema_semantics(value, path=(*path, str(key)))
+            )
     elif isinstance(schema, list):
         for index, item in enumerate(schema):
             hits.extend(_collect_schema_semantics(item, path=(*path, str(index))))
@@ -213,11 +243,7 @@ def _literal_discriminators(
     return frozenset()
 
 
-def _extract_contract_from_app(
-    app: object,
-    *,
-    database_path: Path | None,
-) -> RuntimeContract:
+def _extract_contract_from_app(app: object) -> RuntimeContract:
     from jung.api.contracts import (
         ErrorEvent,
         MessageCompletedEvent,
@@ -257,7 +283,6 @@ def _extract_contract_from_app(
             model.__name__: _schema_names(model)
             for model in (*event_models, SendMessageCommand)
         },
-        database_path=database_path,
     )
 
 
@@ -277,8 +302,6 @@ def _deterministic_settings(database_path: Path) -> object:
 
 
 def extract_runtime_contract() -> RuntimeContract:
-    import tempfile
-
     from jung.api.app import create_app
 
     runtime_factory_called = False
@@ -290,80 +313,94 @@ def extract_runtime_contract() -> RuntimeContract:
             "Runtime factory must not be called during contract extraction"
         )
 
-    with tempfile.TemporaryDirectory(prefix="jung-phase5-contract-") as tmp:
-        database_path = Path(tmp) / "contract-extract.sqlite"
+    with tempfile.TemporaryDirectory(prefix="jung-phase5-contract-") as temporary:
+        temporary_directory = Path(temporary)
+        database_path = temporary_directory / "contract-extract.sqlite"
+        try:
+            database_path.relative_to(temporary_directory)
+        except ValueError as exc:
+            raise AssertionError(
+                "contract extraction database path escaped tempfile"
+            ) from exc
+
         app = create_app(
             _deterministic_settings(database_path),
             runtime_factory=inert_runtime_factory,
         )
-        contract = _extract_contract_from_app(app, database_path=database_path)
-        if runtime_factory_called:
-            raise AssertionError("runtime factory was invoked during extraction")
-        if not str(contract.database_path).startswith(tmp):
-            raise AssertionError("contract extraction database path escaped tempfile")
+        contract = _extract_contract_from_app(app)
+        assert runtime_factory_called is False
         return contract
 
 
 def _legacy_event_ast_hits(path: Path, root: Path) -> list[str]:
     tree = _read_ast(path)
-    hits: list[str] = []
-    try:
-        display = str(path.relative_to(root))
-    except ValueError:
-        display = str(path)
+    display = _display_path(path, root)
+    hits: set[str] = set()
     for node in ast.walk(tree):
+        lineno = getattr(node, "lineno", None)
+        location = f"{display}:{lineno}" if lineno is not None else display
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if node.value in LEGACY_WS_EVENT_NAMES:
-                hits.append(f"{display}: legacy event {node.value!r}")
+                hits.add(f"{location}: legacy event {node.value!r}")
         elif isinstance(node, ast.Name) and node.id in LEGACY_WS_EVENT_NAMES:
-            hits.append(f"{display}: legacy identifier {node.id!r}")
+            hits.add(f"{location}: legacy identifier {node.id!r}")
         elif isinstance(node, ast.Attribute) and node.attr in LEGACY_WS_EVENT_NAMES:
-            hits.append(f"{display}: legacy attribute {node.attr!r}")
-    return hits
+            hits.add(f"{location}: legacy attribute {node.attr!r}")
+    return sorted(hits)
 
 
-def _identifier_hits(path: Path, name: str) -> list[str]:
+def _user_id_source_hits(path: Path, root: Path) -> list[str]:
     tree = _read_ast(path)
-    hits: list[str] = []
+    display = _display_path(path, root)
+    hits: set[str] = set()
+
+    def _record(node: ast.AST, kind: str) -> None:
+        lineno = getattr(node, "lineno", None)
+        location = f"{display}:{lineno}" if lineno is not None else display
+        hits.add(f"{location}: user_id {kind}")
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == name:
-            hits.append(str(path.relative_to(REPO_ROOT)))
-        elif isinstance(node, ast.arg) and node.arg == name:
-            hits.append(str(path.relative_to(REPO_ROOT)))
-    return hits
+        if isinstance(node, ast.Name) and node.id == USER_ID:
+            _record(node, "name")
+        elif isinstance(node, ast.Attribute) and node.attr == USER_ID:
+            _record(node, "attribute")
+        elif isinstance(node, ast.arg) and node.arg == USER_ID:
+            _record(node, "argument")
+        elif isinstance(node, ast.keyword) and node.arg == USER_ID:
+            _record(node, "keyword")
+        elif isinstance(node, ast.alias):
+            if node.asname == USER_ID:
+                _record(node, "import alias")
+            elif _terminal_component(node.name) == USER_ID:
+                _record(node, "import name")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if _terminal_component(node.module) == USER_ID:
+                _record(node, "import module")
+    return sorted(hits)
 
 
-def _client_import_violations(modules: list[str]) -> list[str]:
-    violations: list[str] = []
-    for module in modules:
-        root = module.split(".")[0]
-        if root == "__future__" or root in sys.stdlib_module_names:
-            continue
-        if root in CLIENT_ALLOWED_EXTERNAL_ROOTS:
-            continue
-        if module == "jung.api.contracts" or module.startswith("jung.api.contracts."):
-            continue
-        if module == "jung.client" or module.startswith("jung.client."):
-            continue
-        violations.append(module)
-    return violations
+def _read_pyproject_scripts(
+    root: Path,
+) -> tuple[dict[str, str] | None, Violation | None]:
+    pyproject_path = root / "pyproject.toml"
+    try:
+        with pyproject_path.open("rb") as file:
+            pyproject = tomllib.load(file)
+    except tomllib.TOMLDecodeError as exc:
+        return None, Violation(f"invalid pyproject.toml: {exc}")
 
+    project = pyproject.get("project", {})
+    if not isinstance(project, dict):
+        project = {}
+    scripts = project.get("scripts", {})
+    if not isinstance(scripts, dict):
+        scripts = {}
 
-def _read_pyproject_scripts(root: Path) -> dict[str, str]:
-    text = (root / "pyproject.toml").read_text(encoding="utf-8")
-    scripts: dict[str, str] = {}
-    in_scripts = False
-    for line in text.splitlines():
-        if line.strip() == "[project.scripts]":
-            in_scripts = True
-            continue
-        if in_scripts:
-            if line.startswith("[") and line.endswith("]"):
-                break
-            match = re.match(r'^(\S+)\s*=\s*"([^"]+)"\s*$', line.strip())
-            if match:
-                scripts[match.group(1)] = match.group(2)
-    return scripts
+    normalized: dict[str, str] = {}
+    for key, value in scripts.items():
+        if isinstance(key, str) and isinstance(value, str):
+            normalized[key] = value
+    return normalized, None
 
 
 def _makefile_targets(root: Path) -> set[str]:
@@ -388,83 +425,51 @@ def _makefile_targets(root: Path) -> set[str]:
 def validate_static_repository(root: Path) -> list[Violation]:
     violations: list[Violation] = []
 
-    for path in REQUIRED_PUBLIC_FILES:
-        if not path.exists():
-            violations.append(
-                Violation(
-                    f"missing public file: {path.relative_to(root)}"
-                )
-            )
+    for relative in REQUIRED_PUBLIC_FILES:
+        if not (root / relative).is_file():
+            violations.append(Violation(f"missing public file: {relative}"))
 
     for relative in REQUIRED_PHASE_5_TEST_FILES:
         if not (root / relative).is_file():
             violations.append(Violation(f"missing required test file: {relative}"))
 
     pyproject_path = root / "pyproject.toml"
-    if pyproject_path.is_file():
-        scripts = _read_pyproject_scripts(root)
-        for entry, target in (
-            ("jung-api", "jung.api.app:cli"),
-            ("jung-console", "jung.client.console:cli"),
-        ):
-            if scripts.get(entry) != target:
-                violations.append(
-                    Violation(f"pyproject script {entry!r} must map to {target!r}")
-                )
+    if not pyproject_path.is_file():
+        violations.append(Violation("missing required file: pyproject.toml"))
+    else:
+        scripts, error = _read_pyproject_scripts(root)
+        if error is not None:
+            violations.append(error)
+        elif scripts is not None:
+            for entry, target in (
+                ("jung-api", "jung.api.app:cli"),
+                ("jung-console", "jung.client.console:cli"),
+            ):
+                if scripts.get(entry) != target:
+                    violations.append(
+                        Violation(
+                            f"pyproject script {entry!r} must map to {target!r}"
+                        )
+                    )
 
     makefile_path = root / "Makefile"
-    if makefile_path.is_file():
+    if not makefile_path.is_file():
+        violations.append(Violation("missing required file: Makefile"))
+    else:
         makefile_targets = _makefile_targets(root)
         for target in REQUIRED_MAKE_TARGETS:
             if target not in makefile_targets:
                 violations.append(Violation(f"Makefile missing target: {target}"))
 
-    api_root = root / "src/jung/api"
-    if api_root.exists():
-        for path in _python_files(api_root):
-            for module in _imported_modules(path):
-                if any(
-                    module == prefix or module.startswith(f"{prefix}.")
-                    for prefix in API_FORBIDDEN_IMPORT_PREFIXES
-                ):
-                    violations.append(
-                        Violation(
-                            f"{path.relative_to(root)} imports forbidden {module}"
-                        )
-                    )
-            violations.extend(
-                Violation(hit) for hit in _legacy_event_ast_hits(path, root)
-            )
-            for hit in _identifier_hits(path, "user_id"):
-                violations.append(Violation(f"user_id identifier in {hit}"))
-
-    client_root = root / "src/jung/client"
-    if client_root.exists():
-        for path in _python_files(client_root):
-            for module in _client_import_violations(_imported_modules(path)):
-                violations.append(
-                    Violation(f"{path.relative_to(root)} imports unsupported {module}")
-                )
-            violations.extend(
-                Violation(hit) for hit in _legacy_event_ast_hits(path, root)
-            )
-            for hit in _identifier_hits(path, "user_id"):
-                violations.append(Violation(f"user_id identifier in {hit}"))
-
-    jung_root = root / "src/jung"
-    if jung_root.exists():
-        for path in _python_files(jung_root):
-            rel = path.relative_to(jung_root)
-            if rel.parts and rel.parts[0] in {"api", "client"}:
-                continue
-            for module in _imported_modules(path):
-                root_name = module.split(".")[0]
-                if root_name in CORE_FORBIDDEN_IMPORT_ROOTS:
-                    violations.append(
-                        Violation(
-                            f"{path.relative_to(root)} imports framework {module}"
-                        )
-                    )
+    for package in ("api", "client"):
+        package_root = root / "src/jung" / package
+        if not package_root.exists():
+            continue
+        for path in _python_files(package_root):
+            for hit in _legacy_event_ast_hits(path, root):
+                violations.append(Violation(hit))
+            for hit in _user_id_source_hits(path, root):
+                violations.append(Violation(hit))
 
     return violations
 
@@ -525,21 +530,13 @@ def validate_runtime_contract(contract: RuntimeContract) -> list[Violation]:
                 )
             )
 
-    artifact = REPO_ROOT / "data" / "contract-extract.sqlite"
-    if artifact.exists():
-        violations.append(
-            Violation(
-                "contract extraction artifact must not persist under repository data/"
-            )
-        )
-
     return violations
 
 
 def validate_repository(root: Path | None = None) -> list[Violation]:
-    root = (root or REPO_ROOT).resolve()
-    violations = validate_static_repository(root)
-    if root.resolve() == REPO_ROOT.resolve():
+    resolved_root = (root or REPO_ROOT).resolve()
+    violations = validate_static_repository(resolved_root)
+    if resolved_root == REPO_ROOT.resolve():
         violations.extend(validate_runtime_contract(extract_runtime_contract()))
     return violations
 

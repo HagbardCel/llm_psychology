@@ -1678,23 +1678,28 @@ Acceptance:
 
 Add `scripts/validate_refactor_phase_5.py` with deterministic static and lightweight runtime checks.
 
-It should verify:
+Ownership of Phase 5 architectural enforcement:
 
-- required target files exist;
-- `create_app` and target CLI entry points exist;
-- exact `/api/v1` endpoint paths exist in OpenAPI;
-- no `user_id` appears in target API/client source or schemas;
-- API modules do not import store, phases, LLM, or legacy packages except the allowed typed `ApplicationRuntime`/application boundary;
-- client modules do not import application/core internals;
-- core modules do not import FastAPI/Uvicorn/HTTPX/WebSocket clients;
-- no legacy WebSocket event names appear in target API/client code;
-- no generic workflow/job mutation route appears;
-- no `trio`, `quart`, or `trio_websocket` import appears in target API/client code;
-- route handlers contain no direct `_store`, processor, or LLM access;
-- OpenAPI schemas contain no provider configuration fields;
-- all required tests and probe targets are discoverable.
+| Owner | Responsibility |
+|-------|----------------|
+| `tests/unit/jung/test_import_boundaries.py` | API/client/core dependency direction, including resolved relative imports |
+| API contract and mapper unit tests (`tests/unit/jung/api/`) | DTO shape, redaction, forbidden provider fields, and public response contents |
+| API integration tests and code review | Route handlers remain thin adapters around `TherapyApplication` (architectural review invariant; not proven by a broad AST scanner) |
+| `scripts/validate_refactor_phase_5.py` | Required artifacts, CLI/Make surface, legacy WS names, source/schema `user_id` exclusion, exact runtime HTTP/WS contract |
 
-The validator must not enforce arbitrary line-count budgets. Use dependency and forbidden-concept checks that reflect architectural intent.
+The Phase 5 validator verifies:
+
+- required target public files and Phase 5 test modules exist;
+- `jung-api` / `jung-console` CLI entry points are mapped in `pyproject.toml`;
+- required Make targets (`phase-5-test`, `validate-refactor-phase-5`, `probe-console-v1-deterministic`) exist;
+- exact `/api/v1` HTTP operations and `/api/v1/chat` WebSocket path exist at runtime;
+- exact command/event discriminators match the wire contract;
+- no `user_id` appears in target API/client source (exact identifier forms) or wire-schema semantics;
+- no legacy WebSocket event names appear in target API/client AST.
+
+Import boundaries, provider-field exclusion from DTOs, and thin-handler structure are enforced by the owners in the table above — not by duplicating those checks inside the validator. The validator must not enforce arbitrary line-count budgets.
+
+Do not change §24–§25 completion status when refining this section.
 
 ## 21. Required commands and CI gates
 

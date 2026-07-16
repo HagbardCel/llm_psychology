@@ -128,7 +128,10 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-schemas
 	$(MAKE) validate-generated-contracts
 	$(MAKE) validate-architecture
-	$(MAKE) validate-refactor-target-all
+	$(MAKE) test-validate
+	docker compose --profile test run --rm \
+		-v "$(PWD)/Makefile:/app/Makefile:ro" \
+		test python scripts/validate_refactor_phase_5.py
 	$(MAKE) characterization-smoke
 	$(MAKE) probe-console-deterministic
 
