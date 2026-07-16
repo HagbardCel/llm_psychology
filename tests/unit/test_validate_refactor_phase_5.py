@@ -98,13 +98,33 @@ def test_extract_websocket_paths_retains_direct_and_nested_routes() -> None:
     outer.include_router(inner)
     app.include_router(outer)
 
-    @app.websocket("/extra")
     async def direct_extra(_websocket: WebSocket) -> None:
         pass
 
+    app.router.add_websocket_route("/extra", direct_extra)
+
     assert _extract_websocket_paths(app) == (
-        "/chat",
+        "/api/v1/chat",
         "/extra",
+    )
+
+
+def test_extract_websocket_paths_returns_both_prefixes_for_reused_router() -> None:
+    from fastapi import APIRouter, FastAPI, WebSocket
+
+    app = FastAPI()
+    shared = APIRouter()
+
+    @shared.websocket("/chat")
+    async def chat(_websocket: WebSocket) -> None:
+        pass
+
+    app.include_router(shared, prefix="/api/v1")
+    app.include_router(shared, prefix="/debug")
+
+    assert _extract_websocket_paths(app) == (
+        "/api/v1/chat",
+        "/debug/chat",
     )
 
 

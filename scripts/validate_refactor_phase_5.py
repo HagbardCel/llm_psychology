@@ -6,7 +6,6 @@ from __future__ import annotations
 import ast
 import tempfile
 import tomllib
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args, get_origin
@@ -134,18 +133,29 @@ def _extract_http_operations(app: object) -> frozenset[tuple[str, str]]:
 
 
 def _extract_websocket_paths(app: object) -> tuple[str, ...]:
-    paths: set[str] = set()
+    from starlette.routing import WebSocketRoute
 
-    def collect(routes: Iterable[object]) -> None:
-        for route in routes:
-            if type(route).__name__ == "APIWebSocketRoute":
-                paths.add(route.path)
+    paths: list[str] = []
 
-            included = getattr(route, "original_router", None)
-            included_routes = getattr(included, "routes", ())
-            collect(included_routes)
+    for route in getattr(app, "routes", ()):
+        if isinstance(route, WebSocketRoute):
+            paths.append(route.path)
 
-    collect(getattr(app, "routes", ()))
+        effective_contexts = getattr(
+            route,
+            "effective_route_contexts",
+            None,
+        )
+        if callable(effective_contexts):
+            for context in effective_contexts():
+                effective_route = getattr(
+                    context,
+                    "starlette_route",
+                    None,
+                )
+                if isinstance(effective_route, WebSocketRoute):
+                    paths.append(effective_route.path)
+
     return tuple(sorted(paths))
 
 

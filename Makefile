@@ -130,7 +130,6 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
 	docker compose --profile test run --rm \
-		-v "$(PWD)/Makefile:/app/Makefile:ro" \
 		test python scripts/validate_refactor_phase_5.py
 	$(MAKE) characterization-smoke
 	$(MAKE) probe-console-deterministic
@@ -282,7 +281,6 @@ validate-refactor-phase-5: prepare-runtime-dirs
 		tests/unit/test_recording_fake_llm.py \
 		tests/unit/jung/test_import_boundaries.py
 	docker compose --profile test run --rm \
-		-v "$(PWD)/Makefile:/app/Makefile:ro" \
 		test python scripts/validate_refactor_phase_5.py
 	$(MAKE) phase-5-test
 
