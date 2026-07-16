@@ -17,9 +17,10 @@ from jung.api.contracts import (
 )
 
 
-@dataclass(frozen=True)
 class ChatEventViolation(ValueError):
-    expected_model: str
+    def __init__(self, expected_model: str) -> None:
+        super().__init__(expected_model)
+        self.expected_model = expected_model
 
 
 class ErrorCorrelation(StrEnum):
