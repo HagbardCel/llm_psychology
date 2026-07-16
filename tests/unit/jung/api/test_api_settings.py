@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -14,6 +15,36 @@ from jung.api.settings import (
     validate_bind_host,
 )
 from jung.composition import build_settings
+
+API_ENV_NAMES = (
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
+    "MODEL_NAME",
+    "JUNG_DATA_DIR",
+    "JUNG_API_HOST",
+    "JUNG_API_PORT",
+    "JUNG_API_LOG_LEVEL",
+    "JUNG_API_ALLOWED_ORIGINS",
+    "JUNG_API_ALLOW_REMOTE_BIND",
+    "JUNG_WS_SEND_TIMEOUT",
+    "JUNG_WS_CLOSE_TIMEOUT",
+    "JUNG_SHUTDOWN_TIMEOUT",
+    "JUNG_EVENT_QUEUE_SIZE",
+    "JUNG_ENABLE_LLM_TRACING",
+    "JUNG_LOG_PROMPT_PREVIEWS",
+    "JUNG_LLM_EXTRA_BODY_JSON",
+    "JUNG_LLM_TASK_CONFIG_JSON",
+    "JUNG_LLM_DEFAULT_HEADERS_JSON",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_api_settings_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
+    for name in API_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _settings(
@@ -96,6 +127,25 @@ def test_validate_api_settings_rejects_bad_port() -> None:
         validate_api_settings(_settings(port=0))
 
 
+@pytest.mark.parametrize(
+    ("changes", "expected_name"),
+    [
+        ({"port": True}, "port"),
+        ({"port": 8000.5}, "port"),
+        ({"websocket_send_timeout": True}, "websocket_send_timeout"),
+        ({"websocket_send_timeout": 10**400}, "websocket_send_timeout"),
+    ],
+)
+def test_validate_api_settings_rejects_invalid_direct_values(
+    changes: dict[str, object],
+    expected_name: str,
+) -> None:
+    settings = replace(_settings(), **changes)
+
+    with pytest.raises(ValueError, match=expected_name):
+        validate_api_settings(settings)
+
+
 def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     from jung.api import app as app_module
 
@@ -140,6 +190,18 @@ def test_load_api_settings_uses_jung_data_dir(
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     settings = load_api_settings()
     assert settings.application.database_path == tmp_path / "jung.db"
+
+
+def test_load_api_settings_delegates_composition_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JUNG_EVENT_QUEUE_SIZE", "96")
+    monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
+    settings = load_api_settings()
+    assert settings.application.event_queue_size == 96
+    assert settings.application.shutdown_timeout_seconds == 42.0
 
 
 def test_api_settings_websocket_timeout_defaults() -> None:

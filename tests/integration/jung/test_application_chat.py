@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from jung.application import TherapyApplication
 from jung.domain.commands import EndSession, SendMessage, StartSession, UpdateProfile
 from jung.domain.errors import Busy, RevisionConflict, StoredWorkFailure
 from jung.domain.models import ChatTurn, ChatTurnStatus, MessageRole, Profile, Stage
@@ -34,6 +35,18 @@ from .scenarios import advance_to_ready
 pytestmark = pytest.mark.asyncio
 
 SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"
+
+
+async def _wait_for_generation_lock_release(
+    application: TherapyApplication,
+    *,
+    timeout: float = 2.0,
+) -> None:
+    async def wait_until_released() -> None:
+        while application._generation_lock.locked():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_until_released(), timeout=timeout)
 
 
 async def test_chat_worker_persists_sanitized_error_message(store: SQLiteStore) -> None:
@@ -708,6 +721,7 @@ async def test_submit_message_cancel_after_turn_assigned_worker_completes_and_re
                 ChatTurnStatus.COMPLETE,
             )
             assert completed.status is ChatTurnStatus.COMPLETE
+            await _wait_for_generation_lock_release(runtime.application)
             assert not runtime.application._generation_lock.locked()
         finally:
             release_assemble.set()

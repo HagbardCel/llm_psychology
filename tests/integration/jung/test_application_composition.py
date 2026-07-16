@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from jung.composition import Settings, application_context
+from jung.composition import Settings, application_context, load_composition_settings
 from jung.domain.models import Stage
 from jung.llm.fake import FakeLLM
-from jung.llm.gateway import LLMSettings
+from jung.llm.gateway import AdapterConfig, LLMSettings, LLMTask
 from jung.llm.structured import UnsupportedStrictSchema
 from jung.phases.intake.models import IntakeRecordPatch
 
@@ -154,3 +155,84 @@ async def test_application_context_closes_llm_when_recover_on_startup_fails(
     assert len(exc_info.value.exceptions) == 1
     assert isinstance(exc_info.value.exceptions[0], RuntimeError)
     assert str(exc_info.value.exceptions[0]) == "recover failed"
+
+
+async def test_application_context_wires_loaded_llm_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_config: list[AdapterConfig] = []
+    tracing_calls: list[tuple[object, bool]] = []
+
+    class RecordingTracingGateway:
+        def __init__(self, llm: object, *, log_prompt_previews: bool) -> None:
+            tracing_calls.append((llm, log_prompt_previews))
+            self._llm = llm
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._llm, name)
+
+    class CapturingLLM(FakeLLM):
+        def __init__(self, config: AdapterConfig, **kwargs: object) -> None:
+            captured_config.append(config)
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CapturingLLM)
+    monkeypatch.setattr("jung.composition.TracingLLMGateway", RecordingTracingGateway)
+
+    settings = load_composition_settings(
+        {
+            "JUNG_ENABLE_LLM_TRACING": "true",
+            "JUNG_LOG_PROMPT_PREVIEWS": "true",
+            "JUNG_LLM_DEFAULT_HEADERS_JSON": json.dumps(
+                {"X-Test-Header": "value"},
+            ),
+            "JUNG_LLM_EXTRA_BODY_JSON": json.dumps({"global_flag": True}),
+            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                {
+                    "therapy_response": {
+                        "extra_body": {"task_flag": False},
+                    }
+                }
+            ),
+        },
+        database_path=tmp_path / "wired.db",
+    )
+
+    async with application_context(settings) as runtime:
+        raw_llm = runtime.llm
+        snapshot = await runtime.application.get_snapshot()
+        assert snapshot.stage is Stage.SETUP
+
+    assert len(captured_config) == 1
+    config = captured_config[0]
+    assert config.default_headers == {"X-Test-Header": "value"}
+    assert config.extra_body == {"global_flag": True}
+    assert config.task_extra_body == {LLMTask.THERAPY_RESPONSE: {"task_flag": False}}
+    assert len(tracing_calls) == 1
+    assert tracing_calls[0][0] is raw_llm
+    assert tracing_calls[0][1] is True
+
+
+async def test_application_context_rejects_forbidden_extra_body_before_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_openai(*args: object, **kwargs: object) -> None:
+        raise AssertionError("AsyncOpenAI must not be constructed")
+
+    monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", fail_openai)
+
+    settings = load_composition_settings(
+        {
+            "JUNG_LLM_EXTRA_BODY_JSON": json.dumps({"model": "override"}),
+        },
+        database_path=tmp_path / "forbidden.db",
+    )
+
+    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+        async with application_context(settings):
+            pass

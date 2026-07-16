@@ -314,6 +314,13 @@ def test_repeated_progress_same_turn_id_is_harmless() -> None:
     assert updated.turn_id == turn_id
 
 
+def test_chat_event_violation_is_normal_exception() -> None:
+    error = ChatEventViolation("expected event")
+    assert str(error) == "expected event"
+    assert error.expected_model == "expected event"
+    error.__traceback__ = None
+
+
 def test_chat_events_module_has_no_api_client_import() -> None:
     tree = ast.parse(CHAT_EVENTS_PATH.read_text(encoding="utf-8"))
     imports: list[str] = []

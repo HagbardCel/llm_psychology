@@ -10,8 +10,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from jung._env import parse_bool, parse_positive_finite_float
 from jung.composition import Settings as CompositionSettings
-from jung.composition import build_settings
+from jung.composition import load_composition_settings
 
 _VALID_LOG_LEVELS = frozenset(
     {"critical", "error", "warning", "info", "debug", "trace"}
@@ -28,25 +29,6 @@ class ApiSettings:
     allow_remote_bind: bool = False
     websocket_send_timeout: float = 5.0
     websocket_close_timeout: float = 2.0
-
-
-def _parse_bool(value: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized in {"true", "1", "yes"}:
-        return True
-    if normalized in {"false", "0", "no"}:
-        return False
-    raise ValueError(f"invalid boolean value: {value!r}")
-
-
-def _parse_positive_float(name: str, raw: str) -> float:
-    try:
-        value = float(raw.strip())
-    except ValueError as exc:
-        raise ValueError(f"invalid {name}: {raw!r}") from exc
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be a finite number greater than zero")
-    return value
 
 
 def _parse_origins(raw: str | None) -> tuple[str, ...]:
@@ -67,24 +49,40 @@ def _parse_origins(raw: str | None) -> tuple[str, ...]:
     return tuple(origins)
 
 
+def _validate_positive_finite_number(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a finite number greater than zero")
+
+    try:
+        finite = math.isfinite(float(value))
+    except OverflowError:
+        finite = False
+
+    if not finite or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero")
+
+
 def validate_api_settings(settings: ApiSettings) -> ApiSettings:
     host = settings.host.strip()
     if not host:
         raise ValueError("host must be non-empty")
 
-    if not 1 <= settings.port <= 65535:
-        raise ValueError("port must be between 1 and 65535")
+    port = settings.port
+    if (
+        isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise ValueError("port must be an integer between 1 and 65535")
 
-    send_timeout = settings.websocket_send_timeout
-    if not math.isfinite(send_timeout) or send_timeout <= 0:
-        raise ValueError(
-            "websocket_send_timeout must be a finite number greater than zero"
-        )
-    close_timeout = settings.websocket_close_timeout
-    if not math.isfinite(close_timeout) or close_timeout <= 0:
-        raise ValueError(
-            "websocket_close_timeout must be a finite number greater than zero"
-        )
+    _validate_positive_finite_number(
+        "websocket_send_timeout",
+        settings.websocket_send_timeout,
+    )
+    _validate_positive_finite_number(
+        "websocket_close_timeout",
+        settings.websocket_close_timeout,
+    )
 
     log_level = settings.log_level.strip().lower()
     if log_level not in _VALID_LOG_LEVELS:
@@ -138,29 +136,24 @@ def load_api_settings() -> ApiSettings:
     data_dir = os.environ.get("JUNG_DATA_DIR", "./data").strip() or "./data"
     database_path = Path(data_dir) / "jung.db"
 
-    llm_base_url = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8080/v1").strip()
-    if not llm_base_url:
-        raise ValueError("LLM_BASE_URL must be non-empty")
-
-    llm_api_key = os.environ.get("LLM_API_KEY", "")
-    default_model = os.environ.get("MODEL_NAME", "local-model").strip()
-    if not default_model:
-        raise ValueError("MODEL_NAME must be non-empty")
-
     host = os.environ.get("JUNG_API_HOST", "127.0.0.1")
     port_raw = os.environ.get("JUNG_API_PORT", "8000")
     log_level = os.environ.get("JUNG_API_LOG_LEVEL", "info")
     origins = _parse_origins(os.environ.get("JUNG_API_ALLOWED_ORIGINS"))
-    allow_remote_bind = _parse_bool(
-        os.environ.get("JUNG_API_ALLOW_REMOTE_BIND", "false")
+    allow_remote_bind = parse_bool(
+        "JUNG_API_ALLOW_REMOTE_BIND",
+        os.environ.get("JUNG_API_ALLOW_REMOTE_BIND"),
+        default=False,
     )
-    websocket_send_timeout = _parse_positive_float(
+    websocket_send_timeout = parse_positive_finite_float(
         "JUNG_WS_SEND_TIMEOUT",
-        os.environ.get("JUNG_WS_SEND_TIMEOUT", "5.0"),
+        os.environ.get("JUNG_WS_SEND_TIMEOUT"),
+        default=5.0,
     )
-    websocket_close_timeout = _parse_positive_float(
+    websocket_close_timeout = parse_positive_finite_float(
         "JUNG_WS_CLOSE_TIMEOUT",
-        os.environ.get("JUNG_WS_CLOSE_TIMEOUT", "2.0"),
+        os.environ.get("JUNG_WS_CLOSE_TIMEOUT"),
+        default=2.0,
     )
 
     try:
@@ -169,11 +162,9 @@ def load_api_settings() -> ApiSettings:
         raise ValueError(f"invalid JUNG_API_PORT: {port_raw!r}") from exc
 
     settings = ApiSettings(
-        application=build_settings(
+        application=load_composition_settings(
+            os.environ,
             database_path=database_path,
-            llm_base_url=llm_base_url,
-            llm_api_key=llm_api_key,
-            default_model=default_model,
         ),
         host=host,
         port=port,
