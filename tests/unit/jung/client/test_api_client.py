@@ -6,6 +6,7 @@ import traceback
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -17,6 +18,7 @@ from websockets.exceptions import ConnectionClosed
 from jung.api.contracts import (
     AppSnapshotResponse,
     ChatTurnSummaryResponse,
+    ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     HealthResponse,
@@ -29,6 +31,7 @@ from jung.api.contracts import (
     SessionHistoryResponse,
 )
 from jung.client.api_client import (
+    _ALLOWED_ERROR_STATUSES,
     ChatReconciliationResult,
     ChatReconciliationStatus,
     ClientSettings,
@@ -1187,3 +1190,62 @@ def test_reconciliation_result_enforces_status_payload() -> None:
             snapshot=_snapshot(),
             history=history,
         )
+
+
+def test_allowed_error_statuses_match_error_code_literals() -> None:
+    assert set(_ALLOWED_ERROR_STATUSES) == set(get_args(ErrorCode))
+
+
+@pytest.mark.asyncio
+async def test_error_status_code_mismatch_raises_protocol_error() -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            500,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": "invalid_command",
+                "message": "not allowed",
+                "request_id": request_id,
+                "retryable": False,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await client.get_state()
+    assert raised.value.kind is ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_code",
+    ["llm_timeout", "operation_failed"],
+)
+async def test_stored_http_failures_accept_409_status(
+    error_code: str,
+) -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            409,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": error_code,
+                "message": "Generation failed",
+                "request_id": request_id,
+                "retryable": True,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungApiError) as raised:
+        await client.get_state()
+    assert raised.value.status == 409
+    assert raised.value.code == error_code
+    await client.aclose()

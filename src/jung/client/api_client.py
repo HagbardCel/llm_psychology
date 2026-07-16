@@ -29,6 +29,7 @@ from jung.api.contracts import (
     AppSnapshotResponse,
     ChatTurnSummaryResponse,
     EndSessionRequest,
+    ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     ErrorResponse,
@@ -55,6 +56,20 @@ from jung.client._chat_events import (
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+_ALLOWED_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
+    "invalid_command": frozenset({409}),
+    "state_conflict": frozenset({409}),
+    "busy": frozenset({409}),
+    "not_found": frozenset({404}),
+    "validation_error": frozenset({422}),
+    "llm_unavailable": frozenset({409}),
+    "llm_timeout": frozenset({409}),
+    "invalid_llm_output": frozenset({409}),
+    "operation_failed": frozenset({409}),
+    "internal_error": frozenset({500}),
+    "not_ready": frozenset({503}),
+}
 
 
 def _validated_origin(value: str) -> httpx.URL:
@@ -154,6 +169,7 @@ class ProtocolErrorKind(StrEnum):
     MALFORMED_REQUEST_ID = "malformed_request_id"
     REQUEST_ID_MISMATCH = "request_id_mismatch"
     UNEXPECTED_STATUS = "unexpected_status"
+    ERROR_STATUS_CODE_MISMATCH = "error_status_code_mismatch"
     INVALID_WEBSOCKET_FRAME = "invalid_websocket_frame"
     INVALID_SERVER_EVENT = "invalid_server_event"
     IMPOSSIBLE_HISTORY = "impossible_history"
@@ -587,6 +603,17 @@ class JungApiClient:
             route=route,
             status=response.status_code,
         )
+        allowed_statuses = _ALLOWED_ERROR_STATUSES.get(error.code)
+        if (
+            allowed_statuses is None
+            or response.status_code not in allowed_statuses
+        ):
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
+                route=route,
+                status=response.status_code,
+                expected_model=f"error code {error.code!r}",
+            )
         raise JungApiError(status=response.status_code, error=error)
 
     async def get_state(self) -> AppSnapshotResponse:
