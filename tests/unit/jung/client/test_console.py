@@ -61,11 +61,8 @@ from jung.client.console import (
     ConsoleOperationFailed,
     ConsoleUncertainDelivery,
     ErrorDisplay,
-    HumanInputProvider,
     PendingTurnContext,
     PromptSpec,
-    _async_cli,
-    cli,
     require_command,
 )
 
@@ -108,7 +105,6 @@ class RecordingOutput:
         self.identity_conflicts: list[tuple[UUID, UUID]] = []
         self.uncertain: list[str] = []
         self.invalid: list[str] = []
-        self.client_errors: list[Exception] = []
 
     def render_snapshot(self, snapshot: AppSnapshotResponse) -> None:
         self.snapshots.append(snapshot)
@@ -162,9 +158,6 @@ class RecordingOutput:
 
     def render_invalid_action(self, message: str) -> None:
         self.invalid.append(message)
-
-    def render_client_error(self, error: Exception) -> None:
-        self.client_errors.append(error)
 
 
 class RecordingObserver:
@@ -629,7 +622,7 @@ async def test_non_retryable_operation_failure_is_terminal() -> None:
         await app._handle_operation_stage(snapshot)
 
 
-async def test_eof_after_non_retryable_operation_failure_exits_one() -> None:
+async def test_non_retryable_operation_failure_propagates_from_run() -> None:
     client = _mock_client()
     operation = OperationSummaryResponse(
         id=uuid4(),
@@ -652,12 +645,6 @@ async def test_eof_after_non_retryable_operation_failure_exits_one() -> None:
     with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
         with pytest.raises(ConsoleOperationFailed):
             await run_and_fail()
-
-    async def fake_async_cli() -> int:
-        return 1
-
-    with patch("jung.client.console.asyncio.run", lambda coro: 1):
-        assert cli() == 1
 
 
 async def test_operation_complete_without_stage_transition_is_protocol_error() -> None:
@@ -1218,45 +1205,6 @@ async def test_console_app_does_not_close_injected_client() -> None:
     client.aclose.assert_not_called()
 
 
-async def test_cli_maps_jung_client_errors_to_exit_three() -> None:
-    request_id = uuid4()
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.console.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.console.ConsoleApp.run",
-        AsyncMock(
-            side_effect=JungApiError(
-                status=503,
-                error=ErrorResponse(
-                    code="not_ready",
-                    message="x",
-                    request_id=request_id,
-                    retryable=True,
-                ),
-            )
-        ),
-    ):
-        assert await _async_cli() == 3
-
-
-async def test_eof_maps_to_exit_zero() -> None:
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.console.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.console.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleExitRequested),
-    ):
-        assert await _async_cli() == 0
-
-
 async def test_pending_reconcile_budget_once_per_client_message_id() -> None:
     client = _mock_client()
     session = _session()
@@ -1484,13 +1432,6 @@ async def test_start_session_uses_snapshot_revision() -> None:
     request = client.start_session.await_args.args[0]
     assert isinstance(request, StartSessionRequest)
     assert request.expected_revision == 4
-
-
-async def test_human_input_provider_eof_raises() -> None:
-    provider = HumanInputProvider()
-    with patch("sys.stdin.readline", return_value=""):
-        with pytest.raises(EOFError):
-            await provider.read(PromptSpec(text="> "))
 
 
 async def test_ack_timeout_before_progress_reconciles_once() -> None:

@@ -20,6 +20,7 @@ REQUIRED_PUBLIC_FILES = (
     Path("src/jung/api/errors.py"),
     Path("src/jung/client/api_client.py"),
     Path("src/jung/client/console.py"),
+    Path("src/jung/client/terminal.py"),
 )
 
 REQUIRED_PHASE_5_TEST_FILES = (
@@ -676,7 +677,7 @@ def validate_static_repository(root: Path) -> list[Violation]:
         elif scripts is not None:
             for entry, target in (
                 ("jung-api", "jung.api.app:cli"),
-                ("jung-console", "jung.client.console:cli"),
+                ("jung-console", "jung.client.terminal:cli"),
             ):
                 if scripts.get(entry) != target:
                     violations.append(

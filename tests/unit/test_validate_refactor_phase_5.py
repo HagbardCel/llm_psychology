@@ -48,7 +48,7 @@ def build_valid_static_tree(root: Path) -> None:
             """
             [project.scripts]
             jung-api = "jung.api.app:cli"
-            jung-console = "jung.client.console:cli"
+            jung-console = "jung.client.terminal:cli"
             """
         ).strip()
         + "\n",
@@ -180,7 +180,7 @@ def test_wrong_cli_script_mapping_fails(tmp_path: Path) -> None:
             """
             [project.scripts]
             jung-api = "jung.api.app:wrong"
-            jung-console = "jung.client.console:cli"
+            jung-console = "jung.client.terminal:cli"
             """
         ).strip()
         + "\n",
