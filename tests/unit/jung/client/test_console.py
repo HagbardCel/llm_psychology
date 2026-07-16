@@ -20,6 +20,7 @@ from jung.api.contracts import (
     MessageCompletedEvent,
     MessageInProgressEvent,
     MessageResponse,
+    OperationChangedEvent,
     OperationSummaryResponse,
     ProfileResponse,
     ProfileUpdateRequest,
@@ -60,11 +61,8 @@ from jung.client.console import (
     ConsoleOperationFailed,
     ConsoleUncertainDelivery,
     ErrorDisplay,
-    HumanInputProvider,
     PendingTurnContext,
     PromptSpec,
-    _async_cli,
-    cli,
     require_command,
 )
 
@@ -107,7 +105,6 @@ class RecordingOutput:
         self.identity_conflicts: list[tuple[UUID, UUID]] = []
         self.uncertain: list[str] = []
         self.invalid: list[str] = []
-        self.client_errors: list[Exception] = []
 
     def render_snapshot(self, snapshot: AppSnapshotResponse) -> None:
         self.snapshots.append(snapshot)
@@ -161,9 +158,6 @@ class RecordingOutput:
 
     def render_invalid_action(self, message: str) -> None:
         self.invalid.append(message)
-
-    def render_client_error(self, error: Exception) -> None:
-        self.client_errors.append(error)
 
 
 class RecordingObserver:
@@ -628,7 +622,7 @@ async def test_non_retryable_operation_failure_is_terminal() -> None:
         await app._handle_operation_stage(snapshot)
 
 
-async def test_eof_after_non_retryable_operation_failure_exits_one() -> None:
+async def test_non_retryable_operation_failure_propagates_from_run() -> None:
     client = _mock_client()
     operation = OperationSummaryResponse(
         id=uuid4(),
@@ -651,12 +645,6 @@ async def test_eof_after_non_retryable_operation_failure_exits_one() -> None:
     with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
         with pytest.raises(ConsoleOperationFailed):
             await run_and_fail()
-
-    async def fake_async_cli() -> int:
-        return 1
-
-    with patch("jung.client.console.asyncio.run", lambda coro: 1):
-        assert cli() == 1
 
 
 async def test_operation_complete_without_stage_transition_is_protocol_error() -> None:
@@ -1217,45 +1205,6 @@ async def test_console_app_does_not_close_injected_client() -> None:
     client.aclose.assert_not_called()
 
 
-async def test_cli_maps_jung_client_errors_to_exit_three() -> None:
-    request_id = uuid4()
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.console.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.console.ConsoleApp.run",
-        AsyncMock(
-            side_effect=JungApiError(
-                status=503,
-                error=ErrorResponse(
-                    code="not_ready",
-                    message="x",
-                    request_id=request_id,
-                    retryable=True,
-                ),
-            )
-        ),
-    ):
-        assert await _async_cli() == 3
-
-
-async def test_eof_maps_to_exit_zero() -> None:
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.console.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.console.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleExitRequested),
-    ):
-        assert await _async_cli() == 0
-
-
 async def test_pending_reconcile_budget_once_per_client_message_id() -> None:
     client = _mock_client()
     session = _session()
@@ -1363,6 +1312,90 @@ async def test_token_renders_through_process_chat_event() -> None:
     assert app._output.assistant_tokens == ["hi"]
 
 
+async def test_operation_changed_observer_records_operation_fields() -> None:
+    observer = RecordingObserver()
+    app = _app(_mock_client(), observer=observer)
+    state = ChatRenderState()
+    identity = ChatEventIdentity(
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        request_id=uuid4(),
+    )
+    snapshot = _snapshot(stage="assessment", revision=3)
+    operation = OperationSummaryResponse(
+        id=uuid4(),
+        kind="assessment",
+        status="running",
+    )
+    event = OperationChangedEvent(
+        type="operation_changed",
+        operation=operation,
+        snapshot=snapshot,
+    )
+    assert app._process_chat_event(event, identity=identity, render_state=state) is None
+    assert observer.events == [
+        (
+            "ws_event",
+            {
+                "type": "operation_changed",
+                "operation_kind": "assessment",
+                "operation_status": "running",
+                "revision": 3,
+                "stage": "assessment",
+            },
+        )
+    ]
+
+
+async def test_style_selection_recovers_from_invalid_command_through_run() -> None:
+    client = _mock_client()
+    styles = StyleOptionsResponse(
+        styles=[StyleSummaryResponse(id="cbt", name="CBT", description="")],
+        recommendations=[],
+    )
+    initial = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    refreshed = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    ready = _snapshot(stage="ready", revision=6, commands=["start_session"])
+
+    client.get_state = AsyncMock(side_effect=[initial, refreshed])
+    client.get_styles = AsyncMock(return_value=styles)
+    client.select_style = AsyncMock(
+        side_effect=[
+            JungApiError(
+                status=409,
+                error=ErrorResponse(
+                    code="invalid_command",
+                    message="unknown style",
+                    request_id=uuid4(),
+                    retryable=False,
+                    current_snapshot=None,
+                ),
+            ),
+            ready,
+        ]
+    )
+
+    output = RecordingOutput()
+    app = _app(
+        client,
+        inputs=ScriptedInput("unknown", "cbt", "/exit"),
+        output=output,
+    )
+
+    with pytest.raises(ConsoleExitRequested):
+        await app.run()
+
+    assert len(output.command_rejections) == 1
+    assert client.get_state.await_count == 2
+    assert client.get_styles.await_count == 2
+    assert client.select_style.await_count == 2
+    second_request = client.select_style.await_args_list[1].args[0]
+    assert isinstance(second_request, SelectStyleRequest)
+    assert second_request.expected_revision == refreshed.revision
+    assert any(snap.stage == "ready" for snap in output.snapshots)
+    assert output.snapshots[-1].stage == "ready"
+
+
 async def test_style_selection_uses_snapshot_revision() -> None:
     client = _mock_client()
     snapshot = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
@@ -1399,13 +1432,6 @@ async def test_start_session_uses_snapshot_revision() -> None:
     request = client.start_session.await_args.args[0]
     assert isinstance(request, StartSessionRequest)
     assert request.expected_revision == 4
-
-
-async def test_human_input_provider_eof_raises() -> None:
-    provider = HumanInputProvider()
-    with patch("sys.stdin.readline", return_value=""):
-        with pytest.raises(EOFError):
-            await provider.read(PromptSpec(text="> "))
 
 
 async def test_ack_timeout_before_progress_reconciles_once() -> None:

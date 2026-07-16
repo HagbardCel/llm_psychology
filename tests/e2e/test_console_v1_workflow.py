@@ -14,7 +14,8 @@ from uuid import UUID
 import pytest
 
 from jung.client.api_client import ClientSettings, JungApiClient
-from jung.client.console import ConsoleApp, ConsoleExitRequested, TerminalConsoleOutput
+from jung.client.console import ConsoleApp, ConsoleExitRequested
+from jung.client.terminal import TerminalConsoleOutput
 from jung.domain.models import OperationKind, OperationStatus, SessionKind
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask

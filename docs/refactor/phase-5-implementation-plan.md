@@ -433,7 +433,8 @@ src/jung/
 ├── client/
 │   ├── __init__.py
 │   ├── api_client.py
-│   └── console.py
+│   ├── console.py
+│   └── terminal.py
 └── cli.py                         # only if separate entry points remain clearer
 
 tests/
@@ -1519,7 +1520,7 @@ Add canonical target entry points, for example:
 ```toml
 [project.scripts]
 jung-api = "jung.api.app:cli"
-jung-console = "jung.client.console:cli"
+jung-console = "jung.client.terminal:cli"
 ```
 
 The API CLI:

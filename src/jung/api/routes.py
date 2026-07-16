@@ -26,6 +26,7 @@ from jung.api.contracts import (
     StyleOptionsResponse,
     to_profile_response,
     to_session_history_response,
+    to_session_summary,
     to_snapshot_response,
     to_start_session_response,
     to_style_options_response,
@@ -39,8 +40,7 @@ from jung.domain.commands import (
     StartSession,
     UpdateProfile,
 )
-from jung.domain.errors import InvalidCommand
-from jung.domain.models import OperationStatus, Profile
+from jung.domain.models import Profile
 
 RequestIdHeader = Annotated[
     str | None,
@@ -155,8 +155,6 @@ async def select_style(
 async def list_sessions(
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> SessionListResponse:
-    from jung.api.contracts import to_session_summary
-
     sessions = await runtime.application.list_sessions()
     return SessionListResponse(
         sessions=[to_session_summary(session) for session in sessions]
@@ -227,19 +225,8 @@ async def retry_operation(
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.get_snapshot()
-    operation = snapshot.current_operation
-    if (
-        operation is None
-        or operation.status is not OperationStatus.FAILED
-        or not operation.retryable
-    ):
-        raise InvalidCommand("operation is not the current failed operation")
     snapshot = await runtime.application.retry_operation(
-        RetryOperation(
-            expected_revision=body.expected_revision,
-            operation_id=operation.id,
-        )
+        RetryOperation(expected_revision=body.expected_revision)
     )
     return to_snapshot_response(snapshot, context=context)
 
