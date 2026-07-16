@@ -137,9 +137,23 @@ def test_load_api_settings_uses_jung_data_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     settings = load_api_settings()
     assert settings.application.database_path == tmp_path / "jung.db"
+
+
+def test_load_api_settings_delegates_composition_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
+    monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JUNG_EVENT_QUEUE_SIZE", "96")
+    monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
+    settings = load_api_settings()
+    assert settings.application.event_queue_size == 96
+    assert settings.application.shutdown_timeout_seconds == 42.0
 
 
 def test_api_settings_websocket_timeout_defaults() -> None:

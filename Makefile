@@ -241,6 +241,9 @@ phase-5-test: prepare-runtime-dirs
 		tests/unit/jung/test_events.py \
 		tests/unit/jung/test_application_helpers.py \
 		tests/unit/jung/test_import_boundaries.py \
+		tests/unit/jung/test_composition_settings.py \
+		tests/unit/jung/llm/test_openai_compatible.py \
+		tests/integration/jung/test_application_composition.py \
 		tests/unit/test_recording_fake_llm.py \
 		tests/unit/test_validate_refactor_phase_5.py \
 		tests/integration/jung/test_application_chat.py::test_chat_worker_persists_sanitized_error_message \
@@ -272,10 +275,16 @@ validate-refactor-phase-5: prepare-runtime-dirs
 	docker compose --profile test run --rm test ruff check \
 		src/jung/api \
 		src/jung/client \
+		src/jung/composition.py \
+		src/jung/_env.py \
+		src/jung/llm/openai_compatible.py \
 		tests/jung_api_fixtures.py \
 		tests/integration/jung/resilience_support.py \
 		tests/integration/jung/api \
 		tests/integration/jung/client \
+		tests/integration/jung/test_application_composition.py \
+		tests/unit/jung/test_composition_settings.py \
+		tests/unit/jung/llm/test_openai_compatible.py \
 		scripts/validate_refactor_phase_5.py \
 		tests/unit/test_validate_refactor_phase_5.py \
 		tests/unit/test_recording_fake_llm.py \
