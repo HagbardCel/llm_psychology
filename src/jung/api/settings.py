@@ -49,24 +49,40 @@ def _parse_origins(raw: str | None) -> tuple[str, ...]:
     return tuple(origins)
 
 
+def _validate_positive_finite_number(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a finite number greater than zero")
+
+    try:
+        finite = math.isfinite(float(value))
+    except OverflowError:
+        finite = False
+
+    if not finite or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero")
+
+
 def validate_api_settings(settings: ApiSettings) -> ApiSettings:
     host = settings.host.strip()
     if not host:
         raise ValueError("host must be non-empty")
 
-    if not 1 <= settings.port <= 65535:
-        raise ValueError("port must be between 1 and 65535")
+    port = settings.port
+    if (
+        isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise ValueError("port must be an integer between 1 and 65535")
 
-    send_timeout = settings.websocket_send_timeout
-    if not math.isfinite(send_timeout) or send_timeout <= 0:
-        raise ValueError(
-            "websocket_send_timeout must be a finite number greater than zero"
-        )
-    close_timeout = settings.websocket_close_timeout
-    if not math.isfinite(close_timeout) or close_timeout <= 0:
-        raise ValueError(
-            "websocket_close_timeout must be a finite number greater than zero"
-        )
+    _validate_positive_finite_number(
+        "websocket_send_timeout",
+        settings.websocket_send_timeout,
+    )
+    _validate_positive_finite_number(
+        "websocket_close_timeout",
+        settings.websocket_close_timeout,
+    )
 
     log_level = settings.log_level.strip().lower()
     if log_level not in _VALID_LOG_LEVELS:

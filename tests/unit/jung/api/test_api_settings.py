@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -124,6 +125,25 @@ def test_validate_api_settings_normalizes_origins_to_tuple() -> None:
 def test_validate_api_settings_rejects_bad_port() -> None:
     with pytest.raises(ValueError, match="port"):
         validate_api_settings(_settings(port=0))
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected_name"),
+    [
+        ({"port": True}, "port"),
+        ({"port": 8000.5}, "port"),
+        ({"websocket_send_timeout": True}, "websocket_send_timeout"),
+        ({"websocket_send_timeout": 10**400}, "websocket_send_timeout"),
+    ],
+)
+def test_validate_api_settings_rejects_invalid_direct_values(
+    changes: dict[str, object],
+    expected_name: str,
+) -> None:
+    settings = replace(_settings(), **changes)
+
+    with pytest.raises(ValueError, match=expected_name):
+        validate_api_settings(settings)
 
 
 def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
