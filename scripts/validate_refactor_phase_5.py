@@ -94,8 +94,13 @@ class RuntimeContract:
     websocket_paths: tuple[str, ...]
     command_discriminators: frozenset[str]
     event_discriminators: frozenset[str]
-    openapi_schemas: dict[str, object]
+    openapi_document: dict[str, object]
     ws_schemas: dict[str, object]
+
+
+_HTTP_METHODS = frozenset(
+    {"GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"}
+)
 
 
 def _python_files(directory: Path) -> list[Path]:
@@ -121,10 +126,13 @@ def _ref_terminal(ref: str) -> str:
     return ref.rstrip("/").rsplit("/", 1)[-1]
 
 
-def _extract_http_operations(app: object) -> frozenset[tuple[str, str]]:
+def _extract_http_operations(
+    openapi_document: dict[str, object],
+) -> frozenset[tuple[str, str]]:
     operations: set[tuple[str, str]] = set()
-    openapi = app.openapi()
-    for path, path_item in openapi.get("paths", {}).items():
+    for path, path_item in openapi_document.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
         for method in path_item:
             upper = method.upper()
             if upper in {"GET", "PUT", "POST", "DELETE", "PATCH"}:
@@ -238,6 +246,216 @@ def _collect_schema_semantics(
     return hits
 
 
+def _lookup_component_ref(
+    document: dict[str, object],
+    ref: str,
+    *,
+    expected_component: str,
+) -> object | None:
+    prefix = f"#/components/{expected_component}/"
+    if not ref.startswith(prefix):
+        return None
+    name = ref[len(prefix) :].split("/", 1)[0]
+    components = document.get("components")
+    if not isinstance(components, dict):
+        return None
+    section = components.get(expected_component)
+    if not isinstance(section, dict):
+        return None
+    return section.get(name)
+
+
+def _resolve_outer_ref(
+    value: object,
+    *,
+    document: dict[str, object],
+    expected_component: str,
+) -> object | None:
+    seen_refs: set[str] = set()
+    while isinstance(value, dict):
+        ref = value.get("$ref")
+        if not isinstance(ref, str):
+            return value
+        if ref in seen_refs:
+            return None
+        seen_refs.add(ref)
+        value = _lookup_component_ref(
+            document,
+            ref,
+            expected_component=expected_component,
+        )
+        if value is None:
+            return None
+    return value
+
+
+def _collect_parameter_hits(
+    parameter: object,
+    *,
+    document: dict[str, object],
+    path: tuple[str, ...],
+) -> list[tuple[tuple[str, ...], str]]:
+    resolved = _resolve_outer_ref(
+        parameter,
+        document=document,
+        expected_component="parameters",
+    )
+    if not isinstance(resolved, dict):
+        return []
+
+    hits: list[tuple[tuple[str, ...], str]] = []
+    if resolved.get("name") == USER_ID:
+        hits.append(((*path, "name"), "parameter name user_id"))
+
+    hits.extend(
+        _collect_schema_semantics(
+            resolved.get("schema"),
+            path=(*path, "schema"),
+        )
+    )
+
+    content = resolved.get("content")
+    if isinstance(content, dict):
+        for media_type, media in content.items():
+            if isinstance(media, dict):
+                hits.extend(
+                    _collect_schema_semantics(
+                        media.get("schema"),
+                        path=(*path, "content", str(media_type), "schema"),
+                    )
+                )
+    return hits
+
+
+def _collect_request_body_hits(
+    request_body: object,
+    *,
+    document: dict[str, object],
+    path: tuple[str, ...],
+) -> list[tuple[tuple[str, ...], str]]:
+    resolved = _resolve_outer_ref(
+        request_body,
+        document=document,
+        expected_component="requestBodies",
+    )
+    if not isinstance(resolved, dict):
+        return []
+
+    hits: list[tuple[tuple[str, ...], str]] = []
+    content = resolved.get("content")
+    if isinstance(content, dict):
+        for media_type, media in content.items():
+            if isinstance(media, dict):
+                hits.extend(
+                    _collect_schema_semantics(
+                        media.get("schema"),
+                        path=(*path, "content", str(media_type), "schema"),
+                    )
+                )
+    return hits
+
+
+def collect_openapi_user_id_hits(
+    document: dict[str, object],
+) -> list[tuple[tuple[str, ...], str]]:
+    hits: list[tuple[tuple[str, ...], str]] = []
+    components = document.get("components")
+    if isinstance(components, dict):
+        schemas = components.get("schemas")
+        if isinstance(schemas, dict):
+            for name, schema in schemas.items():
+                for path, reason in _collect_schema_semantics(
+                    schema,
+                    path=("components", "schemas", str(name)),
+                ):
+                    hits.append((path, reason))
+
+        parameters = components.get("parameters")
+        if isinstance(parameters, dict):
+            for name, parameter in parameters.items():
+                hits.extend(
+                    _collect_parameter_hits(
+                        parameter,
+                        document=document,
+                        path=("components", "parameters", str(name)),
+                    )
+                )
+
+        request_bodies = components.get("requestBodies")
+        if isinstance(request_bodies, dict):
+            for name, request_body in request_bodies.items():
+                hits.extend(
+                    _collect_request_body_hits(
+                        request_body,
+                        document=document,
+                        path=("components", "requestBodies", str(name)),
+                    )
+                )
+
+    paths = document.get("paths")
+    if isinstance(paths, dict):
+        for path_name, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+
+            path_parameters = path_item.get("parameters")
+            if isinstance(path_parameters, list):
+                for index, parameter in enumerate(path_parameters):
+                    hits.extend(
+                        _collect_parameter_hits(
+                            parameter,
+                            document=document,
+                            path=(
+                                "paths",
+                                str(path_name),
+                                "parameters",
+                                str(index),
+                            ),
+                        )
+                    )
+
+            for method, operation in path_item.items():
+                if method.upper() not in _HTTP_METHODS or not isinstance(
+                    operation,
+                    dict,
+                ):
+                    continue
+
+                operation_parameters = operation.get("parameters")
+                if isinstance(operation_parameters, list):
+                    for index, parameter in enumerate(operation_parameters):
+                        hits.extend(
+                            _collect_parameter_hits(
+                                parameter,
+                                document=document,
+                                path=(
+                                    "paths",
+                                    str(path_name),
+                                    method,
+                                    "parameters",
+                                    str(index),
+                                ),
+                            )
+                        )
+
+                request_body = operation.get("requestBody")
+                if request_body is not None:
+                    hits.extend(
+                        _collect_request_body_hits(
+                            request_body,
+                            document=document,
+                            path=(
+                                "paths",
+                                str(path_name),
+                                method,
+                                "requestBody",
+                            ),
+                        )
+                    )
+
+    return hits
+
+
 def _literal_discriminators(
     model: type[object],
     field_name: str = "type",
@@ -289,11 +507,11 @@ def _extract_contract_from_app(app: object) -> RuntimeContract:
                 event_discriminators.update(_literal_discriminators(model))
 
     return RuntimeContract(
-        http_operations=_extract_http_operations(app),
+        http_operations=_extract_http_operations(openapi),
         websocket_paths=_extract_websocket_paths(app),
         command_discriminators=frozenset(command_discriminators),
         event_discriminators=frozenset(event_discriminators),
-        openapi_schemas=openapi.get("components", {}).get("schemas", {}),
+        openapi_document=openapi,
         ws_schemas={
             model.__name__: _schema_names(model)
             for model in (*event_models, SendMessageCommand)
@@ -529,10 +747,10 @@ def validate_runtime_contract(contract: RuntimeContract) -> list[Violation]:
     for item in unexpected_events:
         violations.append(Violation(f"unexpected event discriminator: {item}"))
 
-    for path, reason in _collect_schema_semantics(contract.openapi_schemas):
+    for path, reason in collect_openapi_user_id_hits(contract.openapi_document):
         violations.append(
             Violation(
-                "OpenAPI schema semantics include user_id at "
+                "OpenAPI public surface includes user_id at "
                 f"{'.'.join(path)} ({reason})"
             )
         )

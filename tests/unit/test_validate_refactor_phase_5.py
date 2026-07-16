@@ -20,6 +20,7 @@ REQUIRED_PUBLIC_FILES = _MODULE.REQUIRED_PUBLIC_FILES
 REQUIRED_PHASE_5_TEST_FILES = _MODULE.REQUIRED_PHASE_5_TEST_FILES
 RuntimeContract = _MODULE.RuntimeContract
 _collect_schema_semantics = _MODULE._collect_schema_semantics
+_collect_openapi_user_id_hits = _MODULE.collect_openapi_user_id_hits
 _extract_websocket_paths = _MODULE._extract_websocket_paths
 extract_runtime_contract = _MODULE.extract_runtime_contract
 validate_repository = _MODULE.validate_repository
@@ -341,7 +342,7 @@ def test_validate_runtime_contract_reports_missing_http_operation() -> None:
         websocket_paths=("/api/v1/chat",),
         command_discriminators=frozenset({"send_message"}),
         event_discriminators=_MODULE.EXPECTED_EVENT_DISCRIMINATORS,
-        openapi_schemas={},
+        openapi_document={},
         ws_schemas={},
     )
     violations = validate_runtime_contract(contract)
@@ -354,7 +355,7 @@ def test_validate_runtime_contract_reports_unexpected_websocket_path() -> None:
         websocket_paths=("/api/v1/chat", "/api/v1/extra"),
         command_discriminators=frozenset({"send_message"}),
         event_discriminators=_MODULE.EXPECTED_EVENT_DISCRIMINATORS,
-        openapi_schemas={},
+        openapi_document={},
         ws_schemas={},
     )
     messages = [item.message for item in validate_runtime_contract(contract)]
@@ -367,7 +368,7 @@ def test_validate_runtime_contract_reports_discriminator_mismatch() -> None:
         websocket_paths=("/api/v1/chat",),
         command_discriminators=frozenset({"other_command"}),
         event_discriminators=_MODULE.EXPECTED_EVENT_DISCRIMINATORS,
-        openapi_schemas={},
+        openapi_document={},
         ws_schemas={},
     )
     messages = [item.message for item in validate_runtime_contract(contract)]
@@ -389,9 +390,217 @@ def test_validate_runtime_contract_reports_event_discriminator_mismatch() -> Non
         event_discriminators=(
             _MODULE.EXPECTED_EVENT_DISCRIMINATORS - {"token"}
         ) | {"unexpected_event"},
-        openapi_schemas={},
+        openapi_document={},
         ws_schemas={},
     )
     messages = [item.message for item in validate_runtime_contract(contract)]
     assert "missing event discriminator: token" in messages
     assert "unexpected event discriminator: unexpected_event" in messages
+
+
+def test_openapi_query_alias_user_id_is_flagged() -> None:
+    from fastapi import FastAPI, Query
+
+    app = FastAPI()
+
+    @app.get("/probe")
+    def probe(legacy_user: str = Query(alias="user_id")) -> dict[str, str]:
+        return {"legacy_user": legacy_user}
+
+    hits = _collect_openapi_user_id_hits(app.openapi())
+    assert any(reason == "parameter name user_id" for _, reason in hits)
+
+
+def test_openapi_header_alias_user_id_is_flagged() -> None:
+    from fastapi import FastAPI, Header
+
+    app = FastAPI()
+
+    @app.get("/probe")
+    def probe(legacy_user: str = Header(alias="user_id")) -> dict[str, str]:
+        return {"legacy_user": legacy_user}
+
+    hits = _collect_openapi_user_id_hits(app.openapi())
+    assert any(reason == "parameter name user_id" for _, reason in hits)
+
+
+def test_openapi_nested_parameter_schema_user_id_is_flagged() -> None:
+    document = {
+        "paths": {
+            "/probe": {
+                "get": {
+                    "parameters": [
+                        {
+                            "name": "filter",
+                            "in": "query",
+                            "schema": {
+                                "type": "object",
+                                "properties": {"user_id": {"type": "string"}},
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    hits = _collect_openapi_user_id_hits(document)
+    assert any(reason == "property name user_id" for _, reason in hits)
+
+
+def test_openapi_request_body_user_id_property_is_flagged() -> None:
+    document = {
+        "paths": {
+            "/probe": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"user_id": {"type": "string"}},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    hits = _collect_openapi_user_id_hits(document)
+    assert any(reason == "property name user_id" for _, reason in hits)
+
+
+def test_openapi_parameter_ref_user_id_is_flagged() -> None:
+    document = {
+        "components": {
+            "parameters": {
+                "LegacyUser": {
+                    "name": "user_id",
+                    "in": "query",
+                    "schema": {"type": "string"},
+                }
+            }
+        },
+        "paths": {
+            "/probe": {
+                "get": {
+                    "parameters": [{"$ref": "#/components/parameters/LegacyUser"}]
+                }
+            }
+        },
+    }
+    hits = _collect_openapi_user_id_hits(document)
+    assert any(reason == "parameter name user_id" for _, reason in hits)
+
+
+def test_openapi_request_body_ref_user_id_is_flagged() -> None:
+    document = {
+        "components": {
+            "requestBodies": {
+                "LegacyBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {"user_id": {"type": "string"}},
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "paths": {
+            "/probe": {
+                "post": {
+                    "requestBody": {
+                        "$ref": "#/components/requestBodies/LegacyBody"
+                    }
+                }
+            }
+        },
+    }
+    hits = _collect_openapi_user_id_hits(document)
+    assert any(reason == "property name user_id" for _, reason in hits)
+
+
+def test_openapi_descriptive_user_id_text_is_allowed() -> None:
+    document = {
+        "components": {
+            "schemas": {
+                "Profile": {
+                    "type": "object",
+                    "description": "Profile without user_id field",
+                    "properties": {"name": {"type": "string"}},
+                }
+            }
+        }
+    }
+    assert _collect_openapi_user_id_hits(document) == []
+
+
+def test_openapi_outer_parameter_ref_cycle_terminates() -> None:
+    document = {
+        "components": {
+            "parameters": {
+                "A": {"$ref": "#/components/parameters/B"},
+                "B": {"$ref": "#/components/parameters/A"},
+            }
+        },
+        "paths": {
+            "/probe": {
+                "get": {
+                    "parameters": [{"$ref": "#/components/parameters/A"}]
+                }
+            }
+        },
+    }
+    assert _collect_openapi_user_id_hits(document) == []
+
+
+def test_openapi_outer_request_body_ref_cycle_terminates() -> None:
+    document = {
+        "components": {
+            "requestBodies": {
+                "A": {"$ref": "#/components/requestBodies/B"},
+                "B": {"$ref": "#/components/requestBodies/A"},
+            }
+        },
+        "paths": {
+            "/probe": {
+                "post": {
+                    "requestBody": {"$ref": "#/components/requestBodies/A"}
+                }
+            }
+        },
+    }
+    assert _collect_openapi_user_id_hits(document) == []
+
+
+def test_validate_runtime_contract_reports_openapi_parameter_user_id() -> None:
+    contract = RuntimeContract(
+        http_operations=_MODULE.EXPECTED_HTTP_OPERATIONS,
+        websocket_paths=("/api/v1/chat",),
+        command_discriminators=frozenset({"send_message"}),
+        event_discriminators=_MODULE.EXPECTED_EVENT_DISCRIMINATORS,
+        openapi_document={
+            "paths": {
+                "/probe": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "user_id",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        ws_schemas={},
+    )
+    messages = [item.message for item in validate_runtime_contract(contract)]
+    assert any(
+        "OpenAPI public surface includes user_id" in message
+        for message in messages
+    )
