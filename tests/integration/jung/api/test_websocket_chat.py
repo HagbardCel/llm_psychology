@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from collections.abc import Callable
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -27,6 +30,7 @@ from tests.integration.jung.application_fixtures import (
     post_session_expectations,
 )
 from tests.integration.jung.scenarios import advance_to_ready
+from tests.jung_api_fixtures import RuntimeProbe
 
 pytestmark = pytest.mark.asyncio
 
@@ -123,6 +127,20 @@ async def _warm_websocket(ws) -> None:
     assert event["error"]["code"] == "validation_error"
 
 
+async def _receive_until(
+    ws,
+    predicate: Callable[[dict], bool],
+    *,
+    max_events: int = 15,
+    timeout: float = 5.0,
+) -> dict:
+    for _ in range(max_events):
+        event = await _recv_json(ws, timeout=timeout)
+        if predicate(event):
+            return event
+    pytest.fail("matching websocket event was not observed")
+
+
 async def _setup_intake_http(http_base: str) -> tuple[str, int]:
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         revision = (await client.get("/api/v1/state")).json()["revision"]
@@ -195,6 +213,76 @@ async def test_invalid_then_valid_command_on_same_socket(
                 saw_progress = True
                 break
         assert saw_progress
+
+
+async def test_internal_error_then_validation_error_on_same_socket(
+    uvicorn_api_urls,
+    runtime_probe: RuntimeProbe,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    http_base, ws_url = uvicorn_api_urls
+    session_id, revision = await _setup_intake_http(http_base)
+    request_id = uuid4()
+    client_message_id = uuid4()
+    secret = "secret-runtime-detail"
+
+    assert runtime_probe.runtime is not None
+    runtime_probe.runtime.application.submit_message = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError(secret)
+    )
+
+    async with ws_connect(ws_url) as ws:
+        with caplog.at_level(logging.ERROR, logger="jung.api.websocket"):
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "send_message",
+                        "session_id": session_id,
+                        "client_message_id": str(client_message_id),
+                        "request_id": str(request_id),
+                        "expected_revision": revision,
+                        "content": "hello",
+                    }
+                )
+            )
+
+            internal = await _receive_until(
+                ws,
+                lambda event: (
+                    event["type"] == "error"
+                    and event["error"]["code"] == "internal_error"
+                    and event["request_id"] == str(request_id)
+                ),
+            )
+
+        assert internal["session_id"] == session_id
+        assert internal["client_message_id"] == str(client_message_id)
+        assert internal["error"]["request_id"] == str(request_id)
+        assert internal.get("turn_id") is None
+        assert secret not in json.dumps(internal)
+        assert secret not in caplog.text
+
+        records = [
+            record
+            for record in caplog.records
+            if record.message == "websocket_command_rejected"
+            and getattr(record, "request_id", None) == str(request_id)
+            and getattr(record, "error_code", None) == "internal_error"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert getattr(record, "exception_type", None) == "RuntimeError"
+        assert record.levelno == logging.ERROR
+
+        await ws.send("not-json")
+        validation = await _recv_json(ws)
+        assert validation["type"] == "error"
+        assert validation["error"]["code"] == "validation_error"
+
+    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
+        health = await client.get("/api/v1/health")
+        assert health.status_code == 200
+        assert health.json() == {"status": "healthy"}
 
 
 async def test_non_final_intake_streaming_order(

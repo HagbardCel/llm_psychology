@@ -185,13 +185,7 @@ def to_error_response(
         request_id=request_id,
         current_snapshot=current_snapshot,
     )
-    return ErrorResponse(
-        code=envelope.code,
-        message=envelope.message,
-        request_id=envelope.request_id,
-        current_snapshot=envelope.current_snapshot,
-        retryable=envelope.retryable,
-    )
+    return ErrorResponse.model_validate(envelope.model_dump())
 
 
 def validation_error_response(*, request_id: UUID) -> ErrorResponse:

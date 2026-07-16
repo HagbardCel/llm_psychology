@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -136,36 +137,64 @@ def _register_exception_handlers(app: FastAPI) -> None:
         )
 
 
+def _log_http_completion(
+    request: Request,
+    response: Response,
+    *,
+    request_id: UUID,
+    started: float,
+) -> None:
+    logger.info(
+        "HTTP request completed",
+        extra={
+            "request_id": str(request_id),
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": round((time.monotonic() - started) * 1000, 1),
+        },
+    )
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self,
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        header = request.headers.get("X-Request-ID")
+        started = time.monotonic()
+        request_id = new_request_id()
+
         try:
+            header = request.headers.get("X-Request-ID")
             request_id = parse_request_id_header(header)
         except RequestIdError:
-            request_id = new_request_id()
-            body = validation_error_response(request_id=request_id)
-            return build_error_response(status=422, body=body)
-
-        request.state.request_id = request_id
-
-        try:
-            response = await call_next(request)
-        except Exception as exc:
-            _log_safe_exception(
-                "unhandled API error",
-                request_id=request_id,
-                exc=exc,
-            )
             response = build_error_response(
-                status=500,
-                body=to_error_response(exc, request_id=request_id),
+                status=422,
+                body=validation_error_response(request_id=request_id),
             )
+        else:
+            request.state.request_id = request_id
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                _log_safe_exception(
+                    "unhandled API error",
+                    request_id=request_id,
+                    exc=exc,
+                )
+                response = build_error_response(
+                    status=500,
+                    body=to_error_response(exc, request_id=request_id),
+                )
 
         response.headers["X-Request-ID"] = str(request_id)
+        _log_http_completion(
+            request,
+            response,
+            request_id=request_id,
+            started=started,
+        )
         return response
 
 
@@ -179,16 +208,24 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         state: ApiState = app.state.api
+        runtime_exited = False
+
         try:
             async with runtime_factory(settings.application) as runtime:
                 state.runtime = runtime
                 state.ready = True
+                logger.info("api_ready")
+
                 try:
                     yield
                 finally:
                     state.ready = False
+
+            runtime_exited = True
         finally:
             state.runtime = None
+            if runtime_exited:
+                logger.info("api_shutdown_complete")
 
     app = FastAPI(
         title="Jung Local Therapist API",
@@ -232,4 +269,5 @@ def cli() -> None:
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,
+        access_log=False,
     )

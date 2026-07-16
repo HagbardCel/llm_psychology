@@ -1289,26 +1289,15 @@ Replace legacy-specific fields with:
 
 Do not preserve legacy action signatures or hierarchical job trees merely for artifact continuity.
 
-### 15.4 Optional local-model smoke
+### 15.4 Evidence policy for provider vs API acceptance
 
-Keep one optional manual local-model smoke after deterministic probes pass:
+Phase 5 does **not** define its own local-model smoke target. Evidence ownership is split:
 
-```text
-make smoke-refactor-phase-5-local-llm
-```
+- **Phase 3 smoke** owns provider and structured-output compatibility (`make smoke-refactor-phase-3-local-llm` or the current Phase 3 equivalent).
+- **Deterministic Phase 5 probes** own HTTP/WebSocket/client/console acceptance (`make probe-console-v1-deterministic`, `make validate-refactor-phase-5`).
+- **Full-stack real-model smoke** is deferred until a demonstrated coverage gap that deterministic probes cannot close.
 
-It should:
-
-- use a temporary data directory;
-- start the real API;
-- use the real `JungApiClient`;
-- complete a bounded intake or prepared-ready therapy scenario;
-- verify strict structured-output compatibility already established in Phase 3;
-- record model/server/base URL and timing evidence;
-- avoid normal development data;
-- remain outside hosted CI.
-
-Do not replace deterministic `FakeLLM` coverage with the local-model smoke.
+Do not replace deterministic `FakeLLM` coverage with ad hoc local-model runs during Phase 5 closeout.
 
 ## 16. Testing strategy
 
@@ -1652,7 +1641,7 @@ Acceptance:
 - add restart, failure/retry, and disconnect scenarios;
 - update artifacts to target fields;
 - add a native make target;
-- keep optional local-model smoke separate.
+- keep provider smoke (Phase 3) separate from deterministic API/client probes (Phase 5);
 
 Acceptance:
 
@@ -1726,7 +1715,7 @@ The Phase 5 PR should also run:
 
 Hosted CI uses `FakeLLM` and an ephemeral real Uvicorn server in the normal containerized test environment. It does not require an external model server.
 
-Run the optional local-model smoke manually when production API composition, model settings loading, or provider payload behavior changes.
+Run Phase 3 provider smoke manually when production API composition, model settings loading, or provider payload behavior changes. Phase 5 acceptance is established by deterministic probes and the Phase 5 validation script, not by a separate Phase 5 local-model smoke target.
 
 ## 22. Acceptance scenarios
 
@@ -1993,7 +1982,7 @@ Mitigation:
 - [x] Restart, retry, duplicate, disconnect, and slow-client cases are covered.
 - [x] Phase 2–4 tests remain green.
 - [x] Legacy characterization tests remain green until Phase 6.
-- [x] Optional local-model smoke evidence is recorded when required.
+- [x] Phase 3 provider smoke remains the owner for structured-output compatibility; Phase 5 relies on deterministic probes.
 
 ## 25. Phase 5 exit criteria
 

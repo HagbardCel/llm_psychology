@@ -29,6 +29,7 @@ from jung.api.contracts import (
     AppSnapshotResponse,
     ChatTurnSummaryResponse,
     EndSessionRequest,
+    ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     ErrorResponse,
@@ -52,9 +53,27 @@ from jung.client._chat_events import (
     ChatEventViolation,
     matches_decisive_event,
 )
+from jung.client._durable_chat import (
+    DurableChatViolation,
+    inspect_durable_chat_messages,
+)
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+_ALLOWED_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
+    "invalid_command": frozenset({409}),
+    "state_conflict": frozenset({409}),
+    "busy": frozenset({409}),
+    "not_found": frozenset({404}),
+    "validation_error": frozenset({422}),
+    "llm_unavailable": frozenset({409}),
+    "llm_timeout": frozenset({409}),
+    "invalid_llm_output": frozenset({409}),
+    "operation_failed": frozenset({409}),
+    "internal_error": frozenset({409, 500}),
+    "not_ready": frozenset({503}),
+}
 
 
 def _validated_origin(value: str) -> httpx.URL:
@@ -154,6 +173,7 @@ class ProtocolErrorKind(StrEnum):
     MALFORMED_REQUEST_ID = "malformed_request_id"
     REQUEST_ID_MISMATCH = "request_id_mismatch"
     UNEXPECTED_STATUS = "unexpected_status"
+    ERROR_STATUS_CODE_MISMATCH = "error_status_code_mismatch"
     INVALID_WEBSOCKET_FRAME = "invalid_websocket_frame"
     INVALID_SERVER_EVENT = "invalid_server_event"
     IMPOSSIBLE_HISTORY = "impossible_history"
@@ -366,6 +386,7 @@ class JungChatConnection:
         try:
             await self._websocket.close()
         except asyncio.CancelledError:
+            self._close_attempted = False
             raise
         except (OSError, WebSocketException):
             return
@@ -586,6 +607,17 @@ class JungApiClient:
             route=route,
             status=response.status_code,
         )
+        allowed_statuses = _ALLOWED_ERROR_STATUSES.get(error.code)
+        if (
+            allowed_statuses is None
+            or response.status_code not in allowed_statuses
+        ):
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
+                route=route,
+                status=response.status_code,
+                expected_model=f"error code {error.code!r}",
+            )
         raise JungApiError(status=response.status_code, error=error)
 
     async def get_state(self) -> AppSnapshotResponse:
@@ -734,48 +766,36 @@ class JungApiClient:
         *,
         matched_error: ErrorEvent | None = None,
     ) -> ChatReconciliationResult | None:
-        if history.session.id != intent.session_id:
+        try:
+            durable = inspect_durable_chat_messages(
+                history,
+                expected_session_id=intent.session_id,
+                client_message_id=intent.client_message_id,
+            )
+        except DurableChatViolation as exc:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="SessionHistoryResponse",
-            )
+                expected_model=exc.expected_model,
+            ) from None
 
-        users = [
-            message
-            for message in history.messages
-            if message.client_message_id == intent.client_message_id
-            and message.role == "user"
-        ]
-        assistants = [
-            message
-            for message in history.messages
-            if message.client_message_id == intent.client_message_id
-            and message.role == "assistant"
-        ]
-        if len(users) > 1 or len(assistants) > 1 or (assistants and not users):
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="SessionHistoryResponse",
-            )
-
-        if users and users[0].content != intent.content:
+        if durable.user and durable.user.content != intent.content:
             return ChatReconciliationResult(
                 status=ChatReconciliationStatus.IDENTITY_CONFLICT,
                 snapshot=snapshot,
                 history=history,
-                conflicting_user_message=users[0],
+                conflicting_user_message=durable.user,
             )
-        if users and assistants:
+        if durable.user and durable.assistant:
             return ChatReconciliationResult(
                 status=ChatReconciliationStatus.COMPLETE,
                 snapshot=snapshot,
                 history=history,
-                completed_message=assistants[0],
+                completed_message=durable.assistant,
             )
 
         pending = snapshot.active_chat_turn
         if (
-            users
+            durable.user
             and pending is not None
             and pending.session_id == intent.session_id
             and pending.client_message_id == intent.client_message_id

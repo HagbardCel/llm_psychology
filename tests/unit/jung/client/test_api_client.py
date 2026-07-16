@@ -6,6 +6,7 @@ import traceback
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -17,6 +18,7 @@ from websockets.exceptions import ConnectionClosed
 from jung.api.contracts import (
     AppSnapshotResponse,
     ChatTurnSummaryResponse,
+    ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     HealthResponse,
@@ -29,6 +31,7 @@ from jung.api.contracts import (
     SessionHistoryResponse,
 )
 from jung.client.api_client import (
+    _ALLOWED_ERROR_STATUSES,
     ChatReconciliationResult,
     ChatReconciliationStatus,
     ClientSettings,
@@ -507,6 +510,33 @@ async def test_explicit_chat_close_makes_connection_unusable() -> None:
     with pytest.raises(RuntimeError):
         await anext(chat.events())
     websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_chat_close_retries_after_cancellation() -> None:
+    close_attempts = 0
+
+    class CancellingWebSocket:
+        async def close(self) -> None:
+            nonlocal close_attempts
+            close_attempts += 1
+            if close_attempts == 1:
+                raise asyncio.CancelledError
+
+    websocket = CancellingWebSocket()
+    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.CancelledError):
+        await chat.aclose()
+
+    assert chat._unusable is True
+    assert chat._close_attempted is False
+
+    await chat.aclose()
+    assert close_attempts == 2
+
+    await chat.aclose()
+    assert close_attempts == 2
 
 
 @pytest.mark.asyncio
@@ -1160,3 +1190,87 @@ def test_reconciliation_result_enforces_status_payload() -> None:
             snapshot=_snapshot(),
             history=history,
         )
+
+
+def test_allowed_error_statuses_match_error_code_literals() -> None:
+    assert set(_ALLOWED_ERROR_STATUSES) == set(get_args(ErrorCode))
+
+
+@pytest.mark.asyncio
+async def test_error_status_code_mismatch_raises_protocol_error() -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            500,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": "invalid_command",
+                "message": "not allowed",
+                "request_id": request_id,
+                "retryable": False,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await client.get_state()
+    assert raised.value.kind is ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_code",
+    ["llm_timeout", "operation_failed", "internal_error"],
+)
+async def test_stored_http_failures_accept_409_status(
+    error_code: str,
+) -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            409,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": error_code,
+                "message": "Generation failed",
+                "request_id": request_id,
+                "retryable": True,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungApiError) as raised:
+        await client.get_state()
+    assert raised.value.status == 409
+    assert raised.value.code == error_code
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fresh_internal_error_accepts_500_status() -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            500,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": "internal_error",
+                "message": "An unexpected error occurred.",
+                "request_id": request_id,
+                "retryable": False,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungApiError) as raised:
+        await client.get_state()
+    assert raised.value.status == 500
+    assert raised.value.code == "internal_error"
+    await client.aclose()
