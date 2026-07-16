@@ -21,6 +21,7 @@ REQUIRED_PHASE_5_TEST_FILES = _MODULE.REQUIRED_PHASE_5_TEST_FILES
 RuntimeContract = _MODULE.RuntimeContract
 _collect_schema_semantics = _MODULE._collect_schema_semantics
 _collect_openapi_user_id_hits = _MODULE.collect_openapi_user_id_hits
+_extract_http_operations = _MODULE._extract_http_operations
 _extract_websocket_paths = _MODULE._extract_websocket_paths
 extract_runtime_contract = _MODULE.extract_runtime_contract
 validate_repository = _MODULE.validate_repository
@@ -334,6 +335,56 @@ def test_schema_user_id_ref_terminal_is_flagged() -> None:
     hits = _collect_schema_semantics(schema)
     assert hits
     assert hits[0][1] == "$ref terminal user_id"
+
+
+def test_extract_http_operations_includes_head_options_and_trace() -> None:
+    document = {
+        "paths": {
+            "/unexpected": {
+                "head": {},
+                "options": {},
+                "trace": {},
+            }
+        }
+    }
+
+    assert _extract_http_operations(document) == frozenset(
+        {
+            ("HEAD", "/unexpected"),
+            ("OPTIONS", "/unexpected"),
+            ("TRACE", "/unexpected"),
+        }
+    )
+
+
+def test_validate_runtime_contract_reports_unexpected_head_operation() -> None:
+    document = {
+        "paths": {
+            "/unexpected": {
+                "head": {},
+            }
+        }
+    }
+    contract = RuntimeContract(
+        http_operations=(
+            _MODULE.EXPECTED_HTTP_OPERATIONS
+            | _extract_http_operations(document)
+        ),
+        websocket_paths=("/api/v1/chat",),
+        command_discriminators=frozenset({"send_message"}),
+        event_discriminators=_MODULE.EXPECTED_EVENT_DISCRIMINATORS,
+        openapi_document={},
+        ws_schemas={},
+    )
+
+    messages = [
+        violation.message
+        for violation in validate_runtime_contract(contract)
+    ]
+
+    assert messages == [
+        "unexpected HTTP operation: HEAD /unexpected"
+    ]
 
 
 def test_validate_runtime_contract_reports_missing_http_operation() -> None:

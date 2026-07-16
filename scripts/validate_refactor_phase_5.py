@@ -136,7 +136,7 @@ def _extract_http_operations(
             continue
         for method in path_item:
             upper = method.upper()
-            if upper in {"GET", "PUT", "POST", "DELETE", "PATCH"}:
+            if upper in _HTTP_METHODS:
                 operations.add((upper, path))
     return frozenset(operations)
 
