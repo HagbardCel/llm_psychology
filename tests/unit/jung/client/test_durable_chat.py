@@ -75,7 +75,7 @@ def test_history_session_id_mismatch_raises() -> None:
             client_message_id=client_message_id,
         )
 
-    assert raised.value.expected_model == "session history for pending turn"
+    assert raised.value.expected_model == "SessionHistoryResponse"
 
 
 def test_duplicate_user_messages_raise() -> None:

@@ -16,6 +16,7 @@ from jung.api.contracts import (
     ErrorEvent,
     MessageCompletedEvent,
     MessageInProgressEvent,
+    MessageResponse,
     OperationChangedEvent,
     ProfileUpdateRequest,
     ProfileWire,
@@ -515,10 +516,7 @@ class ConsoleApp:
                 history = await self._client.get_session(
                     context.intent.session_id
                 )
-                assistant = self._assistant_for_intent(
-                    history,
-                    context.intent.client_message_id,
-                )
+                assistant = self._assistant_for_intent(history, context.intent)
                 if assistant is not None:
                     return await self._complete_from_history(
                         intent=context.intent,
@@ -527,10 +525,7 @@ class ConsoleApp:
                 continue
 
             history = await self._client.get_session(context.intent.session_id)
-            assistant = self._assistant_for_intent(
-                history,
-                context.intent.client_message_id,
-            )
+            assistant = self._assistant_for_intent(history, context.intent)
             if assistant is not None:
                 return await self._complete_from_history(
                     intent=context.intent,
@@ -610,13 +605,13 @@ class ConsoleApp:
     def _assistant_for_intent(
         self,
         history: SessionHistoryResponse,
-        client_message_id: UUID,
-    ):
+        intent: ChatSendIntent,
+    ) -> MessageResponse | None:
         try:
             durable = inspect_durable_chat_messages(
                 history,
-                expected_session_id=history.session.id,
-                client_message_id=client_message_id,
+                expected_session_id=intent.session_id,
+                client_message_id=intent.client_message_id,
             )
         except DurableChatViolation as exc:
             raise JungProtocolError(

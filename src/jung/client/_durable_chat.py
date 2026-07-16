@@ -27,7 +27,7 @@ def inspect_durable_chat_messages(
     client_message_id: UUID,
 ) -> DurableChatMessages:
     if history.session.id != expected_session_id:
-        raise DurableChatViolation("session history for pending turn")
+        raise DurableChatViolation("SessionHistoryResponse")
 
     users = [
         message

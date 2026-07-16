@@ -1639,6 +1639,48 @@ async def test_pending_poll_completion_refreshes_state() -> None:
     assert client_message_id not in app._locally_submitted_client_ids
 
 
+async def test_pending_poll_rejects_history_for_wrong_session() -> None:
+    client = _mock_client()
+    session_a = _session()
+    session_b_id = uuid4()
+    client_message_id = uuid4()
+    intent = client.new_chat_intent(
+        session_a.id,
+        "hello",
+        client_message_id=client_message_id,
+    )
+    context = PendingTurnContext(intent=intent)
+    pending_snapshot = _snapshot(
+        pending=_turn(
+            session_id=session_a.id,
+            client_message_id=client_message_id,
+        ),
+        session=session_a,
+    )
+    wrong_history = _history(
+        session_id=session_b_id,
+        client_message_id=client_message_id,
+        assistant_content="wrong-session reply",
+    )
+    client.get_state = AsyncMock(return_value=pending_snapshot)
+    client.get_session = AsyncMock(return_value=wrong_history)
+    client.reconcile_chat_turn = AsyncMock()
+    app = _app(client)
+
+    with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
+        with pytest.raises(JungProtocolError) as exc_info:
+            await app._wait_for_pending_chat_turn(
+                pending_snapshot,
+                context=context,
+            )
+
+    assert exc_info.value.kind is ProtocolErrorKind.IMPOSSIBLE_HISTORY
+    client.get_state.assert_awaited_once()
+    client.get_session.assert_awaited_once_with(session_a.id)
+    client.reconcile_chat_turn.assert_not_awaited()
+    assert app._output.assistant_tokens == []
+
+
 async def test_completed_original_turn_not_replaced_by_other_pending() -> None:
     client = _mock_client()
     session = _session()

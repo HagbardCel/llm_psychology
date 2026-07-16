@@ -1223,7 +1223,7 @@ async def test_error_status_code_mismatch_raises_protocol_error() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_code",
-    ["llm_timeout", "operation_failed"],
+    ["llm_timeout", "operation_failed", "internal_error"],
 )
 async def test_stored_http_failures_accept_409_status(
     error_code: str,
@@ -1248,4 +1248,29 @@ async def test_stored_http_failures_accept_409_status(
         await client.get_state()
     assert raised.value.status == 409
     assert raised.value.code == error_code
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fresh_internal_error_accepts_500_status() -> None:
+    client = JungApiClient(ClientSettings("http://localhost:8000"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            500,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": "internal_error",
+                "message": "An unexpected error occurred.",
+                "request_id": request_id,
+                "retryable": False,
+            },
+        )
+
+    await _install_transport(client, handler)
+    with pytest.raises(JungApiError) as raised:
+        await client.get_state()
+    assert raised.value.status == 500
+    assert raised.value.code == "internal_error"
     await client.aclose()

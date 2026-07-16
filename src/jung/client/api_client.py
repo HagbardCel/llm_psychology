@@ -71,7 +71,7 @@ _ALLOWED_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
     "llm_timeout": frozenset({409}),
     "invalid_llm_output": frozenset({409}),
     "operation_failed": frozenset({409}),
-    "internal_error": frozenset({500}),
+    "internal_error": frozenset({409, 500}),
     "not_ready": frozenset({503}),
 }
 
@@ -766,12 +766,6 @@ class JungApiClient:
         *,
         matched_error: ErrorEvent | None = None,
     ) -> ChatReconciliationResult | None:
-        if history.session.id != intent.session_id:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="SessionHistoryResponse",
-            )
-
         try:
             durable = inspect_durable_chat_messages(
                 history,

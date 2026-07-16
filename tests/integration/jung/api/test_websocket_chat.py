@@ -257,9 +257,22 @@ async def test_internal_error_then_validation_error_on_same_socket(
 
         assert internal["session_id"] == session_id
         assert internal["client_message_id"] == str(client_message_id)
+        assert internal["error"]["request_id"] == str(request_id)
         assert internal.get("turn_id") is None
         assert secret not in json.dumps(internal)
         assert secret not in caplog.text
+
+        records = [
+            record
+            for record in caplog.records
+            if record.message == "websocket_command_rejected"
+            and getattr(record, "request_id", None) == str(request_id)
+            and getattr(record, "error_code", None) == "internal_error"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert getattr(record, "exception_type", None) == "RuntimeError"
+        assert record.levelno == logging.ERROR
 
         await ws.send("not-json")
         validation = await _recv_json(ws)
