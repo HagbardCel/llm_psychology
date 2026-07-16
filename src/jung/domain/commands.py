@@ -50,4 +50,3 @@ class RetryOperation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     expected_revision: int
-    operation_id: UUID

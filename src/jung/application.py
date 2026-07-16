@@ -394,18 +394,20 @@ class TherapyApplication:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
                 current = await self._run_store(self._store.get_current_operation)
-                if current is None or current.id != command.operation_id:
-                    raise InvalidCommand(
-                        "operation is not the current failed operation"
+                if current is None:
+                    raise InvariantViolation(
+                        "retry command available without current operation"
                     )
                 if (
                     current.status is not OperationStatus.FAILED
                     or not current.retryable
                 ):
-                    raise InvalidCommand("operation is not retryable")
+                    raise InvariantViolation(
+                        "retry command available for ineligible operation"
+                    )
                 operation = await self._run_store(
                     self._store.retry_operation,
-                    command.operation_id,
+                    current.id,
                     expected_revision=command.expected_revision,
                     now=self._now(),
                 )

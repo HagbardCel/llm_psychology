@@ -149,7 +149,7 @@ async def test_failed_operation_can_be_retried(store: SQLiteStore) -> None:
         )
         revision = (await runtime.application.get_snapshot()).revision
         await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision, operation_id=operation_id)
+            RetryOperation(expected_revision=revision)
         )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
@@ -241,7 +241,7 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
         )
         revision = (await runtime.application.get_snapshot()).revision
         await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision, operation_id=operation_id)
+            RetryOperation(expected_revision=revision)
         )
         runtime.application.begin_shutdown()
         gate.set()
@@ -397,7 +397,7 @@ async def test_retry_operation_schedules_operation_when_publish_fails(
         )
         revision = (await runtime.application.get_snapshot()).revision
         await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision, operation_id=operation_id)
+            RetryOperation(expected_revision=revision)
         )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
@@ -500,7 +500,7 @@ async def test_retry_operation_schedules_when_assemble_raises(
         gate_next_assemble = True
         with pytest.raises(RuntimeError, match="injected assemble failure"):
             await runtime.application.retry_operation(
-                RetryOperation(expected_revision=revision, operation_id=operation_id)
+                RetryOperation(expected_revision=revision)
             )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()

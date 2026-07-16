@@ -39,8 +39,7 @@ from jung.domain.commands import (
     StartSession,
     UpdateProfile,
 )
-from jung.domain.errors import InvalidCommand
-from jung.domain.models import OperationStatus, Profile
+from jung.domain.models import Profile
 
 RequestIdHeader = Annotated[
     str | None,
@@ -227,19 +226,8 @@ async def retry_operation(
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.get_snapshot()
-    operation = snapshot.current_operation
-    if (
-        operation is None
-        or operation.status is not OperationStatus.FAILED
-        or not operation.retryable
-    ):
-        raise InvalidCommand("operation is not the current failed operation")
     snapshot = await runtime.application.retry_operation(
-        RetryOperation(
-            expected_revision=body.expected_revision,
-            operation_id=operation.id,
-        )
+        RetryOperation(expected_revision=body.expected_revision)
     )
     return to_snapshot_response(snapshot, context=context)
 
