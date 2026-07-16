@@ -113,6 +113,7 @@ def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> N
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8000
     assert captured["log_level"] == "info"
+    assert captured["access_log"] is False
     assert type(captured["app"]).__name__ == "FastAPI"
 
 

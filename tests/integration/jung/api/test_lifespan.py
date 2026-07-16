@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+
 import pytest
 from httpx import AsyncClient
+
+from jung.api.app import create_app
+from tests.jung_api_fixtures import runtime_factory
 
 
 @pytest.mark.asyncio
@@ -49,6 +55,66 @@ async def test_health_inside_lifespan_returns_healthy(
 async def test_api_state_initialized_at_construction(api_app) -> None:
     assert api_app.state.api.ready is False
     assert api_app.state.api.runtime is None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_ready_and_shutdown_complete(
+    store,
+    fake_llm,
+    api_settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app(
+        api_settings,
+        runtime_factory=runtime_factory(store, fake_llm),
+    )
+
+    with caplog.at_level(logging.INFO, logger="jung.api.app"):
+        async with app.router.lifespan_context(app):
+            assert any(
+                record.message == "api_ready"
+                for record in caplog.records
+            )
+
+    assert any(
+        record.message == "api_shutdown_complete"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_exit_does_not_log_shutdown_complete(
+    store,
+    fake_llm,
+    api_settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    base_factory = runtime_factory(store, fake_llm)
+
+    @asynccontextmanager
+    async def failing_exit_factory(settings):
+        async with base_factory(settings) as runtime:
+            try:
+                yield runtime
+            finally:
+                raise RuntimeError("shutdown failed")
+
+    app = create_app(api_settings, runtime_factory=failing_exit_factory)
+
+    with caplog.at_level(logging.INFO, logger="jung.api.app"):
+        with pytest.raises(ExceptionGroup) as exc_info:
+            async with app.router.lifespan_context(app):
+                pass
+
+    assert any(
+        isinstance(exc, RuntimeError) and str(exc) == "shutdown failed"
+        for exc in exc_info.value.exceptions
+    )
+
+    assert not any(
+        record.message == "api_shutdown_complete"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

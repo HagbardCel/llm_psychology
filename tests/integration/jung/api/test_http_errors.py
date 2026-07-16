@@ -97,6 +97,47 @@ async def test_invalid_request_body_returns_validation_error(
 
 
 @pytest.mark.asyncio
+async def test_malformed_request_id_logs_http_completion(
+    started_api_client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="jung.api.app"):
+        response = await started_api_client.get(
+            "/api/v1/state",
+            headers={"X-Request-ID": "bad"},
+        )
+
+    assert response.status_code == 422
+    matching = [
+        record
+        for record in caplog.records
+        if record.message == "HTTP request completed"
+        and getattr(record, "status", None) == 422
+        and getattr(record, "path", None) == "/api/v1/state"
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_success_logs_http_completion(
+    started_api_client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="jung.api.app"):
+        response = await started_api_client.get("/api/v1/state")
+
+    assert response.status_code == 200
+    matching = [
+        record
+        for record in caplog.records
+        if record.message == "HTTP request completed"
+        and getattr(record, "status", None) == 200
+        and getattr(record, "path", None) == "/api/v1/state"
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
 async def test_unexpected_exception_returns_sanitized_internal_error(
     store,
     fake_llm,
