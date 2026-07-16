@@ -537,13 +537,133 @@ async def test_extra_body_merge_applies_task_overrides(
     ],
 )
 async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -> None:
-    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)), config=config)
     with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
-        await gateway.generate_structured(
-            [ChatMessage(role=ChatRole.USER, content="give json")],
-            _Answer,
-            _policy(),
+        OpenAICompatibleLLM(config)
+
+
+async def test_extra_body_rejects_forbidden_global_field_before_sdk_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_openai(*args: object, **kwargs: object) -> None:
+        raise AssertionError("AsyncOpenAI must not be constructed")
+
+    monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", fail_openai)
+    config = AdapterConfig(
+        base_url="http://testserver/v1",
+        api_key="test",
+        extra_body={"model": "override"},
+    )
+    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+        OpenAICompatibleLLM(config)
+
+
+async def test_extra_body_rejects_forbidden_task_field_before_sdk_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_openai(*args: object, **kwargs: object) -> None:
+        raise AssertionError("AsyncOpenAI must not be constructed")
+
+    monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", fail_openai)
+    config = AdapterConfig(
+        base_url="http://testserver/v1",
+        api_key="test",
+        task_extra_body={LLMTask.ASSESSMENT: {"stream": True}},
+    )
+    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+        OpenAICompatibleLLM(config)
+
+
+async def test_extra_body_task_replaces_global_object_without_deep_merge() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
         )
+
+    config = AdapterConfig(
+        base_url="http://testserver/v1",
+        api_key="test",
+        extra_body={
+            "chat_template_kwargs": {
+                "enable_thinking": True,
+                "reasoning_budget": 1024,
+            }
+        },
+        task_extra_body={
+            LLMTask.ASSESSMENT: {
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                }
+            }
+        },
+    )
+    gateway = _client(httpx.MockTransport(handler), config=config)
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body.get("chat_template_kwargs") == {
+        "enable_thinking": False,
+    }
+    assert "reasoning_budget" not in body.get("chat_template_kwargs", {})
+
+
+async def test_extra_body_unrelated_global_keys_survive_task_override() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    config = AdapterConfig(
+        base_url="http://testserver/v1",
+        api_key="test",
+        extra_body={"thinking": True, "shared": "global"},
+        task_extra_body={
+            LLMTask.ASSESSMENT: {
+                "shared": "task",
+                "reasoning_effort": "low",
+            }
+        },
+    )
+    gateway = _client(httpx.MockTransport(handler), config=config)
+    await gateway.generate_structured(
+        [ChatMessage(role=ChatRole.USER, content="give json")],
+        _Answer,
+        _policy(),
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body.get("thinking") is True
+    assert body.get("shared") == "task"
+    assert body.get("reasoning_effort") == "low"
 
 
 async def test_provider_attempt_event_emitted_on_initial_success() -> None:

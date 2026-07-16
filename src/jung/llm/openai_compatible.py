@@ -132,6 +132,9 @@ class OpenAICompatibleLLM:
         client: AsyncOpenAI | None = None,
         on_provider_attempt: Callable[[ProviderAttemptEvent], None] | None = None,
     ) -> None:
+        for task in LLMTask:
+            _merge_extra_body(config, task)
+
         self._config = config
         self._client = client or AsyncOpenAI(
             base_url=config.base_url,
