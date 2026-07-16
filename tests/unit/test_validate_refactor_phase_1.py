@@ -71,6 +71,6 @@ def test_validate_incomplete_deletion_inventory_fails(tmp_path):
     broken = tmp_path / "broken-deletion"
     _copy_phase1_tree(broken)
     inventory = broken / "docs/refactor/deletion-inventory.md"
-    inventory.write_text("| Path / symbols | Responsibility |\n|---|---|\n")
+    inventory.write_text("| Path | Treatment |\n|---|---|\n")
     errors = validate(broken)
-    assert any("deletion inventory column" in error for error in errors)
+    assert any("deletion inventory" in error for error in errors)

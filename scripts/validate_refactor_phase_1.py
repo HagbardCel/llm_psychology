@@ -40,14 +40,19 @@ CHARACTERIZATION_FILES = (
     "tests/characterization/test_restart.py",
 )
 
-DELETION_COLUMNS = (
-    "Path / symbols",
-    "Responsibility",
-    "Target",
-    "Test action",
-    "Blocker",
-    "Phase",
+DELETION_SECTIONS = (
+    "## Filesystem deletion roots",
+    "## Legacy Make targets",
+    "## Legacy CI workflows",
+    "## Exceptions",
+)
+
+DELETION_EXCEPTION_COLUMNS = (
+    "Path",
+    "Treatment",
+    "Owner PR",
     "Status",
+    "Evidence",
 )
 
 
@@ -131,12 +136,17 @@ def _baseline_sha_valid(root: Path) -> list[str]:
     return errors
 
 
-def _deletion_inventory_columns(root: Path) -> list[str]:
+def _deletion_inventory_structure(root: Path) -> list[str]:
     text = (root / "docs/refactor/deletion-inventory.md").read_text(encoding="utf-8")
     errors: list[str] = []
-    for column in DELETION_COLUMNS:
+    for section in DELETION_SECTIONS:
+        if section not in text:
+            errors.append(f"missing deletion inventory section {section!r}")
+    for column in DELETION_EXCEPTION_COLUMNS:
         if column not in text:
-            errors.append(f"missing deletion inventory column {column!r}")
+            errors.append(f"missing deletion inventory exception column {column!r}")
+    if "status: active" not in text.split("---", 2)[1]:
+        errors.append("deletion inventory must have status: active")
     return errors
 
 
@@ -203,7 +213,7 @@ def validate(root: Path | None = None) -> list[str]:
     errors.extend(_api_contract_complete(root))
     errors.extend(_workflow_complete(root))
     errors.extend(_baseline_sha_valid(root))
-    errors.extend(_deletion_inventory_columns(root))
+    errors.extend(_deletion_inventory_structure(root))
     errors.extend(_characterization_layout(root))
 
     test_treatment = root / "docs/refactor/test-treatment-inventory.md"

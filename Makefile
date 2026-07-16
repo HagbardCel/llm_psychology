@@ -3,8 +3,8 @@
 .PHONY: ui-console ui-console-test
 .PHONY: probe probe-console-deterministic probe-console-v1-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
-.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full
-.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm phase-5-test validate-refactor-phase-5 _phase-5-console-v1 hook-commit hook-push
+.PHONY: generate-schemas validate-schemas generate-ws-protocol validate-generated-contracts validate-docs validate-architecture finalization-check finalization-check-full finalization-check-target
+.PHONY: prepare-runtime-dirs characterization-smoke characterization-full characterization-test test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm smoke-target-local-llm phase-5-test validate-refactor-phase-5 validate-refactor-phase-6 test-target _phase-5-console-v1 hook-commit hook-push
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -43,6 +43,10 @@ help:
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  validate-architecture - Validate architecture budgets and layer boundaries (Docker)"
 	@echo "  finalization-check - Standard release-candidate checks, including characterization smoke (Docker)"
+	@echo "  finalization-check-target - Target-runtime release gate candidate (Phase 6)"
+	@echo "  test-target         - Complete deterministic Jung test suite once (Phase 6)"
+	@echo "  validate-refactor-phase-6 - Validate Phase 6 cutover invariants (Docker)"
+	@echo "  smoke-target-local-llm - Manual local-model smoke alias (Phase 6 closure)"
 	@echo "  validate-refactor-phase-2 - Validate Phase 2 jung domain/persistence (Docker)"
 	@echo "  phase-3-test            - Run Phase 3 LLM and processor tests (Docker)"
 	@echo "  validate-refactor-phase-3 - Validate Phase 3 jung llm/phases (Docker)"
@@ -120,6 +124,46 @@ test-unit:
 # Run integration tests only (Docker)
 test-integration:
 	docker compose --profile test run --rm test pytest -m integration
+
+TARGET_SUPPORT_TESTS := \
+	tests/unit/test_validate_refactor_phase_5.py \
+	tests/unit/test_validate_refactor_phase_6.py \
+	tests/unit/test_recording_fake_llm.py \
+	tests/unit/test_measure_codebase.py
+
+PHASE_6_PYTEST_OPTIONS := \
+	-o trio_mode=false \
+	-o asyncio_mode=auto
+
+test-target: prepare-runtime-dirs
+	docker compose --profile test run --rm test pytest \
+		$(PHASE_6_PYTEST_OPTIONS) \
+		-m "not real_llm" \
+		tests/unit/jung/ \
+		tests/integration/jung/ \
+		$(TARGET_SUPPORT_TESTS)
+
+smoke-target-local-llm: smoke-refactor-phase-3-local-llm
+
+finalization-check-target: prepare-runtime-dirs
+	$(MAKE) lint
+	$(MAKE) validate-docs
+	$(MAKE) test-target
+	docker compose --profile test run --rm \
+		test python scripts/validate_refactor_phase_6.py --stage pre-cutover
+	docker compose --profile test run --rm \
+		test python scripts/validate_refactor_phase_5.py
+	$(MAKE) probe-console-v1-deterministic
+
+validate-refactor-phase-6: prepare-runtime-dirs
+	docker compose --profile test run --rm test ruff check \
+		scripts/validate_refactor_phase_6.py \
+		tests/unit/test_validate_refactor_phase_6.py
+	docker compose --profile test run --rm \
+		test python scripts/validate_refactor_phase_6.py --stage pre-cutover
+	docker compose --profile test run --rm test pytest \
+		$(PHASE_6_PYTEST_OPTIONS) \
+		tests/unit/test_validate_refactor_phase_6.py -q
 
 # Full release-candidate validation path.
 finalization-check: prepare-runtime-dirs
