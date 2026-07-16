@@ -26,6 +26,7 @@ from jung.api.contracts import (
     StyleOptionsResponse,
     to_profile_response,
     to_session_history_response,
+    to_session_summary,
     to_snapshot_response,
     to_start_session_response,
     to_style_options_response,
@@ -154,8 +155,6 @@ async def select_style(
 async def list_sessions(
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> SessionListResponse:
-    from jung.api.contracts import to_session_summary
-
     sessions = await runtime.application.list_sessions()
     return SessionListResponse(
         sessions=[to_session_summary(session) for session in sessions]
