@@ -317,14 +317,8 @@ class HealthResponse(BaseModel):
     status: Literal["healthy"]
 
 
-class ErrorResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    code: ErrorCode
-    message: str
-    request_id: UUID
-    current_snapshot: AppSnapshotResponse | None = None
-    retryable: bool | None = None
+class ErrorResponse(ErrorEnvelope):
+    pass
 
 
 COMMON_ERROR_RESPONSES = {

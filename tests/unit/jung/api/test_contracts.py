@@ -13,6 +13,7 @@ from jung.api.contracts import (
     COMMAND_ORDER,
     ErrorEnvelope,
     ErrorEvent,
+    ErrorResponse,
     MappingContext,
     MessageResponse,
     PlanSummaryResponse,
@@ -534,3 +535,12 @@ def test_pending_chat_turn_maps_to_snapshot_active_chat_turn() -> None:
 def test_contract_schema_does_not_expose_user_id(model: type[BaseModel]) -> None:
     schema = model.model_json_schema()
     assert not _contains_property(schema, "user_id"), model.__name__
+
+
+def test_error_response_inherits_error_envelope_fields() -> None:
+    assert tuple(ErrorResponse.model_fields) == tuple(ErrorEnvelope.model_fields)
+    for name, envelope_field in ErrorEnvelope.model_fields.items():
+        assert (
+            ErrorResponse.model_fields[name].annotation
+            == envelope_field.annotation
+        )
