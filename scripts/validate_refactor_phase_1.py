@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 REQUIRED = [
@@ -40,20 +41,7 @@ CHARACTERIZATION_FILES = (
     "tests/characterization/test_restart.py",
 )
 
-DELETION_SECTIONS = (
-    "## Filesystem deletion roots",
-    "## Legacy Make targets",
-    "## Legacy CI workflows",
-    "## Exceptions",
-)
-
-DELETION_EXCEPTION_COLUMNS = (
-    "Path",
-    "Treatment",
-    "Owner PR",
-    "Status",
-    "Evidence",
-)
+MANIFEST_PATH = Path("docs/refactor/deletion-manifest.toml")
 
 
 def _links_exist(root: Path, path: str, text: str) -> list[str]:
@@ -136,18 +124,21 @@ def _baseline_sha_valid(root: Path) -> list[str]:
     return errors
 
 
-def _deletion_inventory_structure(root: Path) -> list[str]:
-    text = (root / "docs/refactor/deletion-inventory.md").read_text(encoding="utf-8")
-    errors: list[str] = []
-    for section in DELETION_SECTIONS:
-        if section not in text:
-            errors.append(f"missing deletion inventory section {section!r}")
-    for column in DELETION_EXCEPTION_COLUMNS:
-        if column not in text:
-            errors.append(f"missing deletion inventory exception column {column!r}")
-    if "status: active" not in text.split("---", 2)[1]:
-        errors.append("deletion inventory must have status: active")
-    return errors
+def _deletion_manifest_active(root: Path) -> list[str]:
+    manifest = root / MANIFEST_PATH
+    if not manifest.is_file():
+        return ["missing deletion manifest: docs/refactor/deletion-manifest.toml"]
+    try:
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        return [f"invalid deletion manifest TOML: {exc}"]
+    if data.get("schema_version") != 1:
+        return ["deletion manifest must have schema_version = 1"]
+    if data.get("status") != "active":
+        return ["deletion manifest must have status = \"active\" during Phase 1"]
+    if not isinstance(data.get("items"), list) or not data["items"]:
+        return ["deletion manifest must define at least one item"]
+    return []
 
 
 def _characterization_layout(root: Path) -> list[str]:
@@ -213,7 +204,7 @@ def validate(root: Path | None = None) -> list[str]:
     errors.extend(_api_contract_complete(root))
     errors.extend(_workflow_complete(root))
     errors.extend(_baseline_sha_valid(root))
-    errors.extend(_deletion_inventory_structure(root))
+    errors.extend(_deletion_manifest_active(root))
     errors.extend(_characterization_layout(root))
 
     test_treatment = root / "docs/refactor/test-treatment-inventory.md"

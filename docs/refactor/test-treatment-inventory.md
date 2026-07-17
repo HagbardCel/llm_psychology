@@ -8,7 +8,7 @@ source_of_truth_for: Refactor test treatment plan
 
 # Test Treatment Inventory
 
-Test retirement actions are recorded in the `Test action` column of [Deletion Inventory](deletion-inventory.md). Allowed values are `retain`, `port`, `rewrite_application`, `rewrite_api`, `delete_with_component`, and `delete_redundant`.
+Test retirement actions are recorded in the Phase 6 [deletion manifest](deletion-manifest.toml) (`action` and `evidence` fields). See [deletion-inventory.md](deletion-inventory.md) for the overview.
 
 | Existing test area | Test action | Reason / target home |
 |---|---|---|
