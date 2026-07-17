@@ -98,6 +98,18 @@ replacements = ["src/jung/persistence/sqlite_store.py"]
 evidence = ["tests/unit/jung/persistence/", "tests/integration/jung/persistence/"]
 
 [[items]]
+path = "src/psychoanalyst_app/services/db/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy persistence executor, repositories, and facade stack"
+blocker = "SQLiteStore transactions"
+replacements = ["src/jung/persistence/sqlite_store.py"]
+evidence = ["tests/unit/jung/persistence/", "tests/integration/jung/persistence/"]
+
+[[items]]
 path = "src/psychoanalyst_app/api/ws_handler.py"
 kind = "filesystem"
 action = "port_then_delete"
@@ -248,7 +260,7 @@ status = "planned"
 confidence = "confirmed"
 responsibility = "Legacy deterministic probe shell wrapper"
 replacements = ["Makefile"]
-evidence = ["probe-console-v1-deterministic"]
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
 
 [[items]]
 path = "scripts/probe_intake_notes.sh"
@@ -327,20 +339,21 @@ evidence = ["tests/unit/jung/phases/"]
 [[items]]
 path = "tests/unit/test_intake_record_merge.py"
 kind = "filesystem"
-action = "retain"
+action = "port_then_delete"
 owner_pr = "6D"
 status = "planned"
-confidence = "likely"
-responsibility = "Intake record merge regression coverage until target tests subsume it"
+confidence = "confirmed"
+responsibility = "Legacy intake record merge unit test superseded by Jung-native coverage"
+replacements = ["tests/unit/jung/phases/intake/test_merge.py"]
 
 [[items]]
 path = "tests/unit/test_planning_analysis.py"
 kind = "filesystem"
-action = "retain"
+action = "port_then_delete"
 owner_pr = "6D"
 status = "planned"
-confidence = "likely"
-responsibility = "Planning analysis regression coverage until target tests subsume it"
+confidence = "discovery-needed"
+responsibility = "Planning analysis decisions and recommendations until Jung-native coverage exists"
 
 [[items]]
 path = "tests/unit/test_measure_codebase.py"
@@ -390,7 +403,6 @@ owner_pr = "6A"
 status = "complete"
 confidence = "confirmed"
 responsibility = "API-backed deterministic console workflow probe coverage"
-evidence = ["probe-console-v1-deterministic"]
 
 [[items]]
 path = "scripts/validate_refactor_phase_1.py"
@@ -447,8 +459,16 @@ owner_pr = "6D"
 status = "planned"
 confidence = "confirmed"
 responsibility = "Legacy deterministic console probe Make target"
-replacements = ["probe-console-v1-deterministic"]
 evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "probe-console-v1-deterministic"
+kind = "make_target"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Target API-backed deterministic console probe"
 
 [[items]]
 path = "probe-console-intake-notes"
@@ -521,7 +541,15 @@ owner_pr = "6B"
 status = "planned"
 confidence = "confirmed"
 responsibility = "Legacy real-LLM test Make target"
-replacements = ["smoke-target-local-llm"]
+
+[[items]]
+path = "smoke-target-local-llm"
+kind = "make_target"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Target manual local-model smoke alias"
 
 [[items]]
 path = "test-validate-no-mocks"
@@ -540,7 +568,6 @@ owner_pr = "6B"
 status = "planned"
 confidence = "confirmed"
 responsibility = "Legacy usertest database reset Make target"
-replacements = ["reset-manual-test"]
 
 [[items]]
 path = "reset-foundation-db"
@@ -550,7 +577,6 @@ owner_pr = "6B"
 status = "planned"
 confidence = "confirmed"
 responsibility = "Legacy foundation database reset Make target"
-replacements = ["reset-jung-db"]
 
 [[items]]
 path = ".github/workflows/architecture-governance.yml"

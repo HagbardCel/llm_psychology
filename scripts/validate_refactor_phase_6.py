@@ -10,21 +10,17 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import shlex
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = Path("docs/refactor/deletion-manifest.toml")
 WORKFLOW_EDIT_PATH = ".github/workflows/release-candidate-validation.yml"
 
-STAGE_MANIFEST_STATUS = {
-    "pre-cutover": "active",
-    "cutover": "active",
-    "final": "completed",
-}
-
+TOP_LEVEL_ALLOWED = frozenset({"schema_version", "status", "items"})
 OWNERS = frozenset({"6A", "6B", "6C", "6D"})
 KINDS = frozenset({"filesystem", "make_target", "workflow", "workflow_edit"})
 ACTIONS = frozenset(
@@ -32,7 +28,6 @@ ACTIONS = frozenset(
 )
 ITEM_STATUSES = frozenset({"planned", "in_progress", "complete"})
 CONFIDENCES = frozenset({"confirmed", "likely", "discovery-needed"})
-
 ITEM_REQUIRED = frozenset(
     {
         "path",
@@ -54,7 +49,6 @@ ITEM_OPTIONAL = frozenset(
     }
 )
 ITEM_ALLOWED = ITEM_REQUIRED | ITEM_OPTIONAL
-
 KIND_ACTIONS: dict[str, frozenset[str]] = {
     "filesystem": ACTIONS,
     "make_target": frozenset({"delete", "retain"}),
@@ -70,7 +64,7 @@ LEGACY_GATE_STEPS = frozenset(
         "validate-generated-contracts",
         "validate-architecture",
         "test-validate",
-        "validate_refactor_phase_5.py",
+        "scripts/validate_refactor_phase_5.py",
         "characterization-smoke",
         "probe-console-deterministic",
     }
@@ -80,8 +74,8 @@ TARGET_GATE_STEPS = frozenset(
         "lint",
         "validate-docs",
         "test-target",
-        "validate_refactor_phase_6.py",
-        "validate_refactor_phase_5.py",
+        "scripts/validate_refactor_phase_6.py",
+        "scripts/validate_refactor_phase_5.py",
         "probe-console-v1-deterministic",
     }
 )
@@ -125,7 +119,6 @@ TARGET_RUNTIME = "jung-api"
 LEGACY_ENTRY_POINTS = frozenset({"psychoanalyst-server", "psychoanalyst-db"})
 TARGET_ENTRY_CUTOVER = frozenset({"jung-api", "jung-console"})
 TARGET_ENTRY_FINAL = TARGET_ENTRY_CUTOVER | frozenset({"jung-db"})
-
 MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -157,8 +150,88 @@ class RecipeCommand:
     ignored_failure: bool
 
 
+@dataclass(frozen=True, slots=True)
+class GateRules:
+    target: str
+    required: frozenset[str]
+    forbidden: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class StageRules:
+    manifest_status: str
+    expected_runtime: str
+    gates: tuple[GateRules, ...]
+    required_entry_points: frozenset[str]
+    forbidden_entry_points: frozenset[str]
+    final_closure: bool
+    required_complete_items: frozenset[tuple[str, str]] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class RepoContext:
+    root: Path
+    recipes: dict[str, list[RecipeCommand]]
+    makefile_text: str
+    pyproject: dict[str, Any]
+    compose: str
+    dockerfile: str
+
+
+STAGES: dict[str, StageRules] = {
+    "pre-cutover": StageRules(
+        manifest_status="active",
+        expected_runtime=LEGACY_RUNTIME,
+        gates=(
+            GateRules("finalization-check", LEGACY_GATE_STEPS),
+            GateRules("finalization-check-target", TARGET_GATE_STEPS),
+        ),
+        required_entry_points=frozenset(),
+        forbidden_entry_points=frozenset(),
+        final_closure=False,
+    ),
+    "cutover": StageRules(
+        manifest_status="active",
+        expected_runtime=TARGET_RUNTIME,
+        gates=(
+            GateRules(
+                "finalization-check",
+                TARGET_GATE_STEPS,
+                LEGACY_ONLY_STEPS,
+            ),
+        ),
+        required_entry_points=TARGET_ENTRY_CUTOVER,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        final_closure=False,
+        required_complete_items=frozenset(
+            {("workflow_edit", WORKFLOW_EDIT_PATH)}
+        ),
+    ),
+    "final": StageRules(
+        manifest_status="completed",
+        expected_runtime=TARGET_RUNTIME,
+        gates=(
+            GateRules(
+                "finalization-check",
+                TARGET_GATE_STEPS,
+                LEGACY_ONLY_STEPS,
+            ),
+        ),
+        required_entry_points=TARGET_ENTRY_FINAL,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        final_closure=True,
+    ),
+}
+
+
+def _norm_pkg_name(name: str) -> str:
+    return name.lower().replace("-", "_").replace(".", "_")
+
+
 def _norm_fs_path(path: str) -> str:
-    cleaned = path.strip().replace("\\", "/").replace("//", "/")
+    cleaned = path.strip().replace("\\", "/")
+    while "//" in cleaned:
+        cleaned = cleaned.replace("//", "/")
     had_trailing = path.endswith("/") or path.endswith("\\")
     cleaned = cleaned.rstrip("/")
     if had_trailing and cleaned:
@@ -166,8 +239,36 @@ def _norm_fs_path(path: str) -> str:
     return cleaned
 
 
-def _norm_pkg_name(name: str) -> str:
-    return name.lower().replace("-", "_").replace(".", "_")
+def _is_absolute_repo_path(path: str) -> bool:
+    if PurePosixPath(path).is_absolute():
+        return True
+    if PureWindowsPath(path).is_absolute():
+        return True
+    if len(path) >= 2 and path[0].isalpha() and path[1] == ":":
+        return True
+    if path.startswith("\\\\"):
+        return True
+    return False
+
+
+def _validate_repo_relative_path(
+    path: str, label: str, index: int, *, item_index: int | None = None
+) -> tuple[str | None, list[str]]:
+    prefix = f"item {item_index}: " if item_index is not None else ""
+    errors: list[str] = []
+    if not isinstance(path, str) or not path.strip():
+        return None, [f"{prefix}{label} entries must be non-empty strings"]
+    normalized = _norm_fs_path(path.strip())
+    if not normalized or normalized in {".", "./"}:
+        errors.append(f"{prefix}{label} path must not be empty: {path!r}")
+        return None, errors
+    if _is_absolute_repo_path(normalized):
+        errors.append(f"{prefix}{label} path must be repository-relative: {path!r}")
+        return None, errors
+    if ".." in normalized.split("/"):
+        errors.append(f"{prefix}{label} path must not contain ..: {path!r}")
+        return None, errors
+    return normalized, errors
 
 
 def _non_empty_string(
@@ -181,7 +282,7 @@ def _non_empty_string(
     return stripped, None
 
 
-def _parse_string_list(
+def _parse_path_list(
     value: Any, label: str, index: int
 ) -> tuple[tuple[str, ...] | None, list[str]]:
     if value is None:
@@ -192,10 +293,12 @@ def _parse_string_list(
     items: list[str] = []
     seen: set[str] = set()
     for entry in value:
-        if not isinstance(entry, str) or not entry.strip():
-            errors.append(f"item {index}: {label} entries must be non-empty strings")
+        normalized, entry_errors = _validate_repo_relative_path(
+            entry, label, index, item_index=index
+        )
+        errors.extend(entry_errors)
+        if normalized is None:
             continue
-        normalized = entry.strip()
         if normalized in seen:
             errors.append(f"item {index}: duplicate {label} entry {normalized!r}")
         seen.add(normalized)
@@ -203,20 +306,172 @@ def _parse_string_list(
     return tuple(items), errors
 
 
-def _validate_repo_path(path: str, kind: str, index: int) -> list[str]:
+def _validate_item_path(path: str, kind: str, index: int) -> list[str]:
     errors: list[str] = []
-    if ".." in path.split("/"):
-        errors.append(f"item {index}: path must not contain ..: {path!r}")
+    if kind == "make_target":
+        if not MAKE_TARGET_RE.match(path):
+            errors.append(f"item {index}: invalid make target name: {path!r}")
+        return errors
+    normalized, path_errors = _validate_repo_relative_path(path, "path", index)
+    if path_errors:
+        return path_errors
+    assert normalized is not None
     if kind in {"workflow", "workflow_edit"}:
-        if not path.startswith(".github/workflows/"):
+        if not normalized.startswith(".github/workflows/"):
             errors.append(
                 f"item {index}: workflow path must be under "
                 f".github/workflows/: {path!r}"
             )
-    elif kind == "make_target":
-        if not MAKE_TARGET_RE.match(path):
-            errors.append(f"item {index}: invalid make target name: {path!r}")
     return errors
+
+
+def _parse_manifest_item(
+    raw: dict[str, Any],
+    index: int,
+    seen_keys: set[tuple[str, str]],
+) -> tuple[ManifestItem | None, list[str]]:
+    errors: list[str] = []
+    unknown = set(raw) - ITEM_ALLOWED
+    if unknown:
+        errors.append(
+            f"item {index}: unknown field(s): {', '.join(sorted(unknown))}"
+        )
+    missing = ITEM_REQUIRED - set(raw)
+    if missing:
+        errors.append(
+            f"item {index}: missing required field(s): {', '.join(sorted(missing))}"
+        )
+        return None, errors
+
+    path, err = _non_empty_string(raw["path"], "path", index)
+    if err:
+        return None, [err]
+    kind = raw["kind"]
+    action = raw["action"]
+    owner_pr = raw["owner_pr"]
+    item_status = raw["status"]
+    confidence = raw["confidence"]
+    responsibility, resp_err = _non_empty_string(
+        raw["responsibility"], "responsibility", index
+    )
+    if resp_err:
+        return None, [resp_err]
+
+    if not isinstance(kind, str):
+        errors.append(f"item {index}: kind must be a string")
+    elif kind not in KINDS:
+        errors.append(f"item {index}: invalid kind {kind!r}")
+    if not isinstance(action, str):
+        errors.append(f"item {index}: action must be a string")
+    elif action not in ACTIONS:
+        errors.append(f"item {index}: invalid action {action!r}")
+    if not isinstance(owner_pr, str):
+        errors.append(f"item {index}: owner_pr must be a string")
+    elif owner_pr not in OWNERS:
+        errors.append(f"item {index}: owner_pr must be one of 6A-6D")
+    if not isinstance(item_status, str):
+        errors.append(f"item {index}: status must be a string")
+    elif item_status not in ITEM_STATUSES:
+        errors.append(f"item {index}: invalid status {item_status!r}")
+    if not isinstance(confidence, str):
+        errors.append(f"item {index}: confidence must be a string")
+    elif confidence not in CONFIDENCES:
+        errors.append(f"item {index}: invalid confidence {confidence!r}")
+    if (
+        isinstance(kind, str)
+        and isinstance(action, str)
+        and kind in KIND_ACTIONS
+        and action not in KIND_ACTIONS[kind]
+    ):
+        errors.append(f"item {index}: action {action!r} invalid for kind {kind!r}")
+
+    blocker = None
+    if "blocker" in raw:
+        blocker, b_err = _non_empty_string(raw["blocker"], "blocker", index)
+        if b_err:
+            errors.append(b_err)
+
+    replacements, rep_errors = _parse_path_list(
+        raw.get("replacements"), "replacements", index
+    )
+    errors.extend(rep_errors)
+    evidence, ev_errors = _parse_path_list(raw.get("evidence"), "evidence", index)
+    errors.extend(ev_errors)
+
+    aggregate = False
+    if "aggregate" in raw:
+        if raw["aggregate"] is not True:
+            errors.append(f"item {index}: aggregate must be omitted or true")
+        else:
+            aggregate = True
+            if kind != "filesystem" or action != "delete":
+                errors.append(f"item {index}: aggregate rows require filesystem delete")
+
+    requires_ref = False
+    if "requires_explicit_test_target_reference" in raw:
+        if raw["requires_explicit_test_target_reference"] is not True:
+            errors.append(
+                f"item {index}: requires_explicit_test_target_reference "
+                "must be omitted or true"
+            )
+        else:
+            if action != "retain":
+                errors.append(
+                    f"item {index}: requires_explicit_test_target_reference "
+                    "only valid for retain"
+                )
+            requires_ref = True
+
+    replacement_optional = (
+        isinstance(action, str)
+        and action in {"port_then_delete", "reimplement_then_delete"}
+        and isinstance(item_status, str)
+        and item_status == "planned"
+        and isinstance(confidence, str)
+        and confidence == "discovery-needed"
+    )
+    if (
+        isinstance(action, str)
+        and action in {"port_then_delete", "reimplement_then_delete"}
+        and not replacement_optional
+        and not replacements
+    ):
+        errors.append(f"item {index}: {action} requires replacements")
+
+    if kind == "workflow_edit" and path != WORKFLOW_EDIT_PATH:
+        errors.append(
+            f"item {index}: workflow_edit path must be {WORKFLOW_EDIT_PATH!r}"
+        )
+
+    if item_status == "complete" and confidence != "confirmed":
+        errors.append(f"item {index}: complete items must have confidence = confirmed")
+
+    norm_path = path if kind != "filesystem" else _norm_fs_path(path)
+    key = (kind, norm_path)
+    if key in seen_keys:
+        errors.append(f"item {index}: duplicate kind/path {kind} {path!r}")
+    seen_keys.add(key)
+    errors.extend(_validate_item_path(norm_path, kind, index))
+
+    if errors:
+        return None, errors
+    return (
+        ManifestItem(
+            path=norm_path,
+            kind=kind,
+            action=action,
+            owner_pr=owner_pr,
+            status=item_status,
+            confidence=confidence,
+            responsibility=responsibility,
+            blocker=blocker,
+            replacements=replacements or (),
+            evidence=evidence or (),
+            aggregate=aggregate,
+            requires_explicit_test_target_reference=requires_ref,
+        ),
+        [],
+    )
 
 
 def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
@@ -229,6 +484,11 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
         return None, [f"invalid manifest TOML: {exc}"]
 
     errors: list[str] = []
+    unknown_top = set(data) - TOP_LEVEL_ALLOWED
+    if unknown_top:
+        errors.append(
+            f"manifest has unknown top-level field(s): {', '.join(sorted(unknown_top))}"
+        )
     if data.get("schema_version") != 1:
         errors.append("manifest schema_version must be 1")
     status = data.get("status")
@@ -246,146 +506,29 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
         if not isinstance(raw, dict):
             errors.append(f"item {index}: must be a table")
             continue
-        unknown = set(raw) - ITEM_ALLOWED
-        if unknown:
-            errors.append(
-                f"item {index}: unknown field(s): {', '.join(sorted(unknown))}"
-            )
-        missing = ITEM_REQUIRED - set(raw)
-        if missing:
-            errors.append(
-                f"item {index}: missing required field(s): {', '.join(sorted(missing))}"
-            )
-            continue
-
-        path, err = _non_empty_string(raw["path"], "path", index)
-        if err:
-            errors.append(err)
-            continue
-        kind = raw["kind"]
-        action = raw["action"]
-        owner_pr = raw["owner_pr"]
-        item_status = raw["status"]
-        confidence = raw["confidence"]
-        responsibility, resp_err = _non_empty_string(
-            raw["responsibility"], "responsibility", index
-        )
-        if resp_err:
-            errors.append(resp_err)
-            continue
-
-        if kind not in KINDS:
-            errors.append(f"item {index}: invalid kind {kind!r}")
-        if action not in ACTIONS:
-            errors.append(f"item {index}: invalid action {action!r}")
-        if owner_pr not in OWNERS:
-            errors.append(f"item {index}: owner_pr must be one of 6A-6D")
-        if item_status not in ITEM_STATUSES:
-            errors.append(f"item {index}: invalid status {item_status!r}")
-        if confidence not in CONFIDENCES:
-            errors.append(f"item {index}: invalid confidence {confidence!r}")
-        if kind in KIND_ACTIONS and action not in KIND_ACTIONS[kind]:
-            errors.append(f"item {index}: action {action!r} invalid for kind {kind!r}")
-
-        blocker = None
-        if "blocker" in raw:
-            blocker, b_err = _non_empty_string(raw["blocker"], "blocker", index)
-            if b_err:
-                errors.append(b_err)
-
-        replacements, rep_errors = _parse_string_list(
-            raw.get("replacements"), "replacements", index
-        )
-        errors.extend(rep_errors)
-        evidence, ev_errors = _parse_string_list(raw.get("evidence"), "evidence", index)
-        errors.extend(ev_errors)
-
-        aggregate = False
-        if "aggregate" in raw:
-            if raw["aggregate"] is not True:
-                errors.append(f"item {index}: aggregate must be omitted or true")
-            else:
-                aggregate = True
-                if kind != "filesystem" or action != "delete":
-                    errors.append(
-                        f"item {index}: aggregate rows require filesystem delete"
-                    )
-
-        requires_ref = False
-        if raw.get("requires_explicit_test_target_reference"):
-            if action != "retain":
-                errors.append(
-                    f"item {index}: requires_explicit_test_target_reference "
-                    "only valid for retain"
-                )
-            requires_ref = True
-
-        if action in {"port_then_delete", "reimplement_then_delete"}:
-            if not replacements:
-                errors.append(f"item {index}: {action} requires replacements")
-
-        if kind == "workflow_edit":
-            if path != WORKFLOW_EDIT_PATH:
-                errors.append(
-                    f"item {index}: workflow_edit path must be {WORKFLOW_EDIT_PATH!r}"
-                )
-
-        if item_status == "complete" and confidence != "confirmed":
-            errors.append(
-                f"item {index}: complete items must have confidence = confirmed"
-            )
-
-        norm_path = path if kind != "filesystem" else _norm_fs_path(path)
-        key = (kind, norm_path)
-        if key in seen_keys:
-            errors.append(f"item {index}: duplicate kind/path {kind} {path!r}")
-        seen_keys.add(key)
-        errors.extend(_validate_repo_path(norm_path, kind, index))
-
-        items.append(
-            ManifestItem(
-                path=norm_path,
-                kind=kind,
-                action=action,
-                owner_pr=owner_pr,
-                status=item_status,
-                confidence=confidence,
-                responsibility=responsibility,
-                blocker=blocker,
-                replacements=replacements or (),
-                evidence=evidence or (),
-                aggregate=aggregate,
-                requires_explicit_test_target_reference=requires_ref,
-            )
-        )
+        item, item_errors = _parse_manifest_item(raw, index, seen_keys)
+        errors.extend(item_errors)
+        if item is not None:
+            items.append(item)
 
     if errors:
         return None, errors
     return Manifest(status=status, items=tuple(items)), []
 
 
-def _manifest_status_for_stage(stage: str, manifest: Manifest) -> list[str]:
-    expected = STAGE_MANIFEST_STATUS[stage]
-    if manifest.status != expected:
-        return [
-            f"manifest status must be {expected!r} for stage {stage!r}, "
-            f"got {manifest.status!r}"
-        ]
-    return []
+def _load_repo_context(root: Path) -> RepoContext:
+    makefile_text = (root / "Makefile").read_text(encoding="utf-8")
+    return RepoContext(
+        root=root,
+        recipes=_parse_makefile_text(makefile_text),
+        makefile_text=makefile_text,
+        pyproject=tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8")),
+        compose=(root / "docker-compose.yml").read_text(encoding="utf-8"),
+        dockerfile=(root / "Dockerfile").read_text(encoding="utf-8"),
+    )
 
 
-def _final_manifest_closure(manifest: Manifest) -> list[str]:
-    errors: list[str] = []
-    for item in manifest.items:
-        if item.status != "complete":
-            errors.append(f"manifest item not complete: {item.path}")
-        if item.confidence == "discovery-needed":
-            errors.append(f"discovery-needed item remains: {item.path}")
-    return errors
-
-
-def _parse_makefile(root: Path) -> dict[str, list[RecipeCommand]]:
-    text = (root / "Makefile").read_text(encoding="utf-8")
+def _parse_makefile_text(text: str) -> dict[str, list[RecipeCommand]]:
     recipes: dict[str, list[RecipeCommand]] = {}
     current: str | None = None
     for line in text.splitlines():
@@ -424,43 +567,19 @@ def _target_support_test_paths(makefile_text: str) -> set[str]:
     for line in match.group(1).splitlines():
         stripped = line.strip().rstrip("\\").strip()
         if stripped and not stripped.startswith("#"):
-            paths.add(stripped)
+            paths.add(_norm_fs_path(stripped))
     return paths
 
 
-def _test_target_references_path(root: Path, path: str) -> bool:
-    makefile_text = (root / "Makefile").read_text(encoding="utf-8")
-    if path in _target_support_test_paths(makefile_text):
-        return True
-    recipes = _parse_makefile(root)
-    return _recipe_has_exact_path(recipes.get("test-target", []), path)
-
-
 def _tokenize_command(text: str) -> list[str]:
-    tokens: list[str] = []
-    current: list[str] = []
-    in_single = False
-    in_double = False
-    for char in text:
-        if char == "'" and not in_double:
-            in_single = not in_single
-            continue
-        if char == '"' and not in_single:
-            in_double = not in_double
-            continue
-        if char.isspace() and not in_single and not in_double:
-            if current:
-                tokens.append("".join(current))
-                current = []
-            continue
-        current.append(char)
-    if current:
-        tokens.append("".join(current))
-    return tokens
+    try:
+        return shlex.split(text, posix=True)
+    except ValueError:
+        return text.split()
 
 
 def _is_echo_or_printf(tokens: list[str]) -> bool:
-    return bool(tokens) and tokens[0] in {"echo", "printf", "@echo", "@printf"}
+    return bool(tokens) and tokens[0].lstrip("@") in {"echo", "printf"}
 
 
 def _invoked_make_targets(commands: list[RecipeCommand]) -> set[str]:
@@ -488,68 +607,67 @@ def _invoked_scripts(commands: list[RecipeCommand]) -> set[str]:
         for index, token in enumerate(tokens):
             if token.endswith("python") or token.endswith("python3"):
                 if index + 1 < len(tokens):
-                    found.add(tokens[index + 1])
+                    found.add(_norm_fs_path(tokens[index + 1]))
     return found
 
 
 def _recipe_has_exact_path(commands: list[RecipeCommand], path: str) -> bool:
+    normalized = _norm_fs_path(path)
     for command in commands:
         if command.ignored_failure:
             continue
         tokens = _tokenize_command(command.text.split("#", 1)[0].strip())
         if _is_echo_or_printf(tokens):
             continue
-        if path in tokens:
+        if normalized in {_norm_fs_path(token) for token in tokens}:
             return True
     return False
 
 
 def _gate_errors(
-    recipes: dict[str, list[RecipeCommand]],
-    target: str,
-    required: frozenset[str],
-    forbidden: frozenset[str] | None = None,
+    recipes: dict[str, list[RecipeCommand]], gate: GateRules
 ) -> list[str]:
     errors: list[str] = []
-    if target not in recipes:
-        return [f"missing Makefile target: {target}"]
-    commands = recipes[target]
+    if gate.target not in recipes:
+        return [f"missing Makefile target: {gate.target}"]
+    commands = recipes[gate.target]
     make_targets = _invoked_make_targets(commands)
     scripts = _invoked_scripts(commands)
     searchable = make_targets | scripts
-    for step in required:
+    for step in gate.required:
         if step.endswith(".py"):
-            if not any(step in script for script in scripts):
-                errors.append(f"{target} must invoke {step}")
+            normalized = _norm_fs_path(step)
+            if normalized not in scripts:
+                errors.append(f"{gate.target} must invoke {step}")
         elif step not in searchable:
-            errors.append(f"{target} must invoke {step}")
-    if forbidden:
-        for step in forbidden:
-            if step in searchable:
-                errors.append(f"{target} must not invoke {step}")
+            errors.append(f"{gate.target} must invoke {step}")
+    for step in gate.forbidden:
+        if step in searchable:
+            errors.append(f"{gate.target} must not invoke {step}")
     return errors
 
 
-def _validate_gates(root: Path, stage: str) -> list[str]:
-    recipes = _parse_makefile(root)
-    errors: list[str] = []
-    if stage == "pre-cutover":
-        errors.extend(
-            _gate_errors(recipes, "finalization-check", LEGACY_GATE_STEPS)
-        )
-        errors.extend(
-            _gate_errors(recipes, "finalization-check-target", TARGET_GATE_STEPS)
-        )
-    else:
-        errors.extend(
-            _gate_errors(
-                recipes,
-                "finalization-check",
-                TARGET_GATE_STEPS,
-                LEGACY_ONLY_STEPS,
-            )
-        )
-    return errors
+def _collect_nested_block(text: str, header_pattern: str) -> str | None:
+    lines = text.splitlines()
+    start = None
+    pattern = re.compile(header_pattern)
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            start = index
+            break
+    if start is None:
+        return None
+    block = [lines[start]]
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    for line in lines[start + 1 :]:
+        if not line.strip():
+            block.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        block.append(line)
+    return "\n".join(block)
 
 
 def _extract_yaml_scalar(block: str, key: str) -> str | None:
@@ -568,49 +686,51 @@ def _extract_yaml_scalar(block: str, key: str) -> str | None:
     return value
 
 
-def _extract_compose_service_block(compose: str, service: str) -> str | None:
-    lines = compose.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        if re.match(rf"^\s*{re.escape(service)}:\s*$", line):
-            start = index
-            break
-    if start is None:
+def _extract_build_target(block: str) -> tuple[str | None, bool]:
+    build_block = _collect_nested_block(block, r"^\s*build:\s*$")
+    if build_block is None:
+        return None, False
+    target = _extract_yaml_scalar(build_block, "target")
+    if target is None:
+        return None, False
+    return target, True
+
+
+def _resolve_yaml_merge_anchor(compose: str, service_block: str) -> str | None:
+    match = re.search(r"<<:\s*\*(\S+)", service_block)
+    if not match:
         return None
-    block: list[str] = [lines[start]]
-    base_indent = len(lines[start]) - len(lines[start].lstrip())
-    for line in lines[start + 1 :]:
-        if not line.strip():
-            block.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= base_indent:
-            break
-        block.append(line)
-    return "\n".join(block)
-
-
-def _extract_compose_command(block: str) -> str | None:
-    if re.search(r"^\s*command:\s*$", block, re.MULTILINE):
-        values = re.findall(r"^\s*-\s+(.+?)\s*$", block, re.MULTILINE)
-        if not values:
-            return None
-        return values[-1].strip().strip("'\"")
-    scalar = _extract_yaml_scalar(block, "command")
-    if scalar is None:
-        return None
-    return scalar.strip().strip("'\"")
-
-
-def _extract_compose_build_target(block: str) -> str | None:
-    build_block_match = re.search(
-        r"^\s*build:\s*$([\s\S]*?)(?=^\s*\w|\Z)",
-        block,
-        re.MULTILINE,
+    anchor_name = match.group(1)
+    anchor_header = re.compile(
+        rf"^(\S+):\s*&{re.escape(anchor_name)}\s*$", re.MULTILINE
     )
-    if not build_block_match:
+    header_match = anchor_header.search(compose)
+    if header_match is None:
         return None
-    return _extract_yaml_scalar(build_block_match.group(1), "target")
+    return _collect_nested_block(compose, rf"^{re.escape(header_match.group(1))}:")
+
+
+def _resolve_api_build_target(compose: str) -> tuple[str | None, bool, str | None]:
+    api_block = _collect_nested_block(compose, r"^\s*api:\s*$")
+    if api_block is None:
+        return None, False, "docker-compose.yml missing services.api block"
+
+    local_target, local_explicit = _extract_build_target(api_block)
+    inherited_block = _resolve_yaml_merge_anchor(compose, api_block)
+    inherited_target, inherited_explicit = (
+        _extract_build_target(inherited_block)
+        if inherited_block is not None
+        else (None, False)
+    )
+
+    if inherited_block is None and re.search(r"<<:\s*\*", api_block):
+        return None, True, "docker-compose api merge alias could not be resolved"
+
+    if local_explicit:
+        return local_target, True, None
+    if inherited_explicit:
+        return inherited_target, True, None
+    return None, False, None
 
 
 def _dockerfile_stages(dockerfile: str) -> list[tuple[str, str]]:
@@ -654,10 +774,6 @@ def _runtime_token(command: str | None) -> str | None:
     return command.strip()
 
 
-def _expected_runtime(stage: str) -> str:
-    return LEGACY_RUNTIME if stage == "pre-cutover" else TARGET_RUNTIME
-
-
 def _runtime_matches(token: str | None, expected: str) -> bool:
     if token is None:
         return False
@@ -671,109 +787,122 @@ def _runtime_matches(token: str | None, expected: str) -> bool:
 
 
 def _extract_compose_api_command(compose: str) -> str | None:
-    api_block = _extract_compose_service_block(compose, "api")
+    api_block = _collect_nested_block(compose, r"^\s*api:\s*$")
     if api_block is not None:
-        command = _extract_compose_command(api_block)
+        command = _extract_yaml_scalar(api_block, "command")
         if command is not None:
-            return command
-    anchor_match = re.search(
-        r"^x-api-base:.*?(?=^x-|\nservices:)",
-        compose,
-        re.MULTILINE | re.DOTALL,
-    )
-    if anchor_match is not None:
-        return _extract_compose_command(anchor_match.group(0))
+            return command.strip().strip("'\"")
+        inherited = _resolve_yaml_merge_anchor(compose, api_block)
+        if inherited is not None:
+            command = _extract_yaml_scalar(inherited, "command")
+            if command is not None:
+                return command.strip().strip("'\"")
     return None
 
 
-def _validate_runtime(root: Path, stage: str) -> list[str]:
+def _validate_runtime(ctx: RepoContext, expected_runtime: str) -> list[str]:
     errors: list[str] = []
-    expected = _expected_runtime(stage)
-    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
-    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
-    api_block = _extract_compose_service_block(compose, "api")
-    if api_block is None:
-        return ["docker-compose.yml missing services.api block"]
+    build_target, explicit, resolve_error = _resolve_api_build_target(ctx.compose)
+    if resolve_error:
+        errors.append(resolve_error)
+        return errors
 
-    build_target = _extract_compose_build_target(api_block)
-    if build_target is None:
-        anchor_match = re.search(
-            r"^x-api-base:.*?(?=^x-|\nservices:)",
-            compose,
-            re.MULTILINE | re.DOTALL,
+    stages = _dockerfile_stages(ctx.dockerfile)
+    if not stages:
+        return ["Dockerfile has no stages"]
+
+    if explicit:
+        stage_match = next(
+            ((name, text) for name, text in stages if name == build_target),
+            None,
         )
-        if anchor_match is not None:
-            build_target = _extract_compose_build_target(anchor_match.group(0))
-    stages = _dockerfile_stages(dockerfile)
-    stage_name = build_target or (stages[-1][0] if stages else None)
-    stage_text = next(
-        (text for name, text in stages if name == stage_name),
-        stages[-1][1],
-    )
+        if stage_match is None:
+            errors.append(
+                f"docker-compose build.target {build_target!r} does not match "
+                "any Dockerfile stage"
+            )
+            return errors
+        stage_name, stage_text = stage_match
+    else:
+        stage_name, stage_text = stages[-1]
+
     docker_cmd = _runtime_token(_dockerfile_cmd(stage_text))
-    if not _runtime_matches(docker_cmd, expected):
+    if docker_cmd is None:
+        errors.append(f"Dockerfile stage {stage_name!r} must define an explicit CMD")
+    elif not _runtime_matches(docker_cmd, expected_runtime):
         errors.append(
             f"Dockerfile stage {stage_name!r} CMD must select "
-            f"{expected!r}, got {docker_cmd!r}"
+            f"{expected_runtime!r}, got {docker_cmd!r}"
         )
 
-    compose_cmd = _extract_compose_api_command(compose)
+    compose_cmd = _extract_compose_api_command(ctx.compose)
     if compose_cmd is not None:
-        if not _runtime_matches(_runtime_token(compose_cmd), expected):
+        if not _runtime_matches(_runtime_token(compose_cmd), expected_runtime):
             errors.append(
-                f"docker-compose api command must select {expected!r}, "
+                f"docker-compose api command must select {expected_runtime!r}, "
                 f"got {compose_cmd!r}"
             )
-    elif not _runtime_matches(docker_cmd, expected):
+    elif docker_cmd is None or not _runtime_matches(docker_cmd, expected_runtime):
         errors.append("effective api runtime must select expected command")
 
-    if stage == "pre-cutover":
-        if LEGACY_RUNTIME not in compose and "psychoanalyst_app.server" not in compose:
-            if compose_cmd is None and docker_cmd is None:
-                errors.append("legacy runtime not configured for api service")
+    if expected_runtime == LEGACY_RUNTIME:
+        if (
+            LEGACY_RUNTIME not in ctx.compose
+            and "psychoanalyst_app.server" not in ctx.compose
+            and compose_cmd is None
+            and docker_cmd is None
+        ):
+            errors.append("legacy runtime not configured for api service")
     return errors
 
 
-def _path_exists(root: Path, item: ManifestItem) -> bool:
+def _path_exists(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
-        recipes = _parse_makefile(root)
-        return item.path in recipes
-    return (root / item.path).exists() or (root / item.path.rstrip("/")).is_symlink()
+        return item.path in ctx.recipes
+    path = ctx.root / item.path.rstrip("/")
+    return path.exists() or path.is_symlink()
 
 
-def _path_absent(root: Path, item: ManifestItem) -> bool:
+def _path_absent(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
-        return item.path not in _parse_makefile(root)
-    path = root / item.path.rstrip("/")
+        return item.path not in ctx.recipes
+    path = ctx.root / item.path.rstrip("/")
     return not path.exists() and not path.is_symlink()
 
 
-def _paths_exist(root: Path, paths: tuple[str, ...]) -> list[str]:
+def _paths_exist(ctx: RepoContext, paths: tuple[str, ...]) -> list[str]:
     errors: list[str] = []
     for relative in paths:
-        candidate = root / relative
+        candidate = ctx.root / relative
         if not candidate.exists():
             errors.append(f"missing path: {relative}")
     return errors
 
 
-def _validate_item_complete(root: Path, item: ManifestItem) -> list[str]:
+def _test_target_references_path(ctx: RepoContext, path: str) -> bool:
+    normalized = _norm_fs_path(path)
+    if normalized in _target_support_test_paths(ctx.makefile_text):
+        return True
+    return _recipe_has_exact_path(ctx.recipes.get("test-target", []), normalized)
+
+
+def _validate_item_complete(ctx: RepoContext, item: ManifestItem) -> list[str]:
     errors: list[str] = []
     if item.action in {"delete", "port_then_delete", "reimplement_then_delete"}:
-        errors.extend(_paths_exist(root, item.replacements))
-        errors.extend(_paths_exist(root, item.evidence))
-        if not _path_absent(root, item):
+        errors.extend(_paths_exist(ctx, item.replacements))
+        errors.extend(_paths_exist(ctx, item.evidence))
+        if not _path_absent(ctx, item):
             errors.append(f"complete item still present: {item.path}")
     elif item.action == "retain":
-        if not _path_exists(root, item):
+        if not _path_exists(ctx, item):
             errors.append(f"retained path missing: {item.path}")
         if item.requires_explicit_test_target_reference:
-            if not _test_target_references_path(root, item.path):
+            if not _test_target_references_path(ctx, item.path):
                 errors.append(
                     f"retained test not referenced in test-target recipe: {item.path}"
                 )
     elif item.action == "edit":
-        errors.extend(_validate_workflow_edit(root, complete=True))
+        errors.extend(_validate_workflow_edit(ctx, complete=True))
     return errors
 
 
@@ -816,8 +945,8 @@ def _job_invokes_make_target(job_block: str, make_target: str) -> bool:
     return False
 
 
-def _validate_workflow_edit(root: Path, *, complete: bool) -> list[str]:
-    path = root / WORKFLOW_EDIT_PATH
+def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
+    path = ctx.root / WORKFLOW_EDIT_PATH
     if not path.is_file():
         return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
     workflow = path.read_text(encoding="utf-8")
@@ -850,29 +979,18 @@ def _validate_workflow_edit(root: Path, *, complete: bool) -> list[str]:
     return errors
 
 
-def _validate_complete_items(root: Path, manifest: Manifest) -> list[str]:
-    errors: list[str] = []
-    for item in manifest.items:
-        if item.status == "complete":
-            errors.extend(_validate_item_complete(root, item))
-    return errors
-
-
-def _validate_entry_points(root: Path, stage: str) -> list[str]:
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    scripts = pyproject.get("project", {}).get("scripts", {})
+def _validate_entry_points(ctx: RepoContext, rules: StageRules) -> list[str]:
+    scripts = ctx.pyproject.get("project", {}).get("scripts", {})
     if not isinstance(scripts, dict):
         return ["pyproject.toml missing project.scripts"]
     names = set(scripts)
     errors: list[str] = []
-    if stage in {"cutover", "final"}:
-        required = TARGET_ENTRY_CUTOVER if stage == "cutover" else TARGET_ENTRY_FINAL
-        for entry in required:
-            if entry not in names:
-                errors.append(f"missing target entry point: {entry}")
-        for legacy in LEGACY_ENTRY_POINTS:
-            if legacy in names:
-                errors.append(f"legacy entry point still present: {legacy}")
+    for entry in rules.required_entry_points:
+        if entry not in names:
+            errors.append(f"missing target entry point: {entry}")
+    for legacy in rules.forbidden_entry_points:
+        if legacy in names:
+            errors.append(f"legacy entry point still present: {legacy}")
     return errors
 
 
@@ -924,18 +1042,16 @@ def _read_requirement_names(requirements_path: Path) -> list[str]:
     return names
 
 
-def _validate_dependency_closure(root: Path) -> list[str]:
+def _validate_dependency_closure(ctx: RepoContext) -> list[str]:
     errors: list[str] = []
     names: set[str] = set()
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    for section in ("dependencies",):
-        deps = pyproject.get("project", {}).get(section, [])
-        if isinstance(deps, list):
-            for dep in deps:
-                if isinstance(dep, str):
-                    names.add(_norm_pkg_name(dep.split(";")[0].strip()))
+    deps = ctx.pyproject.get("project", {}).get("dependencies", [])
+    if isinstance(deps, list):
+        for dep in deps:
+            if isinstance(dep, str):
+                names.add(_norm_pkg_name(dep.split(";")[0].strip()))
     for req_name in ("requirements.txt", "requirements-dev.txt"):
-        names.update(_read_requirement_names(root / req_name))
+        names.update(_read_requirement_names(ctx.root / req_name))
     for forbidden in FORBIDDEN_DEP_PREFIXES:
         normalized = _norm_pkg_name(forbidden)
         matches = [
@@ -946,77 +1062,83 @@ def _validate_dependency_closure(root: Path) -> list[str]:
         if matches:
             errors.append(f"forbidden dependency remains: {forbidden}")
     package_data = (
-        pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})
+        ctx.pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})
     )
     if isinstance(package_data, dict) and "psychoanalyst_app" in package_data:
         errors.append("pyproject package-data still references psychoanalyst_app")
     return errors
 
 
-def validate_pre_cutover(root: Path) -> list[str]:
-    manifest, errors = parse_manifest(root)
-    if manifest is None:
-        return errors
-    errors.extend(_manifest_status_for_stage("pre-cutover", manifest))
-    errors.extend(_validate_gates(root, "pre-cutover"))
-    errors.extend(_validate_runtime(root, "pre-cutover"))
-    errors.extend(_validate_complete_items(root, manifest))
-    return errors
-
-
-def validate_cutover(root: Path) -> list[str]:
-    manifest, errors = parse_manifest(root)
-    if manifest is None:
-        return errors
-    errors.extend(_manifest_status_for_stage("cutover", manifest))
-    errors.extend(_validate_gates(root, "cutover"))
-    errors.extend(_validate_runtime(root, "cutover"))
-    errors.extend(_validate_entry_points(root, "cutover"))
-    errors.extend(_validate_complete_items(root, manifest))
-    return errors
-
-
-def validate_final(root: Path) -> list[str]:
-    manifest, errors = parse_manifest(root)
-    if manifest is None:
-        return errors
-    errors.extend(_manifest_status_for_stage("final", manifest))
-    errors.extend(_final_manifest_closure(manifest))
-    errors.extend(_validate_gates(root, "final"))
-    errors.extend(_validate_runtime(root, "final"))
-    errors.extend(_validate_entry_points(root, "final"))
-    errors.extend(_validate_complete_items(root, manifest))
+def _final_manifest_closure(manifest: Manifest) -> list[str]:
+    errors: list[str] = []
     for item in manifest.items:
-        if (
-            item.action != "edit"
-            and item.status == "complete"
-            and not _path_absent(root, item)
-        ):
-            if item.action in {"delete", "port_then_delete", "reimplement_then_delete"}:
-                errors.append(f"deletion item still present: {item.path}")
-            elif item.kind in {"make_target", "workflow"} and item.action == "delete":
-                errors.append(f"deletion item still present: {item.path}")
-    errors.extend(_validate_import_closure(root))
-    errors.extend(_validate_dependency_closure(root))
+        if item.status != "complete":
+            errors.append(f"manifest item not complete: {item.path}")
+        if item.confidence == "discovery-needed":
+            errors.append(f"discovery-needed item remains: {item.path}")
     return errors
+
+
+def _find_item(manifest: Manifest, kind: str, path: str) -> ManifestItem | None:
+    for item in manifest.items:
+        if item.kind == kind and item.path == path:
+            return item
+    return None
 
 
 def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[str]:
     resolved = (root or REPO_ROOT).resolve()
-    if stage == "pre-cutover":
-        return validate_pre_cutover(resolved)
-    if stage == "cutover":
-        return validate_cutover(resolved)
-    if stage == "final":
-        return validate_final(resolved)
-    return [f"unknown stage: {stage}"]
+    if stage not in STAGES:
+        return [f"unknown stage: {stage}"]
+
+    manifest, errors = parse_manifest(resolved)
+    if manifest is None:
+        return errors
+
+    rules = STAGES[stage]
+    if manifest.status != rules.manifest_status:
+        errors.append(
+            f"manifest status must be {rules.manifest_status!r} for stage {stage!r}, "
+            f"got {manifest.status!r}"
+        )
+
+    ctx = _load_repo_context(resolved)
+    for gate in rules.gates:
+        errors.extend(_gate_errors(ctx.recipes, gate))
+    errors.extend(_validate_runtime(ctx, rules.expected_runtime))
+
+    if rules.required_entry_points or rules.forbidden_entry_points:
+        errors.extend(_validate_entry_points(ctx, rules))
+
+    for item in manifest.items:
+        if item.status == "complete":
+            errors.extend(_validate_item_complete(ctx, item))
+
+    for kind, path in rules.required_complete_items:
+        item = _find_item(manifest, kind, path)
+        if item is None:
+            errors.append(f"required complete item missing from manifest: {path}")
+            continue
+        if item.status != "complete":
+            errors.append(
+                f"required item must be complete for stage {stage!r}: {path}"
+            )
+            continue
+        errors.extend(_validate_item_complete(ctx, item))
+
+    if rules.final_closure:
+        errors.extend(_final_manifest_closure(manifest))
+        errors.extend(_validate_import_closure(resolved))
+        errors.extend(_validate_dependency_closure(ctx))
+
+    return errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--stage",
-        choices=("pre-cutover", "cutover", "final"),
+        choices=tuple(STAGES),
         required=True,
     )
     args = parser.parse_args()
