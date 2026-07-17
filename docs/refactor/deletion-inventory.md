@@ -18,6 +18,10 @@ Allowed **Status** values: `planned`, `in_progress`, `complete`.
 
 For `retain_outside_root`, the **Path** column is the original legacy item; **Evidence** names the destination and test coverage.
 
+## Closure semantics
+
+`status: completed` in frontmatter means Phase 6 deletion is finished: no planned or in-progress exceptions remain, no deletion root is still present, no legacy Make target remains, and no deletable workflow file remains. The historical audit list itself is **not** physically erased.
+
 ## Filesystem deletion roots
 
 - `src/psychoanalyst_app/`
@@ -29,7 +33,11 @@ For `retain_outside_root`, the **Path** column is the original legacy item; **Ev
 - `scripts/probe_intake_notes.sh`
 - `scripts/generate_ws_protocol.py`
 - `scripts/check_architecture_budgets.py`
-- `scripts/validate_schemas.py` (if only serves legacy schema generation)
+- `scripts/validate_schemas.py`
+
+### Notes
+
+`scripts/validate_schemas.py` is deleted only if it solely serves legacy schema generation.
 
 ## Legacy Make targets
 
@@ -44,21 +52,30 @@ For `retain_outside_root`, the **Path** column is the original legacy item; **Ev
 - `validate-generated-contracts`
 - `validate-architecture`
 - `finalization-check-full`
-- `test-real-llm` (replaced by `smoke-target-local-llm` in 6B)
-- `test-validate-no-mocks` (retire or retarget in 6B)
-- `reset-usertest` (replaced by `reset-manual-test` in 6B)
-- `reset-foundation-db` (replaced by `reset-jung-db` in 6B)
+- `test-real-llm`
+- `test-validate-no-mocks`
+- `reset-usertest`
+- `reset-foundation-db`
+
+### Notes
+
+- `test-real-llm` is replaced by `smoke-target-local-llm` in 6B.
+- `test-validate-no-mocks` is retired or retargeted in 6B.
+- `reset-usertest` is replaced by `reset-manual-test` in 6B.
+- `reset-foundation-db` is replaced by `reset-jung-db` in 6B.
 
 ## Legacy CI workflows
-
-Delete in 6C:
 
 - `.github/workflows/architecture-governance.yml`
 - `.github/workflows/type-safety.yml`
 
-Edit in 6C:
+## Legacy CI workflow edits
 
-- `.github/workflows/release-candidate-validation.yml` — remove `phase-1-evidence` job; retain `finalization-check`
+- `.github/workflows/release-candidate-validation.yml`
+
+### Notes
+
+In 6C: remove `phase-1-evidence` job; retain `finalization-check`.
 
 ## Exceptions
 
