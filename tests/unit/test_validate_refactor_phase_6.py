@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,12 +15,13 @@ _SPEC.loader.exec_module(_MOD)
 validate, parse_manifest = _MOD.validate, _MOD.parse_manifest
 _parse_shell_command = _MOD._parse_shell_command
 _parse_makefile_text = _MOD._parse_makefile_text
-_command_invokes_required_make = _MOD._command_invokes_required_make
-_command_invokes_python_script = _MOD._command_invokes_python_script
-_command_has_forbidden_make = _MOD._command_has_forbidden_make
-_RC = _MOD.RecipeCommand
+_command_invokes_script = _MOD._command_invokes_script
+_ScriptRequirement = _MOD.ScriptRequirement
 
-_ITEM = """path = "{path}"\nkind = "{kind}"\naction = "{action}"\nowner_pr = "6C"\nstatus = "{status}"\nconfidence = "{confidence}"\nresponsibility = "x"\n"""
+_ITEM = (
+    'path = "{path}"\nkind = "{kind}"\naction = "{action}"\nowner_pr = "6C"\n'
+    'status = "{status}"\nconfidence = "{confidence}"\nresponsibility = "x"\n'
+)
 _MANIFEST_TAIL = """
 [[items]]
 path = "probe-console-v1-deterministic"
@@ -44,7 +46,7 @@ _MAKE = """\
 \tvalidate-schemas validate-generated-contracts validate-architecture \\
 \tcharacterization-smoke characterization-full probe-console-deterministic \\
 \tprobe-console-intake-notes probe-console-v1-deterministic \\
-\tfinalization-check finalization-check-target
+\tfinalization-check finalization-check-target finalization-check-full
 prepare-runtime-dirs:
 \t@true
 lint:
@@ -71,6 +73,10 @@ probe-console-intake-notes:
 \t@true
 probe-console-v1-deterministic:
 \t@true
+finalization-check-full:
+\t@true
+helper-gate:
+\t@true
 """
 _LEGACY_GATE = (
     "finalization-check:\n"
@@ -94,15 +100,20 @@ _TARGET_GATE = (
     "\tpython scripts/validate_refactor_phase_5.py\n"
     "\t$(MAKE) probe-console-v1-deterministic\n"
 )
-_CUTOVER_GATE = (
-    "finalization-check:\n"
-    "\t$(MAKE) lint\n"
-    "\t$(MAKE) validate-docs\n"
-    "\t$(MAKE) test-target\n"
-    "\tpython scripts/validate_refactor_phase_6.py\n"
-    "\tpython scripts/validate_refactor_phase_5.py\n"
-    "\t$(MAKE) probe-console-v1-deterministic\n"
-)
+
+
+def _cutover_gate(stage: str) -> str:
+    return (
+        "finalization-check:\n"
+        "\t$(MAKE) lint\n"
+        "\t$(MAKE) validate-docs\n"
+        "\t$(MAKE) test-target\n"
+        f"\tpython scripts/validate_refactor_phase_6.py --stage {stage}\n"
+        "\tpython scripts/validate_refactor_phase_5.py\n"
+        "\t$(MAKE) probe-console-v1-deterministic\n"
+    )
+
+
 _DF_LEGACY = (
     "FROM python:3.11-slim AS base\n"
     "FROM base AS development\n"
@@ -181,7 +192,7 @@ class RepoFixture:
     ) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "Makefile").write_text(
-            _MAKE + (gates or (_CUTOVER_GATE if target else _LEGACY_GATE + _TARGET_GATE)),
+            _MAKE + (gates or (_cutover_gate("cutover") if target else _LEGACY_GATE + _TARGET_GATE)),
             encoding="utf-8",
         )
         (self.root / "Dockerfile").write_text(
@@ -198,6 +209,10 @@ class RepoFixture:
         (self.root / "scripts/validate_refactor_phase_5.py").write_text("#\n", encoding="utf-8")
         (self.root / "scripts/validate_refactor_phase_6.py").write_text("#\n", encoding="utf-8")
         (self.root / "tests").mkdir(exist_ok=True)
+
+    def mutate_gate(self, target: str, old: str, new: str) -> None:
+        path = self.root / "Makefile"
+        path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
 
     def write_workflow(self, text: str) -> None:
         d = self.root / ".github/workflows"
@@ -229,24 +244,23 @@ class RepoFixture:
                 'status = "complete"\nconfidence = "confirmed"\nresponsibility = "x"\n'
             ),
         )
-        self.write_runtime(target=True)
+        self.write_runtime(target=True, gates=_cutover_gate("final"))
         self.write_workflow(_WF_CUTOVER)
         (self.root / "src").mkdir(exist_ok=True)
 
 
-def test_valid_pre_cutover_passes(tmp_path):
-    RepoFixture(tmp_path).seed_pre()
-    assert validate(tmp_path, stage="pre-cutover") == []
-
-
-def test_valid_cutover_passes_when_workflow_complete(tmp_path):
-    RepoFixture(tmp_path).seed_cutover(complete=True)
-    assert validate(tmp_path, stage="cutover") == []
-
-
-def test_valid_final_passes(tmp_path):
-    RepoFixture(tmp_path).seed_final()
-    assert validate(tmp_path, stage="final") == []
+@pytest.mark.parametrize(
+    "stage,seed",
+    [
+        ("pre-cutover", "pre"),
+        ("cutover", "cutover"),
+        ("final", "final"),
+    ],
+)
+def test_valid_stage_passes(tmp_path, stage, seed):
+    r = RepoFixture(tmp_path)
+    {"pre": r.seed_pre, "cutover": lambda: r.seed_cutover(complete=True), "final": r.seed_final}[seed]()
+    assert validate(tmp_path, stage=stage) == []
 
 
 @pytest.mark.parametrize(
@@ -260,6 +274,74 @@ def test_manifest_status_rejected_for_stage(tmp_path, stage, status):
     assert any("manifest status" in e for e in validate(tmp_path, stage=stage))
 
 
+@pytest.mark.parametrize(
+    "stage,wrong_stage",
+    [
+        ("cutover", "pre-cutover"),
+        ("final", "cutover"),
+    ],
+)
+def test_wrong_phase6_stage_rejected(tmp_path, stage, wrong_stage):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True) if stage == "cutover" else r.seed_final()
+    r.mutate_gate(
+        "finalization-check",
+        f"--stage {stage if stage == 'cutover' else 'final'}",
+        f"--stage {wrong_stage}",
+    )
+    assert any("must invoke scripts/validate_refactor_phase_6.py" in e for e in validate(tmp_path, stage=stage))
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [
+        "echo python scripts/validate_refactor_phase_6.py --stage cutover",
+        "! python scripts/validate_refactor_phase_6.py --stage cutover",
+        "$(MAKE) test-target || true",
+        "-python scripts/validate_refactor_phase_6.py --stage cutover",
+    ],
+)
+def test_suppressed_gate_commands_fail_e2e(tmp_path, recipe):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    makefile = makefile.replace(
+        "\tpython scripts/validate_refactor_phase_6.py --stage cutover\n",
+        f"\t{recipe}\n",
+    )
+    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
+    assert validate(tmp_path, stage="cutover")
+
+
+@pytest.mark.parametrize(
+    "header,body,remove_recipe,frag",
+    [
+        ("finalization-check: characterization-smoke", "", "", "must not depend on characterization-smoke"),
+        ("finalization-check: finalization-check-full", "", "", "must not depend on finalization-check-full"),
+        (
+            "finalization-check: helper-gate",
+            "helper-gate: characterization-smoke",
+            "",
+            "must not depend on characterization-smoke",
+        ),
+        ("finalization-check: $(LEGACY_RELEASE_TARGETS)", "", "", "unsupported prerequisite"),
+        ("finalization-check: test-target", "", "\t$(MAKE) test-target\n", "must invoke test-target"),
+    ],
+)
+def test_gate_prerequisite_rules(tmp_path, header, body, remove_recipe, frag):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    makefile = makefile.replace(
+        "finalization-check:\n",
+        f"{header}\n{body}\n" if body else f"{header}\n",
+    )
+    if remove_recipe:
+        makefile = makefile.replace(remove_recipe, "")
+    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
+    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
 def test_cutover_rejects_in_progress_workflow_edit(tmp_path):
     RepoFixture(tmp_path).seed_cutover(complete=False)
     assert any("required item must be complete" in e for e in validate(tmp_path, stage="cutover"))
@@ -268,77 +350,50 @@ def test_cutover_rejects_in_progress_workflow_edit(tmp_path):
 def test_cutover_rejects_workflow_with_phase1_job(tmp_path):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
-    r.write_workflow(
-        _WF_CUTOVER + "\n  phase-1-evidence:\n    steps:\n      - run: make x\n"
-    )
+    r.write_workflow(_WF_CUTOVER + "\n  phase-1-evidence:\n    steps:\n      - run: make x\n")
     assert any("phase-1-evidence" in e for e in validate(tmp_path, stage="cutover"))
 
 
-def test_completed_deletion_still_present_fails(tmp_path):
+def _manifest_item(**kwargs) -> str:
+    defaults = {"status": "complete", "confidence": "confirmed"}
+    defaults.update(kwargs)
+    return "[[items]]\n" + _ITEM.format(**defaults)
+
+
+@pytest.mark.parametrize(
+    "extra,setup,frag",
+    [
+        ({"path": "legacy.txt", "kind": "filesystem", "action": "delete"}, "touch", "still present"),
+        ({"path": "legacy.py", "kind": "filesystem", "action": "port_then_delete"}, "replacements", "missing path"),
+        ({"path": "missing-target", "kind": "make_target", "action": "retain"}, None, "retained path missing"),
+    ],
+)
+def test_manifest_item_failures(tmp_path, extra, setup, frag):
     r = RepoFixture(tmp_path)
     r.seed_pre()
-    r.write_manifest(
-        items=_MANIFEST_TAIL.format(wf="in_progress")
-        + "[[items]]\n"
-        + _ITEM.format(
-            path="legacy.txt",
-            kind="filesystem",
-            action="delete",
-            status="complete",
-            confidence="confirmed",
-        )
-    )
-    (tmp_path / "legacy.txt").write_text("x", encoding="utf-8")
-    assert any("still present" in e for e in validate(tmp_path, stage="pre-cutover"))
+    item = _manifest_item(**extra)
+    if setup == "touch":
+        (tmp_path / extra["path"]).write_text("x", encoding="utf-8")
+    elif setup == "replacements":
+        item += 'replacements = ["missing/replacement.py"]\n'
+    r.write_manifest(items=_MANIFEST_TAIL.format(wf="in_progress") + item)
+    assert any(frag in e for e in validate(tmp_path, stage="pre-cutover"))
 
 
-def test_missing_concrete_replacement_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_pre()
-    r.write_manifest(
-        items=_MANIFEST_TAIL.format(wf="in_progress")
-        + "[[items]]\n"
-        + _ITEM.format(
-            path="legacy.py",
-            kind="filesystem",
-            action="port_then_delete",
-            status="complete",
-            confidence="confirmed",
-        )
-        + 'replacements = ["missing/replacement.py"]\n'
-    )
-    assert any("missing path" in e for e in validate(tmp_path, stage="pre-cutover"))
-
-
-def test_retained_make_target_absent_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_pre()
-    r.write_manifest(
-        items=_MANIFEST_TAIL.format(wf="in_progress")
-        + "[[items]]\n"
-        + _ITEM.format(
-            path="missing-target",
-            kind="make_target",
-            action="retain",
-            status="complete",
-            confidence="confirmed",
-        )
-    )
-    assert any("retained path missing" in e for e in validate(tmp_path, stage="pre-cutover"))
-
-
-def test_forbidden_dependency_in_pyproject_fails(tmp_path):
+@pytest.mark.parametrize(
+    "dep_source,content",
+    [
+        ("pyproject", _PP_TARGET.replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "trio"]')),
+        ("requirements", None),
+    ],
+)
+def test_forbidden_dependency_fails(tmp_path, dep_source, content):
     r = RepoFixture(tmp_path)
     r.seed_final()
-    r.write_pyproject(
-        _PP_TARGET.replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "trio"]')
-    )
-    assert any("forbidden dependency" in e for e in validate(tmp_path, stage="final"))
-
-
-def test_forbidden_dependency_in_requirements_fails(tmp_path):
-    RepoFixture(tmp_path).seed_final()
-    (tmp_path / "requirements.txt").write_text("quart\n", encoding="utf-8")
+    if dep_source == "pyproject":
+        r.write_pyproject(content)
+    else:
+        (tmp_path / "requirements.txt").write_text("quart\n", encoding="utf-8")
     assert any("forbidden dependency" in e for e in validate(tmp_path, stage="final"))
 
 
@@ -396,8 +451,17 @@ def test_forbidden_import_fails(tmp_path):
             False,
             "command inline list is malformed",
         ),
+        (
+            "cutover",
+            "services:\n  api:\n    command: jung-api\n    build:\n"
+            "      context: .\n      dockerfile: Dockerfile\n      target: development\n"
+            "    build:\n      context: .\n      dockerfile: Dockerfile\n      target: development\n",
+            _DF_TARGET,
+            False,
+            "multiple build blocks",
+        ),
     ],
-    ids=["depends_on", "local_override", "inline_list", "block_list", "malformed"],
+    ids=["depends_on", "local_override", "inline_list", "block_list", "malformed", "duplicate_build"],
 )
 def test_compose_runtime_overrides(tmp_path, stage, compose, dockerfile, ok, err):
     r = RepoFixture(tmp_path)
@@ -445,121 +509,32 @@ def test_unknown_explicit_build_target_fails(tmp_path):
 def test_missing_target_gate_step_fails(tmp_path):
     r = RepoFixture(tmp_path)
     r.seed_pre()
-    (tmp_path / "Makefile").write_text(
-        (tmp_path / "Makefile").read_text(encoding="utf-8").replace("$(MAKE) test-target\n", ""),
-        encoding="utf-8",
-    )
+    r.mutate_gate("finalization-check-target", "\t$(MAKE) test-target\n", "")
     assert any("finalization-check-target must invoke test-target" in e for e in validate(tmp_path, stage="pre-cutover"))
 
 
-def test_multiline_docker_wrapped_python_gate_passes():
+def test_make_recipe_continuation_joins_python_gate():
     recipes = _parse_makefile_text(_TARGET_GATE)
-    commands = recipes["finalization-check-target"]
-    script = "scripts/validate_refactor_phase_6.py"
+    req = _ScriptRequirement(
+        "scripts/validate_refactor_phase_6.py", ("--stage", "pre-cutover")
+    )
+    commands = recipes["finalization-check-target"].recipes
     assert any(
-        _command_invokes_python_script(_parse_shell_command(cmd.text), script)
-        for cmd in commands
+        _command_invokes_script(_parse_shell_command(cmd.text), req) for cmd in commands
     )
 
 
 @pytest.mark.parametrize(
-    "recipe,target,expected",
+    "body,frag",
     [
-        ("@echo probe-console-deterministic", "probe-console-deterministic", False),
-        ("@echo test-target", "test-target", False),
-        ("-$(MAKE) test-target", "test-target", False),
-        ("$(MAKE) probe-console-v1-deterministic", "probe-console-v1-deterministic", True),
-        ("$(MAKE) probe-console-deterministic", "probe-console-deterministic", True),
-        ("echo preparing && make characterization-full", "characterization-full", True),
-        ("echo make characterization-full", "characterization-full", False),
+        ('schema_version = true\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"), "schema_version"),
+        ('schema_version = 1\nstatus = "active"\nextra = true\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"), "extra"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="edit", status="planned", confidence="confirmed"), "action"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="retain", status="planned", confidence="confirmed") + "requires_explicit_test_target_reference = false\n", "requires_explicit_test_target_reference"),
     ],
+    ids=["schema_true", "unknown_top", "filesystem_edit", "requires_false"],
 )
-def test_gate_make_target_detection(recipe, target, expected):
-    parsed = _parse_shell_command(recipe)
-    if expected:
-        assert _command_has_forbidden_make(parsed, target)
-    else:
-        assert not _command_invokes_required_make(parsed, target)
-        assert not _command_has_forbidden_make(parsed, target)
-
-
-@pytest.mark.parametrize(
-    "recipe,script,expected",
-    [
-        ("python scripts/validate_refactor_phase_6.py", "scripts/validate_refactor_phase_6.py", True),
-        ("python scripts/validate_refactor_phase_6.py.old", "scripts/validate_refactor_phase_6.py", False),
-        ("echo scripts/validate_refactor_phase_6.py", "scripts/validate_refactor_phase_6.py", False),
-        (
-            "docker compose --profile test run --rm test python scripts/validate_refactor_phase_6.py --stage pre-cutover",
-            "scripts/validate_refactor_phase_6.py",
-            True,
-        ),
-    ],
-)
-def test_gate_script_exact_match(recipe, script, expected):
-    parsed = _parse_shell_command(recipe)
-    assert _command_invokes_python_script(parsed, script) is expected
-
-
-@pytest.mark.parametrize(
-    "recipe",
-    [
-        "$(MAKE) test-target || true",
-        "$(MAKE) test-target||true",
-        "python scripts/validate_refactor_phase_6.py --stage pre-cutover; exit 0",
-        "python scripts/validate_refactor_phase_6.py --stage pre-cutover;exit 0",
-    ],
-)
-def test_suppressed_gate_commands_rejected(recipe):
-    parsed = _parse_shell_command(recipe)
-    assert not _command_invokes_required_make(parsed, "test-target")
-    assert not _command_invokes_python_script(
-        parsed, "scripts/validate_refactor_phase_6.py"
-    )
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        'schema_version = true\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"),
-        'schema_version = 1.0\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"),
-        'schema_version = 1\nstatus = ["active"]\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"),
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "x"\nkind = ["filesystem"]\n'
-        'action = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n',
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed")
-        + "aggregate = 1\n",
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="retain", status="planned", confidence="confirmed")
-        + "requires_explicit_test_target_reference = 1\n",
-        'schema_version = 1\nstatus = "active"\nextra = true\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"),
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="edit", status="planned", confidence="confirmed"),
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed")
-        + "aggregate = false\n",
-        'schema_version = 1\nstatus = "active"\n\n[[items]]\n'
-        + _ITEM.format(path="x", kind="filesystem", action="retain", status="planned", confidence="confirmed")
-        + "requires_explicit_test_target_reference = false\n",
-    ],
-    ids=[
-        "schema_true",
-        "schema_float",
-        "status_list",
-        "kind_list",
-        "aggregate_int",
-        "requires_int",
-        "unknown_top",
-        "filesystem_edit",
-        "aggregate_false",
-        "requires_false",
-    ],
-)
-def test_malformed_manifest_inputs_fail(tmp_path, body):
+def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
     p = tmp_path / "docs/refactor"
     p.mkdir(parents=True)
     (p / "deletion-manifest.toml").write_text(body, encoding="utf-8")
@@ -580,6 +555,21 @@ def test_absolute_manifest_path_fails(tmp_path):
     )
     manifest, errors = parse_manifest(tmp_path)
     assert manifest is None and any("repository-relative" in e for e in errors)
+
+
+def test_workflow_path_traversal_fails(tmp_path):
+    RepoFixture(tmp_path).write_manifest(
+        items="[[items]]\n"
+        + _ITEM.format(
+            path=".github/workflows/../../Makefile",
+            kind="workflow",
+            action="delete",
+            status="planned",
+            confidence="confirmed",
+        )
+    )
+    manifest, errors = parse_manifest(tmp_path)
+    assert manifest is None and any("must not contain .." in e for e in errors)
 
 
 def test_workflow_path_duplicate_slash_variants_fail(tmp_path):
@@ -637,14 +627,8 @@ def test_port_without_replacement_fails_unless_discovery_needed(tmp_path, status
 @pytest.mark.parametrize(
     "workflow,frag",
     [
-        (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: echo finalization-check\n",
-            "exactly one job invoking",
-        ),
-        (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check || true\n",
-            "exactly one job invoking",
-        ),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: echo finalization-check\n", "exactly one job invoking"),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check || true\n", "exactly one job invoking"),
         (
             "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check\n"
             "  legacy:\n    steps:\n      - run: |\n          cd /workspace\n"
@@ -652,41 +636,39 @@ def test_port_without_replacement_fails_unless_discovery_needed(tmp_path, status
             "legacy target characterization-full",
         ),
         (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: >\n          echo\n"
-            "          make finalization-check\n",
-            "exactly one job invoking",
+            "jobs:\n  finalization-check:\n    steps:\n      - run: |\n          make \\\n"
+            "            characterization-full\n",
+            "unsupported shell continuation",
         ),
         (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check-target\n",
-            "finalization-check-target",
+            "jobs:\n  finalization-check:\n    steps:\n      - run: >\n          make \\\n"
+            "          finalization-check\n",
+            "unsupported shell continuation",
+        ),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check-target\n", "finalization-check-target"),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check\n        continue-on-error: true\n", "continue-on-error"),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: echo make characterization-full\n", "exactly one job invoking"),
+        ("jobs:\n  finalization-check:\n    steps:\n      - run: echo preparing && make characterization-full\n", "legacy target characterization-full"),
+        (
+            "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check\n"
+            "  finalization-check:\n    steps:\n      - run: echo gate disabled\n",
+            "duplicate job names",
         ),
         (
             "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check\n"
-            "        continue-on-error: true\n",
-            "continue-on-error",
-        ),
-        (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: make finalization-check\n"
-            "        continue-on-error: ${{ matrix.experimental }}\n",
-            "continue-on-error",
-        ),
-        (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: echo make characterization-full\n",
-            "exactly one job invoking",
-        ),
-        (
-            "jobs:\n  finalization-check:\n    steps:\n      - run: echo preparing && make characterization-full\n",
-            "legacy target characterization-full",
+            "        run: echo gate disabled\n",
+            "multiple run values",
         ),
         (
             "jobs:\n  finalization-check:\n    steps:\n      - name: Step\n        env:\n          ITEMS: |\n            - one\n            - two\n"
             "      - run: make finalization-check\n",
-            "exactly one job invoking",
+            "__pass__",
         ),
         (
             "jobs:\n  legacy:\n    steps:\n      - run: make characterization-full\n"
             "        continue-on-error: true\n"
-            "  finalization-check:\n    steps:\n      - run: make finalization-check\n",
+            "  finalization-check:\n    steps:\n      - run: make finalization-check\n"
+            "        continue-on-error: false\n",
             "legacy target characterization-full",
         ),
     ],
@@ -694,21 +676,27 @@ def test_port_without_replacement_fails_unless_discovery_needed(tmp_path, status
         "echo",
         "suppressed",
         "literal_legacy",
-        "folded_echo",
+        "literal_continuation",
+        "folded_continuation",
         "target_gate",
         "continue_on_error_true",
-        "continue_on_error_expr",
         "echo_not_legacy",
         "segment_legacy",
+        "duplicate_job",
+        "duplicate_run",
         "nested_env",
-        "legacy_with_continue",
+        "continue_on_error_false_positive",
     ],
 )
 def test_workflow_completion_rules(tmp_path, workflow, frag):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     r.write_workflow("name: x\non: {pull_request: null}\n" + workflow)
-    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+    errors = validate(tmp_path, stage="cutover")
+    if frag == "__pass__":
+        assert not any("exactly one job invoking" in e for e in errors)
+    else:
+        assert any(frag in e for e in errors)
 
 
 def test_renamed_legacy_entry_point_fails(tmp_path):
@@ -729,85 +717,123 @@ def test_wrong_target_entry_point_value_fails(tmp_path):
     assert any("entry point 'jung-api' must be" in e for e in validate(tmp_path, stage="cutover"))
 
 
-def test_docker_echo_runtime_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(
-        target=True,
-        dockerfile=(
-            "FROM python:3.11-slim AS base\n"
-            "FROM base AS development\n"
-            'CMD ["echo", "jung-api"]\n'
+@pytest.mark.parametrize(
+    "dockerfile,compose,frag",
+    [
+        (
+            "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"echo\", \"jung-api\"]\n",
+            None,
+            "CMD must select",
         ),
-    )
-    assert any("CMD must select" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_docker_malformed_cmd_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(
-        target=True,
-        dockerfile=(
-            "FROM python:3.11-slim AS base\n"
-            "FROM base AS development\n"
-            'CMD ["jung-api",\n'
+        (
+            "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"jung-api\",\n",
+            None,
+            "CMD is invalid",
         ),
-    )
-    assert any("CMD is invalid" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_compose_echo_runtime_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(
-        target=True,
-        compose=(
+        (
+            None,
             "services:\n  api:\n    build:\n      context: .\n"
             "      dockerfile: Dockerfile\n      target: development\n"
-            "    command: echo jung.api.app:cli\n"
+            "    command: echo jung.api.app:cli\n",
+            "docker-compose api command must select",
         ),
-    )
-    assert any("docker-compose api command must select" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_unsupported_merge_list_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(
-        target=True,
-        compose=(
-            "x-api-base: &api-base\n  command: jung-api\n"
-            "services:\n  api:\n    <<: [*api-base]\n"
-            "    build:\n      context: .\n      dockerfile: Dockerfile\n"
-            "      target: development\n"
+        (
+            None,
+            "x-api-base: &api-base\n  command: jung-api\nservices:\n  api:\n    <<: [*api-base]\n"
+            "    build:\n      context: .\n      dockerfile: Dockerfile\n      target: development\n",
+            "unsupported merge",
         ),
-    )
-    assert any("unsupported merge" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_duplicate_api_key_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(
-        target=True,
-        compose=(
+        (
+            None,
             "services:\n  api:\n    command: jung-api\n    build:\n"
             "      context: .\n      dockerfile: Dockerfile\n      target: development\n"
             "  api:\n    command: jung-api\n    build:\n"
-            "      context: .\n      dockerfile: Dockerfile\n      target: development\n"
+            "      context: .\n      dockerfile: Dockerfile\n      target: development\n",
+            "multiple services.api blocks",
         ),
-    )
-    assert any("multiple services.api blocks" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_scalar_build_fails(tmp_path):
+        (
+            None,
+            "services:\n  api:\n    build: .\n    command: jung-api\n",
+            "scalar build syntax is unsupported",
+        ),
+    ],
+    ids=["docker_echo", "docker_malformed", "compose_echo", "merge_list", "duplicate_api", "scalar_build"],
+)
+def test_invalid_runtime_shapes(tmp_path, dockerfile, compose, frag):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     r.write_runtime(
         target=True,
-        compose=(
-            "services:\n  api:\n    build: .\n    command: jung-api\n"
-        ),
+        dockerfile=dockerfile or _DF_TARGET,
+        compose=compose or _CP_TARGET,
     )
-    assert any("scalar build syntax is unsupported" in e for e in validate(tmp_path, stage="cutover"))
+    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
+_RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
+
+
+def _retained_test_manifest() -> str:
+    return (
+        _MANIFEST_TAIL.format(wf="complete")
+        + "[[items]]\n"
+        + _ITEM.format(
+            path=_RETAINED_TEST,
+            kind="filesystem",
+            action="retain",
+            status="complete",
+            confidence="confirmed",
+        )
+        + "requires_explicit_test_target_reference = true\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "makefile_patch,should_pass",
+    [
+        (
+            "TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n"
+            "test-target:\n\tpytest tests/unit/jung/\n",
+            False,
+        ),
+        (
+            "test-target:\n\techo pytest tests/unit/test_validate_refactor_phase_6.py\n",
+            False,
+        ),
+        (
+            "test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n",
+            True,
+        ),
+        (
+            "test-target:\n\tdocker compose --profile test run --rm test pytest "
+            "tests/unit/test_validate_refactor_phase_6.py\n",
+            True,
+        ),
+        (
+            "TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n"
+            "test-target:\n\tdocker compose --profile test run --rm test pytest "
+            "$(TARGET_SUPPORT_TESTS)\n",
+            True,
+        ),
+    ],
+    ids=["unused_var", "echo_pytest", "direct_pytest", "docker_pytest", "var_expansion"],
+)
+def test_retained_test_reference_rules(tmp_path, makefile_patch, should_pass):
+    r = RepoFixture(tmp_path)
+    r.write_manifest(items=_retained_test_manifest())
+    r.write_runtime(target=True)
+    r.write_workflow(_WF_CUTOVER)
+    base = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    base = re.sub(
+        r"test-target:\n\tpytest tests/\n",
+        makefile_patch,
+        base,
+    )
+    (tmp_path / "Makefile").write_text(base, encoding="utf-8")
+    (tmp_path / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
+    errors = validate(tmp_path, stage="cutover")
+    if should_pass:
+        assert not any("retained test not referenced" in e for e in errors)
+    else:
+        assert any("retained test not referenced" in e for e in errors)
