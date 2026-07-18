@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 import shlex
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, Self
@@ -31,10 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = Path("docs/refactor/deletion-manifest.toml")
 WORKFLOW_EDIT_PATH = ".github/workflows/release-candidate-validation.yml"
 
-OWNERS = frozenset({"6A", "6B", "6C", "6D"})
 KIND_ACTIONS: dict[str, frozenset[str]] = {
     "filesystem": frozenset(
-        {"delete", "port_then_delete", "reimplement_then_delete", "retain", "edit"}
+        {"delete", "port_then_delete", "reimplement_then_delete", "retain"}
     ),
     "make_target": frozenset({"delete", "retain"}),
     "workflow": frozenset({"delete", "retain"}),
@@ -89,8 +90,8 @@ FORBIDDEN_IMPORT_ROOTS = (
 )
 FORBIDDEN_DEP_PREFIXES = FORBIDDEN_IMPORT_ROOTS + ("langchain",)
 
-LEGACY_RUNTIME = "psychoanalyst_app.server"
-TARGET_RUNTIME = "jung-api"
+LEGACY_RUNTIME_ARGV = ("python", "-m", "psychoanalyst_app.server")
+TARGET_RUNTIME_ARGV = ("jung-api",)
 LEGACY_ENTRY_POINTS = frozenset({"psychoanalyst-server", "psychoanalyst-db"})
 TARGET_ENTRY_POINTS = {
     "jung-api": "jung.api.app:cli",
@@ -100,6 +101,17 @@ TARGET_ENTRY_POINTS = {
 TARGET_ENTRY_CUTOVER = frozenset({"jung-api", "jung-console"})
 TARGET_ENTRY_FINAL = frozenset(TARGET_ENTRY_POINTS)
 MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+MAKE_TOKENS = frozenset({"make", "$(MAKE)", "${MAKE}"})
+PYTHON_SUFFIXES = ("python", "python3")
+
+
+def _strip_nonempty(value: Any, field_name: str) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"{field_name} must be non-empty")
+    return stripped
 
 
 class ManifestItem(BaseModel):
@@ -120,24 +132,25 @@ class ManifestItem(BaseModel):
     aggregate: StrictBool | None = None
     requires_explicit_test_target_reference: StrictBool | None = None
 
-    @field_validator("path", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def normalize_path(cls, value: Any, info: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        kind = info.data.get("kind")
-        if kind == "make_target":
-            return value.strip()
-        return _norm_fs_path(value.strip())
-
-    @field_validator("replacements", "evidence", mode="before")
-    @classmethod
-    def normalize_path_list(cls, value: Any) -> Any:
-        if value is None:
-            return ()
-        if not isinstance(value, list):
-            return value
-        return value
+    def normalize_item_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for field in ("path", "responsibility", "blocker"):
+            if field in normalized and normalized[field] is not None:
+                normalized[field] = _strip_nonempty(normalized[field], field)
+        kind = normalized.get("kind")
+        if isinstance(normalized.get("path"), str) and kind != "make_target":
+            normalized["path"] = _norm_fs_path(normalized["path"])
+        replacements = normalized.get("replacements")
+        if isinstance(replacements, list):
+            normalized["replacements"] = replacements
+        evidence = normalized.get("evidence")
+        if isinstance(evidence, list):
+            normalized["evidence"] = evidence
+        return normalized
 
     @field_validator("replacements", "evidence")
     @classmethod
@@ -195,15 +208,13 @@ class ManifestItem(BaseModel):
         if self.kind == "make_target":
             if not MAKE_TARGET_RE.match(self.path):
                 raise ValueError(f"invalid make target name: {self.path!r}")
+        elif self.kind in {"workflow", "workflow_edit"}:
+            if not self.path.startswith(".github/workflows/"):
+                raise ValueError("workflow path must be under .github/workflows/")
         else:
             _, err = _validate_repo_relative_path(self.path, "path")
             if err:
                 raise ValueError(err)
-            if self.kind in {"workflow", "workflow_edit"}:
-                if not self.path.startswith(".github/workflows/"):
-                    raise ValueError(
-                        "workflow path must be under .github/workflows/"
-                    )
         return self
 
 
@@ -241,9 +252,17 @@ class RecipeCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedValue:
+class ParsedCommand:
+    tokens: tuple[str, ...]
+    segments: tuple[tuple[str, ...], ...]
+    has_shell_control: bool
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedArgv:
     present: bool
-    value: str | None = None
+    argv: tuple[str, ...] | None = None
     error: str | None = None
 
 
@@ -257,7 +276,7 @@ class GateRules:
 @dataclass(frozen=True, slots=True)
 class StageRules:
     manifest_status: str
-    expected_runtime: str
+    expected_runtime_argv: tuple[str, ...]
     gates: tuple[GateRules, ...]
     required_entry_points: frozenset[str]
     forbidden_entry_points: frozenset[str]
@@ -278,7 +297,7 @@ class RepoContext:
 STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
         manifest_status="active",
-        expected_runtime=LEGACY_RUNTIME,
+        expected_runtime_argv=LEGACY_RUNTIME_ARGV,
         gates=(
             GateRules("finalization-check", LEGACY_GATE_STEPS),
             GateRules("finalization-check-target", TARGET_GATE_STEPS),
@@ -289,7 +308,7 @@ STAGES: dict[str, StageRules] = {
     ),
     "cutover": StageRules(
         manifest_status="active",
-        expected_runtime=TARGET_RUNTIME,
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
         gates=(
             GateRules(
                 "finalization-check",
@@ -306,7 +325,7 @@ STAGES: dict[str, StageRules] = {
     ),
     "final": StageRules(
         manifest_status="completed",
-        expected_runtime=TARGET_RUNTIME,
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
         gates=(
             GateRules(
                 "finalization-check",
@@ -389,13 +408,6 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
     except tomllib.TOMLDecodeError as exc:
         return None, [f"invalid manifest TOML: {exc}"]
 
-    unknown_top = set(data) - {"schema_version", "status", "items"}
-    if unknown_top:
-        return None, [
-            "manifest has unknown top-level field(s): "
-            + ", ".join(sorted(unknown_top))
-        ]
-
     raw_items = data.get("items")
     if not isinstance(raw_items, list) or not raw_items:
         return None, ["manifest must define at least one item"]
@@ -422,6 +434,9 @@ def _load_repo_context(root: Path) -> RepoContext:
 def _parse_makefile_text(text: str) -> dict[str, list[RecipeCommand]]:
     recipes: dict[str, list[RecipeCommand]] = {}
     current: str | None = None
+    pending: str | None = None
+    pending_ignored = False
+
     for line in text.splitlines():
         if line.startswith("#"):
             continue
@@ -430,89 +445,110 @@ def _parse_makefile_text(text: str) -> dict[str, list[RecipeCommand]]:
             if target and not target.startswith("."):
                 current = target
                 recipes.setdefault(current, [])
+            pending = None
             continue
-        if line.startswith("\t") and current is not None:
-            body = line[1:].strip()
-            if not body or body.startswith("#"):
-                continue
-            if body.endswith("\\"):
-                body = body[:-1].strip()
-            ignored = body.startswith("-")
-            if ignored:
-                body = body[1:].strip()
-            recipes[current].append(
-                RecipeCommand(text=body, ignored_failure=ignored)
-            )
+        if not line.startswith("\t") or current is None:
+            continue
+        body = line[1:].strip()
+        if not body or body.startswith("#"):
+            continue
+        if pending is None:
+            pending_ignored = body.startswith("-")
+            pending = body[1:].strip() if pending_ignored else body
+        else:
+            pending = f"{pending} {body}"
+        if body.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        recipes[current].append(
+            RecipeCommand(text=pending, ignored_failure=pending_ignored)
+        )
+        pending = None
     return recipes
 
 
-def _target_support_test_paths(makefile_text: str) -> set[str]:
-    match = re.search(
-        r"^TARGET_SUPPORT_TESTS\s*:=\s*(.*?)(?=^\S|\Z)",
-        makefile_text,
-        re.MULTILINE | re.DOTALL,
-    )
-    if not match:
-        return set()
-    paths: set[str] = set()
-    for line in match.group(1).splitlines():
-        stripped = line.strip().rstrip("\\").strip()
-        if stripped and not stripped.startswith("#"):
-            paths.add(_norm_fs_path(stripped))
-    return paths
-
-
-def _tokenize_command(text: str) -> list[str]:
+def _parse_shell_command(text: str) -> ParsedCommand:
     try:
-        return shlex.split(text, posix=True)
-    except ValueError:
-        return text.split()
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = tuple(lexer)
+    except ValueError as exc:
+        return ParsedCommand((), (), False, str(exc))
 
-
-def _is_echo_or_printf(tokens: list[str]) -> bool:
-    return bool(tokens) and tokens[0].lstrip("@") in {"echo", "printf"}
-
-
-def _invoked_make_targets(commands: list[RecipeCommand]) -> set[str]:
-    found: set[str] = set()
-    for command in commands:
-        if command.ignored_failure:
+    segments: list[list[str]] = []
+    current: list[str] = []
+    has_control = False
+    for token in tokens:
+        if token and all(char in ";&|" for char in token):
+            has_control = True
+            if current:
+                segments.append(current)
+                current = []
             continue
-        tokens = _tokenize_command(command.text.split("#", 1)[0].strip())
-        if _is_echo_or_printf(tokens):
-            continue
-        for index, token in enumerate(tokens):
-            if token in {"$(MAKE)", "make", "${MAKE}"} and index + 1 < len(tokens):
-                found.add(tokens[index + 1])
-    return found
+        current.append(token)
+    if current:
+        segments.append(current)
+    return ParsedCommand(tokens, tuple(tuple(part) for part in segments), has_control)
 
 
-def _invoked_scripts(commands: list[RecipeCommand]) -> set[str]:
-    found: set[str] = set()
-    for command in commands:
-        if command.ignored_failure:
-            continue
-        tokens = _tokenize_command(command.text.split("#", 1)[0].strip())
-        if _is_echo_or_printf(tokens):
-            continue
-        for index, token in enumerate(tokens):
-            if token.endswith("python") or token.endswith("python3"):
-                if index + 1 < len(tokens):
-                    found.add(_norm_fs_path(tokens[index + 1]))
-    return found
+def _segment_invokes_make_target(
+    segment: tuple[str, ...], target: str, *, allow_leading_dash: bool
+) -> bool:
+    if not segment:
+        return False
+    offset = 1 if allow_leading_dash and segment[0] == "-" else 0
+    if len(segment) < offset + 2:
+        return False
+    return (
+        segment[offset] in MAKE_TOKENS and segment[offset + 1] == target
+    )
 
 
-def _recipe_has_exact_path(commands: list[RecipeCommand], path: str) -> bool:
-    normalized = _norm_fs_path(path)
-    for command in commands:
-        if command.ignored_failure:
-            continue
-        tokens = _tokenize_command(command.text.split("#", 1)[0].strip())
-        if _is_echo_or_printf(tokens):
-            continue
-        if normalized in {_norm_fs_path(token) for token in tokens}:
-            return True
+def _command_invokes_required_make(
+    command: ParsedCommand, target: str
+) -> bool:
+    if command.error or command.has_shell_control or len(command.segments) != 1:
+        return False
+    segment = command.segments[0]
+    if segment and segment[0] == "-":
+        return False
+    return (
+        len(segment) == 2
+        and segment[0] in MAKE_TOKENS
+        and segment[1] == target
+    )
+
+
+def _command_invokes_python_script(
+    command: ParsedCommand, script: str
+) -> bool:
+    if command.error or command.has_shell_control or len(command.segments) != 1:
+        return False
+    segment = command.segments[0]
+    if segment and segment[0] == "-":
+        return False
+    normalized = _norm_fs_path(script)
+    for index, token in enumerate(segment):
+        if token.endswith(PYTHON_SUFFIXES) and index + 1 < len(segment):
+            if _norm_fs_path(segment[index + 1]) == normalized:
+                return True
     return False
+
+
+def _is_canonical_gate(command: ParsedCommand) -> bool:
+    return _command_invokes_required_make(command, "finalization-check")
+
+
+def _command_has_forbidden_make(
+    command: ParsedCommand, target: str
+) -> bool:
+    if command.error:
+        return False
+    return any(
+        _segment_invokes_make_target(segment, target, allow_leading_dash=True)
+        for segment in command.segments
+    )
 
 
 def _gate_errors(
@@ -522,19 +558,31 @@ def _gate_errors(
     if gate.target not in recipes:
         return [f"missing Makefile target: {gate.target}"]
     commands = recipes[gate.target]
-    make_targets = _invoked_make_targets(commands)
-    scripts = _invoked_scripts(commands)
-    searchable = make_targets | scripts
     for step in gate.required:
-        if step.endswith(".py"):
-            normalized = _norm_fs_path(step)
-            if normalized not in scripts:
-                errors.append(f"{gate.target} must invoke {step}")
-        elif step not in searchable:
+        found = False
+        for command in commands:
+            if command.ignored_failure:
+                continue
+            parsed = _parse_shell_command(command.text)
+            if step.endswith(".py"):
+                if _command_invokes_python_script(parsed, step):
+                    found = True
+                    break
+            elif _command_invokes_required_make(parsed, step):
+                found = True
+                break
+        if not found:
             errors.append(f"{gate.target} must invoke {step}")
     for step in gate.forbidden:
-        if step in searchable:
-            errors.append(f"{gate.target} must not invoke {step}")
+        for command in commands:
+            parsed = _parse_shell_command(command.text)
+            if step.endswith(".py"):
+                if _command_invokes_python_script(parsed, step):
+                    errors.append(f"{gate.target} must not invoke {step}")
+                    break
+            elif _command_has_forbidden_make(parsed, step):
+                errors.append(f"{gate.target} must not invoke {step}")
+                break
     return errors
 
 
@@ -556,10 +604,15 @@ def _yaml_block(text: str, header_pattern: str) -> str | None:
     return "\n".join(block)
 
 
+def _is_comment_or_blank(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
+
+
 def _direct_child_indent(parent_block: str) -> int | None:
-    parent_indent = None
+    parent_indent: int | None = None
     for line in parent_block.splitlines():
-        if not line.strip():
+        if _is_comment_or_blank(line):
             continue
         indent = len(line) - len(line.lstrip())
         if parent_indent is None:
@@ -570,19 +623,19 @@ def _direct_child_indent(parent_block: str) -> int | None:
     return None
 
 
-def _direct_children(parent_block: str) -> dict[str, str]:
+def _direct_children(parent_block: str) -> list[tuple[str, str]]:
     lines = parent_block.splitlines()
     if not lines:
-        return {}
+        return []
     child_indent = _direct_child_indent(parent_block)
     if child_indent is None:
-        return {}
-    children: dict[str, list[str]] = {}
+        return []
+    children: list[tuple[str, list[str]]] = []
     current_name: str | None = None
     for line in lines[1:]:
-        if not line.strip():
+        if _is_comment_or_blank(line):
             if current_name is not None:
-                children[current_name].append(line)
+                children[-1][1].append(line)
             continue
         indent = len(line) - len(line.lstrip())
         if indent < child_indent:
@@ -591,12 +644,23 @@ def _direct_children(parent_block: str) -> dict[str, str]:
             match = re.match(r"(\S+):\s*(.*)$", line.strip())
             if match:
                 current_name = match.group(1)
-                children[current_name] = [line]
+                children.append((current_name, [line]))
             else:
                 current_name = None
         elif current_name is not None and indent > child_indent:
-            children[current_name].append(line)
-    return {name: "\n".join(block) for name, block in children.items()}
+            children[-1][1].append(line)
+    return [(name, "\n".join(block)) for name, block in children]
+
+
+def _children_named(
+    children: list[tuple[str, str]], name: str
+) -> list[str]:
+    return [block for child_name, block in children if child_name == name]
+
+
+def _is_inline_mapping(block: str) -> bool:
+    first = block.splitlines()[0].strip() if block else ""
+    return "{" in first
 
 
 def _services_block(compose: str) -> tuple[str | None, str | None]:
@@ -614,19 +678,37 @@ def _api_service_block(compose: str) -> tuple[str | None, str | None]:
         return None, err
     assert services is not None
     children = _direct_children(services)
-    api_blocks = [name for name in children if name == "api"]
+    api_blocks = _children_named(children, "api")
     if not api_blocks:
         return None, "docker-compose.yml missing services.api block"
     if len(api_blocks) > 1:
         return None, "docker-compose.yml has multiple services.api blocks"
-    return children["api"], None
+    api_block = api_blocks[0]
+    if _is_inline_mapping(api_block):
+        return None, "docker-compose api inline mapping is unsupported"
+    return api_block, None
 
 
 def _merge_aliases(service_block: str) -> tuple[list[str], str | None]:
-    aliases = re.findall(r"<<:\s*\*(\S+)", service_block)
-    if len(aliases) > 1:
-        return aliases, "docker-compose api has multiple merge aliases"
-    return aliases, None
+    children = _direct_children(service_block)
+    merge_blocks = _children_named(children, "<<")
+    if len(merge_blocks) > 1:
+        return [], "docker-compose api has multiple merge keys"
+    if not merge_blocks:
+        return [], None
+    block = merge_blocks[0]
+    first_line = block.splitlines()[0].strip()
+    match = re.match(r"<<:\s*(.*)$", first_line)
+    if not match:
+        return [], "docker-compose api has unsupported merge syntax"
+    value = match.group(1).strip()
+    if not value:
+        if len(block.splitlines()) > 1:
+            return [], "docker-compose api has unsupported merge list syntax"
+        return [], "docker-compose api has unsupported merge syntax"
+    if value.startswith("*") and not value.startswith("[") and " " not in value:
+        return [value[1:]], None
+    return [], "docker-compose api has unsupported merge syntax"
 
 
 def _resolve_merge_anchor(compose: str, alias: str) -> tuple[str | None, str | None]:
@@ -652,7 +734,7 @@ def _extract_direct_scalar(block: str, key: str) -> list[tuple[int, str]]:
         return []
     matches: list[tuple[int, str]] = []
     for index, line in enumerate(block.splitlines()):
-        if not line.strip():
+        if _is_comment_or_blank(line):
             continue
         indent = len(line) - len(line.lstrip())
         if indent != child_indent:
@@ -663,100 +745,115 @@ def _extract_direct_scalar(block: str, key: str) -> list[tuple[int, str]]:
     return matches
 
 
-def _parse_inline_command_list(raw: str) -> tuple[str | None, str | None]:
+def _parse_inline_command_list(raw: str) -> ParsedArgv:
     if not raw.startswith("["):
-        return None, "command inline list must start with ["
+        return ParsedArgv(True, error="command inline list must start with [")
     try:
         parsed = ast.literal_eval(raw)
     except (SyntaxError, ValueError):
-        return None, "command inline list is malformed"
+        return ParsedArgv(True, error="command inline list is malformed")
     if not isinstance(parsed, list) or not parsed:
-        return None, "command inline list must be a non-empty list of strings"
+        return ParsedArgv(
+            True, error="command inline list must be a non-empty list of strings"
+        )
     if not all(isinstance(item, str) and item for item in parsed):
-        return None, "command inline list must contain only non-empty strings"
-    return " ".join(parsed), None
+        return ParsedArgv(
+            True,
+            error="command inline list must contain only non-empty strings",
+        )
+    return ParsedArgv(True, argv=tuple(parsed))
 
 
 def _parse_block_command_list(
     block: str, key_line_index: int
-) -> tuple[str | None, str | None]:
-    lines = block.splitlines()
+) -> ParsedArgv:
     child_indent = _direct_child_indent(block)
     if child_indent is None:
-        return None, "command block is malformed"
+        return ParsedArgv(True, error="command block is malformed")
     list_indent = child_indent + 2
     items: list[str] = []
-    for line in lines[key_line_index + 1 :]:
-        if not line.strip():
+    for line in block.splitlines()[key_line_index + 1 :]:
+        if _is_comment_or_blank(line):
             continue
         indent = len(line) - len(line.lstrip())
         if indent < list_indent:
             break
         if indent != list_indent:
-            return None, "command block contains unsupported child syntax"
+            return ParsedArgv(
+                True, error="command block contains unsupported child syntax"
+            )
         match = re.match(r"-\s*(.+)$", line.strip())
         if not match:
-            return None, "command block contains unsupported child syntax"
+            return ParsedArgv(
+                True, error="command block contains unsupported child syntax"
+            )
         value = match.group(1).strip().strip("'\"")
         if not value:
-            return None, "command block list items must be non-empty strings"
+            return ParsedArgv(
+                True, error="command block list items must be non-empty strings"
+            )
         items.append(value)
     if not items:
-        return None, "command block list must be non-empty"
-    return " ".join(items), None
+        return ParsedArgv(True, error="command block list must be non-empty")
+    return ParsedArgv(True, argv=tuple(items))
 
 
-def _extract_yaml_command(block: str) -> ParsedValue:
+def _scalar_to_argv(raw: str) -> ParsedArgv:
+    value = raw.strip().strip("'\"")
+    if not value:
+        return ParsedArgv(True, error="command must not be empty")
+    parsed = _parse_shell_command(value)
+    if parsed.error:
+        return ParsedArgv(True, error=parsed.error)
+    if parsed.has_shell_control:
+        return ParsedArgv(True, error="command contains unsupported shell control")
+    if len(parsed.segments) != 1:
+        return ParsedArgv(True, error="command contains unsupported shell control")
+    return ParsedArgv(True, argv=parsed.segments[0])
+
+
+def _extract_yaml_command(block: str) -> ParsedArgv:
     matches = _extract_direct_scalar(block, "command")
     if not matches:
-        return ParsedValue(present=False)
+        return ParsedArgv(False)
     if len(matches) > 1:
-        return ParsedValue(
-            present=True,
-            error="docker-compose api has multiple command keys",
-        )
-    _, raw = matches[0]
+        return ParsedArgv(True, error="docker-compose api has multiple command keys")
+    key_index, raw = matches[0]
     if not raw:
-        key_index = next(
-            i
-            for i, line in enumerate(block.splitlines())
-            if line.strip().startswith("command:")
-        )
-        value, err = _parse_block_command_list(block, key_index)
-        if err:
-            return ParsedValue(present=True, error=err)
-        return ParsedValue(present=True, value=value)
+        return _parse_block_command_list(block, key_index)
     if raw.startswith("["):
-        value, err = _parse_inline_command_list(raw)
-        if err:
-            return ParsedValue(present=True, error=err)
-        return ParsedValue(present=True, value=value)
-    return ParsedValue(present=True, value=raw.strip().strip("'\""))
+        return _parse_inline_command_list(raw)
+    return _scalar_to_argv(raw)
 
 
-def _extract_build_target(block: str) -> ParsedValue:
-    build_children = _direct_children(block)
-    build_blocks = [name for name in build_children if name == "build"]
+def _extract_build_target(block: str) -> ParsedArgv:
+    children = _direct_children(block)
+    build_blocks = _children_named(children, "build")
     if not build_blocks:
-        return ParsedValue(present=False)
+        return ParsedArgv(False)
     if len(build_blocks) > 1:
-        return ParsedValue(
-            present=True,
-            error="docker-compose api has multiple build blocks",
-        )
-    build_block = build_children["build"]
+        return ParsedArgv(True, error="docker-compose api has multiple build blocks")
+    build_block = build_blocks[0]
+    if _is_inline_mapping(build_block):
+        return ParsedArgv(True, error="docker-compose api inline build is unsupported")
+    first_line = build_block.splitlines()[0].strip()
+    if re.match(r"build:\s*\S+", first_line) and "{" not in first_line:
+        remainder = first_line.split(":", 1)[1].strip()
+        if remainder and not remainder.startswith("{"):
+            return ParsedArgv(
+                True, error="docker-compose scalar build syntax is unsupported"
+            )
     targets = _extract_direct_scalar(build_block, "target")
     if not targets:
-        return ParsedValue(present=False)
+        return ParsedArgv(False)
     if len(targets) > 1:
-        return ParsedValue(
-            present=True,
-            error="docker-compose api build has multiple target keys",
+        return ParsedArgv(
+            True, error="docker-compose api build has multiple target keys"
         )
     _, raw = targets[0]
     if not raw:
-        return ParsedValue(present=True, error="docker-compose build target is empty")
-    return ParsedValue(present=True, value=raw.strip().strip("'\""))
+        return ParsedArgv(True, error="docker-compose build target is empty")
+    return ParsedArgv(True, argv=(raw.strip().strip("'\""),))
 
 
 def _api_service_layers(
@@ -777,54 +874,48 @@ def _api_service_layers(
     return api_block, inherited, None
 
 
-def _pick_parsed(local: ParsedValue, inherited: ParsedValue) -> ParsedValue | str:
-    if local.error:
+def _pick_argv(local: ParsedArgv, inherited: ParsedArgv) -> ParsedArgv | str:
+    if local.present and local.error:
         return local.error
-    if local.present:
-        return local if local.value is not None else "present but invalid"
-    if inherited.error:
+    if local.present and local.argv is not None:
+        return local
+    if inherited.present and inherited.error:
         return inherited.error
-    if inherited.present and inherited.value is not None:
+    if inherited.present and inherited.argv is not None:
         return inherited
-    return ParsedValue(present=False)
+    return ParsedArgv(False)
 
 
-def _resolve_api_build_target(compose: str) -> tuple[str | None, bool, str | None]:
-    api_block, inherited_block, err = _api_service_layers(compose)
-    if err:
-        return None, False, err
-    assert api_block is not None
-    local = _extract_build_target(api_block)
-    inherited = (
-        _extract_build_target(inherited_block)
-        if inherited_block is not None
-        else ParsedValue(present=False)
-    )
-    picked = _pick_parsed(local, inherited)
-    if isinstance(picked, str):
-        return None, True, picked
-    if picked.present and picked.value is not None:
-        return picked.value, True, None
-    return None, False, None
-
-
-def _extract_compose_api_command(compose: str) -> tuple[str | None, str | None]:
+def _layered_argv(
+    compose: str,
+    extractor: Callable[[str], ParsedArgv],
+) -> tuple[ParsedArgv | None, str | None]:
     api_block, inherited_block, err = _api_service_layers(compose)
     if err:
         return None, err
     assert api_block is not None
-    local = _extract_yaml_command(api_block)
+    local = extractor(api_block)
     inherited = (
-        _extract_yaml_command(inherited_block)
-        if inherited_block is not None
-        else ParsedValue(present=False)
+        extractor(inherited_block) if inherited_block else ParsedArgv(False)
     )
-    picked = _pick_parsed(local, inherited)
+    picked = _pick_argv(local, inherited)
     if isinstance(picked, str):
         return None, picked
-    if picked.present and picked.value is not None:
-        return picked.value, None
-    return None, None
+    return picked, None
+
+
+def _resolve_api_build_target(compose: str) -> tuple[str | None, bool, str | None]:
+    picked, err = _layered_argv(compose, _extract_build_target)
+    if err:
+        return None, False, err
+    assert picked is not None
+    if picked.present and picked.argv is not None:
+        return picked.argv[0], True, None
+    return None, False, None
+
+
+def _extract_compose_api_command(compose: str) -> tuple[ParsedArgv | None, str | None]:
+    return _layered_argv(compose, _extract_yaml_command)
 
 
 def _dockerfile_stages(dockerfile: str) -> list[tuple[str, str]]:
@@ -845,42 +936,35 @@ def _dockerfile_stages(dockerfile: str) -> list[tuple[str, str]]:
     return stages
 
 
-def _dockerfile_cmd(stage_text: str) -> str | None:
+def _dockerfile_cmd(stage_text: str) -> ParsedArgv:
     matches = list(
-        re.finditer(r'^\s*CMD\s+(\[[^\]]+\]|.+?)\s*$', stage_text, re.MULTILINE)
+        re.finditer(r"^\s*CMD\s+(\[[^\]]*\]|.+?)\s*$", stage_text, re.MULTILINE)
     )
     if not matches:
-        return None
+        return ParsedArgv(False)
     raw = matches[-1].group(1).strip()
     if raw.startswith("["):
-        parts = re.findall(r'"([^"]+)"', raw)
-        return parts[-1] if parts else None
-    return raw.strip().strip("'\"")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return ParsedArgv(True, error="Dockerfile CMD exec form is malformed")
+        if not isinstance(parsed, list) or not parsed:
+            return ParsedArgv(
+                True,
+                error="Dockerfile CMD exec form must be a non-empty list",
+            )
+        if not all(isinstance(item, str) and item for item in parsed):
+            return ParsedArgv(
+                True,
+                error="Dockerfile CMD exec form must contain only non-empty strings",
+            )
+        return ParsedArgv(True, argv=tuple(parsed))
+    return _scalar_to_argv(raw)
 
 
-def _runtime_token(command: str | None) -> str | None:
-    if command is None:
-        return None
-    if command.startswith("python -m "):
-        return command.split("python -m ", 1)[1].strip()
-    if command.startswith("python3 -m "):
-        return command.split("python3 -m ", 1)[1].strip()
-    return command.strip()
-
-
-def _runtime_matches(token: str | None, expected: str) -> bool:
-    if token is None:
-        return False
-    if expected == LEGACY_RUNTIME:
-        return token == LEGACY_RUNTIME or token.endswith("psychoanalyst_app.server")
-    return (
-        token == TARGET_RUNTIME
-        or token.endswith("jung.api.app:cli")
-        or token == "jung-api"
-    )
-
-
-def _validate_runtime(ctx: RepoContext, expected_runtime: str) -> list[str]:
+def _validate_runtime(
+    ctx: RepoContext, expected_argv: tuple[str, ...]
+) -> list[str]:
     errors: list[str] = []
     build_target, explicit, resolve_error = _resolve_api_build_target(ctx.compose)
     if resolve_error:
@@ -906,37 +990,40 @@ def _validate_runtime(ctx: RepoContext, expected_runtime: str) -> list[str]:
     else:
         stage_name, stage_text = stages[-1]
 
-    docker_cmd = _runtime_token(_dockerfile_cmd(stage_text))
-    if docker_cmd is None:
+    docker_parsed = _dockerfile_cmd(stage_text)
+    if docker_parsed.present and docker_parsed.error:
+        errors.append(
+            f"Dockerfile stage {stage_name!r} CMD is invalid: {docker_parsed.error}"
+        )
+    elif not docker_parsed.present:
         errors.append(f"Dockerfile stage {stage_name!r} must define an explicit CMD")
-    elif not _runtime_matches(docker_cmd, expected_runtime):
+    elif docker_parsed.argv != expected_argv:
         errors.append(
             f"Dockerfile stage {stage_name!r} CMD must select "
-            f"{expected_runtime!r}, got {docker_cmd!r}"
+            f"{expected_argv!r}, got {docker_parsed.argv!r}"
         )
 
-    compose_cmd, compose_err = _extract_compose_api_command(ctx.compose)
+    compose_parsed, compose_err = _extract_compose_api_command(ctx.compose)
     if compose_err:
         errors.append(compose_err)
         return errors
+    assert compose_parsed is not None
 
-    if compose_cmd is not None:
-        if not _runtime_matches(_runtime_token(compose_cmd), expected_runtime):
+    if compose_parsed.present:
+        if compose_parsed.error:
             errors.append(
-                f"docker-compose api command must select {expected_runtime!r}, "
-                f"got {compose_cmd!r}"
+                f"docker-compose api command is invalid: {compose_parsed.error}"
             )
-    elif docker_cmd is None or not _runtime_matches(docker_cmd, expected_runtime):
+        elif compose_parsed.argv != expected_argv:
+            errors.append(
+                f"docker-compose api command must select {expected_argv!r}, "
+                f"got {compose_parsed.argv!r}"
+            )
+    elif not docker_parsed.present or (
+        docker_parsed.argv is not None and docker_parsed.argv != expected_argv
+    ):
         errors.append("effective api runtime must select expected command")
 
-    if expected_runtime == LEGACY_RUNTIME:
-        if (
-            LEGACY_RUNTIME not in ctx.compose
-            and "psychoanalyst_app.server" not in ctx.compose
-            and compose_cmd is None
-            and docker_cmd is None
-        ):
-            errors.append("legacy runtime not configured for api service")
     return errors
 
 
@@ -963,11 +1050,33 @@ def _paths_exist(ctx: RepoContext, paths: tuple[str, ...]) -> list[str]:
     return errors
 
 
+def _target_support_test_paths(makefile_text: str) -> set[str]:
+    match = re.search(
+        r"^TARGET_SUPPORT_TESTS\s*:=\s*(.*?)(?=^\S|\Z)",
+        makefile_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if not match:
+        return set()
+    paths: set[str] = set()
+    for line in match.group(1).splitlines():
+        stripped = line.strip().rstrip("\\").strip()
+        if stripped and not stripped.startswith("#"):
+            paths.add(_norm_fs_path(stripped))
+    return paths
+
+
 def _test_target_references_path(ctx: RepoContext, path: str) -> bool:
     normalized = _norm_fs_path(path)
     if normalized in _target_support_test_paths(ctx.makefile_text):
         return True
-    return _recipe_has_exact_path(ctx.recipes.get("test-target", []), normalized)
+    for command in ctx.recipes.get("test-target", []):
+        if command.ignored_failure:
+            continue
+        parsed = _parse_shell_command(command.text)
+        if normalized in {_norm_fs_path(token) for token in parsed.tokens}:
+            return True
+    return False
 
 
 def _validate_item_complete(ctx: RepoContext, item: ManifestItem) -> list[str]:
@@ -985,54 +1094,44 @@ def _validate_item_complete(ctx: RepoContext, item: ManifestItem) -> list[str]:
                 errors.append(
                     f"retained test not referenced in test-target recipe: {item.path}"
                 )
-    elif item.action == "edit":
+    elif item.action == "edit" and item.kind == "workflow_edit":
         errors.extend(_validate_workflow_edit(ctx, complete=True))
     return errors
 
 
-def _extract_workflow_job_blocks(workflow: str) -> dict[str, str]:
-    jobs: dict[str, str] = {}
-    match = re.search(r"^\s*jobs:\s*$", workflow, re.MULTILINE)
-    if not match:
-        return jobs
-    lines = workflow.splitlines()
-    start = workflow[: match.start()].count("\n")
-    index = start + 1
-    while index < len(lines):
-        line = lines[index]
-        job_match = re.match(r"^  (\S+):\s*$", line)
-        if not job_match:
-            index += 1
+def _workflow_jobs(workflow: str) -> list[tuple[str, str]]:
+    jobs_block = _yaml_block(workflow, r"^\s*jobs:\s*$")
+    if jobs_block is None:
+        return []
+    return _direct_children(jobs_block)
+
+
+def _split_step_list(steps_block: str) -> list[str]:
+    lines = steps_block.splitlines()
+    step_indent: int | None = None
+    start_index = 0
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*steps:\s*$", line):
+            start_index = index + 1
             continue
-        name = job_match.group(1)
-        block = [line]
-        index += 1
-        while index < len(lines):
-            next_line = lines[index]
-            if re.match(r"^  \S+:\s*$", next_line):
-                break
-            block.append(next_line)
-            index += 1
-        jobs[name] = "\n".join(block)
-    return jobs
-
-
-def _split_job_steps(job_block: str) -> list[str]:
-    lines = job_block.splitlines()
-    steps_start = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if re.match(r"^\s*steps:\s*$", line)
-        ),
-        None,
-    )
-    if steps_start is None:
+        if _is_comment_or_blank(line):
+            continue
+        if re.match(r"^\s*-\s", line):
+            step_indent = len(line) - len(line.lstrip())
+            break
+    if step_indent is None:
         return []
     steps: list[str] = []
     current: list[str] = []
-    for line in lines[steps_start + 1 :]:
-        if re.match(r"^\s*-\s", line):
+    for line in lines[start_index:]:
+        if _is_comment_or_blank(line):
+            if current:
+                current.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < step_indent:
+            break
+        if indent == step_indent and re.match(r"^\s*-\s", line):
             if current:
                 steps.append("\n".join(current))
             current = [line]
@@ -1043,65 +1142,75 @@ def _split_job_steps(job_block: str) -> list[str]:
     return steps
 
 
-def _extract_step_run_commands(step_block: str) -> list[str]:
+def _job_steps(job_block: str) -> list[str]:
+    children = _direct_children(job_block)
+    steps_blocks = _children_named(children, "steps")
+    if len(steps_blocks) != 1:
+        return []
+    return _split_step_list(steps_blocks[0])
+
+
+def _extract_scalar_property(block: str, key: str) -> list[str]:
+    values: list[str] = []
+    shorthand = re.match(rf"^\s*-\s*{re.escape(key)}:\s*(.*)$", block)
+    if shorthand:
+        values.extend(_read_yaml_scalar_value(shorthand.group(1), block, 0))
+        return values
+    children = _direct_children(block)
+    for child_name, child_block in children:
+        if child_name != key:
+            continue
+        first = child_block.splitlines()[0]
+        match = re.match(rf"^{re.escape(key)}:\s*(.*)$", first.strip())
+        if match:
+            values.extend(
+                _read_yaml_scalar_value(match.group(1), child_block, 0)
+            )
+    return values
+
+
+def _read_yaml_scalar_value(
+    remainder: str, block: str, key_line_index: int
+) -> list[str]:
+    if remainder in {"|", "|-", "|+", ">", ">-", ">+"}:
+        folded = remainder.startswith(">")
+        block_lines: list[str] = []
+        for line in block.splitlines()[key_line_index + 1 :]:
+            if re.match(r"^\s*-\s*\S", line):
+                break
+            if line.strip():
+                block_lines.append(line.strip())
+        if folded:
+            text = " ".join(block_lines).strip()
+            return [text] if text else []
+        return [line for line in block_lines if line]
+    if remainder:
+        return [remainder.strip()]
+    return []
+
+
+def _parse_continue_on_error(step_block: str) -> tuple[str, str | None]:
+    values = _extract_scalar_property(step_block, "continue-on-error")
+    if not values:
+        return "absent", None
+    if len(values) > 1:
+        return "unsupported", "step has multiple continue-on-error values"
+    value = values[0].strip()
+    if value in {"false", "False"}:
+        return "false", None
+    if value in {"true", "True"}:
+        return "true", None
+    return "unsupported", None
+
+
+def _step_run_commands(step_block: str) -> list[str]:
     commands: list[str] = []
-    lines = step_block.splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        match = re.match(r"^\s*-\s*run:\s*(.*)$", line)
-        if not match:
-            index += 1
-            continue
-        remainder = match.group(1)
-        if remainder in {"|", "|-", "|+", ">", ">-", ">+"}:
-            folded = remainder.startswith(">")
-            block_lines: list[str] = []
-            index += 1
-            while index < len(lines):
-                next_line = lines[index]
-                if re.match(r"^\s*-\s*\S", next_line):
-                    break
-                if next_line.strip():
-                    block_lines.append(next_line.strip())
-                index += 1
-            if folded:
-                folded_text = " ".join(block_lines).strip()
-                if folded_text:
-                    commands.append(folded_text)
-            else:
-                commands.extend(block_lines)
-            continue
-        if remainder:
-            commands.append(remainder.strip())
-        index += 1
-    return commands
-
-
-def _step_has_continue_on_error(step_block: str) -> bool:
-    return bool(re.search(r"continue-on-error:\s*true\b", step_block))
-
-
-def _is_exact_canonical_gate(command: str) -> bool:
-    text = command.split("#", 1)[0].strip()
-    if not text:
-        return False
-    if ";" in text or "||" in text or "&&" in text or "|" in text:
-        return False
-    tokens = _tokenize_command(text)
-    return (
-        len(tokens) == 2
-        and tokens[0] in {"make", "$(MAKE)", "${MAKE}"}
-        and tokens[1] == "finalization-check"
-    )
-
-
-def _job_run_commands(job_block: str) -> list[RecipeCommand]:
-    commands: list[RecipeCommand] = []
-    for step in _split_job_steps(job_block):
-        ignored = _step_has_continue_on_error(step)
-        for run_cmd in _extract_step_run_commands(step):
-            commands.append(RecipeCommand(text=run_cmd, ignored_failure=ignored))
+    shorthand = re.match(r"^\s*-\s*run:\s*(.*)$", step_block.splitlines()[0])
+    if shorthand:
+        commands.extend(
+            _read_yaml_scalar_value(shorthand.group(1), step_block, 0)
+        )
+    commands.extend(_extract_scalar_property(step_block, "run"))
     return commands
 
 
@@ -1110,49 +1219,48 @@ def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
     if not path.is_file():
         return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
     workflow = path.read_text(encoding="utf-8")
-    jobs = _extract_workflow_job_blocks(workflow)
+    jobs = _workflow_jobs(workflow)
     errors: list[str] = []
-    if complete:
-        if "phase-1-evidence" in jobs:
-            errors.append("workflow edit must remove phase-1-evidence job")
-        gate_jobs: list[str] = []
-        for name, block in jobs.items():
-            for step in _split_job_steps(block):
-                ignored = _step_has_continue_on_error(step)
-                run_commands = [
-                    RecipeCommand(text=run_cmd, ignored_failure=ignored)
-                    for run_cmd in _extract_step_run_commands(step)
-                ]
-                if any(
-                    _is_exact_canonical_gate(cmd.text) and not cmd.ignored_failure
-                    for cmd in run_commands
+    if not complete:
+        return errors
+    if any(name == "phase-1-evidence" for name, _ in jobs):
+        errors.append("workflow edit must remove phase-1-evidence job")
+    gate_jobs: list[str] = []
+    for name, block in jobs:
+        for step in _job_steps(block):
+            coe_status, coe_err = _parse_continue_on_error(step)
+            if coe_err:
+                errors.append(f"workflow job {name}: {coe_err}")
+            for run_cmd in _step_run_commands(step):
+                parsed = _parse_shell_command(run_cmd)
+                if _is_canonical_gate(parsed):
+                    if coe_status in {"true", "unsupported"}:
+                        errors.append(
+                            f"workflow job {name} must not use continue-on-error "
+                            "for finalization-check"
+                        )
+                    elif coe_status in {"absent", "false"}:
+                        gate_jobs.append(name)
+            for run_cmd in _step_run_commands(step):
+                parsed = _parse_shell_command(run_cmd)
+                for legacy in LEGACY_ONLY_STEPS:
+                    if _command_has_forbidden_make(parsed, legacy):
+                        errors.append(
+                            f"workflow job {name} must not invoke "
+                            f"legacy target {legacy}"
+                        )
+                if _command_has_forbidden_make(
+                    parsed, "finalization-check-target"
                 ):
-                    gate_jobs.append(name)
-                if any(
-                    _is_exact_canonical_gate(cmd.text) for cmd in run_commands
-                ) and ignored:
                     errors.append(
-                        f"workflow job {name} must not use continue-on-error "
-                        "for finalization-check"
+                        f"workflow job {name} must not invoke "
+                        "make finalization-check-target"
                     )
-        if len(gate_jobs) != 1:
-            errors.append(
-                "workflow edit must have exactly one job invoking "
-                "make finalization-check"
-            )
-        for name, block in jobs.items():
-            run_commands = _job_run_commands(block)
-            invoked = _invoked_make_targets(run_commands)
-            if "finalization-check-target" in invoked:
-                errors.append(
-                    f"workflow job {name} must not invoke "
-                    "make finalization-check-target"
-                )
-            for legacy in LEGACY_ONLY_STEPS:
-                if legacy in invoked:
-                    errors.append(
-                        f"workflow job {name} must not invoke legacy target {legacy}"
-                    )
+    if len(gate_jobs) != 1:
+        errors.append(
+            "workflow edit must have exactly one job invoking "
+            "make finalization-check"
+        )
     return errors
 
 
@@ -1297,7 +1405,7 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
     ctx = _load_repo_context(resolved)
     for gate in rules.gates:
         errors.extend(_gate_errors(ctx.recipes, gate))
-    errors.extend(_validate_runtime(ctx, rules.expected_runtime))
+    errors.extend(_validate_runtime(ctx, rules.expected_runtime_argv))
 
     if rules.required_entry_points or rules.forbidden_entry_points:
         errors.extend(_validate_entry_points(ctx, rules))
