@@ -61,9 +61,7 @@ _PHONY = (
     "test-target characterization-smoke probe-console-deterministic "
     "probe-console-v1-deterministic finalization-check finalization-check-target\n"
 )
-_DOCKER_PY = (
-    "docker compose --profile test run --rm test python {script}{args}\n"
-)
+_DOCKER_PY = "docker compose --profile test run --rm test python {script}{args}\n"
 _LEGACY_GATE = (
     "finalization-check: prepare-runtime-dirs\n"
     "\t$(MAKE) lint\n"
@@ -72,8 +70,7 @@ _LEGACY_GATE = (
     "\t$(MAKE) validate-generated-contracts\n"
     "\t$(MAKE) validate-architecture\n"
     "\t$(MAKE) test-validate\n"
-    "\t"
-    + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
+    "\t" + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
     + "\t$(MAKE) characterization-smoke\n"
     + "\t$(MAKE) probe-console-deterministic\n"
 )
@@ -102,6 +99,10 @@ _WF_COEXIST = (
     "  finalization-check:\n    steps:\n      - run: make finalization-check\n"
 )
 _CANONICAL_MISMATCH = "completed release workflow does not match canonical contract"
+_PHASE6_DOCKER = (
+    "\tdocker compose --profile test run --rm test python "
+    "scripts/validate_refactor_phase_6.py --stage cutover\n"
+)
 
 
 def _target_gate(stage: str) -> str:
@@ -111,8 +112,7 @@ def _target_gate(stage: str) -> str:
         "\t$(MAKE) validate-docs\n"
         "\t$(MAKE) test-target\n"
         "\t" + _DOCKER_PY.format(
-            script="scripts/validate_refactor_phase_6.py",
-            args=f" --stage {stage}",
+            script="scripts/validate_refactor_phase_6.py", args=f" --stage {stage}"
         )
         + "\t" + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
         + "\t$(MAKE) probe-console-v1-deterministic\n"
@@ -126,85 +126,35 @@ def _cutover_gate(stage: str) -> str:
         "\t$(MAKE) validate-docs\n"
         "\t$(MAKE) test-target\n"
         "\t" + _DOCKER_PY.format(
-            script="scripts/validate_refactor_phase_6.py",
-            args=f" --stage {stage}",
+            script="scripts/validate_refactor_phase_6.py", args=f" --stage {stage}"
         )
         + "\t" + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
         + "\t$(MAKE) probe-console-v1-deterministic\n"
     )
 
 
-def workflow_with(
-    *,
-    push_extra: str = "",
-    timeout: str = "60",
-    gate_extra: str = "",
-    extra_job: str = "",
-    duplicate_jobs: str = "",
-    gate_run: str = "make finalization-check",
-) -> str:
-    return (
-        "name: Release Candidate Validation\n"
-        "on:\n"
-        "  push:\n    branches:\n      - master\n      - main\n      - develop\n"
-        f"{push_extra}"
-        "  pull_request:\n    branches:\n      - master\n      - main\n      - develop\n"
-        "jobs:\n"
-        f"{duplicate_jobs}"
-        "  finalization-check:\n"
-        "    name: Docker Finalization Check\n"
-        "    runs-on: ubuntu-latest\n"
-        f"    timeout-minutes: {timeout}\n"
-        "    env:\n"
-        "      ENV_FILE: .env.example\n"
-        "    steps:\n"
-        "      - name: Checkout code\n"
-        "        uses: actions/checkout@v4\n"
-        "      - name: Run Docker release-candidate gate\n"
-        f"        {gate_extra}run: {gate_run}\n"
-        "      - name: Check whitespace and stale generated diffs\n"
-        "        run: git diff --check && git diff --exit-code\n"
-        f"{extra_job}"
+def replace_target_block(makefile: str, target: str, replacement: str) -> str:
+    pattern = re.compile(
+        rf"^{re.escape(target)}:.*?(?=^[A-Za-z0-9_.-]+:|\Z)",
+        re.MULTILINE | re.DOTALL,
     )
+    matches = list(pattern.finditer(makefile))
+    if len(matches) != 1:
+        raise AssertionError(f"expected exactly one {target!r} block, got {len(matches)}")
+    start, end = matches[0].span()
+    return makefile[:start] + replacement + makefile[end:]
 
 
-_DF_LEGACY = (
-    "FROM python:3.11-slim AS base\nFROM base AS development\n"
-    'CMD ["python", "-m", "psychoanalyst_app.server"]\n'
-)
-_DF_TARGET = (
-    "FROM python:3.11-slim AS base\nFROM base AS development\n"
-    'CMD ["jung-api"]\n'
-)
-_DF_WRONG_CMD = (
-    "FROM python:3.11-slim AS base\nFROM base AS development\n"
-    'CMD ["echo", "jung-api"]\n'
-)
-_DF_MALFORMED_CMD = (
-    "FROM python:3.11-slim AS base\nFROM base AS development\n"
-    "CMD [not-valid\n"
-)
-_DF_NONSELECTED = (
-    "FROM python:3.11-slim AS base\n"
-    'CMD ["wrong"]\n'
-    "FROM base AS development\n"
-    'CMD ["jung-api"]\n'
-)
-_DF_DUP_STAGE = (
-    "FROM python:3.11-slim AS base\nFROM base AS development\n"
-    'CMD ["jung-api"]\n'
-    "FROM other AS development\n"
-    'CMD ["other"]\n'
-)
-
-
-def _compose_fixture(command: str, *, api_extra: str = "") -> str:
+def _compose_fixture(
+    command: str, *, api_extra: str = "", base_extra: str = ""
+) -> str:
     return (
         "x-api-base: &api-base\n"
         "  build:\n"
         "    context: .\n"
         "    dockerfile: Dockerfile\n"
         "    target: development\n"
+        f"{base_extra}"
         '  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"\n'
         "  volumes:\n"
         "    - ./src:/app/src:delegated\n"
@@ -230,6 +180,23 @@ def _compose_fixture(command: str, *, api_extra: str = "") -> str:
     )
 
 
+_DF_LEGACY = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"python\", \"-m\", \"psychoanalyst_app.server\"]\n"
+_DF_TARGET = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"jung-api\"]\n"
+_DF_WRONG_CMD = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"echo\", \"jung-api\"]\n"
+_DF_MALFORMED_CMD = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [not-valid\n"
+_DF_SHELL_CMD = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD jung-api\n"
+_DF_ENTRYPOINT = (
+    "FROM python:3.11-slim AS base\nENTRYPOINT [\"echo\"]\n"
+    "FROM base AS development\nCMD [\"jung-api\"]\n"
+)
+_DF_NONSELECTED = (
+    "FROM python:3.11-slim AS base\nCMD [\"wrong\"]\n"
+    "FROM base AS development\nCMD [\"jung-api\"]\n"
+)
+_DF_DUP_STAGE = (
+    "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"jung-api\"]\n"
+    "FROM other AS development\nCMD [\"other\"]\n"
+)
 _CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server")
 _CP_TARGET = _compose_fixture("jung-api")
 _PP_LEGACY = (
@@ -243,6 +210,25 @@ _PP_TARGET = (
     'jung-console = "jung.client.terminal:cli"\n'
     'jung-db = "jung.tools.db_backup:main"\n'
 )
+_RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
+
+
+def _manifest_item(**kwargs) -> str:
+    defaults = {"status": "complete", "confidence": "confirmed"}
+    defaults.update(kwargs)
+    return "[[items]]\n" + _ITEM.format(**defaults)
+
+
+def _retained_test_manifest() -> str:
+    return (
+        _MANIFEST_TAIL.format(wf="complete")
+        + _manifest_item(
+            path=_RETAINED_TEST,
+            kind="filesystem",
+            action="retain",
+        )
+        + "requires_explicit_test_target_reference = true\n"
+    )
 
 
 @dataclass
@@ -341,119 +327,123 @@ def test_manifest_status_rejected(tmp_path, stage, status):
 
 
 @pytest.mark.parametrize(
-    "mutation,frag",
+    "old,new,frag",
     [
-        ("wrong stage", "recipe contract mismatch"),
-        ("missing recipe", "recipe contract mismatch"),
-        ("extra recipe", "unsupported recipe"),
-        ("ignored failure", "unsupported recipe prefix"),
-        ("at-prefix failure", "unsupported recipe prefix"),
-        ("wrong prerequisite", "prerequisite contract mismatch"),
-        ("duplicate definition", "exactly one definition"),
-        ("not phony", "must be phony"),
-        ("multi-target header", "unsupported multi-target header"),
-        ("forbidden multi-target", "unsupported multi-target header"),
-        ("double-colon", "unsupported double-colon definition"),
-        ("inline recipe header", "unsupported inline recipe header"),
-        ("plus prefix", "unsupported recipe prefix"),
-        ("ignore directive", ".IGNORE"),
-        ("oneshell", "forbidden control"),
-        ("recipeprefix", "forbidden control"),
-        ("gnuflags", "forbidden control"),
-        ("makefiles", "forbidden control MAKEFILES"),
-        ("include", "include directives are unsupported"),
-        ("expanded target", "variable-expanded target headers are unsupported"),
-        ("eval assignment", "eval expressions are unsupported"),
+        ("--stage cutover", "--stage pre-cutover", "recipe contract mismatch"),
+        (
+            "\t$(MAKE) probe-console-v1-deterministic\n",
+            "",
+            "recipe contract mismatch",
+        ),
+        (
+            "\t$(MAKE) probe-console-v1-deterministic\n",
+            "\t$(MAKE) probe-console-v1-deterministic\n\tbash -c 'make characterization-smoke'\n",
+            "unsupported recipe",
+        ),
+        ("\t$(MAKE) test-target\n", "\t-$(MAKE) test-target\n", "unsupported recipe prefix"),
+        ("\t$(MAKE) lint\n", "\t@-$(MAKE) lint\n", "unsupported recipe prefix"),
+        (_PHASE6_DOCKER, "\t@-" + _PHASE6_DOCKER.lstrip(), "unsupported recipe prefix"),
+        (
+            "finalization-check: prepare-runtime-dirs",
+            "finalization-check: characterization-smoke",
+            "prerequisite contract mismatch",
+        ),
+        (
+            " finalization-check finalization-check-target",
+            " finalization-check-target",
+            "must be phony",
+        ),
+        ("\t$(MAKE) lint\n", "\t+$(MAKE) lint\n", "unsupported recipe prefix"),
     ],
-    ids=lambda v: v,
+    ids=[
+        "wrong_stage",
+        "missing_recipe",
+        "extra_recipe",
+        "ignored_failure",
+        "at_prefix_make",
+        "at_prefix_docker",
+        "wrong_prerequisite",
+        "not_phony",
+        "plus_prefix",
+    ],
 )
-def test_gate_mutations(tmp_path, mutation, frag):
+def test_gate_replacements(tmp_path, old, new, frag):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
-    if mutation == "wrong stage":
-        makefile = makefile.replace("--stage cutover", "--stage pre-cutover")
-    elif mutation == "missing recipe":
-        makefile = makefile.replace("\t$(MAKE) probe-console-v1-deterministic\n", "")
-    elif mutation == "extra recipe":
-        makefile = makefile.replace(
-            "\t$(MAKE) probe-console-v1-deterministic\n",
-            "\t$(MAKE) probe-console-v1-deterministic\n\tbash -c 'make characterization-smoke'\n",
-        )
-    elif mutation == "ignored failure":
-        makefile = makefile.replace("\t$(MAKE) test-target\n", "\t-$(MAKE) test-target\n")
-    elif mutation == "at-prefix failure":
-        makefile = makefile.replace("\t$(MAKE) lint\n", "\t@-$(MAKE) lint\n")
-    elif mutation == "wrong prerequisite":
-        makefile = makefile.replace(
-            "finalization-check: prepare-runtime-dirs",
-            "finalization-check: characterization-smoke",
-        )
-    elif mutation == "duplicate definition":
-        makefile += "\nfinalization-check: prepare-runtime-dirs\n\t@true\n"
-    elif mutation == "not phony":
-        makefile = makefile.replace(" finalization-check", "")
-    elif mutation == "multi-target header":
-        makefile = makefile.replace(
-            "finalization-check: prepare-runtime-dirs",
-            "finalization-check helper: prepare-runtime-dirs",
-        )
-    elif mutation == "forbidden multi-target":
-        makefile += "\nfinalization-check-target helper: prepare-runtime-dirs\n\t@true\n"
-    elif mutation == "double-colon":
-        makefile = makefile.replace(
-            "finalization-check: prepare-runtime-dirs",
-            "finalization-check:: prepare-runtime-dirs",
-        )
-    elif mutation == "inline recipe header":
-        makefile = makefile.replace(
-            "finalization-check: prepare-runtime-dirs",
-            "finalization-check: prepare-runtime-dirs ; $(MAKE) lint",
-        )
-    elif mutation == "plus prefix":
-        makefile = makefile.replace("\t$(MAKE) lint\n", "\t+$(MAKE) lint\n")
-    elif mutation == "ignore directive":
-        makefile = ".IGNORE:\n" + makefile
-    elif mutation == "oneshell":
-        makefile = ".ONESHELL:\n" + makefile
-    elif mutation == "recipeprefix":
-        makefile = ".RECIPEPREFIX := >\n" + makefile
-    elif mutation == "gnuflags":
-        makefile = "GNUMAKEFLAGS += -i\n" + makefile
-    elif mutation == "makefiles":
-        makefile = "MAKEFILES := extra.mk\n" + makefile
-    elif mutation == "include":
-        makefile = "include extra.mk\n" + makefile
-    elif mutation == "expanded target":
-        makefile = "GATE := finalization-check\n$(GATE): characterization-smoke\n" + makefile
-    elif mutation == "eval assignment":
-        makefile = (
-            "HIDDEN := $(eval finalization-check: characterization-smoke)\n" + makefile
-        )
-    else:
-        raise AssertionError(mutation)
-    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
+    assert makefile.count(old) == 1
+    (tmp_path / "Makefile").write_text(makefile.replace(old, new, 1), encoding="utf-8")
     assert any(frag in e for e in validate(tmp_path, stage="cutover"))
 
 
-def test_phase6_docker_recipe_at_prefix_fails(tmp_path):
+@pytest.mark.parametrize(
+    "prefix,suffix,frag",
+    [
+        ("", "\nfinalization-check: prepare-runtime-dirs\n\t@true\n", "exactly one definition"),
+        (
+            "",
+            "\nfinalization-check helper: prepare-runtime-dirs\n\t@true\n",
+            "unsupported multi-target header",
+        ),
+        (".IGNORE:\n", "", ".IGNORE"),
+        (".ONESHELL:\n", "", "forbidden control"),
+        (".RECIPEPREFIX := >\n", "", "forbidden control"),
+        ("GNUMAKEFLAGS += -i\n", "", "forbidden control"),
+        ("MAKEFILES := extra.mk\n", "", "forbidden control MAKEFILES"),
+        ("include extra.mk\n", "", "include directives are unsupported"),
+        (
+            "GATE := finalization-check\n$(GATE): characterization-smoke\n",
+            "",
+            "variable-expanded target headers are unsupported",
+        ),
+        (
+            "HIDDEN := $(eval finalization-check: characterization-smoke)\n",
+            "",
+            "eval expressions are unsupported",
+        ),
+    ],
+    ids=[
+        "duplicate_definition",
+        "forbidden_multi_target",
+        "ignore_directive",
+        "oneshell",
+        "recipeprefix",
+        "gnuflags",
+        "makefiles",
+        "include",
+        "expanded_target",
+        "eval_assignment",
+    ],
+)
+def test_gate_additions(tmp_path, prefix, suffix, frag):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
-    makefile = makefile.replace(
-        "\tdocker compose --profile test run --rm test python scripts/validate_refactor_phase_6.py --stage cutover\n",
-        "\t@-docker compose --profile test run --rm test python scripts/validate_refactor_phase_6.py --stage cutover\n",
+    (tmp_path / "Makefile").write_text(prefix + makefile + suffix, encoding="utf-8")
+    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
+def test_empty_gate_body_fails(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    (tmp_path / "Makefile").write_text(
+        replace_target_block(
+            (tmp_path / "Makefile").read_text(encoding="utf-8"),
+            "finalization-check",
+            "finalization-check: prepare-runtime-dirs\n",
+        ),
+        encoding="utf-8",
     )
-    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
-    assert any("unsupported recipe prefix" in e for e in validate(tmp_path, stage="cutover"))
+    assert any("recipe contract mismatch" in e for e in validate(tmp_path, stage="cutover"))
 
 
 def test_cutover_rejects_target_gate_present(tmp_path):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
-    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
-    makefile += _target_gate("cutover")
-    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
+    (tmp_path / "Makefile").write_text(
+        (tmp_path / "Makefile").read_text(encoding="utf-8") + _target_gate("cutover"),
+        encoding="utf-8",
+    )
     assert any("finalization-check-target must be absent" in e for e in validate(tmp_path, stage="cutover"))
 
 
@@ -477,12 +467,6 @@ def test_final_requires_completed_workflow_item(tmp_path):
         "required complete item missing" in error
         for error in validate(tmp_path, stage="final")
     )
-
-
-def _manifest_item(**kwargs) -> str:
-    defaults = {"status": "complete", "confidence": "confirmed"}
-    defaults.update(kwargs)
-    return "[[items]]\n" + _ITEM.format(**defaults)
 
 
 @pytest.mark.parametrize(
@@ -549,8 +533,11 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         ("cutover", _DF_TARGET, _compose_fixture("python -m psychoanalyst_app.server"), False, "docker-compose api command must select"),
         ("cutover", _DF_WRONG_CMD, _CP_TARGET, False, "CMD must select"),
         ("cutover", _DF_MALFORMED_CMD, _CP_TARGET, False, "malformed"),
+        ("cutover", _DF_SHELL_CMD, _CP_TARGET, False, "Dockerfile CMD must use JSON exec form"),
+        ("cutover", _DF_ENTRYPOINT, _CP_TARGET, False, "ENTRYPOINT is unsupported"),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api", api_extra="    command: jung-api\n"), False, "must not declare local 'command'"),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target"),
+        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("  command: jung-api\n", ""), False, "exactly one command"),
         ("cutover", _DF_NONSELECTED, _CP_TARGET, True, ""),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api"),
         ("cutover", _DF_DUP_STAGE, _CP_TARGET, False, "exactly one 'development' stage"),
@@ -560,8 +547,11 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         "compose_wrong_command",
         "docker_wrong_cmd",
         "docker_malformed_cmd",
+        "docker_shell_cmd",
+        "docker_entrypoint",
         "api_local_override",
         "unknown_build_target",
+        "missing_command",
         "nonselected_stage_ok",
         "duplicate_api",
         "duplicate_docker_stage",
@@ -587,6 +577,8 @@ def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
         (_compose_fixture("jung-api", api_extra="    profiles:\n      - dev\n"), "must not declare local 'profiles'"),
         (_compose_fixture("jung-api", api_extra="    deploy:\n      replicas: 1\n"), "must not declare local 'deploy'"),
         (_compose_fixture("jung-api", api_extra="    scale: 2\n"), "must not declare local 'scale'"),
+        (_compose_fixture("jung-api", base_extra="  entrypoint: echo\n"), "x-api-base must not declare 'entrypoint'"),
+        (_compose_fixture("jung-api", base_extra="  profiles:\n    - dev\n"), "x-api-base must not declare 'profiles'"),
     ],
     ids=[
         "dup_services_comment",
@@ -595,9 +587,11 @@ def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
         "quoted_command",
         "explicit_key",
         "wrong_merge",
-        "profiles",
-        "deploy",
-        "scale",
+        "profiles_local",
+        "deploy_local",
+        "scale_local",
+        "entrypoint_base",
+        "profiles_base",
     ],
 )
 def test_compose_syntax_categories(tmp_path, compose, frag):
@@ -607,59 +601,41 @@ def test_compose_syntax_categories(tmp_path, compose, frag):
     assert any(frag in e for e in validate(tmp_path, stage="cutover"))
 
 
-def test_compose_missing_command_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    compose = _compose_fixture("jung-api").replace("  command: jung-api\n", "")
-    r.write_runtime(target=True, compose=compose)
-    assert any("exactly one command" in e for e in validate(tmp_path, stage="cutover"))
-
-
 @pytest.mark.parametrize(
-    "workflow",
+    "workflow,expect_fail",
     [
-        workflow_with(push_extra="    paths-ignore:\n      - \"**\"\n"),
-        workflow_with(timeout="sixty"),
-        workflow_with(gate_extra="if: false\n        "),
-        workflow_with(gate_run="make finalization-check\n        run: echo noop"),
-        workflow_with(gate_run="|\n          make finalization-check"),
-        workflow_with(extra_job="  extra:\n    runs-on: ubuntu-latest\n"),
-        workflow_with(duplicate_jobs="  finalization-check:\n    runs-on: ubuntu-latest\n"),
-        "name: Release Candidate Validation\non:\n  workflow_dispatch:\njobs:\n"
-        "  finalization-check:\n    runs-on: ubuntu-latest\n",
+        (_WF_CANONICAL.replace("make finalization-check", "make other-gate"), True),
+        (
+            _WF_CANONICAL.replace(
+                "jobs:\n",
+                "jobs:\n  extra:\n    runs-on: ubuntu-latest\n",
+            ),
+            True,
+        ),
+        (
+            _WF_CANONICAL.replace(
+                "run: make finalization-check\n",
+                "  # whole-line comment\n\n        run: make finalization-check   \n",
+            ),
+            False,
+        ),
     ],
-    ids=[
-        "paths_ignore",
-        "bad_timeout",
-        "step_if",
-        "dup_run",
-        "block_scalar",
-        "extra_job",
-        "dup_jobs",
-        "dispatch",
-    ],
+    ids=["altered_gate", "extra_job", "normalization_ok"],
 )
-def test_workflow_contract(tmp_path, workflow):
+def test_workflow_contract(tmp_path, workflow, expect_fail):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     r.write_workflow(workflow)
-    assert any(_CANONICAL_MISMATCH in e for e in validate(tmp_path, stage="cutover"))
+    errors = validate(tmp_path, stage="cutover")
+    if expect_fail:
+        assert any(_CANONICAL_MISMATCH in e for e in errors)
+    else:
+        assert not any(_CANONICAL_MISMATCH in e for e in errors)
 
 
 def test_recipe_shell_word_allowed_for_retained_test(tmp_path):
     r = RepoFixture(tmp_path)
-    r.write_manifest(
-        items=_MANIFEST_TAIL.format(wf="complete")
-        + "[[items]]\n"
-        + _ITEM.format(
-            path="tests/unit/test_validate_refactor_phase_6.py",
-            kind="filesystem",
-            action="retain",
-            status="complete",
-            confidence="confirmed",
-        )
-        + "requires_explicit_test_target_reference = true\n"
-    )
+    r.write_manifest(items=_retained_test_manifest())
     r.write_runtime(target=True)
     r.write_workflow(_WF_CANONICAL)
     base = (tmp_path / "Makefile").read_text(encoding="utf-8")
@@ -669,10 +645,8 @@ def test_recipe_shell_word_allowed_for_retained_test(tmp_path):
         base,
     )
     (tmp_path / "Makefile").write_text(base, encoding="utf-8")
-    (tmp_path / "tests/unit/test_validate_refactor_phase_6.py").parent.mkdir(
-        parents=True, exist_ok=True
-    )
-    (tmp_path / "tests/unit/test_validate_refactor_phase_6.py").write_text("#\n", encoding="utf-8")
+    (tmp_path / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
     errors = validate(tmp_path, stage="cutover")
     assert not any("forbidden control" in e for e in errors)
     assert not any("retained test not referenced" in e for e in errors)
@@ -687,24 +661,6 @@ def test_forbidden_import_and_dependency(tmp_path):
     assert any("imports forbidden module" in e for e in validate(tmp_path, stage="final"))
     r.write_pyproject(_PP_TARGET.replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "trio"]'))
     assert any("forbidden dependency" in e for e in validate(tmp_path, stage="final"))
-
-
-_RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
-
-
-def _retained_test_manifest() -> str:
-    return (
-        _MANIFEST_TAIL.format(wf="complete")
-        + "[[items]]\n"
-        + _ITEM.format(
-            path=_RETAINED_TEST,
-            kind="filesystem",
-            action="retain",
-            status="complete",
-            confidence="confirmed",
-        )
-        + "requires_explicit_test_target_reference = true\n"
-    )
 
 
 @pytest.mark.parametrize(

@@ -67,10 +67,12 @@ PREPARE_RUNTIME_RECIPES = (
         "else chmod -R u+rwX,g+rwX data logs; fi"
     ),
 )
-FORBIDDEN_API_LOCAL_KEYS = frozenset({
-    "command", "build", "entrypoint", "image", "extends",
-    "profiles", "deploy", "scale",
+FORBIDDEN_API_BASE_KEYS = frozenset({
+    "entrypoint", "image", "extends", "profiles", "deploy", "scale",
 })
+FORBIDDEN_API_LOCAL_KEYS = (
+    FORBIDDEN_API_BASE_KEYS | frozenset({"command", "build"})
+)
 SELECTED_DOCKER_STAGE = "development"
 REQUIRED_BUILD_VALUES = {
     "context": ".",
@@ -103,10 +105,12 @@ WATCHED_CUTOVER = frozenset({
     PREPARE_RUNTIME_DIRS, "finalization-check", "finalization-check-target", "lint",
     "validate-docs", "test-target", "probe-console-v1-deterministic",
 })
+
 @dataclass(frozen=True, slots=True)
 class GateContract:
     prerequisites: tuple[str, ...]
     recipes: tuple[tuple[str, ...], ...]
+
 def _legacy_gate() -> GateContract:
     return GateContract(
         prerequisites=(PREPARE_RUNTIME_DIRS,),
@@ -134,6 +138,7 @@ def _target_gate(stage: str) -> GateContract:
             ("make", "probe-console-v1-deterministic"),
         ),
     )
+
 @dataclass(frozen=True, slots=True)
 class StageRules:
     manifest_status: str
@@ -145,6 +150,7 @@ class StageRules:
     forbidden_entry_points: frozenset[str]
     final_closure: bool
     required_complete_items: frozenset[tuple[str, str]] = frozenset()
+
 STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
         manifest_status="active",
@@ -182,6 +188,7 @@ STAGES: dict[str, StageRules] = {
         required_complete_items=REQUIRED_WORKFLOW_ITEM,
     ),
 }
+
 def _strip_nonempty(value: Any, field_name: str) -> Any:
     if not isinstance(value, str):
         return value
@@ -189,6 +196,7 @@ def _strip_nonempty(value: Any, field_name: str) -> Any:
     if not stripped:
         raise ValueError(f"{field_name} must be non-empty")
     return stripped
+
 class ManifestItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["filesystem", "make_target", "workflow", "workflow_edit"]
@@ -278,6 +286,7 @@ class ManifestItem(BaseModel):
             ):
                 raise ValueError("workflow path must be under .github/workflows/")
         return self
+
 class Manifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: StrictInt
@@ -300,6 +309,7 @@ class Manifest(BaseModel):
                 )
             seen.add(key)
         return self
+
 @dataclass(frozen=True, slots=True)
 class RecipeCommand:
     text: str
@@ -391,6 +401,7 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
     except ValidationError as exc:
         return None, _format_validation_errors(exc)
     return manifest, []
+
 def _load_repo_context(root: Path, watched: frozenset[str]) -> RepoContext:
     makefile_text = (root / "Makefile").read_text(encoding="utf-8")
     return RepoContext(
@@ -401,6 +412,7 @@ def _load_repo_context(root: Path, watched: frozenset[str]) -> RepoContext:
         (root / "docker-compose.yml").read_text(encoding="utf-8"),
         (root / "Dockerfile").read_text(encoding="utf-8"),
     )
+
 def _parse_shell_command(text: str) -> tuple[tuple[str, ...] | None, str | None]:
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|<>")
@@ -558,6 +570,7 @@ def _parse_makefile(text: str, watched: frozenset[str]) -> ParsedMakefile:
         phony=frozenset(phony),
         errors=tuple(errors),
     )
+
 def _normalize_gate_recipe(
     command: RecipeCommand,
 ) -> tuple[tuple[str, ...] | None, str | None]:
@@ -573,22 +586,18 @@ def _normalize_gate_recipe(
     if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
         return ("docker-python", *argv[prefix_len:]), None
     return None, f"unsupported recipe: {command.text!r}"
-def _delegated_targets(gates: tuple[tuple[str, GateContract], ...]) -> frozenset[str]:
-    return frozenset(
-        recipe[1]
-        for _, contract in gates
-        for recipe in contract.recipes
-        if recipe[0] == "make"
-    )
+
 def _validate_makefile_contracts(
     makefile: ParsedMakefile, rules: StageRules
 ) -> list[str]:
     errors = list(makefile.errors)
     active_targets = rules.watched_targets - rules.forbidden_targets
-    phony_required = active_targets | _delegated_targets(rules.gates)
+    phony_required = active_targets
     for name in phony_required:
         if name not in makefile.phony:
             errors.append(f"{name} must be phony")
+        if name == PREPARE_RUNTIME_DIRS:
+            continue
         defs = makefile.definitions.get(name, ())
         if len(defs) != 1:
             errors.append(f"{name} must have exactly one definition, got {len(defs)}")
@@ -620,31 +629,25 @@ def _validate_makefile_contracts(
                 f"{target_name} prerequisite contract mismatch: "
                 f"expected {expected.prerequisites!r}, got {gate.prerequisites!r}"
             )
+        normalization_failed = False
         recipes: list[tuple[str, ...]] = []
         for command in gate.recipes:
             normalized, err = _normalize_gate_recipe(command)
             if err:
-                errors.append(err)
-                recipes = []
+                errors.append(f"{target_name}: {err}")
+                normalization_failed = True
                 break
             assert normalized is not None
             recipes.append(normalized)
-        if recipes and len(recipes) != len(expected.recipes):
-            errors.append(
-                f"{target_name} recipe contract mismatch: expected "
-                f"{len(expected.recipes)} recipes, got {len(recipes)}"
-            )
-        elif recipes:
-            for index, (got, want) in enumerate(
-                zip(recipes, expected.recipes, strict=True)
-            ):
-                if got != want:
-                    errors.append(
-                        f"{target_name} recipe contract mismatch at index {index}: "
-                        f"expected {want!r}, got {got!r}"
-                    )
-                    break
+        if not normalization_failed:
+            actual = tuple(recipes)
+            if actual != expected.recipes:
+                errors.append(
+                    f"{target_name} recipe contract mismatch: "
+                    f"expected {expected.recipes!r}, got {actual!r}"
+                )
     return errors
+
 def _is_comment_or_blank(line: str) -> bool:
     return not line.strip() or line.lstrip().startswith("#")
 def _valid_compose_key(key: str, *, allow_merge: bool) -> bool:
@@ -724,6 +727,7 @@ def _scalar_to_argv(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
     if argv is None:
         return None, "command must not be empty"
     return argv, None
+
 def _validate_compose_runtime(
     compose: str, expected_argv: tuple[str, ...]
 ) -> list[str]:
@@ -749,6 +753,9 @@ def _validate_compose_runtime(
     anchor_children, anchor_err = _child_entries(anchor.block, "x-api-base")
     if anchor_err:
         return [anchor_err]
+    for entry in anchor_children:
+        if entry.key in FORBIDDEN_API_BASE_KEYS:
+            errors.append(f"x-api-base must not declare {entry.key!r}")
     builds = _named(anchor_children, "build")
     commands = _named(anchor_children, "command")
     if len(builds) != 1:
@@ -774,18 +781,14 @@ def _validate_compose_runtime(
                         f"got {matches[0].value!r}"
                     )
     if commands:
-        command = commands[0]
-        if not _plain_compose_scalar(command.value):
-            errors.append("x-api-base command uses unsupported scalar syntax")
-        else:
-            compose_argv, argv_err = _scalar_to_argv(command.value)
-            if argv_err:
-                errors.append(f"docker-compose api command is invalid: {argv_err}")
-            elif compose_argv != expected_argv:
-                errors.append(
-                    f"docker-compose api command must select {expected_argv!r}, "
-                    f"got {compose_argv!r}"
-                )
+        compose_argv, argv_err = _scalar_to_argv(commands[0].value)
+        if argv_err:
+            errors.append(f"docker-compose api command is invalid: {argv_err}")
+        elif compose_argv != expected_argv:
+            errors.append(
+                f"docker-compose api command must select {expected_argv!r}, "
+                f"got {compose_argv!r}"
+            )
     service_children, service_err = _child_entries(services[0].block, "services")
     if service_err:
         return errors + [service_err]
@@ -806,9 +809,16 @@ def _validate_compose_runtime(
     elif merges[0].value != "*api-base":
         errors.append("services.api merge must be <<: *api-base")
     return errors
+
 def _dockerfile_stage_cmd(
     dockerfile: str, stage_name: str
 ) -> tuple[tuple[str, ...] | None, str | None]:
+    if re.search(
+        r"^[ \t]*(?:ONBUILD[ \t]+)?ENTRYPOINT\b",
+        dockerfile,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        return None, "Dockerfile ENTRYPOINT is unsupported"
     stages: list[tuple[str, list[str]]] = []
     current_name = "final"
     current_lines: list[str] = []
@@ -830,22 +840,21 @@ def _dockerfile_stage_cmd(
     cmd_matches = list(
         re.finditer(r"^\s*CMD\s+(\[[^\]]*\]|.+?)\s*$", stage_text, re.MULTILINE)
     )
-    if not cmd_matches:
-        return None, f"Dockerfile stage {stage_name!r} must define an explicit CMD"
-    raw = cmd_matches[-1].group(1).strip()
-    if raw.startswith("["):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return None, "Dockerfile CMD exec form is malformed"
-        if not isinstance(parsed, list) or not parsed:
-            return None, "Dockerfile CMD exec form must be a non-empty list"
-        if not all(isinstance(item, str) and item for item in parsed):
-            return None, (
-                "Dockerfile CMD exec form must contain only non-empty strings"
-            )
-        return tuple(parsed), None
-    return _scalar_to_argv(raw)
+    if len(cmd_matches) != 1:
+        return None, f"Dockerfile stage {stage_name!r} must define exactly one CMD"
+    raw = cmd_matches[0].group(1).strip()
+    if not raw.startswith("["):
+        return None, "Dockerfile CMD must use JSON exec form"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, "Dockerfile CMD exec form is malformed"
+    if not isinstance(parsed, list) or not parsed:
+        return None, "Dockerfile CMD exec form must be a non-empty list"
+    if not all(isinstance(item, str) and item for item in parsed):
+        return None, "Dockerfile CMD exec form must contain only non-empty strings"
+    return tuple(parsed), None
+
 def _validate_runtime(ctx: RepoContext, rules: StageRules) -> list[str]:
     errors = _validate_compose_runtime(ctx.compose, rules.expected_runtime_argv)
     if errors:
@@ -867,17 +876,16 @@ def _normalize_workflow_text(text: str) -> str:
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
-
 def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
     path = ctx.root / WORKFLOW_EDIT_PATH
     if not path.is_file():
         return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
-    if not complete:
-        return []
+    canonical = _normalize_workflow_text(EXPECTED_COMPLETED_WORKFLOW)
     actual = _normalize_workflow_text(path.read_text(encoding="utf-8"))
-    if actual != _normalize_workflow_text(EXPECTED_COMPLETED_WORKFLOW):
+    if complete and actual != canonical:
         return ["completed release workflow does not match canonical contract"]
     return []
+
 def _manifest_path_present(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
         return item.path in ctx.makefile.definitions
@@ -907,15 +915,13 @@ def _pytest_argv_offset(argv: tuple[str, ...]) -> int | None:
     if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
         return prefix_len
     return None
-def _recipe_ignored(command: RecipeCommand) -> bool:
-    return "-" in command.prefix or "+" in command.prefix
 def _pytest_arguments(makefile: ParsedMakefile) -> tuple[tuple[str, ...], ...]:
     defs = makefile.definitions.get("test-target", ())
     if len(defs) != 1:
         return ()
     arguments: list[tuple[str, ...]] = []
     for command in defs[0].recipes:
-        if _recipe_ignored(command):
+        if "-" in command.prefix or "+" in command.prefix:
             continue
         argv, err = _parse_shell_command(command.text)
         if err or argv is None:
@@ -1036,6 +1042,7 @@ def _final_manifest_closure(manifest: Manifest) -> list[str]:
         for item in manifest.items
         if item.confidence == "discovery-needed"
     ]
+
 def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[str]:
     resolved = (root or REPO_ROOT).resolve()
     if stage not in STAGES:
@@ -1073,6 +1080,7 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
         errors.extend(_validate_import_closure(resolved))
         errors.extend(_validate_dependency_closure(ctx))
     return errors
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
