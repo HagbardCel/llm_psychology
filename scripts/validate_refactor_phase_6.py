@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semantic cutover checks for Phase 6 legacy deletion."""
+"""Semantic cutover checks for Phase 6 legacy deletion (architectural guardrail)."""
 from __future__ import annotations
 
 import argparse
@@ -37,11 +37,22 @@ KIND_ACTIONS: dict[str, frozenset[str]] = {
 PHASE_5_SCRIPT = "scripts/validate_refactor_phase_5.py"
 PHASE_6_SCRIPT = "scripts/validate_refactor_phase_6.py"
 PREPARE_RUNTIME_DIRS = "prepare-runtime-dirs"
-DOCKER_TEST_PREFIX = ("docker", "compose", "--profile", "test", "run", "--rm", "test")
+DOCKER_COMPOSE_RUN = (
+    "docker", "compose", "-f", "docker-compose.yml", "--profile", "test",
+    "run", "--rm", "--no-deps",
+)
+DOCKER_TEST_PREFIX = DOCKER_COMPOSE_RUN + ("test",)
+DOCKER_PYTHON_PREFIX = DOCKER_COMPOSE_RUN + (
+    "--entrypoint", "/usr/local/bin/python", "--volume", "$(CURDIR):/workspace:ro",
+    "--workdir", "/workspace", "--env", "PYTHONPATH=/workspace/src", "test",
+)
 MAKE_TOKENS = frozenset({"make", "$(MAKE)", "${MAKE}"})
+# Repository-level assignments or declarations of these variables are unsupported.
 FORBIDDEN_MAKE_CONTROLS = frozenset({
     "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "MAKEFILES", "SHELL",
     ".SHELLFLAGS", ".ONESHELL", ".RECIPEPREFIX",
+    "COMPOSE_FILE", "MAKE", "PATH", "CURDIR",
+    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG",
 })
 TARGET_SUPPORT_TESTS_VAR = "$(TARGET_SUPPORT_TESTS)"
 FORBIDDEN_IMPORT_ROOTS = (
@@ -70,9 +81,8 @@ PREPARE_RUNTIME_RECIPES = (
 FORBIDDEN_API_BASE_KEYS = frozenset({
     "entrypoint", "image", "extends", "profiles", "deploy", "scale",
 })
-FORBIDDEN_API_LOCAL_KEYS = (
-    FORBIDDEN_API_BASE_KEYS | frozenset({"command", "build"})
-)
+FORBIDDEN_API_LOCAL_KEYS = FORBIDDEN_API_BASE_KEYS | frozenset({"command", "build"})
+FORBIDDEN_TEST_SERVICE_KEYS = frozenset({"entrypoint", "image", "extends"})
 SELECTED_DOCKER_STAGE = "development"
 REQUIRED_BUILD_VALUES = {
     "context": ".",
@@ -81,7 +91,6 @@ REQUIRED_BUILD_VALUES = {
 }
 YAML_SIMPLE_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 EVAL_RE = re.compile(r"\$\(\s*eval\b|\$\{\s*eval\b")
-REQUIRED_WORKFLOW_ITEM = frozenset({("workflow_edit", WORKFLOW_EDIT_PATH)})
 EXPECTED_COMPLETED_WORKFLOW = (
     "name: Release Candidate Validation\n"
     "on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n"
@@ -115,24 +124,17 @@ def _legacy_gate() -> GateContract:
     return GateContract(
         prerequisites=(PREPARE_RUNTIME_DIRS,),
         recipes=(
-            ("make", "lint"),
-            ("make", "validate-docs"),
-            ("make", "validate-schemas"),
-            ("make", "validate-generated-contracts"),
-            ("make", "validate-architecture"),
-            ("make", "test-validate"),
-            ("docker-python", PHASE_5_SCRIPT),
-            ("make", "characterization-smoke"),
-            ("make", "probe-console-deterministic"),
+            ("make", "lint"), ("make", "validate-docs"), ("make", "validate-schemas"),
+            ("make", "validate-generated-contracts"), ("make", "validate-architecture"),
+            ("make", "test-validate"), ("docker-python", PHASE_5_SCRIPT),
+            ("make", "characterization-smoke"), ("make", "probe-console-deterministic"),
         ),
     )
 def _target_gate(stage: str) -> GateContract:
     return GateContract(
         prerequisites=(PREPARE_RUNTIME_DIRS,),
         recipes=(
-            ("make", "lint"),
-            ("make", "validate-docs"),
-            ("make", "test-target"),
+            ("make", "lint"), ("make", "validate-docs"), ("make", "test-target"),
             ("docker-python", PHASE_6_SCRIPT, "--stage", stage),
             ("docker-python", PHASE_5_SCRIPT),
             ("make", "probe-console-v1-deterministic"),
@@ -149,43 +151,26 @@ class StageRules:
     required_entry_points: frozenset[str]
     forbidden_entry_points: frozenset[str]
     final_closure: bool
-    required_complete_items: frozenset[tuple[str, str]] = frozenset()
-
+    requires_completed_workflow: bool = False
 STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
-        manifest_status="active",
-        expected_runtime_argv=LEGACY_RUNTIME_ARGV,
-        gates=(
+        "active", LEGACY_RUNTIME_ARGV,
+        (
             ("finalization-check", _legacy_gate()),
             ("finalization-check-target", _target_gate("pre-cutover")),
         ),
-        watched_targets=WATCHED_PRE_CUTOVER,
-        forbidden_targets=frozenset(),
-        required_entry_points=frozenset(),
-        forbidden_entry_points=frozenset(),
-        final_closure=False,
-    ),
-    "cutover": StageRules(
-        manifest_status="active",
-        expected_runtime_argv=TARGET_RUNTIME_ARGV,
-        gates=(("finalization-check", _target_gate("cutover")),),
-        watched_targets=WATCHED_CUTOVER,
-        forbidden_targets=frozenset({"finalization-check-target"}),
-        required_entry_points=TARGET_ENTRY_CUTOVER,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
-        final_closure=False,
-        required_complete_items=REQUIRED_WORKFLOW_ITEM,
+        WATCHED_PRE_CUTOVER, frozenset(), frozenset(), frozenset(), False,
+    ),    "cutover": StageRules(
+        "active", TARGET_RUNTIME_ARGV,
+        (("finalization-check", _target_gate("cutover")),),
+        WATCHED_CUTOVER, frozenset({"finalization-check-target"}), TARGET_ENTRY_CUTOVER,
+        LEGACY_ENTRY_POINTS, False, True,
     ),
     "final": StageRules(
-        manifest_status="completed",
-        expected_runtime_argv=TARGET_RUNTIME_ARGV,
-        gates=(("finalization-check", _target_gate("final")),),
-        watched_targets=WATCHED_CUTOVER,
-        forbidden_targets=frozenset({"finalization-check-target"}),
-        required_entry_points=TARGET_ENTRY_FINAL,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
-        final_closure=True,
-        required_complete_items=REQUIRED_WORKFLOW_ITEM,
+        "completed", TARGET_RUNTIME_ARGV,
+        (("finalization-check", _target_gate("final")),),
+        WATCHED_CUTOVER, frozenset({"finalization-check-target"}), TARGET_ENTRY_FINAL,
+        LEGACY_ENTRY_POINTS, True, True,
     ),
 }
 
@@ -581,7 +566,7 @@ def _normalize_gate_recipe(
         return None, err or "unsupported recipe"
     if len(argv) == 2 and argv[0] in MAKE_TOKENS:
         return ("make", argv[1]), None
-    docker_prefix = DOCKER_TEST_PREFIX + ("python",)
+    docker_prefix = DOCKER_PYTHON_PREFIX
     prefix_len = len(docker_prefix)
     if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
         return ("docker-python", *argv[prefix_len:]), None
@@ -591,9 +576,7 @@ def _validate_makefile_contracts(
     makefile: ParsedMakefile, rules: StageRules
 ) -> list[str]:
     errors = list(makefile.errors)
-    active_targets = rules.watched_targets - rules.forbidden_targets
-    phony_required = active_targets
-    for name in phony_required:
+    for name in rules.watched_targets - rules.forbidden_targets:
         if name not in makefile.phony:
             errors.append(f"{name} must be phony")
         if name == PREPARE_RUNTIME_DIRS:
@@ -629,17 +612,15 @@ def _validate_makefile_contracts(
                 f"{target_name} prerequisite contract mismatch: "
                 f"expected {expected.prerequisites!r}, got {gate.prerequisites!r}"
             )
-        normalization_failed = False
         recipes: list[tuple[str, ...]] = []
         for command in gate.recipes:
             normalized, err = _normalize_gate_recipe(command)
             if err:
                 errors.append(f"{target_name}: {err}")
-                normalization_failed = True
                 break
             assert normalized is not None
             recipes.append(normalized)
-        if not normalization_failed:
+        else:
             actual = tuple(recipes)
             if actual != expected.recipes:
                 errors.append(
@@ -728,6 +709,30 @@ def _scalar_to_argv(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
         return None, "command must not be empty"
     return argv, None
 
+def _validate_build_contract(
+    entries: tuple[MappingEntry, ...],
+    *,
+    label: str,
+) -> list[str]:
+    builds = _named(entries, "build")
+    if len(builds) != 1:
+        return [f"{label} must have exactly one build key"]
+    build_entries, error = _child_entries(builds[0].block, f"{label} build")
+    if error:
+        return [error]
+    errors: list[str] = []
+    for key, expected in REQUIRED_BUILD_VALUES.items():
+        matches = _named(build_entries, key)
+        if len(matches) != 1:
+            errors.append(f"{label} build must have exactly one {key}")
+        elif not _plain_compose_scalar(matches[0].value):
+            errors.append(f"{label} build.{key} uses unsupported scalar syntax")
+        elif matches[0].value != expected:
+            errors.append(
+                f"{label} build.{key} must be {expected!r}, got {matches[0].value!r}"
+            )
+    return errors
+
 def _validate_compose_runtime(
     compose: str, expected_argv: tuple[str, ...]
 ) -> list[str]:
@@ -737,6 +742,8 @@ def _validate_compose_runtime(
     )
     if root_err:
         return [root_err]
+    if _named(root_entries, "include"):
+        return ["docker-compose.yml must not declare top-level include"]
     api_base = _named(root_entries, "x-api-base")
     services = _named(root_entries, "services")
     if len(api_base) != 1:
@@ -756,30 +763,10 @@ def _validate_compose_runtime(
     for entry in anchor_children:
         if entry.key in FORBIDDEN_API_BASE_KEYS:
             errors.append(f"x-api-base must not declare {entry.key!r}")
-    builds = _named(anchor_children, "build")
+    errors.extend(_validate_build_contract(anchor_children, label="x-api-base"))
     commands = _named(anchor_children, "command")
-    if len(builds) != 1:
-        errors.append("x-api-base must have exactly one build key")
     if len(commands) != 1:
         errors.append("x-api-base must have exactly one command key")
-    if builds:
-        build_children, build_err = _child_entries(builds[0].block, "x-api-base build")
-        if build_err:
-            errors.append(build_err)
-        else:
-            for key, expected in REQUIRED_BUILD_VALUES.items():
-                matches = _named(build_children, key)
-                if len(matches) != 1:
-                    errors.append(f"x-api-base build missing {key}")
-                elif not _plain_compose_scalar(matches[0].value):
-                    errors.append(
-                        f"x-api-base build.{key} uses unsupported scalar syntax"
-                    )
-                elif matches[0].value != expected:
-                    errors.append(
-                        f"docker-compose build.{key} must be {expected!r}, "
-                        f"got {matches[0].value!r}"
-                    )
     if commands:
         compose_argv, argv_err = _scalar_to_argv(commands[0].value)
         if argv_err:
@@ -808,6 +795,16 @@ def _validate_compose_runtime(
         errors.append("services.api must have exactly one merge key")
     elif merges[0].value != "*api-base":
         errors.append("services.api merge must be <<: *api-base")
+    test_entries = _named(service_children, "test")
+    if len(test_entries) != 1:
+        return errors + ["docker-compose.yml must have exactly one services.test block"]
+    test_children, test_err = _child_entries(test_entries[0].block, "services.test")
+    if test_err:
+        return errors + [test_err]
+    for entry in test_children:
+        if entry.key in FORBIDDEN_TEST_SERVICE_KEYS:
+            errors.append(f"services.test must not declare {entry.key!r}")
+    errors.extend(_validate_build_contract(test_children, label="services.test"))
     return errors
 
 def _dockerfile_stage_cmd(
@@ -876,16 +873,6 @@ def _normalize_workflow_text(text: str) -> str:
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
-def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
-    path = ctx.root / WORKFLOW_EDIT_PATH
-    if not path.is_file():
-        return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
-    canonical = _normalize_workflow_text(EXPECTED_COMPLETED_WORKFLOW)
-    actual = _normalize_workflow_text(path.read_text(encoding="utf-8"))
-    if complete and actual != canonical:
-        return ["completed release workflow does not match canonical contract"]
-    return []
-
 def _manifest_path_present(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
         return item.path in ctx.makefile.definitions
@@ -959,7 +946,15 @@ def _validate_item_complete(ctx: RepoContext, item: ManifestItem) -> list[str]:
                 f"retained test not referenced in test-target recipe: {item.path}"
             )
     elif item.action == "edit" and item.kind == "workflow_edit":
-        errors.extend(_validate_workflow_edit(ctx, complete=True))
+        path = ctx.root / WORKFLOW_EDIT_PATH
+        if not path.is_file():
+            errors.append(f"missing workflow edit file: {WORKFLOW_EDIT_PATH}")
+        elif _normalize_workflow_text(path.read_text(encoding="utf-8")) != (
+            _normalize_workflow_text(EXPECTED_COMPLETED_WORKFLOW)
+        ):
+            errors.append(
+                "completed release workflow does not match canonical contract"
+            )
     return errors
 def _validate_entry_points(ctx: RepoContext, rules: StageRules) -> list[str]:
     scripts = ctx.pyproject.get("project", {}).get("scripts", {})
@@ -1064,16 +1059,21 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
     for item in manifest.items:
         if item.status == "complete":
             errors.extend(_validate_item_complete(ctx, item))
-    for kind, path in rules.required_complete_items:
-        item = next(
-            (row for row in manifest.items if row.kind == kind and row.path == path),
+    if rules.requires_completed_workflow:
+        workflow_item = next(
+            (
+                item for item in manifest.items
+                if item.kind == "workflow_edit" and item.path == WORKFLOW_EDIT_PATH
+            ),
             None,
         )
-        if item is None:
-            errors.append(f"required complete item missing from manifest: {path}")
-        elif item.status != "complete":
+        if workflow_item is None:
             errors.append(
-                f"required item must be complete for stage {stage!r}: {path}"
+                f"required complete item missing from manifest: {WORKFLOW_EDIT_PATH}"
+            )
+        elif workflow_item.status != "complete":
+            errors.append(
+                f"required workflow item must be complete for stage {stage!r}"
             )
     if rules.final_closure:
         errors.extend(_final_manifest_closure(manifest))

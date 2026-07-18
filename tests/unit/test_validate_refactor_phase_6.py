@@ -61,7 +61,20 @@ _PHONY = (
     "test-target characterization-smoke probe-console-deterministic "
     "probe-console-v1-deterministic finalization-check finalization-check-target\n"
 )
-_DOCKER_PY = "docker compose --profile test run --rm test python {script}{args}\n"
+_DOCKER_TEST_RUN = (
+    "docker compose -f docker-compose.yml --profile test run --rm --no-deps test"
+)
+_DOCKER_PY = (
+    "docker compose -f docker-compose.yml --profile test run --rm --no-deps "
+    "--entrypoint /usr/local/bin/python "
+    '--volume "$(CURDIR):/workspace:ro" '
+    "--workdir /workspace "
+    "--env PYTHONPATH=/workspace/src "
+    "test {script}{args}\n"
+)
+_CANONICAL_VALIDATOR_RECIPE = _DOCKER_PY.format(
+    script="scripts/validate_refactor_phase_6.py", args=" --stage cutover"
+)
 _LEGACY_GATE = (
     "finalization-check: prepare-runtime-dirs\n"
     "\t$(MAKE) lint\n"
@@ -99,10 +112,7 @@ _WF_COEXIST = (
     "  finalization-check:\n    steps:\n      - run: make finalization-check\n"
 )
 _CANONICAL_MISMATCH = "completed release workflow does not match canonical contract"
-_PHASE6_DOCKER = (
-    "\tdocker compose --profile test run --rm test python "
-    "scripts/validate_refactor_phase_6.py --stage cutover\n"
-)
+_PHASE6_DOCKER = "\t" + _CANONICAL_VALIDATOR_RECIPE
 
 
 def _target_gate(stage: str) -> str:
@@ -146,7 +156,7 @@ def replace_target_block(makefile: str, target: str, replacement: str) -> str:
 
 
 def _compose_fixture(
-    command: str, *, api_extra: str = "", base_extra: str = ""
+    command: str, *, api_extra: str = "", base_extra: str = "", test_extra: str = ""
 ) -> str:
     return (
         "x-api-base: &api-base\n"
@@ -177,6 +187,14 @@ def _compose_fixture(
         "    env_file:\n"
         "      - ${ENV_FILE:-.env}\n"
         f"{api_extra}"
+        "  test:\n"
+        "    profiles: [\"test\"]\n"
+        "    build:\n"
+        "      context: .\n"
+        "      dockerfile: Dockerfile\n"
+        "      target: development\n"
+        f"{test_extra}"
+        "    command: pytest\n"
     )
 
 
@@ -292,12 +310,21 @@ class RepoFixture:
         self.write_manifest(
             status="completed",
             items=(
-                '[[items]]\npath = "gone/"\nkind = "filesystem"\naction = "delete"\n'
-                "aggregate = true\nowner_pr = \"6D\"\nstatus = \"complete\"\n"
-                'confidence = "confirmed"\nresponsibility = "x"\n\n'
-                "[[items]]\npath = \".github/workflows/release-candidate-validation.yml\"\n"
-                'kind = "workflow_edit"\naction = "edit"\nowner_pr = "6C"\n'
-                'status = "complete"\nconfidence = "confirmed"\nresponsibility = "x"\n'
+                _manifest_item(
+                    path="gone/",
+                    kind="filesystem",
+                    action="delete",
+                    owner_pr="6D",
+                    responsibility="x",
+                )
+                + "aggregate = true\n"
+                + _manifest_item(
+                    path=".github/workflows/release-candidate-validation.yml",
+                    kind="workflow_edit",
+                    action="edit",
+                    owner_pr="6C",
+                    responsibility="x",
+                )
             ),
         )
         self.write_runtime(target=True, gates=_cutover_gate("final"))
@@ -377,6 +404,33 @@ def test_gate_replacements(tmp_path, old, new, frag):
 
 
 @pytest.mark.parametrize(
+    "old,new",
+    [
+        ("-f docker-compose.yml ", ""),
+        ("--no-deps ", ""),
+        ("$(CURDIR):/workspace:ro", "$(CURDIR):/other:ro"),
+        ("--workdir /workspace", "--workdir /app"),
+    ],
+    ids=["missing_compose_file", "missing_no_deps", "wrong_workspace_mount", "wrong_workdir"],
+)
+def test_validator_bootstrap_recipe_mutations(tmp_path, old, new):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    assert makefile.count(_CANONICAL_VALIDATOR_RECIPE) == 1
+    assert _CANONICAL_VALIDATOR_RECIPE.count(old) == 1
+    mutated = _CANONICAL_VALIDATOR_RECIPE.replace(old, new, 1)
+    (tmp_path / "Makefile").write_text(
+        makefile.replace(_CANONICAL_VALIDATOR_RECIPE, mutated, 1),
+        encoding="utf-8",
+    )
+    assert any(
+        "recipe contract mismatch" in e or "unsupported recipe" in e
+        for e in validate(tmp_path, stage="cutover")
+    )
+
+
+@pytest.mark.parametrize(
     "prefix,suffix,frag",
     [
         ("", "\nfinalization-check: prepare-runtime-dirs\n\t@true\n", "exactly one definition"),
@@ -401,6 +455,13 @@ def test_gate_replacements(tmp_path, old, new, frag):
             "",
             "eval expressions are unsupported",
         ),
+        ("export COMPOSE_FILE := alternate.yml\n", "", "forbidden control COMPOSE_FILE"),
+        ("MAKE := true\n", "", "forbidden control MAKE"),
+        ("export PATH := ./fake-bin:$(PATH)\n", "", "forbidden control PATH"),
+        ("CURDIR := /tmp/alternate-checkout\n", "", "forbidden control CURDIR"),
+        ("export DOCKER_HOST := tcp://evil:2375\n", "", "forbidden control DOCKER_HOST"),
+        ("DOCKER_CONTEXT := evil\n", "", "forbidden control DOCKER_CONTEXT"),
+        ("export DOCKER_CONFIG := ./fake-docker\n", "", "forbidden control DOCKER_CONFIG"),
     ],
     ids=[
         "duplicate_definition",
@@ -413,6 +474,13 @@ def test_gate_replacements(tmp_path, old, new, frag):
         "include",
         "expanded_target",
         "eval_assignment",
+        "compose_file",
+        "make_override",
+        "path_override",
+        "curdir_override",
+        "docker_host",
+        "docker_context",
+        "docker_config",
     ],
 )
 def test_gate_additions(tmp_path, prefix, suffix, frag):
@@ -447,26 +515,32 @@ def test_cutover_rejects_target_gate_present(tmp_path):
     assert any("finalization-check-target must be absent" in e for e in validate(tmp_path, stage="cutover"))
 
 
-def test_cutover_rejects_in_progress_workflow_edit(tmp_path):
-    RepoFixture(tmp_path).seed_cutover(complete=False)
-    assert any("required item must be complete" in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_final_requires_completed_workflow_item(tmp_path):
+@pytest.mark.parametrize(
+    "stage,setup,frag",
+    [
+        ("cutover", "incomplete", "required workflow item must be complete"),
+        ("final", "absent", "required complete item missing"),
+    ],
+    ids=["cutover_incomplete", "final_absent"],
+)
+def test_workflow_lifecycle_requirements(tmp_path, stage, setup, frag):
     r = RepoFixture(tmp_path)
-    r.seed_final()
-    r.write_manifest(
-        status="completed",
-        items=(
-            '[[items]]\npath = "gone/"\nkind = "filesystem"\naction = "delete"\n'
-            "aggregate = true\nowner_pr = \"6D\"\nstatus = \"complete\"\n"
-            'confidence = "confirmed"\nresponsibility = "x"\n'
-        ),
-    )
-    assert any(
-        "required complete item missing" in error
-        for error in validate(tmp_path, stage="final")
-    )
+    if stage == "cutover":
+        r.seed_cutover(complete=False)
+    else:
+        r.seed_final()
+        r.write_manifest(
+            status="completed",
+            items=_manifest_item(
+                path="gone/",
+                kind="filesystem",
+                action="delete",
+                owner_pr="6D",
+                responsibility="x",
+            )
+            + "aggregate = true\n",
+        )
+    assert any(frag in e for e in validate(tmp_path, stage=stage))
 
 
 @pytest.mark.parametrize(
@@ -514,10 +588,20 @@ def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
 def test_manifest_duplicate_normalized_paths_fail(tmp_path):
     body = (
         'schema_version = 1\nstatus = "active"\n\n'
-        '[[items]]\npath = "a//b"\nkind = "filesystem"\naction = "delete"\n'
-        'owner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n\n'
-        '[[items]]\npath = "a/b"\nkind = "filesystem"\naction = "delete"\n'
-        'owner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n'
+        + _manifest_item(
+            path="a//b",
+            kind="filesystem",
+            action="delete",
+            status="planned",
+            confidence="confirmed",
+        )
+        + _manifest_item(
+            path="a/b",
+            kind="filesystem",
+            action="delete",
+            status="planned",
+            confidence="confirmed",
+        )
     )
     (tmp_path / "docs/refactor").mkdir(parents=True)
     (tmp_path / "docs/refactor/deletion-manifest.toml").write_text(body, encoding="utf-8")
@@ -537,6 +621,13 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         ("cutover", _DF_ENTRYPOINT, _CP_TARGET, False, "ENTRYPOINT is unsupported"),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api", api_extra="    command: jung-api\n"), False, "must not declare local 'command'"),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target"),
+        (
+            "cutover",
+            _DF_TARGET,
+            _compose_fixture("jung-api", test_extra="      target: production\n"),
+            False,
+            "services.test build",
+        ),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("  command: jung-api\n", ""), False, "exactly one command"),
         ("cutover", _DF_NONSELECTED, _CP_TARGET, True, ""),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api"),
@@ -551,6 +642,7 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         "docker_entrypoint",
         "api_local_override",
         "unknown_build_target",
+        "test_service_build_target",
         "missing_command",
         "nonselected_stage_ok",
         "duplicate_api",
@@ -579,6 +671,8 @@ def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
         (_compose_fixture("jung-api", api_extra="    scale: 2\n"), "must not declare local 'scale'"),
         (_compose_fixture("jung-api", base_extra="  entrypoint: echo\n"), "x-api-base must not declare 'entrypoint'"),
         (_compose_fixture("jung-api", base_extra="  profiles:\n    - dev\n"), "x-api-base must not declare 'profiles'"),
+        ("include:\n  - alternate-compose.yml\n" + _compose_fixture("jung-api"), "must not declare top-level include"),
+        (_compose_fixture("jung-api", test_extra="    entrypoint: [\"true\"]\n"), "services.test must not declare 'entrypoint'"),
     ],
     ids=[
         "dup_services_comment",
@@ -592,6 +686,8 @@ def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
         "scale_local",
         "entrypoint_base",
         "profiles_base",
+        "top_level_include",
+        "test_entrypoint",
     ],
 )
 def test_compose_syntax_categories(tmp_path, compose, frag):
@@ -633,24 +729,6 @@ def test_workflow_contract(tmp_path, workflow, expect_fail):
         assert not any(_CANONICAL_MISMATCH in e for e in errors)
 
 
-def test_recipe_shell_word_allowed_for_retained_test(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.write_manifest(items=_retained_test_manifest())
-    r.write_runtime(target=True)
-    r.write_workflow(_WF_CANONICAL)
-    base = (tmp_path / "Makefile").read_text(encoding="utf-8")
-    base = re.sub(
-        r"test-target:\n\tpytest tests/\n",
-        "test-target:\n\tpytest -k SHELL tests/unit/test_validate_refactor_phase_6.py\n",
-        base,
-    )
-    (tmp_path / "Makefile").write_text(base, encoding="utf-8")
-    (tmp_path / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
-    errors = validate(tmp_path, stage="cutover")
-    assert not any("forbidden control" in e for e in errors)
-    assert not any("retained test not referenced" in e for e in errors)
-
 
 def test_forbidden_import_and_dependency(tmp_path):
     r = RepoFixture(tmp_path)
@@ -664,19 +742,46 @@ def test_forbidden_import_and_dependency(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "makefile_patch,should_pass",
+    "makefile_patch,referenced,control_error",
     [
-        ("TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n" "test-target:\n\tpytest tests/unit/jung/\n", False),
-        ("test-target:\n\techo $(TARGET_SUPPORT_TESTS)\n", False),
-        ("test-target:\n\techo pytest tests/unit/test_validate_refactor_phase_6.py\n", False),
-        ("test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n", True),
-        ("test-target:\n\tdocker compose --profile test run --rm test pytest tests/unit/test_validate_refactor_phase_6.py\n", True),
-        ("TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n" "test-target:\n\tdocker compose --profile test run --rm test pytest $(TARGET_SUPPORT_TESTS)\n", True),
-        ("test-target:\n\t@-pytest tests/unit/test_validate_refactor_phase_6.py\n", False),
+        ("TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n" "test-target:\n\tpytest tests/unit/jung/\n", False, False),
+        ("test-target:\n\techo $(TARGET_SUPPORT_TESTS)\n", False, False),
+        ("test-target:\n\techo pytest tests/unit/test_validate_refactor_phase_6.py\n", False, False),
+        ("test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n", True, False),
+        (
+            "test-target:\n\t"
+            + _DOCKER_TEST_RUN
+            + " pytest tests/unit/test_validate_refactor_phase_6.py\n",
+            True,
+            False,
+        ),
+        (
+            "TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n"
+            "test-target:\n\t"
+            + _DOCKER_TEST_RUN
+            + " pytest $(TARGET_SUPPORT_TESTS)\n",
+            True,
+            False,
+        ),
+        ("test-target:\n\t@-pytest tests/unit/test_validate_refactor_phase_6.py\n", False, False),
+        (
+            "test-target:\n\tpytest -k SHELL tests/unit/test_validate_refactor_phase_6.py\n",
+            True,
+            False,
+        ),
     ],
-    ids=["unused_var", "echo_var", "echo_pytest", "direct_pytest", "docker_pytest", "var_expansion", "at_prefix_pytest"],
+    ids=[
+        "unused_var",
+        "echo_var",
+        "echo_pytest",
+        "direct_pytest",
+        "docker_pytest",
+        "var_expansion",
+        "at_prefix_pytest",
+        "shell_word_in_pytest",
+    ],
 )
-def test_retained_test_reference_rules(tmp_path, makefile_patch, should_pass):
+def test_retained_test_reference_rules(tmp_path, makefile_patch, referenced, control_error):
     r = RepoFixture(tmp_path)
     r.write_manifest(items=_retained_test_manifest())
     r.write_runtime(target=True)
@@ -687,7 +792,11 @@ def test_retained_test_reference_rules(tmp_path, makefile_patch, should_pass):
     (tmp_path / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
     errors = validate(tmp_path, stage="cutover")
-    if should_pass:
+    if referenced:
         assert not any("retained test not referenced" in e for e in errors)
     else:
         assert any("retained test not referenced" in e for e in errors)
+    if control_error:
+        assert any("forbidden control" in e for e in errors)
+    else:
+        assert not any("forbidden control" in e for e in errors)

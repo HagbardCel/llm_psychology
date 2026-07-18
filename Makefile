@@ -115,15 +115,15 @@ lint: prepare-runtime-dirs
 
 # Run all tests (Docker)
 test:
-	docker compose --profile test run --rm test
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test
 
 # Run unit tests only (Docker)
 test-unit:
-	docker compose --profile test run --rm test pytest -m unit
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest -m unit
 
 # Run integration tests only (Docker)
 test-integration:
-	docker compose --profile test run --rm test pytest -m integration
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest -m integration
 
 TARGET_SUPPORT_TESTS := \
 	tests/unit/test_validate_refactor_phase_5.py \
@@ -136,7 +136,7 @@ PHASE_6_PYTEST_OPTIONS := \
 	-o asyncio_mode=auto
 
 test-target: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		$(PHASE_6_PYTEST_OPTIONS) \
 		-m "not real_llm" \
 		tests/unit/jung/ \
@@ -149,19 +149,31 @@ finalization-check-target: prepare-runtime-dirs
 	$(MAKE) lint
 	$(MAKE) validate-docs
 	$(MAKE) test-target
-	docker compose --profile test run --rm \
-		test python scripts/validate_refactor_phase_6.py --stage pre-cutover
-	docker compose --profile test run --rm \
-		test python scripts/validate_refactor_phase_5.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
+		--entrypoint /usr/local/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--workdir /workspace \
+		--env PYTHONPATH=/workspace/src \
+		test scripts/validate_refactor_phase_6.py --stage pre-cutover
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
+		--entrypoint /usr/local/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--workdir /workspace \
+		--env PYTHONPATH=/workspace/src \
+		test scripts/validate_refactor_phase_5.py
 	$(MAKE) probe-console-v1-deterministic
 
 validate-refactor-phase-6: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		scripts/validate_refactor_phase_6.py \
 		tests/unit/test_validate_refactor_phase_6.py
-	docker compose --profile test run --rm \
-		test python scripts/validate_refactor_phase_6.py --stage pre-cutover
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
+		--entrypoint /usr/local/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--workdir /workspace \
+		--env PYTHONPATH=/workspace/src \
+		test scripts/validate_refactor_phase_6.py --stage pre-cutover
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		$(PHASE_6_PYTEST_OPTIONS) \
 		tests/unit/test_validate_refactor_phase_6.py -q
 
@@ -173,8 +185,12 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) validate-generated-contracts
 	$(MAKE) validate-architecture
 	$(MAKE) test-validate
-	docker compose --profile test run --rm \
-		test python scripts/validate_refactor_phase_5.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
+		--entrypoint /usr/local/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--workdir /workspace \
+		--env PYTHONPATH=/workspace/src \
+		test scripts/validate_refactor_phase_5.py
 	$(MAKE) characterization-smoke
 	$(MAKE) probe-console-deterministic
 
@@ -187,14 +203,14 @@ finalization-check-full: finalization-check
 
 # Fast Phase 1 checkpoint: retained deterministic unit coverage plus real smoke.
 test-refactor-fast: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest tests/unit/test_intake_record_merge.py tests/unit/test_intake_slot_evidence_adapter.py tests/unit/test_note_taker_intake_patch.py tests/unit/test_planning_analysis.py tests/unit/test_reflection_plan_snapshot.py tests/unit/test_agent_output_validators.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/unit/test_intake_record_merge.py tests/unit/test_intake_slot_evidence_adapter.py tests/unit/test_note_taker_intake_patch.py tests/unit/test_planning_analysis.py tests/unit/test_reflection_plan_snapshot.py tests/unit/test_agent_output_validators.py
 	$(MAKE) characterization-smoke
 
 characterization-smoke: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest tests/characterization -m characterization_smoke
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/characterization -m characterization_smoke
 
 characterization-full: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest tests/characterization -m characterization_full
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/characterization -m characterization_full
 
 characterization-test: prepare-runtime-dirs
 	$(MAKE) characterization-smoke
@@ -203,10 +219,10 @@ characterization-test: prepare-runtime-dirs
 validate-refactor-phase-1: prepare-runtime-dirs
 	$(MAKE) validate-docs
 	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" -v "$(PWD)/requirements.in:/app/requirements.in:ro" -v "$(PWD)/requirements-dev.in:/app/requirements-dev.in:ro" api python scripts/validate_refactor_phase_1.py
-	docker compose --profile test run --rm test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
 
 phase-2-test: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		tests/unit/jung/test_domain_models.py \
 		tests/unit/jung/domain/test_plan_content.py \
 		tests/unit/jung/test_json_validation.py \
@@ -220,7 +236,7 @@ phase-2-test: prepare-runtime-dirs
 		-q
 
 validate-refactor-phase-2: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		src/jung/domain \
 		src/jung/persistence \
 		src/jung/workflow.py \
@@ -237,7 +253,7 @@ validate-refactor-phase-2: prepare-runtime-dirs
 	$(MAKE) phase-2-test
 
 phase-3-test: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/llm \
@@ -249,7 +265,7 @@ phase-3-test: prepare-runtime-dirs
 		-q
 
 phase-4-test: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/test_events.py \
@@ -278,7 +294,7 @@ PHASE_5_PYTEST_OPTIONS := \
 PHASE_5_CONSOLE_TEST := tests/e2e/test_console_v1_workflow.py
 
 phase-5-test: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		$(PHASE_5_PYTEST_OPTIONS) \
 		tests/unit/jung/api/ \
 		tests/unit/jung/client/ \
@@ -298,7 +314,7 @@ phase-5-test: prepare-runtime-dirs
 	$(MAKE) _phase-5-console-v1
 
 _phase-5-console-v1: prepare-runtime-dirs
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		$(PHASE_5_PYTEST_OPTIONS) \
 		$(PHASE_5_CONSOLE_TEST) \
 		-q
@@ -310,13 +326,13 @@ PROBE_V1_ABS_OUTPUT_DIR := $(abspath $(PROBE_V1_OUTPUT_DIR))
 
 probe-console-v1-deterministic: prepare-runtime-dirs
 	@mkdir -p "$(PROBE_V1_ABS_OUTPUT_DIR)"
-	docker compose --profile test run --rm \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
 		-v "$(PROBE_V1_ABS_OUTPUT_DIR):/app/probe-output" \
 		-e PROBE_OUTPUT_DIR=/app/probe-output \
 		test pytest $(PHASE_5_PYTEST_OPTIONS) $(PHASE_5_CONSOLE_TEST) -v
 
 validate-refactor-phase-5: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		src/jung/api \
 		src/jung/client \
 		src/jung/composition.py \
@@ -335,12 +351,16 @@ validate-refactor-phase-5: prepare-runtime-dirs
 		tests/unit/test_validate_refactor_phase_5.py \
 		tests/unit/test_recording_fake_llm.py \
 		tests/unit/jung/test_import_boundaries.py
-	docker compose --profile test run --rm \
-		test python scripts/validate_refactor_phase_5.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
+		--entrypoint /usr/local/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--workdir /workspace \
+		--env PYTHONPATH=/workspace/src \
+		test scripts/validate_refactor_phase_5.py
 	$(MAKE) phase-5-test
 
 validate-refactor-phase-4: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		src/jung/application.py \
 		src/jung/events.py \
 		src/jung/supervisor.py \
@@ -373,7 +393,7 @@ validate-refactor-phase-4: prepare-runtime-dirs
 		tests/integration/jung/test_store_recovery.py \
 		tests/integration/jung/test_processor_store_seams.py \
 		tests/unit/jung/test_import_boundaries.py
-	docker compose --profile test run --rm test python scripts/validate_refactor_phase_4.py
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test python scripts/validate_refactor_phase_4.py
 	$(MAKE) phase-4-test
 
 validate-refactor-target-all: prepare-runtime-dirs
@@ -384,7 +404,7 @@ validate-refactor-target-all: prepare-runtime-dirs
 	$(MAKE) validate-refactor-phase-5
 
 validate-refactor-phase-3: prepare-runtime-dirs
-	docker compose --profile test run --rm test ruff check \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		src/jung/llm \
 		src/jung/phases \
 		src/jung/styles \
@@ -398,7 +418,7 @@ validate-refactor-phase-3: prepare-runtime-dirs
 	$(MAKE) phase-3-test
 
 smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
-	docker compose --profile test run --rm \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
 		-e PHASE3_SMOKE_SERVER \
 		-e PHASE3_SMOKE_BASE_URL \
 		-e PHASE3_SMOKE_MODEL \
@@ -426,7 +446,7 @@ hook-push: hook-commit
 test-real-llm: prepare-runtime-dirs
 	$(MAKE) check-usertest-key
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
-	docker compose --profile test run --rm test pytest -m real_llm --no-mocks
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest -m real_llm --no-mocks
 
 # Run devcontainer setup tests (Docker)
 test-devcontainer: devcontainer-test
@@ -436,14 +456,14 @@ test-dev:
 	@echo "🚀 Running quick tests in Docker..."
 	@echo "Perfect for: Active development, TDD, debugging"
 	@echo ""
-	docker compose --profile test run --rm test pytest -m "not real_llm" --ignore=tests/characterization -x --tb=short -q
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest -m "not real_llm" --ignore=tests/characterization -x --tb=short -q
 
 # Full isolated Docker tests (pre-commit validation)
 test-validate: prepare-runtime-dirs
 	@echo "🔍 Running full test suite in isolated Docker environment..."
 	@echo "Perfect for: Pre-commit validation, ensuring clean state"
 	@echo ""
-	docker compose --profile test run --rm test pytest tests --ignore=tests/characterization \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests --ignore=tests/characterization \
 		--ignore=tests/e2e \
 		--ignore=tests/unit/jung/llm \
 		--ignore=tests/unit/jung/api \
@@ -454,7 +474,7 @@ test-validate: prepare-runtime-dirs
 		--ignore=tests/integration/jung/api \
 		--ignore=tests/integration/jung/client \
 		--ignore-glob='tests/integration/jung/test_application_*.py'
-	docker compose --profile test run --rm test pytest \
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/api/ \
@@ -481,7 +501,7 @@ test-validate-no-mocks: prepare-runtime-dirs
 	@echo ""
 	$(MAKE) check-usertest-key
 	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
-	PYTEST_ARGS="--no-mocks" docker compose --profile test run --rm test
+	PYTEST_ARGS="--no-mocks" docker compose -f docker-compose.yml --profile test run --rm --no-deps test
 
 # Install git pre-commit and pre-push hooks for automated validation
 install-hooks:
@@ -590,7 +610,7 @@ docker-test: test
 
 # Run specific test file
 docker-test-one:
-	docker compose --profile test run --rm test pytest $(TEST)
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest $(TEST)
 
 # Shell into API container
 docker-shell:
