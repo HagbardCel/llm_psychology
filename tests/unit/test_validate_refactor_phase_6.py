@@ -13,7 +13,6 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["validate_refactor_phase_6"] = _MOD
 _SPEC.loader.exec_module(_MOD)
 validate, parse_manifest = _MOD.validate, _MOD.parse_manifest
-PREPARE_RUNTIME_RECIPES = _MOD.PREPARE_RUNTIME_RECIPES
 
 _ITEM = (
     'path = "{path}"\nkind = "{kind}"\naction = "{action}"\nowner_pr = "6C"\n'
@@ -40,8 +39,9 @@ responsibility = "Workflow cutover"
 """
 _PREPARE = (
     "prepare-runtime-dirs:\n"
-    f"\t{PREPARE_RUNTIME_RECIPES[0]}\n"
-    f"\t{PREPARE_RUNTIME_RECIPES[1]}\n"
+    "\t@mkdir -p data logs logs/workflow-probes\n"
+    '\t@if [ "$${CI:-}" = "true" ]; then chmod -R a+rwX data logs; '
+    "else chmod -R u+rwX,g+rwX data logs; fi\n"
 )
 _STUBS = """\
 lint:\n\t@true
@@ -117,15 +117,56 @@ _DF_TARGET = (
     "FROM python:3.11-slim AS base\nFROM base AS development\n"
     'CMD ["jung-api"]\n'
 )
-_CP_LEGACY = (
-    "x-api-base: &api-base\n  build:\n    context: .\n    dockerfile: Dockerfile\n"
-    "    target: development\n  command: python -m psychoanalyst_app.server\n"
-    "services:\n  api:\n    <<: *api-base\n"
+_DF_WRONG_CMD = (
+    "FROM python:3.11-slim AS base\nFROM base AS development\n"
+    'CMD ["echo", "jung-api"]\n'
 )
-_CP_TARGET = (
-    "x-api-base: &api-base\n  build:\n    context: .\n    dockerfile: Dockerfile\n"
-    "    target: development\n  command: jung-api\nservices:\n  api:\n    <<: *api-base\n"
+_DF_MALFORMED_CMD = (
+    "FROM python:3.11-slim AS base\nFROM base AS development\n"
+    "CMD [not-valid\n"
 )
+_DF_NONSELECTED = (
+    "FROM python:3.11-slim AS base\n"
+    'CMD ["wrong"]\n'
+    "FROM base AS development\n"
+    'CMD ["jung-api"]\n'
+)
+
+
+def _compose_fixture(command: str, *, api_extra: str = "") -> str:
+    return (
+        "x-api-base: &api-base\n"
+        "  build:\n"
+        "    context: .\n"
+        "    dockerfile: Dockerfile\n"
+        "    target: development\n"
+        '  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"\n'
+        "  volumes:\n"
+        "    - ./src:/app/src:delegated\n"
+        "  environment:\n"
+        "    - APP_ENV=development\n"
+        "  networks:\n"
+        "    - app-network\n"
+        f"  command: {command}\n"
+        "  logging:\n"
+        '    driver: "json-file"\n'
+        "    options:\n"
+        '      max-size: "10m"\n'
+        "  healthcheck:\n"
+        '    test: ["CMD", "wget"]\n'
+        "    interval: 30s\n"
+        "services:\n"
+        "  api:\n"
+        "    <<: *api-base\n"
+        "    container_name: psychoanalyst_api\n"
+        "    env_file:\n"
+        "      - ${ENV_FILE:-.env}\n"
+        f"{api_extra}"
+    )
+
+
+_CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server")
+_CP_TARGET = _compose_fixture("jung-api")
 _PP_LEGACY = (
     '[project]\nname = "x"\nversion = "0.0.0"\ndependencies = ["fastapi"]\n'
     '[project.scripts]\npsychoanalyst-server = "psychoanalyst_app.server:cli"\n'
@@ -202,19 +243,6 @@ class RepoFixture:
         (self.root / "scripts/validate_refactor_phase_6.py").write_text("#\n", encoding="utf-8")
         (self.root / "tests").mkdir(exist_ok=True)
 
-    def replace_target_recipe(self, target: str, old: str, new: str) -> None:
-        path = self.root / "Makefile"
-        text = path.read_text(encoding="utf-8")
-        header = f"{target}:"
-        start = text.find(header)
-        assert start != -1, f"target {target!r} not found"
-        next_header = re.search(r"^[A-Za-z0-9_.-]+:", text[start + len(header) :], re.M)
-        end = start + len(header) + next_header.start() if next_header else len(text)
-        block = text[start:end]
-        count = block.count(old)
-        assert count == 1, f"old recipe must appear once in {target}, got {count}"
-        path.write_text(text[:start] + block.replace(old, new) + text[end:], encoding="utf-8")
-
     def write_workflow(self, text: str) -> None:
         d = self.root / ".github/workflows"
         d.mkdir(parents=True, exist_ok=True)
@@ -277,18 +305,23 @@ def test_manifest_status_rejected(tmp_path, stage, status):
         ("wrong stage", "recipe contract mismatch"),
         ("missing recipe", "recipe contract mismatch"),
         ("extra recipe", "unsupported recipe"),
-        ("ignored failure", "unsupported recipe"),
+        ("ignored failure", "unsupported recipe prefix"),
+        ("at-prefix failure", "unsupported recipe prefix"),
         ("wrong prerequisite", "prerequisite contract mismatch"),
         ("duplicate definition", "exactly one definition"),
         ("not phony", "must be phony"),
         ("multi-target header", "unsupported multi-target header"),
+        ("forbidden multi-target", "unsupported multi-target header"),
         ("double-colon", "unsupported double-colon definition"),
         ("inline recipe header", "unsupported inline recipe header"),
-        ("plus prefix", "unsupported recipe"),
+        ("plus prefix", "unsupported recipe prefix"),
         ("ignore directive", ".IGNORE"),
         ("oneshell", "forbidden control"),
         ("recipeprefix", "forbidden control"),
         ("gnuflags", "forbidden control"),
+        ("makefiles", "forbidden control MAKEFILES"),
+        ("include", "include directives are unsupported"),
+        ("expanded target", "variable-expanded target headers are unsupported"),
     ],
     ids=lambda v: v,
 )
@@ -307,6 +340,8 @@ def test_gate_mutations(tmp_path, mutation, frag):
         )
     elif mutation == "ignored failure":
         makefile = makefile.replace("\t$(MAKE) test-target\n", "\t-$(MAKE) test-target\n")
+    elif mutation == "at-prefix failure":
+        makefile = makefile.replace("\t$(MAKE) lint\n", "\t@-$(MAKE) lint\n")
     elif mutation == "wrong prerequisite":
         makefile = makefile.replace(
             "finalization-check: prepare-runtime-dirs",
@@ -321,6 +356,8 @@ def test_gate_mutations(tmp_path, mutation, frag):
             "finalization-check: prepare-runtime-dirs",
             "finalization-check helper: prepare-runtime-dirs",
         )
+    elif mutation == "forbidden multi-target":
+        makefile += "\nfinalization-check-target helper: prepare-runtime-dirs\n\t@true\n"
     elif mutation == "double-colon":
         makefile = makefile.replace(
             "finalization-check: prepare-runtime-dirs",
@@ -341,10 +378,28 @@ def test_gate_mutations(tmp_path, mutation, frag):
         makefile = ".RECIPEPREFIX := >\n" + makefile
     elif mutation == "gnuflags":
         makefile = "GNUMAKEFLAGS += -i\n" + makefile
+    elif mutation == "makefiles":
+        makefile = "MAKEFILES := extra.mk\n" + makefile
+    elif mutation == "include":
+        makefile = "include extra.mk\n" + makefile
+    elif mutation == "expanded target":
+        makefile = "GATE := finalization-check\n$(GATE): characterization-smoke\n" + makefile
     else:
         raise AssertionError(mutation)
     (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
     assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
+def test_phase6_docker_recipe_at_prefix_fails(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    makefile = makefile.replace(
+        "\tdocker compose --profile test run --rm test python scripts/validate_refactor_phase_6.py --stage cutover\n",
+        "\t@-docker compose --profile test run --rm test python scripts/validate_refactor_phase_6.py --stage cutover\n",
+    )
+    (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
+    assert any("unsupported recipe prefix" in e for e in validate(tmp_path, stage="cutover"))
 
 
 def test_cutover_rejects_target_gate_present(tmp_path):
@@ -394,6 +449,10 @@ def test_manifest_item_failures(tmp_path, extra, setup, frag):
         ('schema_version = 1\nstatus = "active"\nextra = true\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"), "extra"),
         ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="edit", status="planned", confidence="confirmed"), "action"),
         ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="retain", status="planned", confidence="confirmed") + "requires_explicit_test_target_reference = false\n", "requires_explicit_test_target_reference"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "/abs/path"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n', "repository-relative"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "a/../b"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n', "must not contain"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "dup"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\nreplacements = ["dup", "dup"]\n', "duplicate path entry"),
+        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "x"\nkind = "filesystem"\naction = "port_then_delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\nevidence = ["e", "e"]\n', "duplicate path entry"),
     ],
 )
 def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
@@ -405,16 +464,45 @@ def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
     assert any(frag in error for error in errors)
 
 
+def test_manifest_duplicate_normalized_paths_fail(tmp_path):
+    body = (
+        'schema_version = 1\nstatus = "active"\n\n'
+        '[[items]]\npath = "a//b"\nkind = "filesystem"\naction = "delete"\n'
+        'owner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n\n'
+        '[[items]]\npath = "a/b"\nkind = "filesystem"\naction = "delete"\n'
+        'owner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n'
+    )
+    (tmp_path / "docs/refactor").mkdir(parents=True)
+    (tmp_path / "docs/refactor/deletion-manifest.toml").write_text(body, encoding="utf-8")
+    manifest, errors = parse_manifest(tmp_path)
+    assert manifest is None
+    assert any("duplicate kind/path" in error for error in errors)
+
+
 @pytest.mark.parametrize(
-    "stage,compose,dockerfile,ok,err",
+    "stage,dockerfile,compose,ok,err",
     [
-        ("pre-cutover", "services:\n  api:\n    build:\n      context: .\n      dockerfile: Dockerfile\n      target: development\n    command: python -m psychoanalyst_app.server\n", _DF_LEGACY, True, ""),
-        ("cutover", "services:\n  api:\n    build:\n      context: .\n      dockerfile: Dockerfile\n      target: development\n    command: python -m psychoanalyst_app.server\n", _DF_TARGET, False, "docker-compose api command must select"),
-        ("cutover", "services:\n  api:\n    build:\n      context: .\n      dockerfile: Dockerfile\n      target: development\n    command: [not-a-valid-list\n", _DF_TARGET, False, "command inline list is malformed"),
+        ("pre-cutover", _DF_LEGACY, _CP_LEGACY, True, ""),
+        ("cutover", _DF_TARGET, _compose_fixture("python -m psychoanalyst_app.server"), False, "docker-compose api command must select"),
+        ("cutover", _DF_WRONG_CMD, _CP_TARGET, False, "CMD must select"),
+        ("cutover", _DF_MALFORMED_CMD, _CP_TARGET, False, "malformed"),
+        ("cutover", _DF_TARGET, _compose_fixture("jung-api", api_extra="    command: jung-api\n"), False, "must not declare local 'command'"),
+        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target"),
+        ("cutover", _DF_NONSELECTED, _CP_TARGET, True, ""),
+        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api"),
     ],
-    ids=["legacy_ok", "override_fail", "malformed_list"],
+    ids=[
+        "legacy_ok",
+        "compose_wrong_command",
+        "docker_wrong_cmd",
+        "docker_malformed_cmd",
+        "api_local_override",
+        "unknown_build_target",
+        "nonselected_stage_ok",
+        "duplicate_api",
+    ],
 )
-def test_compose_runtime(tmp_path, stage, compose, dockerfile, ok, err):
+def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
     r = RepoFixture(tmp_path)
     (r.seed_cutover(complete=True) if stage == "cutover" else r.seed_pre())
     r.write_runtime(target=stage != "pre-cutover", dockerfile=dockerfile, compose=compose)
@@ -422,21 +510,44 @@ def test_compose_runtime(tmp_path, stage, compose, dockerfile, ok, err):
     assert (errors == []) if ok else any(err in e for e in errors)
 
 
+def test_compose_missing_command_fails(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    compose = _compose_fixture("jung-api").replace("  command: jung-api\n", "")
+    r.write_runtime(target=True, compose=compose)
+    assert any("x-api-base keys" in e or "command" in e for e in validate(tmp_path, stage="cutover"))
+
+
 @pytest.mark.parametrize(
     "workflow,frag",
     [
-        ("on:\n  workflow_dispatch:\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "on missing push"),
+        ("on:\n  workflow_dispatch:\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "on keys"),
         ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: |\n          make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "unsupported block scalar"),
         ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n      MAKEFLAGS: -i\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow env contract mismatch"),
         ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - if: false\n        name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow step 1 keys contract mismatch"),
+        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n    paths-ignore:\n      - \"**\"\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "push keys"),
+        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: sixty\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow timeout-minutes must be integer 60"),
+        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n        run: echo noop\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "duplicate 'run' key"),
     ],
-    ids=["dispatch", "block_scalar", "extra_env", "step_if"],
+    ids=["dispatch", "block_scalar", "extra_env", "step_if", "paths_ignore", "bad_timeout", "dup_run"],
 )
 def test_workflow_contract(tmp_path, workflow, frag):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     r.write_workflow("name: Release Candidate Validation\n" + workflow)
     assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
+def test_workflow_duplicate_root_on_fails(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    workflow = _WF_CUTOVER.replace(
+        "on:\n",
+        "on:\n  push:\n    branches:\n      - master\non:\n  workflow_dispatch:\n",
+        1,
+    )
+    r.write_workflow(workflow)
+    assert any("workflow has duplicate keys" in e for e in validate(tmp_path, stage="cutover"))
 
 
 def test_forbidden_import_and_dependency(tmp_path):
@@ -477,8 +588,9 @@ def _retained_test_manifest() -> str:
         ("test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n", True),
         ("test-target:\n\tdocker compose --profile test run --rm test pytest tests/unit/test_validate_refactor_phase_6.py\n", True),
         ("TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n" "test-target:\n\tdocker compose --profile test run --rm test pytest $(TARGET_SUPPORT_TESTS)\n", True),
+        ("test-target:\n\t@-pytest tests/unit/test_validate_refactor_phase_6.py\n", False),
     ],
-    ids=["unused_var", "echo_var", "echo_pytest", "direct_pytest", "docker_pytest", "var_expansion"],
+    ids=["unused_var", "echo_var", "echo_pytest", "direct_pytest", "docker_pytest", "var_expansion", "at_prefix_pytest"],
 )
 def test_retained_test_reference_rules(tmp_path, makefile_patch, should_pass):
     r = RepoFixture(tmp_path)

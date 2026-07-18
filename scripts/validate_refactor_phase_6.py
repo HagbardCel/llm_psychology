@@ -13,7 +13,6 @@ import json
 import re
 import shlex
 import tomllib
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, Self
@@ -60,6 +59,7 @@ FORBIDDEN_MAKE_CONTROLS = frozenset(
         "MAKEFLAGS",
         "MFLAGS",
         "GNUMAKEFLAGS",
+        "MAKEFILES",
         "SHELL",
         ".SHELLFLAGS",
         ".ONESHELL",
@@ -98,6 +98,36 @@ PREPARE_RUNTIME_RECIPES = (
         '@if [ "$${CI:-}" = "true" ]; then chmod -R a+rwX data logs; '
         "else chmod -R u+rwX,g+rwX data logs; fi"
     ),
+)
+
+API_BASE_KEYS = frozenset(
+    {
+        "build",
+        "user",
+        "volumes",
+        "environment",
+        "networks",
+        "command",
+        "logging",
+        "healthcheck",
+    }
+)
+API_SERVICE_KEYS = frozenset({"<<", "container_name", "env_file"})
+FORBIDDEN_API_OVERRIDE_KEYS = frozenset(
+    {"command", "build", "entrypoint", "image", "extends"}
+)
+SELECTED_DOCKER_STAGE = "development"
+REQUIRED_BUILD_VALUES = {
+    "context": ".",
+    "dockerfile": "Dockerfile",
+    "target": SELECTED_DOCKER_STAGE,
+}
+
+WORKFLOW_TOP_KEYS = frozenset({"name", "on", "jobs"})
+WORKFLOW_ON_KEYS = frozenset({"push", "pull_request"})
+WORKFLOW_TRIGGER_KEYS = frozenset({"branches"})
+WORKFLOW_JOB_KEYS = frozenset(
+    {"name", "runs-on", "timeout-minutes", "env", "steps"}
 )
 
 
@@ -152,11 +182,6 @@ WORKFLOW_CONTRACT = WorkflowContract(
     ),
 )
 
-WORKFLOW_TOP_KEYS = frozenset({"name", "on", "jobs"})
-WORKFLOW_JOB_KEYS = frozenset(
-    {"name", "runs-on", "timeout-minutes", "env", "steps"}
-)
-
 
 def _legacy_gate() -> GateContract:
     return GateContract(
@@ -193,9 +218,9 @@ def _target_gate(stage: str) -> GateContract:
 class StageRules:
     manifest_status: str
     expected_runtime_argv: tuple[str, ...]
+    expected_compose_command: str
     gates: tuple[tuple[str, GateContract], ...]
-    require_target_gate: bool
-    forbid_target_gate: bool
+    forbidden_targets: frozenset[str]
     required_entry_points: frozenset[str]
     forbidden_entry_points: frozenset[str]
     final_closure: bool
@@ -206,12 +231,12 @@ STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
         manifest_status="active",
         expected_runtime_argv=LEGACY_RUNTIME_ARGV,
+        expected_compose_command="python -m psychoanalyst_app.server",
         gates=(
             ("finalization-check", _legacy_gate()),
             ("finalization-check-target", _target_gate("pre-cutover")),
         ),
-        require_target_gate=True,
-        forbid_target_gate=False,
+        forbidden_targets=frozenset(),
         required_entry_points=frozenset(),
         forbidden_entry_points=frozenset(),
         final_closure=False,
@@ -219,9 +244,9 @@ STAGES: dict[str, StageRules] = {
     "cutover": StageRules(
         manifest_status="active",
         expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        expected_compose_command="jung-api",
         gates=(("finalization-check", _target_gate("cutover")),),
-        require_target_gate=False,
-        forbid_target_gate=True,
+        forbidden_targets=frozenset({"finalization-check-target"}),
         required_entry_points=TARGET_ENTRY_CUTOVER,
         forbidden_entry_points=LEGACY_ENTRY_POINTS,
         final_closure=False,
@@ -232,9 +257,9 @@ STAGES: dict[str, StageRules] = {
     "final": StageRules(
         manifest_status="completed",
         expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        expected_compose_command="jung-api",
         gates=(("finalization-check", _target_gate("final")),),
-        require_target_gate=False,
-        forbid_target_gate=True,
+        forbidden_targets=frozenset({"finalization-check-target"}),
         required_entry_points=TARGET_ENTRY_FINAL,
         forbidden_entry_points=LEGACY_ENTRY_POINTS,
         final_closure=True,
@@ -380,7 +405,7 @@ class Manifest(BaseModel):
 @dataclass(frozen=True, slots=True)
 class RecipeCommand:
     text: str
-    prefix: str  # "", "@", "-", "+"
+    prefix: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,17 +415,9 @@ class ParsedCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedArgv:
-    present: bool
-    argv: tuple[str, ...] | None = None
-    error: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class ParsedMakeTarget:
     recipes: tuple[RecipeCommand, ...]
     prerequisites: tuple[str, ...]
-    is_double_colon: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,11 +518,33 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
     return manifest, []
 
 
-def _load_repo_context(root: Path, contracted: frozenset[str]) -> RepoContext:
+def _delegated_make_targets(
+    gates: tuple[tuple[str, GateContract], ...],
+) -> frozenset[str]:
+    names: set[str] = set()
+    for _, contract in gates:
+        for recipe in contract.recipes:
+            if recipe[0] == "make":
+                names.add(recipe[1])
+    return frozenset(names)
+
+
+def _contracted_targets(rules: StageRules) -> frozenset[str]:
+    names = {PREPARE_RUNTIME_DIRS}
+    names.update(name for name, _ in rules.gates)
+    names.update(_delegated_make_targets(rules.gates))
+    return frozenset(names)
+
+
+def _watched_targets(rules: StageRules) -> frozenset[str]:
+    return _contracted_targets(rules) | rules.forbidden_targets
+
+
+def _load_repo_context(root: Path, watched: frozenset[str]) -> RepoContext:
     makefile_text = (root / "Makefile").read_text(encoding="utf-8")
     return RepoContext(
         root=root,
-        makefile=_parse_makefile(makefile_text, contracted),
+        makefile=_parse_makefile(makefile_text, watched),
         makefile_text=makefile_text,
         pyproject=tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8")),
         compose=(root / "docker-compose.yml").read_text(encoding="utf-8"),
@@ -547,26 +586,30 @@ def _header_targets(lhs: str) -> tuple[list[str], bool, bool]:
     return targets, is_double, is_grouped
 
 
-def _is_invalid_contracted_header(
-    lhs: str, rhs: str, contracted: frozenset[str]
+def _is_invalid_watched_header(
+    lhs: str, rhs: str, watched: frozenset[str], *, is_double: bool
 ) -> list[str]:
-    targets, is_double, is_grouped = _header_targets(lhs)
+    targets, _, is_grouped = _header_targets(lhs)
     errors: list[str] = []
+    if "%" in lhs:
+        for name in targets:
+            if name in watched:
+                errors.append(f"{name} uses unsupported pattern target header")
     if ";" in rhs:
         for name in targets:
-            if name in contracted:
+            if name in watched:
                 errors.append(f"{name} uses unsupported inline recipe header")
     if is_double:
         for name in targets:
-            if name in contracted:
+            if name in watched:
                 errors.append(f"{name} uses unsupported double-colon definition")
     if is_grouped:
         for name in targets:
-            if name in contracted:
+            if name in watched:
                 errors.append(f"{name} uses unsupported grouped target header")
     if len(targets) > 1:
         for name in targets:
-            if name in contracted:
+            if name in watched:
                 errors.append(f"{name} uses unsupported multi-target header")
     return errors
 
@@ -595,10 +638,19 @@ def _detect_make_control(line: str) -> str | None:
     return None
 
 
-def _parse_makefile(
-    text: str, contracted: frozenset[str] | None = None
-) -> ParsedMakefile:
-    contracted = contracted or frozenset()
+def _detect_make_composition(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or line.startswith("\t"):
+        return None
+    if re.match(r"^(?:include|-include|sinclude)\s+", stripped):
+        return "Makefile include directives are unsupported"
+    if re.match(r"^\$\(eval\b", stripped):
+        return "Makefile eval directives are unsupported"
+    return None
+
+
+def _parse_makefile(text: str, watched: frozenset[str] | None = None) -> ParsedMakefile:
+    watched = watched or frozenset()
     definitions: dict[str, list[ParsedMakeTarget]] = {}
     phony: set[str] = set()
     has_ignore = False
@@ -607,13 +659,15 @@ def _parse_makefile(
     current: str | None = None
     current_prereqs: tuple[str, ...] = ()
     current_recipes: list[RecipeCommand] = []
-    current_double = False
     pending: str | None = None
     pending_prefix = ""
 
     for line in text.splitlines():
         if line.startswith("#"):
             continue
+        composition = _detect_make_composition(line)
+        if composition:
+            control_errors.append(composition)
         control = _detect_make_control(line)
         if control:
             if control == ".IGNORE":
@@ -623,9 +677,7 @@ def _parse_makefile(
         if line and not line.startswith("\t") and ":" in line:
             if current is not None:
                 definitions.setdefault(current, []).append(
-                    ParsedMakeTarget(
-                        tuple(current_recipes), current_prereqs, current_double
-                    )
+                    ParsedMakeTarget(tuple(current_recipes), current_prereqs)
                 )
             lhs, rhs = line.split(":", 1)
             if lhs.strip().startswith("."):
@@ -634,24 +686,22 @@ def _parse_makefile(
                 current = None
                 pending = None
                 continue
+            lhs_stripped = lhs.strip()
             is_double = "::" in line
+            if "$" in lhs_stripped:
+                header_errors.append(
+                    "variable-expanded target headers are unsupported"
+                )
             targets, _, _ = _header_targets(lhs)
-            header_errors.extend(_is_invalid_contracted_header(lhs, rhs, contracted))
-            if is_double:
-                for name in targets:
-                    if name in contracted:
-                        header_errors.append(
-                            f"{name} uses unsupported double-colon definition"
-                        )
+            header_errors.extend(
+                _is_invalid_watched_header(lhs, rhs, watched, is_double=is_double)
+            )
             if len(targets) != 1:
                 current = None
                 pending = None
                 continue
             current = targets[0]
-            current_double = is_double
             prereq_part = rhs.split(";", 1)[0]
-            if is_double and prereq_part.startswith(":"):
-                prereq_part = prereq_part[1:]
             current_prereqs = tuple(token for token in prereq_part.split() if token)
             current_recipes = []
             pending = None
@@ -674,7 +724,7 @@ def _parse_makefile(
 
     if current is not None:
         definitions.setdefault(current, []).append(
-            ParsedMakeTarget(tuple(current_recipes), current_prereqs, current_double)
+            ParsedMakeTarget(tuple(current_recipes), current_prereqs)
         )
 
     return ParsedMakefile(
@@ -693,10 +743,8 @@ def _recipe_text(command: RecipeCommand) -> str:
 def _normalize_gate_recipe(
     command: RecipeCommand,
 ) -> tuple[tuple[str, ...] | None, str | None]:
-    if command.prefix in {"-", "+"}:
-        return None, "unsupported recipe"
-    if command.prefix == "@":
-        return None, "unsupported recipe"
+    if command.prefix:
+        return None, "unsupported recipe prefix"
     parsed = _parse_shell_command(command.text)
     if parsed.error or parsed.argv is None:
         return None, parsed.error or "unsupported recipe"
@@ -708,26 +756,6 @@ def _normalize_gate_recipe(
     if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
         return ("docker-python", *argv[prefix_len:]), None
     return None, f"unsupported recipe: {command.text!r}"
-
-
-def _delegated_make_targets(
-    gates: tuple[tuple[str, GateContract], ...],
-) -> frozenset[str]:
-    names: set[str] = set()
-    for _, contract in gates:
-        for recipe in contract.recipes:
-            if recipe[0] == "make":
-                names.add(recipe[1])
-    return frozenset(names)
-
-
-def _contracted_targets(
-    rules: StageRules,
-) -> frozenset[str]:
-    names = {PREPARE_RUNTIME_DIRS}
-    names.update(name for name, _ in rules.gates)
-    names.update(_delegated_make_targets(rules.gates))
-    return frozenset(names)
 
 
 def _compare_gate_contract(
@@ -770,70 +798,52 @@ def _gate_contract_from_target(
     return GateContract(target.prerequisites, tuple(recipes)), []
 
 
-def _validate_prepare_runtime_dirs(makefile: ParsedMakefile) -> list[str]:
-    errors: list[str] = []
-    defs = makefile.definitions.get(PREPARE_RUNTIME_DIRS, ())
-    if len(defs) != 1:
-        errors.append(
-            f"{PREPARE_RUNTIME_DIRS} must have exactly one definition, got {len(defs)}"
-        )
-        return errors
-    target = defs[0]
-    if target.prerequisites:
-        errors.append(f"{PREPARE_RUNTIME_DIRS} must have no prerequisites")
-    if len(target.recipes) != 2:
-        errors.append(f"{PREPARE_RUNTIME_DIRS} must have exactly two recipes")
-        return errors
-    texts = tuple(_recipe_text(cmd) for cmd in target.recipes)
-    if texts != PREPARE_RUNTIME_RECIPES:
-        errors.append(f"{PREPARE_RUNTIME_DIRS} recipe contract mismatch")
-    for command in target.recipes:
-        if command.prefix in {"-", "+"}:
-            errors.append(
-                f"{PREPARE_RUNTIME_DIRS} must not use ignored-failure recipes"
-            )
-    return errors
-
-
-def _validate_make_semantics(
+def _validate_makefile_contracts(
     makefile: ParsedMakefile, rules: StageRules
 ) -> list[str]:
     errors = list(makefile.header_errors)
     errors.extend(makefile.control_errors)
     if makefile.has_ignore:
         errors.append("Makefile must not declare .IGNORE")
+
     contracted = _contracted_targets(rules)
-    delegated = _delegated_make_targets(rules.gates)
-    phony_required = contracted | delegated
+    phony_required = contracted | _delegated_make_targets(rules.gates)
     for name in phony_required:
         if name not in makefile.phony:
             errors.append(f"{name} must be phony")
-    unique_required = contracted | delegated
-    for name in unique_required:
+    for name in phony_required:
         defs = makefile.definitions.get(name, ())
         if len(defs) != 1:
             errors.append(f"{name} must have exactly one definition, got {len(defs)}")
-        elif defs[0].is_double_colon:
-            errors.append(f"{name} uses unsupported double-colon definition")
-    errors.extend(_validate_prepare_runtime_dirs(makefile))
-    return errors
 
+    defs = makefile.definitions.get(PREPARE_RUNTIME_DIRS, ())
+    if len(defs) != 1:
+        errors.append(
+            f"{PREPARE_RUNTIME_DIRS} must have exactly one definition, got {len(defs)}"
+        )
+    else:
+        target = defs[0]
+        if target.prerequisites:
+            errors.append(f"{PREPARE_RUNTIME_DIRS} must have no prerequisites")
+        elif len(target.recipes) != 2:
+            errors.append(f"{PREPARE_RUNTIME_DIRS} must have exactly two recipes")
+        else:
+            texts = tuple(_recipe_text(cmd) for cmd in target.recipes)
+            if texts != PREPARE_RUNTIME_RECIPES:
+                errors.append(f"{PREPARE_RUNTIME_DIRS} recipe contract mismatch")
 
-def _validate_gates(makefile: ParsedMakefile, rules: StageRules) -> list[str]:
-    errors: list[str] = []
-    if rules.require_target_gate:
-        if "finalization-check-target" not in makefile.definitions:
-            errors.append("missing Makefile target: finalization-check-target")
-    if rules.forbid_target_gate and "finalization-check-target" in makefile.definitions:
-        errors.append("finalization-check-target must be absent after cutover")
+    for forbidden in rules.forbidden_targets:
+        if forbidden in makefile.definitions:
+            errors.append(f"{forbidden} must be absent after cutover")
+
     for target_name, expected in rules.gates:
-        defs = makefile.definitions.get(target_name, ())
-        if len(defs) != 1:
+        gate_defs = makefile.definitions.get(target_name, ())
+        if len(gate_defs) != 1:
             errors.append(
-                f"{target_name} must have exactly one definition, got {len(defs)}"
+                f"{target_name} must have exactly one definition, got {len(gate_defs)}"
             )
             continue
-        actual_contract, norm_errors = _gate_contract_from_target(defs[0])
+        actual_contract, norm_errors = _gate_contract_from_target(gate_defs[0])
         errors.extend(norm_errors)
         if actual_contract is None:
             continue
@@ -925,18 +935,23 @@ def _one_child(
     return matches[0], None
 
 
-def _child_keys(block: str) -> frozenset[str]:
-    return frozenset(name for name, _ in _direct_children(block))
+def _exact_child_keys(
+    children: list[tuple[str, str]], allowed: frozenset[str], label: str
+) -> str | None:
+    keys = [name for name, _ in children]
+    if len(keys) != len(set(keys)):
+        return f"{label} has duplicate keys"
+    if frozenset(keys) != allowed:
+        return f"{label} keys must be {sorted(allowed)!r}"
+    return None
 
 
 def _scalar_value(block: str, key: str) -> tuple[str | None, str | None]:
-    children = _direct_children(block)
-    matches = [child for name, child in children if name == key]
-    if not matches:
-        return None, None
-    if len(matches) > 1:
-        return None, f"multiple {key} keys"
-    first = matches[0].splitlines()[0].strip()
+    child, err = _one_child(_direct_children(block), key, required=True, label=key)
+    if err:
+        return None, err
+    assert child is not None
+    first = child.splitlines()[0].strip()
     match = re.match(rf"^{re.escape(key)}:\s*(.*)$", first)
     if not match:
         return None, f"invalid {key} syntax"
@@ -950,25 +965,52 @@ def _scalar_value(block: str, key: str) -> tuple[str | None, str | None]:
     return value.strip("'\""), None
 
 
-def _branch_list(block: str, key: str) -> tuple[frozenset[str] | None, str | None]:
-    child, err = _one_child(_direct_children(block), key, required=True, label="on")
-    if err:
-        return None, err
-    assert child is not None
-    list_block, err = _one_child(
-        _direct_children(child), "branches", required=True, label=key
+def _top_level_children(text: str) -> list[tuple[str, str]]:
+    children: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        if _is_comment_or_blank(line):
+            continue
+        if line.startswith((" ", "\t")):
+            if children:
+                children[-1][1].append(line)
+            continue
+        match = re.match(r"(\S+):\s*(.*)$", line.strip())
+        if match:
+            children.append((match.group(1), [line]))
+    return [(name, "\n".join(block)) for name, block in children]
+
+
+def _parse_branch_list(
+    trigger_block: str, trigger_name: str, expected: frozenset[str]
+) -> str | None:
+    child, err = _one_child(
+        _direct_children(trigger_block), "branches", required=True, label=trigger_name
     )
     if err:
-        return None, err
-    assert list_block is not None
-    branches: set[str] = set()
-    for line in list_block.splitlines():
+        return err
+    assert child is not None
+    child_indent = _direct_child_indent(child)
+    if child_indent is None:
+        return f"{trigger_name} branches must be non-empty"
+    branches: list[str] = []
+    for line in child.splitlines()[1:]:
+        if _is_comment_or_blank(line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent != child_indent:
+            return f"{trigger_name} branches contain unsupported syntax"
         match = re.match(r"^\s*-\s+(\S+)\s*$", line)
-        if match:
-            branches.add(match.group(1))
+        if not match:
+            return f"{trigger_name} branches contain unsupported syntax"
+        branch = match.group(1)
+        if branch in branches:
+            return f"{trigger_name} branches contain duplicate values"
+        branches.append(branch)
     if not branches:
-        return None, f"{key} branches must be non-empty"
-    return frozenset(branches), None
+        return f"{trigger_name} branches must be non-empty"
+    if frozenset(branches) != expected:
+        return f"workflow {trigger_name} branches contract mismatch"
+    return None
 
 
 def _env_mapping(block: str) -> tuple[frozenset[tuple[str, str]] | None, str | None]:
@@ -976,18 +1018,20 @@ def _env_mapping(block: str) -> tuple[frozenset[tuple[str, str]] | None, str | N
     if err:
         return None, err
     assert child is not None
-    pairs: set[tuple[str, str]] = set()
-    for name, _ in _direct_children(child):
-        value, value_err = _scalar_value(child, name)
-        if value_err:
-            return None, value_err
-        if value is None:
-            return None, f"env key {name!r} must be a plain scalar"
-        pairs.add((name, value))
-    return frozenset(pairs), None
+    env_children = _direct_children(child)
+    if frozenset(name for name, _ in env_children) != frozenset({"ENV_FILE"}):
+        return None, "workflow env contract mismatch"
+    value, value_err = _scalar_value(child, "ENV_FILE")
+    if value_err:
+        return None, value_err
+    if value != ".env.example":
+        return None, "workflow env contract mismatch"
+    return frozenset({("ENV_FILE", ".env.example")}), None
 
 
-def _workflow_steps(job_block: str) -> tuple[list[dict[str, str]] | None, str | None]:
+def _workflow_steps(
+    job_block: str,
+) -> tuple[list[tuple[tuple[str, str], ...]] | None, str | None]:
     steps_block, err = _one_child(
         _direct_children(job_block), "steps", required=True, label="job"
     )
@@ -1008,8 +1052,8 @@ def _workflow_steps(job_block: str) -> tuple[list[dict[str, str]] | None, str | 
             break
     if step_indent is None:
         return [], None
-    steps: list[dict[str, str]] = []
-    current: dict[str, str] = {}
+    steps: list[tuple[tuple[str, str], ...]] = []
+    current: list[tuple[str, str]] = []
     for line in lines[start:]:
         if _is_comment_or_blank(line):
             continue
@@ -1018,38 +1062,119 @@ def _workflow_steps(job_block: str) -> tuple[list[dict[str, str]] | None, str | 
             break
         if indent == step_indent and re.match(r"^\s*-\s", line):
             if current:
-                steps.append(current)
-            current = {}
+                steps.append(tuple(current))
+            current = []
             remainder = line.strip()[1:].strip()
             if remainder:
                 match = re.match(r"(\S+):\s*(.*)$", remainder)
                 if match:
-                    current[match.group(1)] = match.group(2).strip()
+                    current.append((match.group(1), match.group(2).strip()))
             continue
         match = re.match(r"^(\S+):\s*(.*)$", line.strip())
-        if match and current is not None:
+        if match:
             key, value = match.group(1), match.group(2).strip()
             if value in {"|", "|-", "|+", ">", ">-", ">+"}:
                 return None, "unsupported block scalar"
             if value.startswith("{") or value.startswith("["):
                 return None, "unsupported inline mapping"
-            current[key] = value.strip("'\"")
+            if any(existing_key == key for existing_key, _ in current):
+                return None, f"workflow step has duplicate {key!r} key"
+            current.append((key, value.strip("'\"")))
     if current:
-        steps.append(current)
+        steps.append(tuple(current))
     return steps, None
 
 
-def _root_keys(workflow: str) -> frozenset[str]:
-    keys: set[str] = set()
-    for line in workflow.splitlines():
-        if _is_comment_or_blank(line):
+def _validate_workflow_triggers(
+    on_children: list[tuple[str, str]], contract: WorkflowContract
+) -> list[str]:
+    errors: list[str] = []
+    on_key_err = _exact_child_keys(on_children, WORKFLOW_ON_KEYS, "on")
+    if on_key_err:
+        return [on_key_err]
+    for trigger_name, expected_branches in (
+        ("push", contract.triggers.push_branches),
+        ("pull_request", contract.triggers.pull_request_branches),
+    ):
+        trigger_block, trigger_err = _one_child(
+            on_children, trigger_name, required=True, label="on"
+        )
+        if trigger_err:
+            errors.append(trigger_err)
             continue
-        if line.startswith((" ", "\t")):
+        assert trigger_block is not None
+        trigger_key_err = _exact_child_keys(
+            _direct_children(trigger_block), WORKFLOW_TRIGGER_KEYS, trigger_name
+        )
+        if trigger_key_err:
+            errors.append(trigger_key_err)
             continue
-        match = re.match(r"(\S+):", line.strip())
-        if match:
-            keys.add(match.group(1))
-    return frozenset(keys)
+        branch_err = _parse_branch_list(trigger_block, trigger_name, expected_branches)
+        if branch_err:
+            errors.append(branch_err)
+    return errors
+
+
+def _validate_workflow_job(job_block: str, contract: WorkflowContract) -> list[str]:
+    errors: list[str] = []
+    job_key_err = _exact_child_keys(
+        _direct_children(job_block), WORKFLOW_JOB_KEYS, "workflow job"
+    )
+    if job_key_err:
+        errors.append(job_key_err)
+    runs_on, err = _scalar_value(job_block, "runs-on")
+    if err:
+        errors.append(err)
+    elif runs_on != contract.runs_on:
+        errors.append("workflow runs-on contract mismatch")
+    timeout_raw, err = _scalar_value(job_block, "timeout-minutes")
+    if err:
+        errors.append(err)
+    elif timeout_raw is None:
+        errors.append("workflow timeout-minutes contract mismatch")
+    else:
+        try:
+            timeout = int(timeout_raw)
+        except ValueError:
+            errors.append("workflow timeout-minutes must be integer 60")
+        else:
+            if timeout != contract.timeout_minutes:
+                errors.append("workflow timeout-minutes contract mismatch")
+    env, err = _env_mapping(job_block)
+    if err:
+        errors.append(err)
+    elif env != contract.env:
+        errors.append("workflow env contract mismatch")
+    name, name_err = _scalar_value(job_block, "name")
+    if name_err:
+        errors.append(name_err)
+    elif not name:
+        errors.append("workflow job name must be a non-empty string")
+    steps, err = _workflow_steps(job_block)
+    if err:
+        errors.append(err)
+        return errors
+    if steps is None:
+        return errors
+    if len(steps) != len(contract.steps):
+        errors.append("workflow step count contract mismatch")
+        return errors
+    for index, (actual_pairs, expected) in enumerate(
+        zip(steps, contract.steps, strict=True)
+    ):
+        actual = dict(actual_pairs)
+        if frozenset(actual) != expected.allowed_keys:
+            errors.append(f"workflow step {index} keys contract mismatch")
+            continue
+        if not actual.get("name"):
+            errors.append(f"workflow step {index} name must be a non-empty string")
+        op_kind, op_value = expected.operation
+        if actual.get(op_kind) != op_value:
+            errors.append(f"workflow step {index} operation contract mismatch")
+        extra_keys = set(actual) - {op_kind, "name"}
+        if extra_keys:
+            errors.append(f"workflow step {index} has unsupported keys")
+    return errors
 
 
 def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
@@ -1062,450 +1187,204 @@ def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
     if re.search(r"^\s*&\w", workflow, re.MULTILINE) or "<<:" in workflow:
         return ["workflow uses unsupported YAML anchors"]
     errors: list[str] = []
-    if _root_keys(workflow) != WORKFLOW_TOP_KEYS:
-        errors.append(
-            f"workflow top-level keys must be {sorted(WORKFLOW_TOP_KEYS)!r}"
-        )
-    on_block = _yaml_block(workflow, r"^on:\s*$")
-    if on_block is None:
-        return errors + ["workflow missing on"]
-    push, err = _branch_list(on_block, "push")
-    if err:
-        errors.append(err)
-    pull_request, err = _branch_list(on_block, "pull_request")
-    if err:
-        errors.append(err)
+    root_children = _top_level_children(workflow)
+    root_err = _exact_child_keys(root_children, WORKFLOW_TOP_KEYS, "workflow")
+    if root_err:
+        errors.append(root_err)
+    on_block, on_err = _one_child(root_children, "on", required=True, label="workflow")
+    if on_err:
+        return errors + [on_err]
+    assert on_block is not None
+    on_children = _direct_children(on_block)
     contract = WORKFLOW_CONTRACT
-    if push != contract.triggers.push_branches:
-        errors.append("workflow push branches contract mismatch")
-    if pull_request != contract.triggers.pull_request_branches:
-        errors.append("workflow pull_request branches contract mismatch")
-    jobs_block = _yaml_block(workflow, r"^jobs:\s*$")
-    if jobs_block is None:
-        return errors + ["workflow missing jobs"]
+    errors.extend(_validate_workflow_triggers(on_children, contract))
+    jobs_block, jobs_err = _one_child(
+        root_children, "jobs", required=True, label="workflow"
+    )
+    if jobs_err:
+        return errors + [jobs_err]
+    assert jobs_block is not None
     jobs = _direct_children(jobs_block)
     if len(jobs) != 1 or jobs[0][0] != contract.job_name:
         errors.append(
             f"workflow must have exactly one job: {contract.job_name!r}"
         )
         return errors
-    job_block = jobs[0][1]
-    if _child_keys(job_block) != WORKFLOW_JOB_KEYS:
-        errors.append(
-            f"workflow job keys must be {sorted(WORKFLOW_JOB_KEYS)!r}"
-        )
-    runs_on, err = _scalar_value(job_block, "runs-on")
-    if err:
-        errors.append(err)
-    elif runs_on != contract.runs_on:
-        errors.append("workflow runs-on contract mismatch")
-    timeout_raw, err = _scalar_value(job_block, "timeout-minutes")
-    if err:
-        errors.append(err)
-    elif timeout_raw is None or int(timeout_raw) != contract.timeout_minutes:
-        errors.append("workflow timeout-minutes contract mismatch")
-    env, err = _env_mapping(job_block)
-    if err:
-        errors.append(err)
-    elif env != contract.env:
-        errors.append("workflow env contract mismatch")
-    for key in ("name",):
-        value, value_err = _scalar_value(job_block, key)
-        if value_err:
-            errors.append(value_err)
-        elif not value:
-            errors.append(f"workflow job {key} must be a non-empty string")
-    steps, err = _workflow_steps(job_block)
-    if err:
-        errors.append(err)
-        return errors
-    if steps is None:
-        return errors
-    if len(steps) != len(contract.steps):
-        errors.append("workflow step count contract mismatch")
-        return errors
-    for index, (actual, expected) in enumerate(zip(steps, contract.steps, strict=True)):
-        if frozenset(actual) != expected.allowed_keys:
-            errors.append(f"workflow step {index} keys contract mismatch")
-            continue
-        if not actual.get("name"):
-            errors.append(f"workflow step {index} name must be a non-empty string")
-        op_kind, op_value = expected.operation
-        actual_value = actual.get(op_kind)
-        if actual_value != op_value:
-            errors.append(f"workflow step {index} operation contract mismatch")
-        extra_keys = set(actual) - {op_kind, "name"}
-        if extra_keys:
-            errors.append(f"workflow step {index} has unsupported keys")
+    errors.extend(_validate_workflow_job(jobs[0][1], contract))
     return errors
 
 
 # --- Compose / Docker runtime ---
 
 
-def _children_named(children: list[tuple[str, str]], name: str) -> list[str]:
-    return [block for child_name, block in children if child_name == name]
-
-
-def _is_inline_mapping(block: str) -> bool:
-    first = block.splitlines()[0].strip() if block else ""
-    return "{" in first
-
-
-def _services_block(compose: str) -> tuple[str | None, str | None]:
-    if len(re.findall(r"^services:\s*$", compose, re.MULTILINE)) > 1:
-        return None, "docker-compose.yml has multiple services blocks"
-    block = _yaml_block(compose, r"^services:\s*$")
-    if block is None:
-        return None, "docker-compose.yml missing services block"
-    return block, None
-
-
-def _api_service_block(compose: str) -> tuple[str | None, str | None]:
-    services, err = _services_block(compose)
-    if err:
-        return None, err
-    assert services is not None
-    api_blocks = _children_named(_direct_children(services), "api")
-    if not api_blocks:
-        return None, "docker-compose.yml missing services.api block"
-    if len(api_blocks) > 1:
-        return None, "docker-compose.yml has multiple services.api blocks"
-    api_block = api_blocks[0]
-    if _is_inline_mapping(api_block):
-        return None, "docker-compose api inline mapping is unsupported"
-    return api_block, None
-
-
-def _merge_aliases(service_block: str) -> tuple[list[str], str | None]:
-    merge_blocks = _children_named(_direct_children(service_block), "<<")
-    if len(merge_blocks) > 1:
-        return [], "docker-compose api has multiple merge keys"
-    if not merge_blocks:
-        return [], None
-    block = merge_blocks[0]
-    first_line = block.splitlines()[0].strip()
-    match = re.match(r"<<:\s*(.*)$", first_line)
-    if not match:
-        return [], "docker-compose api has unsupported merge syntax"
-    value = match.group(1).strip()
-    if not value:
-        if len(block.splitlines()) > 1:
-            return [], "docker-compose api has unsupported merge list syntax"
-        return [], "docker-compose api has unsupported merge syntax"
-    if value.startswith("*") and not value.startswith("[") and " " not in value:
-        return [value[1:]], None
-    return [], "docker-compose api has unsupported merge syntax"
-
-
-def _resolve_merge_anchor(compose: str, alias: str) -> tuple[str | None, str | None]:
-    headers = list(
-        re.finditer(
-            rf"^(\S+):\s*&{re.escape(alias)}\s*$", compose, re.MULTILINE
-        )
-    )
-    if not headers:
-        return None, f"docker-compose merge alias *{alias} could not be resolved"
-    if len(headers) > 1:
-        return None, f"docker-compose merge alias *{alias} is ambiguous"
-    anchor_name = headers[0].group(1)
-    block = _yaml_block(compose, rf"^{re.escape(anchor_name)}:\s*")
-    if block is None:
-        return None, f"docker-compose merge alias *{alias} could not be resolved"
-    return block, None
-
-
-def _extract_direct_scalar(block: str, key: str) -> list[tuple[int, str]]:
-    child_indent = _direct_child_indent(block)
-    if child_indent is None:
-        return []
-    matches: list[tuple[int, str]] = []
-    for index, line in enumerate(block.splitlines()):
-        if _is_comment_or_blank(line):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent != child_indent:
-            continue
-        match = re.match(rf"{re.escape(key)}:\s*(.*)$", line.strip())
-        if match:
-            matches.append((index, match.group(1).strip()))
-    return matches
-
-
-def _parse_inline_command_list(raw: str) -> ParsedArgv:
-    if not raw.startswith("["):
-        return ParsedArgv(True, error="command inline list must start with [")
-    try:
-        parsed = ast.literal_eval(raw)
-    except (SyntaxError, ValueError):
-        return ParsedArgv(True, error="command inline list is malformed")
-    if not isinstance(parsed, list) or not parsed:
-        return ParsedArgv(
-            True, error="command inline list must be a non-empty list of strings"
-        )
-    if not all(isinstance(item, str) and item for item in parsed):
-        return ParsedArgv(
-            True,
-            error="command inline list must contain only non-empty strings",
-        )
-    return ParsedArgv(True, argv=tuple(parsed))
-
-
-def _parse_block_command_list(block: str, key_line_index: int) -> ParsedArgv:
-    child_indent = _direct_child_indent(block)
-    if child_indent is None:
-        return ParsedArgv(True, error="command block is malformed")
-    list_indent = child_indent + 2
-    items: list[str] = []
-    for line in block.splitlines()[key_line_index + 1 :]:
-        if _is_comment_or_blank(line):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent < list_indent:
-            break
-        if indent != list_indent:
-            return ParsedArgv(
-                True, error="command block contains unsupported child syntax"
-            )
-        match = re.match(r"-\s*(.+)$", line.strip())
-        if not match:
-            return ParsedArgv(
-                True, error="command block contains unsupported child syntax"
-            )
-        value = match.group(1).strip().strip("'\"")
-        if not value:
-            return ParsedArgv(
-                True, error="command block list items must be non-empty strings"
-            )
-        items.append(value)
-    if not items:
-        return ParsedArgv(True, error="command block list must be non-empty")
-    return ParsedArgv(True, argv=tuple(items))
-
-
-def _scalar_to_argv(raw: str) -> ParsedArgv:
+def _scalar_to_argv(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
     value = raw.strip().strip("'\"")
     if not value:
-        return ParsedArgv(True, error="command must not be empty")
+        return None, "command must not be empty"
     parsed = _parse_shell_command(value)
     if parsed.error:
-        return ParsedArgv(True, error=parsed.error)
+        return None, parsed.error
     if parsed.argv is None:
-        return ParsedArgv(True, error="command must not be empty")
-    return ParsedArgv(True, argv=parsed.argv)
+        return None, "command must not be empty"
+    return parsed.argv, None
 
 
-def _extract_yaml_command(block: str) -> ParsedArgv:
-    matches = _extract_direct_scalar(block, "command")
-    if not matches:
-        return ParsedArgv(False)
-    if len(matches) > 1:
-        return ParsedArgv(True, error="docker-compose api has multiple command keys")
-    key_index, raw = matches[0]
-    if not raw:
-        return _parse_block_command_list(block, key_index)
-    if raw.startswith("["):
-        return _parse_inline_command_list(raw)
-    return _scalar_to_argv(raw)
-
-
-def _extract_build_target(block: str) -> ParsedArgv:
-    build_blocks = _children_named(_direct_children(block), "build")
-    if not build_blocks:
-        return ParsedArgv(False)
-    if len(build_blocks) > 1:
-        return ParsedArgv(True, error="docker-compose api has multiple build blocks")
-    build_block = build_blocks[0]
-    if _is_inline_mapping(build_block):
-        return ParsedArgv(True, error="docker-compose api inline build is unsupported")
-    first_line = build_block.splitlines()[0].strip()
-    if re.match(r"build:\s*\S+", first_line) and "{" not in first_line:
-        remainder = first_line.split(":", 1)[1].strip()
-        if remainder and not remainder.startswith("{"):
-            return ParsedArgv(
-                True, error="docker-compose scalar build syntax is unsupported"
-            )
-    targets = _extract_direct_scalar(build_block, "target")
-    if not targets:
-        return ParsedArgv(False)
-    if len(targets) > 1:
-        return ParsedArgv(
-            True, error="docker-compose api build has multiple target keys"
-        )
-    _, raw = targets[0]
-    if not raw:
-        return ParsedArgv(True, error="docker-compose build target is empty")
-    return ParsedArgv(True, argv=(raw.strip().strip("'\""),))
-
-
-def _api_service_layers(
-    compose: str,
-) -> tuple[str | None, str | None, str | None]:
-    api_block, err = _api_service_block(compose)
-    if err:
-        return None, None, err
-    assert api_block is not None
-    aliases, alias_err = _merge_aliases(api_block)
-    if alias_err:
-        return api_block, None, alias_err
-    if not aliases:
-        return api_block, None, None
-    inherited, resolve_err = _resolve_merge_anchor(compose, aliases[0])
-    if resolve_err:
-        return api_block, None, resolve_err
-    return api_block, inherited, None
-
-
-def _pick_argv(local: ParsedArgv, inherited: ParsedArgv) -> ParsedArgv | str:
-    if local.present and local.error:
-        return local.error
-    if local.present and local.argv is not None:
-        return local
-    if inherited.present and inherited.error:
-        return inherited.error
-    if inherited.present and inherited.argv is not None:
-        return inherited
-    return ParsedArgv(False)
-
-
-def _layered_argv(
-    compose: str,
-    extractor: Callable[[str], ParsedArgv],
-) -> tuple[ParsedArgv | None, str | None]:
-    api_block, inherited_block, err = _api_service_layers(compose)
-    if err:
-        return None, err
-    assert api_block is not None
-    local = extractor(api_block)
-    inherited = (
-        extractor(inherited_block) if inherited_block else ParsedArgv(False)
+def _validate_compose_runtime(
+    compose: str, expected_command: str
+) -> tuple[tuple[str, ...] | None, list[str]]:
+    errors: list[str] = []
+    anchor_headers = list(
+        re.finditer(r"^x-api-base:\s*&api-base\s*$", compose, re.MULTILINE)
     )
-    picked = _pick_argv(local, inherited)
-    if isinstance(picked, str):
-        return None, picked
-    return picked, None
+    if len(anchor_headers) != 1:
+        errors.append(
+            "docker-compose must have exactly one x-api-base: &api-base anchor"
+        )
+        return None, errors
+    anchor_block = _yaml_block(compose, r"^x-api-base:\s*&api-base\s*$")
+    if anchor_block is None:
+        errors.append("docker-compose missing x-api-base anchor block")
+        return None, errors
+    anchor_children = _direct_children(anchor_block)
+    key_err = _exact_child_keys(anchor_children, API_BASE_KEYS, "x-api-base")
+    if key_err:
+        errors.append(key_err)
+    command_raw, command_err = _scalar_value(anchor_block, "command")
+    if command_err:
+        errors.append(command_err)
+    elif command_raw != expected_command:
+        errors.append(
+            f"docker-compose api command must select {expected_command!r}, "
+            f"got {command_raw!r}"
+        )
+    build_block, build_err = _one_child(
+        anchor_children, "build", required=True, label="x-api-base"
+    )
+    if build_err:
+        errors.append(build_err)
+    elif build_block is not None:
+        build_children = _direct_children(build_block)
+        build_key_err = _exact_child_keys(
+            build_children, frozenset(REQUIRED_BUILD_VALUES), "x-api-base build"
+        )
+        if build_key_err:
+            errors.append(build_key_err)
+        else:
+            for key, expected in REQUIRED_BUILD_VALUES.items():
+                value, value_err = _scalar_value(build_block, key)
+                if value_err:
+                    errors.append(value_err)
+                elif value != expected:
+                    errors.append(
+                        f"docker-compose build.{key} must be {expected!r}, "
+                        f"got {value!r}"
+                    )
+    if len(re.findall(r"^services:\s*$", compose, re.MULTILINE)) != 1:
+        errors.append("docker-compose.yml must have exactly one services block")
+        return None, errors
+    services_block = _yaml_block(compose, r"^services:\s*$")
+    if services_block is None:
+        errors.append("docker-compose.yml missing services block")
+        return None, errors
+    api_blocks = [
+        block for name, block in _direct_children(services_block) if name == "api"
+    ]
+    if len(api_blocks) != 1:
+        errors.append("docker-compose.yml must have exactly one services.api block")
+        return None, errors
+    api_children = _direct_children(api_blocks[0])
+    for forbidden in FORBIDDEN_API_OVERRIDE_KEYS:
+        if any(name == forbidden for name, _ in api_children):
+            errors.append(f"services.api must not declare local {forbidden!r}")
+    api_key_err = _exact_child_keys(api_children, API_SERVICE_KEYS, "services.api")
+    if api_key_err:
+        errors.append(api_key_err)
+    else:
+        merge_block, merge_err = _one_child(
+            api_children, "<<", required=True, label="services.api"
+        )
+        if merge_err:
+            errors.append(merge_err)
+        elif merge_block is not None:
+            first_line = merge_block.splitlines()[0].strip()
+            if first_line != "<<: *api-base":
+                errors.append("services.api merge must be <<: *api-base")
+    if command_raw is None or command_err:
+        return None, errors
+    argv, argv_err = _scalar_to_argv(command_raw)
+    if argv_err:
+        errors.append(f"docker-compose api command is invalid: {argv_err}")
+        return None, errors
+    return argv, errors
 
 
-def _resolve_api_build_target(compose: str) -> tuple[str | None, bool, str | None]:
-    picked, err = _layered_argv(compose, _extract_build_target)
-    if err:
-        return None, False, err
-    assert picked is not None
-    if picked.present and picked.argv is not None:
-        return picked.argv[0], True, None
-    return None, False, None
-
-
-def _extract_compose_api_command(compose: str) -> tuple[ParsedArgv | None, str | None]:
-    return _layered_argv(compose, _extract_yaml_command)
-
-
-def _dockerfile_stages(dockerfile: str) -> list[tuple[str, str]]:
-    stages: list[tuple[str, str]] = []
+def _dockerfile_stage_cmd(
+    dockerfile: str, stage_name: str
+) -> tuple[tuple[str, ...] | None, str | None]:
+    stages: list[tuple[str, list[str]]] = []
     current_name = "final"
     current_lines: list[str] = []
     for line in dockerfile.splitlines():
         stage_match = re.match(r"^FROM\b.*\sAS\s+(\S+)", line, re.IGNORECASE)
         if stage_match:
             if current_lines:
-                stages.append((current_name, "\n".join(current_lines)))
+                stages.append((current_name, current_lines))
             current_name = stage_match.group(1)
             current_lines = [line]
         else:
             current_lines.append(line)
     if current_lines:
-        stages.append((current_name, "\n".join(current_lines)))
-    return stages
-
-
-def _dockerfile_cmd(stage_text: str) -> ParsedArgv:
+        stages.append((current_name, current_lines))
+    stage_lines = next((lines for name, lines in stages if name == stage_name), None)
+    if stage_lines is None:
+        return None, (
+            f"Dockerfile stage {stage_name!r} not found for compose build.target"
+        )
+    stage_text = "\n".join(stage_lines)
     matches = list(
         re.finditer(r"^\s*CMD\s+(\[[^\]]*\]|.+?)\s*$", stage_text, re.MULTILINE)
     )
     if not matches:
-        return ParsedArgv(False)
+        return None, f"Dockerfile stage {stage_name!r} must define an explicit CMD"
     raw = matches[-1].group(1).strip()
     if raw.startswith("["):
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return ParsedArgv(True, error="Dockerfile CMD exec form is malformed")
+            return None, "Dockerfile CMD exec form is malformed"
         if not isinstance(parsed, list) or not parsed:
-            return ParsedArgv(
-                True,
-                error="Dockerfile CMD exec form must be a non-empty list",
-            )
+            return None, "Dockerfile CMD exec form must be a non-empty list"
         if not all(isinstance(item, str) and item for item in parsed):
-            return ParsedArgv(
-                True,
-                error="Dockerfile CMD exec form must contain only non-empty strings",
+            return None, (
+                "Dockerfile CMD exec form must contain only non-empty strings"
             )
-        return ParsedArgv(True, argv=tuple(parsed))
+        return tuple(parsed), None
     return _scalar_to_argv(raw)
 
 
-def _validate_runtime(
-    ctx: RepoContext, expected_argv: tuple[str, ...]
-) -> list[str]:
-    errors: list[str] = []
-    build_target, explicit, resolve_error = _resolve_api_build_target(ctx.compose)
-    if resolve_error:
-        errors.append(resolve_error)
+def _validate_runtime(ctx: RepoContext, rules: StageRules) -> list[str]:
+    expected_argv = rules.expected_runtime_argv
+    compose_argv, errors = _validate_compose_runtime(
+        ctx.compose, rules.expected_compose_command
+    )
+    if errors:
         return errors
-
-    stages = _dockerfile_stages(ctx.dockerfile)
-    if not stages:
-        return ["Dockerfile has no stages"]
-
-    if explicit:
-        stage_match = next(
-            ((name, text) for name, text in stages if name == build_target),
-            None,
-        )
-        if stage_match is None:
-            errors.append(
-                f"docker-compose build.target {build_target!r} does not match "
-                "any Dockerfile stage"
-            )
-            return errors
-        stage_name, stage_text = stage_match
-    else:
-        stage_name, stage_text = stages[-1]
-
-    docker_parsed = _dockerfile_cmd(stage_text)
-    if docker_parsed.present and docker_parsed.error:
+    assert compose_argv is not None
+    if compose_argv != expected_argv:
         errors.append(
-            f"Dockerfile stage {stage_name!r} CMD is invalid: {docker_parsed.error}"
+            f"docker-compose api command must select {expected_argv!r}, "
+            f"got {compose_argv!r}"
         )
-    elif not docker_parsed.present:
-        errors.append(f"Dockerfile stage {stage_name!r} must define an explicit CMD")
-    elif docker_parsed.argv != expected_argv:
+    docker_argv, docker_err = _dockerfile_stage_cmd(
+        ctx.dockerfile, SELECTED_DOCKER_STAGE
+    )
+    if docker_err:
+        errors.append(docker_err)
+    elif docker_argv != expected_argv:
         errors.append(
-            f"Dockerfile stage {stage_name!r} CMD must select "
-            f"{expected_argv!r}, got {docker_parsed.argv!r}"
+            f"Dockerfile stage {SELECTED_DOCKER_STAGE!r} CMD must select "
+            f"{expected_argv!r}, got {docker_argv!r}"
         )
-
-    compose_parsed, compose_err = _extract_compose_api_command(ctx.compose)
-    if compose_err:
-        errors.append(compose_err)
-        return errors
-    assert compose_parsed is not None
-
-    if compose_parsed.present:
-        if compose_parsed.error:
-            errors.append(
-                f"docker-compose api command is invalid: {compose_parsed.error}"
-            )
-        elif compose_parsed.argv != expected_argv:
-            errors.append(
-                f"docker-compose api command must select {expected_argv!r}, "
-                f"got {compose_parsed.argv!r}"
-            )
-    elif not docker_parsed.present or (
-        docker_parsed.argv is not None and docker_parsed.argv != expected_argv
-    ):
-        errors.append("effective api runtime must select expected command")
-
     return errors
 
 
@@ -1564,12 +1443,16 @@ def _pytest_argv_offset(argv: tuple[str, ...]) -> int | None:
     return None
 
 
+def _recipe_ignored(command: RecipeCommand) -> bool:
+    return "-" in command.prefix or "+" in command.prefix
+
+
 def _test_target_expands_support_tests(ctx: RepoContext) -> bool:
     defs = ctx.makefile.definitions.get("test-target", ())
     if len(defs) != 1:
         return False
     for command in defs[0].recipes:
-        if command.prefix in {"-", "+"}:
+        if _recipe_ignored(command):
             continue
         parsed = _parse_shell_command(command.text)
         if parsed.error or parsed.argv is None:
@@ -1593,7 +1476,7 @@ def _test_target_references_path(ctx: RepoContext, path: str) -> bool:
     if len(defs) != 1:
         return False
     for command in defs[0].recipes:
-        if command.prefix in {"-", "+"}:
+        if _recipe_ignored(command):
             continue
         parsed = _parse_shell_command(command.text)
         if parsed.error or parsed.argv is None:
@@ -1764,11 +1647,10 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
             f"got {manifest.status!r}"
         )
 
-    contracted = _contracted_targets(rules)
-    ctx = _load_repo_context(resolved, contracted)
-    errors.extend(_validate_make_semantics(ctx.makefile, rules))
-    errors.extend(_validate_gates(ctx.makefile, rules))
-    errors.extend(_validate_runtime(ctx, rules.expected_runtime_argv))
+    watched = _watched_targets(rules)
+    ctx = _load_repo_context(resolved, watched)
+    errors.extend(_validate_makefile_contracts(ctx.makefile, rules))
+    errors.extend(_validate_runtime(ctx, rules))
 
     if rules.required_entry_points or rules.forbidden_entry_points:
         errors.extend(_validate_entry_points(ctx, rules))
