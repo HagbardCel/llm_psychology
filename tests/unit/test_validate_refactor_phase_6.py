@@ -77,6 +77,31 @@ _LEGACY_GATE = (
     + "\t$(MAKE) characterization-smoke\n"
     + "\t$(MAKE) probe-console-deterministic\n"
 )
+_WF_CANONICAL = (
+    "name: Release Candidate Validation\n"
+    "on:\n"
+    "  push:\n    branches:\n      - master\n      - main\n      - develop\n"
+    "  pull_request:\n    branches:\n      - master\n      - main\n      - develop\n"
+    "jobs:\n"
+    "  finalization-check:\n"
+    "    name: Docker Finalization Check\n"
+    "    runs-on: ubuntu-latest\n"
+    "    timeout-minutes: 60\n"
+    "    env:\n"
+    "      ENV_FILE: .env.example\n"
+    "    steps:\n"
+    "      - name: Checkout code\n"
+    "        uses: actions/checkout@v4\n"
+    "      - name: Run Docker release-candidate gate\n"
+    "        run: make finalization-check\n"
+    "      - name: Check whitespace and stale generated diffs\n"
+    "        run: git diff --check && git diff --exit-code\n"
+)
+_WF_COEXIST = (
+    "name: x\non:\n  push:\n    branches:\n      - main\njobs:\n"
+    "  finalization-check:\n    steps:\n      - run: make finalization-check\n"
+)
+_CANONICAL_MISMATCH = "completed release workflow does not match canonical contract"
 
 
 def _target_gate(stage: str) -> str:
@@ -109,6 +134,40 @@ def _cutover_gate(stage: str) -> str:
     )
 
 
+def workflow_with(
+    *,
+    push_extra: str = "",
+    timeout: str = "60",
+    gate_extra: str = "",
+    extra_job: str = "",
+    duplicate_jobs: str = "",
+    gate_run: str = "make finalization-check",
+) -> str:
+    return (
+        "name: Release Candidate Validation\n"
+        "on:\n"
+        "  push:\n    branches:\n      - master\n      - main\n      - develop\n"
+        f"{push_extra}"
+        "  pull_request:\n    branches:\n      - master\n      - main\n      - develop\n"
+        "jobs:\n"
+        f"{duplicate_jobs}"
+        "  finalization-check:\n"
+        "    name: Docker Finalization Check\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    timeout-minutes: {timeout}\n"
+        "    env:\n"
+        "      ENV_FILE: .env.example\n"
+        "    steps:\n"
+        "      - name: Checkout code\n"
+        "        uses: actions/checkout@v4\n"
+        "      - name: Run Docker release-candidate gate\n"
+        f"        {gate_extra}run: {gate_run}\n"
+        "      - name: Check whitespace and stale generated diffs\n"
+        "        run: git diff --check && git diff --exit-code\n"
+        f"{extra_job}"
+    )
+
+
 _DF_LEGACY = (
     "FROM python:3.11-slim AS base\nFROM base AS development\n"
     'CMD ["python", "-m", "psychoanalyst_app.server"]\n'
@@ -130,6 +189,12 @@ _DF_NONSELECTED = (
     'CMD ["wrong"]\n'
     "FROM base AS development\n"
     'CMD ["jung-api"]\n'
+)
+_DF_DUP_STAGE = (
+    "FROM python:3.11-slim AS base\nFROM base AS development\n"
+    'CMD ["jung-api"]\n'
+    "FROM other AS development\n"
+    'CMD ["other"]\n'
 )
 
 
@@ -177,30 +242,6 @@ _PP_TARGET = (
     'jung-api = "jung.api.app:cli"\n'
     'jung-console = "jung.client.terminal:cli"\n'
     'jung-db = "jung.tools.db_backup:main"\n'
-)
-_WF_COEXIST = (
-    "name: x\non:\n  push:\n    branches:\n      - main\njobs:\n"
-    "  finalization-check:\n    steps:\n      - run: make finalization-check\n"
-)
-_WF_CUTOVER = (
-    "name: Release Candidate Validation\n"
-    "on:\n"
-    "  push:\n    branches:\n      - master\n      - main\n      - develop\n"
-    "  pull_request:\n    branches:\n      - master\n      - main\n      - develop\n"
-    "jobs:\n"
-    "  finalization-check:\n"
-    "    name: Docker Finalization Check\n"
-    "    runs-on: ubuntu-latest\n"
-    "    timeout-minutes: 60\n"
-    "    env:\n"
-    "      ENV_FILE: .env.example\n"
-    "    steps:\n"
-    "      - name: Checkout code\n"
-    "        uses: actions/checkout@v4\n"
-    "      - name: Run Docker release-candidate gate\n"
-    "        run: make finalization-check\n"
-    "      - name: Check whitespace and stale generated diffs\n"
-    "        run: git diff --check && git diff --exit-code\n"
 )
 
 
@@ -259,7 +300,7 @@ class RepoFixture:
     def seed_cutover(self, *, complete=False) -> None:
         self.write_manifest(items=_MANIFEST_TAIL.format(wf="complete" if complete else "in_progress"))
         self.write_runtime(target=True)
-        self.write_workflow(_WF_CUTOVER if complete else _WF_COEXIST)
+        self.write_workflow(_WF_CANONICAL if complete else _WF_COEXIST)
 
     def seed_final(self) -> None:
         self.write_manifest(
@@ -274,7 +315,7 @@ class RepoFixture:
             ),
         )
         self.write_runtime(target=True, gates=_cutover_gate("final"))
-        self.write_workflow(_WF_CUTOVER)
+        self.write_workflow(_WF_CANONICAL)
         (self.root / "src").mkdir(exist_ok=True)
 
 
@@ -322,6 +363,7 @@ def test_manifest_status_rejected(tmp_path, stage, status):
         ("makefiles", "forbidden control MAKEFILES"),
         ("include", "include directives are unsupported"),
         ("expanded target", "variable-expanded target headers are unsupported"),
+        ("eval assignment", "eval expressions are unsupported"),
     ],
     ids=lambda v: v,
 )
@@ -384,6 +426,10 @@ def test_gate_mutations(tmp_path, mutation, frag):
         makefile = "include extra.mk\n" + makefile
     elif mutation == "expanded target":
         makefile = "GATE := finalization-check\n$(GATE): characterization-smoke\n" + makefile
+    elif mutation == "eval assignment":
+        makefile = (
+            "HIDDEN := $(eval finalization-check: characterization-smoke)\n" + makefile
+        )
     else:
         raise AssertionError(mutation)
     (tmp_path / "Makefile").write_text(makefile, encoding="utf-8")
@@ -414,6 +460,23 @@ def test_cutover_rejects_target_gate_present(tmp_path):
 def test_cutover_rejects_in_progress_workflow_edit(tmp_path):
     RepoFixture(tmp_path).seed_cutover(complete=False)
     assert any("required item must be complete" in e for e in validate(tmp_path, stage="cutover"))
+
+
+def test_final_requires_completed_workflow_item(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.seed_final()
+    r.write_manifest(
+        status="completed",
+        items=(
+            '[[items]]\npath = "gone/"\nkind = "filesystem"\naction = "delete"\n'
+            "aggregate = true\nowner_pr = \"6D\"\nstatus = \"complete\"\n"
+            'confidence = "confirmed"\nresponsibility = "x"\n'
+        ),
+    )
+    assert any(
+        "required complete item missing" in error
+        for error in validate(tmp_path, stage="final")
+    )
 
 
 def _manifest_item(**kwargs) -> str:
@@ -490,6 +553,7 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target"),
         ("cutover", _DF_NONSELECTED, _CP_TARGET, True, ""),
         ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api"),
+        ("cutover", _DF_DUP_STAGE, _CP_TARGET, False, "exactly one 'development' stage"),
     ],
     ids=[
         "legacy_ok",
@@ -500,6 +564,7 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
         "unknown_build_target",
         "nonselected_stage_ok",
         "duplicate_api",
+        "duplicate_docker_stage",
     ],
 )
 def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
@@ -510,44 +575,107 @@ def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
     assert (errors == []) if ok else any(err in e for e in errors)
 
 
+@pytest.mark.parametrize(
+    "compose,frag",
+    [
+        (_compose_fixture("jung-api").replace("services:\n", "services: # duplicate\nservices:\n", 1), "exactly one services"),
+        (_compose_fixture("jung-api").replace("x-api-base:", "x-api-base: # duplicate\nx-api-base:", 1), "exactly one x-api-base"),
+        ('"services":\n  api:\n    image: x\n' + _compose_fixture("jung-api").split("services:", 1)[1], "unsupported mapping syntax"),
+        (_compose_fixture("jung-api", api_extra='    "command": jung-api\n'), "unsupported mapping syntax"),
+        ("? services\n" + _compose_fixture("jung-api"), "unsupported mapping syntax"),
+        (_compose_fixture("jung-api").replace("<<: *api-base", "<<: *other"), "merge must be <<: *api-base"),
+        (_compose_fixture("jung-api", api_extra="    profiles:\n      - dev\n"), "must not declare local 'profiles'"),
+        (_compose_fixture("jung-api", api_extra="    deploy:\n      replicas: 1\n"), "must not declare local 'deploy'"),
+        (_compose_fixture("jung-api", api_extra="    scale: 2\n"), "must not declare local 'scale'"),
+    ],
+    ids=[
+        "dup_services_comment",
+        "dup_api_base_comment",
+        "quoted_services",
+        "quoted_command",
+        "explicit_key",
+        "wrong_merge",
+        "profiles",
+        "deploy",
+        "scale",
+    ],
+)
+def test_compose_syntax_categories(tmp_path, compose, frag):
+    r = RepoFixture(tmp_path)
+    r.seed_cutover(complete=True)
+    r.write_runtime(target=True, compose=compose)
+    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+
+
 def test_compose_missing_command_fails(tmp_path):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
     compose = _compose_fixture("jung-api").replace("  command: jung-api\n", "")
     r.write_runtime(target=True, compose=compose)
-    assert any("x-api-base keys" in e or "command" in e for e in validate(tmp_path, stage="cutover"))
+    assert any("exactly one command" in e for e in validate(tmp_path, stage="cutover"))
 
 
 @pytest.mark.parametrize(
-    "workflow,frag",
+    "workflow",
     [
-        ("on:\n  workflow_dispatch:\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "on keys"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: |\n          make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "unsupported block scalar"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n      MAKEFLAGS: -i\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow env contract mismatch"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - if: false\n        name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow step 1 keys contract mismatch"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n    paths-ignore:\n      - \"**\"\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "push keys"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: sixty\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "workflow timeout-minutes must be integer 60"),
-        ("on:\n  push:\n    branches:\n      - master\n      - main\n      - develop\n  pull_request:\n    branches:\n      - master\n      - main\n      - develop\njobs:\n  finalization-check:\n    name: x\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    env:\n      ENV_FILE: .env.example\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n      - name: Gate\n        run: make finalization-check\n        run: echo noop\n      - name: Diff\n        run: git diff --check && git diff --exit-code\n", "duplicate 'run' key"),
+        workflow_with(push_extra="    paths-ignore:\n      - \"**\"\n"),
+        workflow_with(timeout="sixty"),
+        workflow_with(gate_extra="if: false\n        "),
+        workflow_with(gate_run="make finalization-check\n        run: echo noop"),
+        workflow_with(gate_run="|\n          make finalization-check"),
+        workflow_with(extra_job="  extra:\n    runs-on: ubuntu-latest\n"),
+        workflow_with(duplicate_jobs="  finalization-check:\n    runs-on: ubuntu-latest\n"),
+        "name: Release Candidate Validation\non:\n  workflow_dispatch:\njobs:\n"
+        "  finalization-check:\n    runs-on: ubuntu-latest\n",
     ],
-    ids=["dispatch", "block_scalar", "extra_env", "step_if", "paths_ignore", "bad_timeout", "dup_run"],
+    ids=[
+        "paths_ignore",
+        "bad_timeout",
+        "step_if",
+        "dup_run",
+        "block_scalar",
+        "extra_job",
+        "dup_jobs",
+        "dispatch",
+    ],
 )
-def test_workflow_contract(tmp_path, workflow, frag):
+def test_workflow_contract(tmp_path, workflow):
     r = RepoFixture(tmp_path)
     r.seed_cutover(complete=True)
-    r.write_workflow("name: Release Candidate Validation\n" + workflow)
-    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
-
-
-def test_workflow_duplicate_root_on_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    workflow = _WF_CUTOVER.replace(
-        "on:\n",
-        "on:\n  push:\n    branches:\n      - master\non:\n  workflow_dispatch:\n",
-        1,
-    )
     r.write_workflow(workflow)
-    assert any("workflow has duplicate keys" in e for e in validate(tmp_path, stage="cutover"))
+    assert any(_CANONICAL_MISMATCH in e for e in validate(tmp_path, stage="cutover"))
+
+
+def test_recipe_shell_word_allowed_for_retained_test(tmp_path):
+    r = RepoFixture(tmp_path)
+    r.write_manifest(
+        items=_MANIFEST_TAIL.format(wf="complete")
+        + "[[items]]\n"
+        + _ITEM.format(
+            path="tests/unit/test_validate_refactor_phase_6.py",
+            kind="filesystem",
+            action="retain",
+            status="complete",
+            confidence="confirmed",
+        )
+        + "requires_explicit_test_target_reference = true\n"
+    )
+    r.write_runtime(target=True)
+    r.write_workflow(_WF_CANONICAL)
+    base = (tmp_path / "Makefile").read_text(encoding="utf-8")
+    base = re.sub(
+        r"test-target:\n\tpytest tests/\n",
+        "test-target:\n\tpytest -k SHELL tests/unit/test_validate_refactor_phase_6.py\n",
+        base,
+    )
+    (tmp_path / "Makefile").write_text(base, encoding="utf-8")
+    (tmp_path / "tests/unit/test_validate_refactor_phase_6.py").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (tmp_path / "tests/unit/test_validate_refactor_phase_6.py").write_text("#\n", encoding="utf-8")
+    errors = validate(tmp_path, stage="cutover")
+    assert not any("forbidden control" in e for e in errors)
+    assert not any("retained test not referenced" in e for e in errors)
 
 
 def test_forbidden_import_and_dependency(tmp_path):
@@ -596,7 +724,7 @@ def test_retained_test_reference_rules(tmp_path, makefile_patch, should_pass):
     r = RepoFixture(tmp_path)
     r.write_manifest(items=_retained_test_manifest())
     r.write_runtime(target=True)
-    r.write_workflow(_WF_CUTOVER)
+    r.write_workflow(_WF_CANONICAL)
     base = (tmp_path / "Makefile").read_text(encoding="utf-8")
     base = re.sub(r"test-target:\n\tpytest tests/\n", makefile_patch, base)
     (tmp_path / "Makefile").write_text(base, encoding="utf-8")
