@@ -42,43 +42,9 @@ KIND_ACTIONS: dict[str, frozenset[str]] = {
     "workflow_edit": frozenset({"edit"}),
 }
 
-LEGACY_GATE_TARGETS = frozenset(
-    {
-        "lint",
-        "validate-docs",
-        "validate-schemas",
-        "validate-generated-contracts",
-        "validate-architecture",
-        "test-validate",
-        "characterization-smoke",
-        "probe-console-deterministic",
-    }
-)
-TARGET_GATE_TARGETS = frozenset(
-    {
-        "lint",
-        "validate-docs",
-        "test-target",
-        "probe-console-v1-deterministic",
-    }
-)
-LEGACY_ONLY_STEPS = frozenset(
-    {
-        "test-validate",
-        "characterization-smoke",
-        "characterization-full",
-        "finalization-check-full",
-        "probe-console-deterministic",
-        "probe-console-intake-notes",
-        "validate-schemas",
-        "validate-generated-contracts",
-        "validate-architecture",
-    }
-)
 PHASE_5_SCRIPT = "scripts/validate_refactor_phase_5.py"
 PHASE_6_SCRIPT = "scripts/validate_refactor_phase_6.py"
-GOVERNED_GATES = frozenset({"finalization-check", "finalization-check-target"})
-PERMITTED_STRUCTURAL_PREREQS = frozenset({"prepare-runtime-dirs"})
+PREPARE_RUNTIME_DIRS = "prepare-runtime-dirs"
 DOCKER_TEST_PREFIX = (
     "docker",
     "compose",
@@ -88,6 +54,19 @@ DOCKER_TEST_PREFIX = (
     "--rm",
     "test",
 )
+MAKE_TOKENS = frozenset({"make", "$(MAKE)", "${MAKE}"})
+FORBIDDEN_MAKE_CONTROLS = frozenset(
+    {
+        "MAKEFLAGS",
+        "MFLAGS",
+        "GNUMAKEFLAGS",
+        "SHELL",
+        ".SHELLFLAGS",
+        ".ONESHELL",
+        ".RECIPEPREFIX",
+    }
+)
+TARGET_SUPPORT_TESTS_VAR = "$(TARGET_SUPPORT_TESTS)"
 
 FORBIDDEN_IMPORT_ROOTS = (
     "psychoanalyst_app",
@@ -112,9 +91,155 @@ TARGET_ENTRY_POINTS = {
 TARGET_ENTRY_CUTOVER = frozenset({"jung-api", "jung-console"})
 TARGET_ENTRY_FINAL = frozenset(TARGET_ENTRY_POINTS)
 MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-MAKE_TOKENS = frozenset({"make", "$(MAKE)", "${MAKE}"})
-PYTHON_INTERPRETERS = frozenset({"python", "python3"})
-TARGET_SUPPORT_TESTS_VAR = "$(TARGET_SUPPORT_TESTS)"
+
+PREPARE_RUNTIME_RECIPES = (
+    "@mkdir -p data logs logs/workflow-probes",
+    (
+        '@if [ "$${CI:-}" = "true" ]; then chmod -R a+rwX data logs; '
+        "else chmod -R u+rwX,g+rwX data logs; fi"
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GateContract:
+    prerequisites: tuple[str, ...]
+    recipes: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowTriggers:
+    push_branches: frozenset[str]
+    pull_request_branches: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowStepContract:
+    allowed_keys: frozenset[str]
+    operation: tuple[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowContract:
+    triggers: WorkflowTriggers
+    job_name: str
+    runs_on: str
+    timeout_minutes: int
+    env: frozenset[tuple[str, str]]
+    steps: tuple[WorkflowStepContract, ...]
+
+
+WORKFLOW_CONTRACT = WorkflowContract(
+    triggers=WorkflowTriggers(
+        push_branches=frozenset({"master", "main", "develop"}),
+        pull_request_branches=frozenset({"master", "main", "develop"}),
+    ),
+    job_name="finalization-check",
+    runs_on="ubuntu-latest",
+    timeout_minutes=60,
+    env=frozenset({("ENV_FILE", ".env.example")}),
+    steps=(
+        WorkflowStepContract(
+            frozenset({"name", "uses"}), ("uses", "actions/checkout@v4")
+        ),
+        WorkflowStepContract(
+            frozenset({"name", "run"}), ("run", "make finalization-check")
+        ),
+        WorkflowStepContract(
+            frozenset({"name", "run"}),
+            ("run", "git diff --check && git diff --exit-code"),
+        ),
+    ),
+)
+
+WORKFLOW_TOP_KEYS = frozenset({"name", "on", "jobs"})
+WORKFLOW_JOB_KEYS = frozenset(
+    {"name", "runs-on", "timeout-minutes", "env", "steps"}
+)
+
+
+def _legacy_gate() -> GateContract:
+    return GateContract(
+        prerequisites=(PREPARE_RUNTIME_DIRS,),
+        recipes=(
+            ("make", "lint"),
+            ("make", "validate-docs"),
+            ("make", "validate-schemas"),
+            ("make", "validate-generated-contracts"),
+            ("make", "validate-architecture"),
+            ("make", "test-validate"),
+            ("docker-python", PHASE_5_SCRIPT),
+            ("make", "characterization-smoke"),
+            ("make", "probe-console-deterministic"),
+        ),
+    )
+
+
+def _target_gate(stage: str) -> GateContract:
+    return GateContract(
+        prerequisites=(PREPARE_RUNTIME_DIRS,),
+        recipes=(
+            ("make", "lint"),
+            ("make", "validate-docs"),
+            ("make", "test-target"),
+            ("docker-python", PHASE_6_SCRIPT, "--stage", stage),
+            ("docker-python", PHASE_5_SCRIPT),
+            ("make", "probe-console-v1-deterministic"),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StageRules:
+    manifest_status: str
+    expected_runtime_argv: tuple[str, ...]
+    gates: tuple[tuple[str, GateContract], ...]
+    require_target_gate: bool
+    forbid_target_gate: bool
+    required_entry_points: frozenset[str]
+    forbidden_entry_points: frozenset[str]
+    final_closure: bool
+    required_complete_items: frozenset[tuple[str, str]] = frozenset()
+
+
+STAGES: dict[str, StageRules] = {
+    "pre-cutover": StageRules(
+        manifest_status="active",
+        expected_runtime_argv=LEGACY_RUNTIME_ARGV,
+        gates=(
+            ("finalization-check", _legacy_gate()),
+            ("finalization-check-target", _target_gate("pre-cutover")),
+        ),
+        require_target_gate=True,
+        forbid_target_gate=False,
+        required_entry_points=frozenset(),
+        forbidden_entry_points=frozenset(),
+        final_closure=False,
+    ),
+    "cutover": StageRules(
+        manifest_status="active",
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        gates=(("finalization-check", _target_gate("cutover")),),
+        require_target_gate=False,
+        forbid_target_gate=True,
+        required_entry_points=TARGET_ENTRY_CUTOVER,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        final_closure=False,
+        required_complete_items=frozenset(
+            {("workflow_edit", WORKFLOW_EDIT_PATH)}
+        ),
+    ),
+    "final": StageRules(
+        manifest_status="completed",
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        gates=(("finalization-check", _target_gate("final")),),
+        require_target_gate=False,
+        forbid_target_gate=True,
+        required_entry_points=TARGET_ENTRY_FINAL,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        final_closure=True,
+    ),
+}
 
 
 def _strip_nonempty(value: Any, field_name: str) -> Any:
@@ -255,14 +380,12 @@ class Manifest(BaseModel):
 @dataclass(frozen=True, slots=True)
 class RecipeCommand:
     text: str
-    ignored_failure: bool
+    prefix: str  # "", "@", "-", "+"
 
 
 @dataclass(frozen=True, slots=True)
 class ParsedCommand:
-    tokens: tuple[str, ...]
-    segments: tuple[tuple[str, ...], ...]
-    has_shell_control: bool
+    argv: tuple[str, ...] | None
     error: str | None = None
 
 
@@ -274,103 +397,29 @@ class ParsedArgv:
 
 
 @dataclass(frozen=True, slots=True)
-class ScriptRequirement:
-    path: str
-    required_args: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class ParsedMakeTarget:
     recipes: tuple[RecipeCommand, ...]
     prerequisites: tuple[str, ...]
+    is_double_colon: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class GateRules:
-    target: str
-    required_targets: frozenset[str]
-    required_scripts: tuple[ScriptRequirement, ...]
-    forbidden_targets: frozenset[str] = frozenset()
-
-
-@dataclass(frozen=True, slots=True)
-class StageRules:
-    manifest_status: str
-    expected_runtime_argv: tuple[str, ...]
-    gates: tuple[GateRules, ...]
-    required_entry_points: frozenset[str]
-    forbidden_entry_points: frozenset[str]
-    final_closure: bool
-    required_complete_items: frozenset[tuple[str, str]] = frozenset()
+class ParsedMakefile:
+    definitions: dict[str, tuple[ParsedMakeTarget, ...]]
+    phony: frozenset[str]
+    has_ignore: bool
+    header_errors: tuple[str, ...]
+    control_errors: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class RepoContext:
     root: Path
-    targets: dict[str, ParsedMakeTarget]
+    makefile: ParsedMakefile
     makefile_text: str
     pyproject: dict[str, Any]
     compose: str
     dockerfile: str
-
-
-def _target_gate(
-    stage: str, *, forbidden: frozenset[str] = LEGACY_ONLY_STEPS
-) -> GateRules:
-    return GateRules(
-        "finalization-check",
-        TARGET_GATE_TARGETS,
-        (
-            ScriptRequirement(PHASE_6_SCRIPT, ("--stage", stage)),
-            ScriptRequirement(PHASE_5_SCRIPT),
-        ),
-        forbidden,
-    )
-
-
-STAGES: dict[str, StageRules] = {
-    "pre-cutover": StageRules(
-        manifest_status="active",
-        expected_runtime_argv=LEGACY_RUNTIME_ARGV,
-        gates=(
-            GateRules(
-                "finalization-check",
-                LEGACY_GATE_TARGETS,
-                (ScriptRequirement(PHASE_5_SCRIPT),),
-            ),
-            GateRules(
-                "finalization-check-target",
-                TARGET_GATE_TARGETS,
-                (
-                    ScriptRequirement(PHASE_6_SCRIPT, ("--stage", "pre-cutover")),
-                    ScriptRequirement(PHASE_5_SCRIPT),
-                ),
-            ),
-        ),
-        required_entry_points=frozenset(),
-        forbidden_entry_points=frozenset(),
-        final_closure=False,
-    ),
-    "cutover": StageRules(
-        manifest_status="active",
-        expected_runtime_argv=TARGET_RUNTIME_ARGV,
-        gates=(_target_gate("cutover"),),
-        required_entry_points=TARGET_ENTRY_CUTOVER,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
-        final_closure=False,
-        required_complete_items=frozenset(
-            {("workflow_edit", WORKFLOW_EDIT_PATH)}
-        ),
-    ),
-    "final": StageRules(
-        manifest_status="completed",
-        expected_runtime_argv=TARGET_RUNTIME_ARGV,
-        gates=(_target_gate("final"),),
-        required_entry_points=TARGET_ENTRY_FINAL,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
-        final_closure=True,
-    ),
-}
 
 
 def _norm_pkg_name(name: str) -> str:
@@ -452,11 +501,11 @@ def parse_manifest(root: Path) -> tuple[Manifest | None, list[str]]:
     return manifest, []
 
 
-def _load_repo_context(root: Path) -> RepoContext:
+def _load_repo_context(root: Path, contracted: frozenset[str]) -> RepoContext:
     makefile_text = (root / "Makefile").read_text(encoding="utf-8")
     return RepoContext(
         root=root,
-        targets=_parse_makefile_text(makefile_text),
+        makefile=_parse_makefile(makefile_text, contracted),
         makefile_text=makefile_text,
         pyproject=tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8")),
         compose=(root / "docker-compose.yml").read_text(encoding="utf-8"),
@@ -464,33 +513,146 @@ def _load_repo_context(root: Path) -> RepoContext:
     )
 
 
-def _parse_prerequisite_tokens(prereq_part: str) -> tuple[str, ...]:
-    return tuple(token for token in prereq_part.split() if token)
+def _parse_shell_command(text: str) -> ParsedCommand:
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens: list[str] = []
+        for token in lexer:
+            if token and all(char in ";&|<>" for char in token):
+                return ParsedCommand(None, "unsupported shell control")
+            tokens.append(token)
+    except ValueError as exc:
+        return ParsedCommand(None, str(exc))
+    if not tokens:
+        return ParsedCommand(None, "empty command")
+    return ParsedCommand(tuple(tokens))
 
 
-def _parse_makefile_text(text: str) -> dict[str, ParsedMakeTarget]:
-    targets: dict[str, ParsedMakeTarget] = {}
+def _recipe_prefix(body: str) -> tuple[str, str]:
+    prefix = ""
+    rest = body
+    while rest and rest[0] in "@-+":
+        prefix += rest[0]
+        rest = rest[1:].strip()
+    return prefix, rest
+
+
+def _header_targets(lhs: str) -> tuple[list[str], bool, bool]:
+    is_double = "::" in lhs
+    is_grouped = "&:" in lhs
+    lhs_clean = lhs.replace("::", ":").replace("&:", ":")
+    targets = [part for part in lhs_clean.split() if part]
+    return targets, is_double, is_grouped
+
+
+def _is_invalid_contracted_header(
+    lhs: str, rhs: str, contracted: frozenset[str]
+) -> list[str]:
+    targets, is_double, is_grouped = _header_targets(lhs)
+    errors: list[str] = []
+    if ";" in rhs:
+        for name in targets:
+            if name in contracted:
+                errors.append(f"{name} uses unsupported inline recipe header")
+    if is_double:
+        for name in targets:
+            if name in contracted:
+                errors.append(f"{name} uses unsupported double-colon definition")
+    if is_grouped:
+        for name in targets:
+            if name in contracted:
+                errors.append(f"{name} uses unsupported grouped target header")
+    if len(targets) > 1:
+        for name in targets:
+            if name in contracted:
+                errors.append(f"{name} uses unsupported multi-target header")
+    return errors
+
+
+def _detect_make_control(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if re.match(r"^\.IGNORE\b", stripped):
+        return ".IGNORE"
+    for control in FORBIDDEN_MAKE_CONTROLS:
+        if control.startswith("."):
+            if re.match(rf"^{re.escape(control)}\b", stripped):
+                return control
+        elif re.search(
+            rf"(?:^|\s)(?:export|override|private)?\s*{re.escape(control)}\b",
+            stripped,
+        ):
+            return control
+        elif re.search(rf"^{re.escape(control)}\s*[:+?]?=", stripped):
+            return control
+        elif re.search(rf":\s*{re.escape(control)}\s*=", stripped):
+            return control
+        elif re.match(rf"^define\s+{re.escape(control)}\b", stripped):
+            return control
+    return None
+
+
+def _parse_makefile(
+    text: str, contracted: frozenset[str] | None = None
+) -> ParsedMakefile:
+    contracted = contracted or frozenset()
+    definitions: dict[str, list[ParsedMakeTarget]] = {}
+    phony: set[str] = set()
+    has_ignore = False
+    header_errors: list[str] = []
+    control_errors: list[str] = []
     current: str | None = None
     current_prereqs: tuple[str, ...] = ()
-    pending: str | None = None
-    pending_ignored = False
     current_recipes: list[RecipeCommand] = []
+    current_double = False
+    pending: str | None = None
+    pending_prefix = ""
 
     for line in text.splitlines():
         if line.startswith("#"):
             continue
+        control = _detect_make_control(line)
+        if control:
+            if control == ".IGNORE":
+                has_ignore = True
+            else:
+                control_errors.append(f"Makefile declares forbidden control {control}")
         if line and not line.startswith("\t") and ":" in line:
             if current is not None:
-                targets[current] = ParsedMakeTarget(
-                    tuple(current_recipes), current_prereqs
+                definitions.setdefault(current, []).append(
+                    ParsedMakeTarget(
+                        tuple(current_recipes), current_prereqs, current_double
+                    )
                 )
-            target_part, prereq_part = line.split(":", 1)
-            current = target_part.strip()
-            if not current or current.startswith("."):
+            lhs, rhs = line.split(":", 1)
+            if lhs.strip().startswith("."):
+                if lhs.strip() == ".PHONY":
+                    phony.update(token for token in rhs.split() if token)
                 current = None
                 pending = None
                 continue
-            current_prereqs = _parse_prerequisite_tokens(prereq_part)
+            is_double = "::" in line
+            targets, _, _ = _header_targets(lhs)
+            header_errors.extend(_is_invalid_contracted_header(lhs, rhs, contracted))
+            if is_double:
+                for name in targets:
+                    if name in contracted:
+                        header_errors.append(
+                            f"{name} uses unsupported double-colon definition"
+                        )
+            if len(targets) != 1:
+                current = None
+                pending = None
+                continue
+            current = targets[0]
+            current_double = is_double
+            prereq_part = rhs.split(";", 1)[0]
+            if is_double and prereq_part.startswith(":"):
+                prereq_part = prereq_part[1:]
+            current_prereqs = tuple(token for token in prereq_part.split() if token)
             current_recipes = []
             pending = None
             continue
@@ -500,220 +662,191 @@ def _parse_makefile_text(text: str) -> dict[str, ParsedMakeTarget]:
         if not body or body.startswith("#"):
             continue
         if pending is None:
-            pending_ignored = body.startswith("-")
-            pending = body[1:].strip() if pending_ignored else body
+            pending_prefix, pending = _recipe_prefix(body)
         else:
             pending = f"{pending} {body}"
         if body.endswith("\\"):
             pending = pending[:-1].rstrip()
             continue
-        current_recipes.append(
-            RecipeCommand(text=pending, ignored_failure=pending_ignored)
-        )
+        current_recipes.append(RecipeCommand(text=pending, prefix=pending_prefix))
         pending = None
+        pending_prefix = ""
 
     if current is not None:
-        targets[current] = ParsedMakeTarget(tuple(current_recipes), current_prereqs)
-    return targets
+        definitions.setdefault(current, []).append(
+            ParsedMakeTarget(tuple(current_recipes), current_prereqs, current_double)
+        )
 
-
-def _parse_shell_command(text: str) -> ParsedCommand:
-    try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|")
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        tokens = tuple(lexer)
-    except ValueError as exc:
-        return ParsedCommand((), (), False, str(exc))
-
-    segments: list[list[str]] = []
-    current: list[str] = []
-    has_control = False
-    for token in tokens:
-        if token and all(char in ";&|" for char in token):
-            has_control = True
-            if current:
-                segments.append(current)
-                current = []
-            continue
-        current.append(token)
-    if current:
-        segments.append(current)
-    return ParsedCommand(tokens, tuple(tuple(part) for part in segments), has_control)
-
-
-def _segment_invokes_make_target(
-    segment: tuple[str, ...], target: str, *, allow_leading_dash: bool
-) -> bool:
-    if not segment:
-        return False
-    offset = 1 if allow_leading_dash and segment[0] == "-" else 0
-    if len(segment) < offset + 2:
-        return False
-    return (
-        segment[offset] in MAKE_TOKENS and segment[offset + 1] == target
+    return ParsedMakefile(
+        definitions={name: tuple(items) for name, items in definitions.items()},
+        phony=frozenset(phony),
+        has_ignore=has_ignore,
+        header_errors=tuple(header_errors),
+        control_errors=tuple(control_errors),
     )
 
 
-def _command_invokes_required_make(
-    command: ParsedCommand, target: str
-) -> bool:
-    if command.error or command.has_shell_control or len(command.segments) != 1:
-        return False
-    segment = command.segments[0]
-    if segment and segment[0] == "-":
-        return False
-    return (
-        len(segment) == 2
-        and segment[0] in MAKE_TOKENS
-        and segment[1] == target
-    )
+def _recipe_text(command: RecipeCommand) -> str:
+    return f"{command.prefix}{command.text}"
 
 
-def _script_argv_offset(segment: tuple[str, ...]) -> int | None:
-    if not segment:
-        return None
-    if segment[0] in PYTHON_INTERPRETERS:
-        return 1
+def _normalize_gate_recipe(
+    command: RecipeCommand,
+) -> tuple[tuple[str, ...] | None, str | None]:
+    if command.prefix in {"-", "+"}:
+        return None, "unsupported recipe"
+    if command.prefix == "@":
+        return None, "unsupported recipe"
+    parsed = _parse_shell_command(command.text)
+    if parsed.error or parsed.argv is None:
+        return None, parsed.error or "unsupported recipe"
+    argv = parsed.argv
+    if len(argv) == 2 and argv[0] in MAKE_TOKENS:
+        return ("make", argv[1]), None
     docker_prefix = DOCKER_TEST_PREFIX + ("python",)
     prefix_len = len(docker_prefix)
-    if len(segment) >= prefix_len and segment[:prefix_len] == docker_prefix:
-        return prefix_len
-    return None
+    if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
+        return ("docker-python", *argv[prefix_len:]), None
+    return None, f"unsupported recipe: {command.text!r}"
 
 
-def _command_invokes_script(
-    command: ParsedCommand, requirement: ScriptRequirement
-) -> bool:
-    if command.error or command.has_shell_control or len(command.segments) != 1:
-        return False
-    segment = command.segments[0]
-    if segment and segment[0] == "-":
-        return False
-    offset = _script_argv_offset(segment)
-    if offset is None:
-        return False
-    argv = segment[offset:]
-    expected_len = 1 + len(requirement.required_args)
-    if len(argv) != expected_len:
-        return False
-    if _norm_fs_path(argv[0]) != _norm_fs_path(requirement.path):
-        return False
-    return argv[1:] == requirement.required_args
+def _delegated_make_targets(
+    gates: tuple[tuple[str, GateContract], ...],
+) -> frozenset[str]:
+    names: set[str] = set()
+    for _, contract in gates:
+        for recipe in contract.recipes:
+            if recipe[0] == "make":
+                names.add(recipe[1])
+    return frozenset(names)
 
 
-def _pytest_argv_offset(segment: tuple[str, ...]) -> int | None:
-    if not segment:
-        return None
-    if segment[0] == "pytest":
-        return 0
-    if len(segment) >= 3 and segment[:3] == ("python", "-m", "pytest"):
-        return 3
-    docker_prefix = DOCKER_TEST_PREFIX + ("pytest",)
-    prefix_len = len(docker_prefix)
-    if len(segment) >= prefix_len and segment[:prefix_len] == docker_prefix:
-        return prefix_len
-    return None
+def _contracted_targets(
+    rules: StageRules,
+) -> frozenset[str]:
+    names = {PREPARE_RUNTIME_DIRS}
+    names.update(name for name, _ in rules.gates)
+    names.update(_delegated_make_targets(rules.gates))
+    return frozenset(names)
 
 
-def _command_invokes_pytest_with_path(
-    command: ParsedCommand, path: str
-) -> bool:
-    if command.error or command.has_shell_control or len(command.segments) != 1:
-        return False
-    segment = command.segments[0]
-    if segment and segment[0] == "-":
-        return False
-    offset = _pytest_argv_offset(segment)
-    if offset is None:
-        return False
-    normalized = _norm_fs_path(path)
-    return normalized in {_norm_fs_path(token) for token in segment[offset:]}
-
-
-def _is_canonical_gate(command: ParsedCommand) -> bool:
-    return _command_invokes_required_make(command, "finalization-check")
-
-
-def _command_has_forbidden_make(
-    command: ParsedCommand, target: str
-) -> bool:
-    if command.error:
-        return False
-    return any(
-        _segment_invokes_make_target(segment, target, allow_leading_dash=True)
-        for segment in command.segments
-    )
-
-
-def _reachable_prerequisites(
-    targets: dict[str, ParsedMakeTarget], start: str
-) -> set[str]:
-    if start not in targets:
-        return set()
-    visited: set[str] = set()
-    reachable: set[str] = set()
-    stack = list(targets[start].prerequisites)
-    while stack:
-        name = stack.pop()
-        if name in PERMITTED_STRUCTURAL_PREREQS or name in visited:
-            continue
-        visited.add(name)
-        reachable.add(name)
-        if name in targets:
-            stack.extend(targets[name].prerequisites)
-    return reachable
-
-
-def _gate_errors(
-    targets: dict[str, ParsedMakeTarget], gate: GateRules
+def _compare_gate_contract(
+    target: str, actual: GateContract, expected: GateContract
 ) -> list[str]:
     errors: list[str] = []
-    if gate.target not in targets:
-        return [f"missing Makefile target: {gate.target}"]
-    if gate.target in GOVERNED_GATES:
-        for token in targets[gate.target].prerequisites:
-            if token in PERMITTED_STRUCTURAL_PREREQS:
-                continue
-            if MAKE_TARGET_RE.match(token):
-                continue
-            errors.append(f"{gate.target} has unsupported prerequisite: {token}")
-        for legacy in LEGACY_ONLY_STEPS:
-            if legacy in _reachable_prerequisites(targets, gate.target):
-                errors.append(f"{gate.target} must not depend on {legacy}")
-    recipes = targets[gate.target].recipes
-    for step in gate.required_targets:
-        found = False
-        for command in recipes:
-            if command.ignored_failure:
-                continue
-            parsed = _parse_shell_command(command.text)
-            if _command_invokes_required_make(parsed, step):
-                found = True
-                break
-        if not found:
-            errors.append(f"{gate.target} must invoke {step}")
-    for script in gate.required_scripts:
-        found = False
-        for command in recipes:
-            if command.ignored_failure:
-                continue
-            parsed = _parse_shell_command(command.text)
-            if _command_invokes_script(parsed, script):
-                found = True
-                break
-        if not found:
-            label = script.path
-            if script.required_args:
-                label = f"{script.path} {' '.join(script.required_args)}"
-            errors.append(f"{gate.target} must invoke {label}")
-    for step in gate.forbidden_targets:
-        for command in recipes:
-            parsed = _parse_shell_command(command.text)
-            if _command_has_forbidden_make(parsed, step):
-                errors.append(f"{gate.target} must not invoke {step}")
-                break
+    if actual.prerequisites != expected.prerequisites:
+        errors.append(
+            f"{target} prerequisite contract mismatch: "
+            f"expected {expected.prerequisites!r}, got {actual.prerequisites!r}"
+        )
+    if len(actual.recipes) != len(expected.recipes):
+        errors.append(
+            f"{target} recipe contract mismatch: expected {len(expected.recipes)} "
+            f"recipes, got {len(actual.recipes)}"
+        )
+        return errors
+    for index, (got, want) in enumerate(
+        zip(actual.recipes, expected.recipes, strict=True)
+    ):
+        if got != want:
+            errors.append(
+                f"{target} recipe contract mismatch at index {index}: "
+                f"expected {want!r}, got {got!r}"
+            )
+            break
     return errors
+
+
+def _gate_contract_from_target(
+    target: ParsedMakeTarget,
+) -> tuple[GateContract | None, list[str]]:
+    recipes: list[tuple[str, ...]] = []
+    for command in target.recipes:
+        normalized, err = _normalize_gate_recipe(command)
+        if err:
+            return None, [err]
+        assert normalized is not None
+        recipes.append(normalized)
+    return GateContract(target.prerequisites, tuple(recipes)), []
+
+
+def _validate_prepare_runtime_dirs(makefile: ParsedMakefile) -> list[str]:
+    errors: list[str] = []
+    defs = makefile.definitions.get(PREPARE_RUNTIME_DIRS, ())
+    if len(defs) != 1:
+        errors.append(
+            f"{PREPARE_RUNTIME_DIRS} must have exactly one definition, got {len(defs)}"
+        )
+        return errors
+    target = defs[0]
+    if target.prerequisites:
+        errors.append(f"{PREPARE_RUNTIME_DIRS} must have no prerequisites")
+    if len(target.recipes) != 2:
+        errors.append(f"{PREPARE_RUNTIME_DIRS} must have exactly two recipes")
+        return errors
+    texts = tuple(_recipe_text(cmd) for cmd in target.recipes)
+    if texts != PREPARE_RUNTIME_RECIPES:
+        errors.append(f"{PREPARE_RUNTIME_DIRS} recipe contract mismatch")
+    for command in target.recipes:
+        if command.prefix in {"-", "+"}:
+            errors.append(
+                f"{PREPARE_RUNTIME_DIRS} must not use ignored-failure recipes"
+            )
+    return errors
+
+
+def _validate_make_semantics(
+    makefile: ParsedMakefile, rules: StageRules
+) -> list[str]:
+    errors = list(makefile.header_errors)
+    errors.extend(makefile.control_errors)
+    if makefile.has_ignore:
+        errors.append("Makefile must not declare .IGNORE")
+    contracted = _contracted_targets(rules)
+    delegated = _delegated_make_targets(rules.gates)
+    phony_required = contracted | delegated
+    for name in phony_required:
+        if name not in makefile.phony:
+            errors.append(f"{name} must be phony")
+    unique_required = contracted | delegated
+    for name in unique_required:
+        defs = makefile.definitions.get(name, ())
+        if len(defs) != 1:
+            errors.append(f"{name} must have exactly one definition, got {len(defs)}")
+        elif defs[0].is_double_colon:
+            errors.append(f"{name} uses unsupported double-colon definition")
+    errors.extend(_validate_prepare_runtime_dirs(makefile))
+    return errors
+
+
+def _validate_gates(makefile: ParsedMakefile, rules: StageRules) -> list[str]:
+    errors: list[str] = []
+    if rules.require_target_gate:
+        if "finalization-check-target" not in makefile.definitions:
+            errors.append("missing Makefile target: finalization-check-target")
+    if rules.forbid_target_gate and "finalization-check-target" in makefile.definitions:
+        errors.append("finalization-check-target must be absent after cutover")
+    for target_name, expected in rules.gates:
+        defs = makefile.definitions.get(target_name, ())
+        if len(defs) != 1:
+            errors.append(
+                f"{target_name} must have exactly one definition, got {len(defs)}"
+            )
+            continue
+        actual_contract, norm_errors = _gate_contract_from_target(defs[0])
+        errors.extend(norm_errors)
+        if actual_contract is None:
+            continue
+        errors.extend(_compare_gate_contract(target_name, actual_contract, expected))
+    return errors
+
+
+# --- YAML helpers (canonical subset) ---
+
+
+def _is_comment_or_blank(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
 
 
 def _yaml_block(text: str, header_pattern: str) -> str | None:
@@ -732,11 +865,6 @@ def _yaml_block(text: str, header_pattern: str) -> str | None:
             break
         block.append(line)
     return "\n".join(block)
-
-
-def _is_comment_or_blank(line: str) -> bool:
-    stripped = line.strip()
-    return not stripped or stripped.startswith("#")
 
 
 def _direct_child_indent(parent_block: str) -> int | None:
@@ -782,9 +910,240 @@ def _direct_children(parent_block: str) -> list[tuple[str, str]]:
     return [(name, "\n".join(block)) for name, block in children]
 
 
-def _children_named(
-    children: list[tuple[str, str]], name: str
-) -> list[str]:
+def _one_child(
+    children: list[tuple[str, str]],
+    name: str,
+    *,
+    required: bool,
+    label: str,
+) -> tuple[str | None, str | None]:
+    matches = [block for child_name, block in children if child_name == name]
+    if not matches:
+        return (None, f"{label} missing {name}") if required else (None, None)
+    if len(matches) > 1:
+        return None, f"{label} has multiple {name} keys"
+    return matches[0], None
+
+
+def _child_keys(block: str) -> frozenset[str]:
+    return frozenset(name for name, _ in _direct_children(block))
+
+
+def _scalar_value(block: str, key: str) -> tuple[str | None, str | None]:
+    children = _direct_children(block)
+    matches = [child for name, child in children if name == key]
+    if not matches:
+        return None, None
+    if len(matches) > 1:
+        return None, f"multiple {key} keys"
+    first = matches[0].splitlines()[0].strip()
+    match = re.match(rf"^{re.escape(key)}:\s*(.*)$", first)
+    if not match:
+        return None, f"invalid {key} syntax"
+    value = match.group(1).strip()
+    if value in {"|", "|-", "|+", ">", ">-", ">+"}:
+        return None, "unsupported block scalar"
+    if value.startswith("{") or value.startswith("["):
+        return None, "unsupported inline mapping"
+    if "&" in value or "*" in value:
+        return None, "unsupported YAML anchor"
+    return value.strip("'\""), None
+
+
+def _branch_list(block: str, key: str) -> tuple[frozenset[str] | None, str | None]:
+    child, err = _one_child(_direct_children(block), key, required=True, label="on")
+    if err:
+        return None, err
+    assert child is not None
+    list_block, err = _one_child(
+        _direct_children(child), "branches", required=True, label=key
+    )
+    if err:
+        return None, err
+    assert list_block is not None
+    branches: set[str] = set()
+    for line in list_block.splitlines():
+        match = re.match(r"^\s*-\s+(\S+)\s*$", line)
+        if match:
+            branches.add(match.group(1))
+    if not branches:
+        return None, f"{key} branches must be non-empty"
+    return frozenset(branches), None
+
+
+def _env_mapping(block: str) -> tuple[frozenset[tuple[str, str]] | None, str | None]:
+    child, err = _one_child(_direct_children(block), "env", required=True, label="job")
+    if err:
+        return None, err
+    assert child is not None
+    pairs: set[tuple[str, str]] = set()
+    for name, _ in _direct_children(child):
+        value, value_err = _scalar_value(child, name)
+        if value_err:
+            return None, value_err
+        if value is None:
+            return None, f"env key {name!r} must be a plain scalar"
+        pairs.add((name, value))
+    return frozenset(pairs), None
+
+
+def _workflow_steps(job_block: str) -> tuple[list[dict[str, str]] | None, str | None]:
+    steps_block, err = _one_child(
+        _direct_children(job_block), "steps", required=True, label="job"
+    )
+    if err:
+        return None, err
+    assert steps_block is not None
+    lines = steps_block.splitlines()
+    step_indent: int | None = None
+    start = 0
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*steps:\s*$", line):
+            start = index + 1
+            continue
+        if _is_comment_or_blank(line):
+            continue
+        if re.match(r"^\s*-\s", line):
+            step_indent = len(line) - len(line.lstrip())
+            break
+    if step_indent is None:
+        return [], None
+    steps: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in lines[start:]:
+        if _is_comment_or_blank(line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < step_indent:
+            break
+        if indent == step_indent and re.match(r"^\s*-\s", line):
+            if current:
+                steps.append(current)
+            current = {}
+            remainder = line.strip()[1:].strip()
+            if remainder:
+                match = re.match(r"(\S+):\s*(.*)$", remainder)
+                if match:
+                    current[match.group(1)] = match.group(2).strip()
+            continue
+        match = re.match(r"^(\S+):\s*(.*)$", line.strip())
+        if match and current is not None:
+            key, value = match.group(1), match.group(2).strip()
+            if value in {"|", "|-", "|+", ">", ">-", ">+"}:
+                return None, "unsupported block scalar"
+            if value.startswith("{") or value.startswith("["):
+                return None, "unsupported inline mapping"
+            current[key] = value.strip("'\"")
+    if current:
+        steps.append(current)
+    return steps, None
+
+
+def _root_keys(workflow: str) -> frozenset[str]:
+    keys: set[str] = set()
+    for line in workflow.splitlines():
+        if _is_comment_or_blank(line):
+            continue
+        if line.startswith((" ", "\t")):
+            continue
+        match = re.match(r"(\S+):", line.strip())
+        if match:
+            keys.add(match.group(1))
+    return frozenset(keys)
+
+
+def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
+    path = ctx.root / WORKFLOW_EDIT_PATH
+    if not path.is_file():
+        return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
+    if not complete:
+        return []
+    workflow = path.read_text(encoding="utf-8")
+    if re.search(r"^\s*&\w", workflow, re.MULTILINE) or "<<:" in workflow:
+        return ["workflow uses unsupported YAML anchors"]
+    errors: list[str] = []
+    if _root_keys(workflow) != WORKFLOW_TOP_KEYS:
+        errors.append(
+            f"workflow top-level keys must be {sorted(WORKFLOW_TOP_KEYS)!r}"
+        )
+    on_block = _yaml_block(workflow, r"^on:\s*$")
+    if on_block is None:
+        return errors + ["workflow missing on"]
+    push, err = _branch_list(on_block, "push")
+    if err:
+        errors.append(err)
+    pull_request, err = _branch_list(on_block, "pull_request")
+    if err:
+        errors.append(err)
+    contract = WORKFLOW_CONTRACT
+    if push != contract.triggers.push_branches:
+        errors.append("workflow push branches contract mismatch")
+    if pull_request != contract.triggers.pull_request_branches:
+        errors.append("workflow pull_request branches contract mismatch")
+    jobs_block = _yaml_block(workflow, r"^jobs:\s*$")
+    if jobs_block is None:
+        return errors + ["workflow missing jobs"]
+    jobs = _direct_children(jobs_block)
+    if len(jobs) != 1 or jobs[0][0] != contract.job_name:
+        errors.append(
+            f"workflow must have exactly one job: {contract.job_name!r}"
+        )
+        return errors
+    job_block = jobs[0][1]
+    if _child_keys(job_block) != WORKFLOW_JOB_KEYS:
+        errors.append(
+            f"workflow job keys must be {sorted(WORKFLOW_JOB_KEYS)!r}"
+        )
+    runs_on, err = _scalar_value(job_block, "runs-on")
+    if err:
+        errors.append(err)
+    elif runs_on != contract.runs_on:
+        errors.append("workflow runs-on contract mismatch")
+    timeout_raw, err = _scalar_value(job_block, "timeout-minutes")
+    if err:
+        errors.append(err)
+    elif timeout_raw is None or int(timeout_raw) != contract.timeout_minutes:
+        errors.append("workflow timeout-minutes contract mismatch")
+    env, err = _env_mapping(job_block)
+    if err:
+        errors.append(err)
+    elif env != contract.env:
+        errors.append("workflow env contract mismatch")
+    for key in ("name",):
+        value, value_err = _scalar_value(job_block, key)
+        if value_err:
+            errors.append(value_err)
+        elif not value:
+            errors.append(f"workflow job {key} must be a non-empty string")
+    steps, err = _workflow_steps(job_block)
+    if err:
+        errors.append(err)
+        return errors
+    if steps is None:
+        return errors
+    if len(steps) != len(contract.steps):
+        errors.append("workflow step count contract mismatch")
+        return errors
+    for index, (actual, expected) in enumerate(zip(steps, contract.steps, strict=True)):
+        if frozenset(actual) != expected.allowed_keys:
+            errors.append(f"workflow step {index} keys contract mismatch")
+            continue
+        if not actual.get("name"):
+            errors.append(f"workflow step {index} name must be a non-empty string")
+        op_kind, op_value = expected.operation
+        actual_value = actual.get(op_kind)
+        if actual_value != op_value:
+            errors.append(f"workflow step {index} operation contract mismatch")
+        extra_keys = set(actual) - {op_kind, "name"}
+        if extra_keys:
+            errors.append(f"workflow step {index} has unsupported keys")
+    return errors
+
+
+# --- Compose / Docker runtime ---
+
+
+def _children_named(children: list[tuple[str, str]], name: str) -> list[str]:
     return [block for child_name, block in children if child_name == name]
 
 
@@ -807,8 +1166,7 @@ def _api_service_block(compose: str) -> tuple[str | None, str | None]:
     if err:
         return None, err
     assert services is not None
-    children = _direct_children(services)
-    api_blocks = _children_named(children, "api")
+    api_blocks = _children_named(_direct_children(services), "api")
     if not api_blocks:
         return None, "docker-compose.yml missing services.api block"
     if len(api_blocks) > 1:
@@ -820,8 +1178,7 @@ def _api_service_block(compose: str) -> tuple[str | None, str | None]:
 
 
 def _merge_aliases(service_block: str) -> tuple[list[str], str | None]:
-    children = _direct_children(service_block)
-    merge_blocks = _children_named(children, "<<")
+    merge_blocks = _children_named(_direct_children(service_block), "<<")
     if len(merge_blocks) > 1:
         return [], "docker-compose api has multiple merge keys"
     if not merge_blocks:
@@ -894,9 +1251,7 @@ def _parse_inline_command_list(raw: str) -> ParsedArgv:
     return ParsedArgv(True, argv=tuple(parsed))
 
 
-def _parse_block_command_list(
-    block: str, key_line_index: int
-) -> ParsedArgv:
+def _parse_block_command_list(block: str, key_line_index: int) -> ParsedArgv:
     child_indent = _direct_child_indent(block)
     if child_indent is None:
         return ParsedArgv(True, error="command block is malformed")
@@ -935,11 +1290,9 @@ def _scalar_to_argv(raw: str) -> ParsedArgv:
     parsed = _parse_shell_command(value)
     if parsed.error:
         return ParsedArgv(True, error=parsed.error)
-    if parsed.has_shell_control:
-        return ParsedArgv(True, error="command contains unsupported shell control")
-    if len(parsed.segments) != 1:
-        return ParsedArgv(True, error="command contains unsupported shell control")
-    return ParsedArgv(True, argv=parsed.segments[0])
+    if parsed.argv is None:
+        return ParsedArgv(True, error="command must not be empty")
+    return ParsedArgv(True, argv=parsed.argv)
 
 
 def _extract_yaml_command(block: str) -> ParsedArgv:
@@ -957,8 +1310,7 @@ def _extract_yaml_command(block: str) -> ParsedArgv:
 
 
 def _extract_build_target(block: str) -> ParsedArgv:
-    children = _direct_children(block)
-    build_blocks = _children_named(children, "build")
+    build_blocks = _children_named(_direct_children(block), "build")
     if not build_blocks:
         return ParsedArgv(False)
     if len(build_blocks) > 1:
@@ -1157,16 +1509,20 @@ def _validate_runtime(
     return errors
 
 
+def _target_exists(ctx: RepoContext, path: str) -> bool:
+    return path in ctx.makefile.definitions
+
+
 def _path_exists(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
-        return item.path in ctx.targets
+        return _target_exists(ctx, item.path)
     path = ctx.root / item.path.rstrip("/")
     return path.exists() or path.is_symlink()
 
 
 def _path_absent(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
-        return item.path not in ctx.targets
+        return not _target_exists(ctx, item.path)
     path = ctx.root / item.path.rstrip("/")
     return not path.exists() and not path.is_symlink()
 
@@ -1196,17 +1552,32 @@ def _target_support_test_paths(makefile_text: str) -> set[str]:
     return paths
 
 
+def _pytest_argv_offset(argv: tuple[str, ...]) -> int | None:
+    if not argv:
+        return None
+    if argv[0] == "pytest":
+        return 0
+    docker_prefix = DOCKER_TEST_PREFIX + ("pytest",)
+    prefix_len = len(docker_prefix)
+    if len(argv) >= prefix_len and argv[:prefix_len] == docker_prefix:
+        return prefix_len
+    return None
+
+
 def _test_target_expands_support_tests(ctx: RepoContext) -> bool:
-    target = ctx.targets.get("test-target")
-    if target is None:
+    defs = ctx.makefile.definitions.get("test-target", ())
+    if len(defs) != 1:
         return False
-    for command in target.recipes:
-        if command.ignored_failure:
+    for command in defs[0].recipes:
+        if command.prefix in {"-", "+"}:
             continue
         parsed = _parse_shell_command(command.text)
-        if parsed.error or parsed.has_shell_control or len(parsed.segments) != 1:
+        if parsed.error or parsed.argv is None:
             continue
-        if TARGET_SUPPORT_TESTS_VAR in parsed.segments[0]:
+        offset = _pytest_argv_offset(parsed.argv)
+        if offset is None:
+            continue
+        if TARGET_SUPPORT_TESTS_VAR in parsed.argv[offset:]:
             return True
     return False
 
@@ -1218,14 +1589,19 @@ def _test_target_references_path(ctx: RepoContext, path: str) -> bool:
         and _test_target_expands_support_tests(ctx)
     ):
         return True
-    target = ctx.targets.get("test-target")
-    if target is None:
+    defs = ctx.makefile.definitions.get("test-target", ())
+    if len(defs) != 1:
         return False
-    for command in target.recipes:
-        if command.ignored_failure:
+    for command in defs[0].recipes:
+        if command.prefix in {"-", "+"}:
             continue
         parsed = _parse_shell_command(command.text)
-        if _command_invokes_pytest_with_path(parsed, normalized):
+        if parsed.error or parsed.argv is None:
+            continue
+        offset = _pytest_argv_offset(parsed.argv)
+        if offset is None:
+            continue
+        if normalized in {_norm_fs_path(token) for token in parsed.argv[offset:]}:
             return True
     return False
 
@@ -1247,225 +1623,6 @@ def _validate_item_complete(ctx: RepoContext, item: ManifestItem) -> list[str]:
                 )
     elif item.action == "edit" and item.kind == "workflow_edit":
         errors.extend(_validate_workflow_edit(ctx, complete=True))
-    return errors
-
-
-def _workflow_jobs(workflow: str) -> tuple[list[tuple[str, str]], list[str]]:
-    matches = list(re.finditer(r"^jobs:\s*$", workflow, re.MULTILINE))
-    if not matches:
-        return [], ["workflow missing jobs block"]
-    if len(matches) > 1:
-        return [], ["workflow has multiple jobs blocks"]
-    jobs_block = _yaml_block(workflow, r"^jobs:\s*$")
-    if jobs_block is None:
-        return [], ["workflow missing jobs block"]
-    children = _direct_children(jobs_block)
-    names = [name for name, _ in children]
-    if len(names) != len(set(names)):
-        return [], ["workflow has duplicate job names"]
-    return children, []
-
-
-def _split_step_list(steps_block: str) -> list[str]:
-    lines = steps_block.splitlines()
-    step_indent: int | None = None
-    start_index = 0
-    for index, line in enumerate(lines):
-        if re.match(r"^\s*steps:\s*$", line):
-            start_index = index + 1
-            continue
-        if _is_comment_or_blank(line):
-            continue
-        if re.match(r"^\s*-\s", line):
-            step_indent = len(line) - len(line.lstrip())
-            break
-    if step_indent is None:
-        return []
-    steps: list[str] = []
-    current: list[str] = []
-    for line in lines[start_index:]:
-        if _is_comment_or_blank(line):
-            if current:
-                current.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent < step_indent:
-            break
-        if indent == step_indent and re.match(r"^\s*-\s", line):
-            if current:
-                steps.append("\n".join(current))
-            current = [line]
-        elif current:
-            current.append(line)
-    if current:
-        steps.append("\n".join(current))
-    return steps
-
-
-def _job_steps(job_block: str) -> tuple[list[str], list[str]]:
-    children = _direct_children(job_block)
-    steps_blocks = _children_named(children, "steps")
-    if not steps_blocks:
-        return [], ["job missing steps block"]
-    if len(steps_blocks) > 1:
-        return [], ["job has duplicate steps keys"]
-    return _split_step_list(steps_blocks[0]), []
-
-
-def _read_yaml_scalar_value(
-    remainder: str, block: str, key_line_index: int
-) -> tuple[list[str], str | None]:
-    if remainder in {"|", "|-", "|+", ">", ">-", ">+"}:
-        folded = remainder.startswith(">")
-        block_lines: list[str] = []
-        for line in block.splitlines()[key_line_index + 1 :]:
-            if re.match(r"^\s*-\s*\S", line):
-                break
-            if line.rstrip().endswith("\\"):
-                msg = "workflow block scalar contains unsupported shell continuation"
-                return [], msg
-            if line.strip():
-                block_lines.append(line.strip())
-        if folded:
-            text = " ".join(block_lines).strip()
-            return ([text] if text else []), None
-        return [line for line in block_lines if line], None
-    if remainder:
-        return [remainder.strip()], None
-    return [], None
-
-
-def _scalar_property_values(
-    block: str, key: str
-) -> tuple[list[str], str | None]:
-    values: list[str] = []
-    first_line = block.splitlines()[0] if block else ""
-    shorthand = re.match(rf"^\s*-\s*{re.escape(key)}:\s*(.*)$", first_line)
-    if shorthand:
-        read_values, err = _read_yaml_scalar_value(shorthand.group(1), block, 0)
-        if err:
-            return [], err
-        values.extend(read_values)
-        return values, None
-    children = _direct_children(block)
-    for child_name, child_block in children:
-        if child_name != key:
-            continue
-        first = child_block.splitlines()[0]
-        match = re.match(rf"^{re.escape(key)}:\s*(.*)$", first.strip())
-        if match:
-            read_values, err = _read_yaml_scalar_value(
-                match.group(1), child_block, 0
-            )
-            if err:
-                return [], err
-            values.extend(read_values)
-    return values, None
-
-
-def _parse_continue_on_error(step_block: str) -> tuple[str, str | None]:
-    values, err = _scalar_property_values(step_block, "continue-on-error")
-    if err:
-        return "unsupported", err
-    if not values:
-        return "absent", None
-    if len(values) > 1:
-        return "unsupported", "step has multiple continue-on-error values"
-    value = values[0].strip()
-    if value in {"false", "False"}:
-        return "false", None
-    if value in {"true", "True"}:
-        return "true", None
-    return "unsupported", None
-
-
-def _count_run_keys(step_block: str) -> int:
-    count = 0
-    for line in step_block.splitlines():
-        stripped = line.strip()
-        if re.match(r"^-\s*run:", stripped) or re.match(r"^run:", stripped):
-            count += 1
-    return count
-
-
-def _step_run_commands(step_block: str) -> tuple[list[str], str | None]:
-    if _count_run_keys(step_block) > 1:
-        return [], "step has multiple run values"
-    first_line = step_block.splitlines()[0] if step_block else ""
-    shorthand = re.match(r"^\s*-\s*run:\s*(.*)$", first_line)
-    if shorthand:
-        read_values, err = _read_yaml_scalar_value(shorthand.group(1), step_block, 0)
-        if err:
-            return [], err
-        return read_values, None
-    values, err = _scalar_property_values(step_block, "run")
-    if err:
-        return [], err
-    if len(values) > 1:
-        return [], "step has multiple run values"
-    return values, None
-
-
-def _analyze_workflow_step(
-    step_block: str,
-) -> tuple[list[str], str, str | None]:
-    run_cmds, run_err = _step_run_commands(step_block)
-    if run_err:
-        return [], "unsupported", run_err
-    coe_status, coe_err = _parse_continue_on_error(step_block)
-    if coe_err:
-        return run_cmds, "unsupported", coe_err
-    return run_cmds, coe_status, None
-
-
-def _validate_workflow_edit(ctx: RepoContext, *, complete: bool) -> list[str]:
-    path = ctx.root / WORKFLOW_EDIT_PATH
-    if not path.is_file():
-        return [f"missing workflow edit file: {WORKFLOW_EDIT_PATH}"]
-    if not complete:
-        return []
-    workflow = path.read_text(encoding="utf-8")
-    jobs, job_errors = _workflow_jobs(workflow)
-    errors: list[str] = list(job_errors)
-    if any(name == "phase-1-evidence" for name, _ in jobs):
-        errors.append("workflow edit must remove phase-1-evidence job")
-    gate_jobs: list[str] = []
-    for name, block in jobs:
-        steps, step_errors = _job_steps(block)
-        errors.extend(f"workflow job {name}: {err}" for err in step_errors)
-        for step in steps:
-            run_cmds, coe_status, step_err = _analyze_workflow_step(step)
-            if step_err:
-                errors.append(f"workflow job {name}: {step_err}")
-                continue
-            for run_cmd in run_cmds:
-                parsed = _parse_shell_command(run_cmd)
-                if _is_canonical_gate(parsed):
-                    if coe_status in {"true", "unsupported"}:
-                        errors.append(
-                            f"workflow job {name} must not use continue-on-error "
-                            "for finalization-check"
-                        )
-                    elif coe_status in {"absent", "false"}:
-                        gate_jobs.append(name)
-                for legacy in LEGACY_ONLY_STEPS:
-                    if _command_has_forbidden_make(parsed, legacy):
-                        errors.append(
-                            f"workflow job {name} must not invoke "
-                            f"legacy target {legacy}"
-                        )
-                if _command_has_forbidden_make(
-                    parsed, "finalization-check-target"
-                ):
-                    errors.append(
-                        f"workflow job {name} must not invoke "
-                        "make finalization-check-target"
-                    )
-    if len(gate_jobs) != 1:
-        errors.append(
-            "workflow edit must have exactly one job invoking "
-            "make finalization-check"
-        )
     return errors
 
 
@@ -1607,9 +1764,10 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
             f"got {manifest.status!r}"
         )
 
-    ctx = _load_repo_context(resolved)
-    for gate in rules.gates:
-        errors.extend(_gate_errors(ctx.targets, gate))
+    contracted = _contracted_targets(rules)
+    ctx = _load_repo_context(resolved, contracted)
+    errors.extend(_validate_make_semantics(ctx.makefile, rules))
+    errors.extend(_validate_gates(ctx.makefile, rules))
     errors.extend(_validate_runtime(ctx, rules.expected_runtime_argv))
 
     if rules.required_entry_points or rules.forbidden_entry_points:
