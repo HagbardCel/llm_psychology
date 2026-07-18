@@ -38,16 +38,16 @@ PHASE_5_SCRIPT = "scripts/validate_refactor_phase_5.py"
 PHASE_6_SCRIPT = "scripts/validate_refactor_phase_6.py"
 PREPARE_RUNTIME_DIRS = "prepare-runtime-dirs"
 DOCKER_COMPOSE_RUN = (
-    "docker", "compose", "-f", "docker-compose.yml", "--profile", "test",
-    "run", "--rm", "--no-deps",
+    "docker", "compose", "-f", "docker-compose.yml",
+    "--profile", "test", "run", "--rm", "--no-deps",
 )
 DOCKER_TEST_PREFIX = DOCKER_COMPOSE_RUN + ("test",)
 DOCKER_PYTHON_PREFIX = DOCKER_COMPOSE_RUN + (
-    "--entrypoint", "/usr/local/bin/python", "--volume", "$(CURDIR):/workspace:ro",
+    "--entrypoint", "/usr/local/bin/python",
+    "--volume", "$(CURDIR):/workspace:ro",
     "--workdir", "/workspace", "--env", "PYTHONPATH=/workspace/src", "test",
 )
 MAKE_TOKENS = frozenset({"make", "$(MAKE)", "${MAKE}"})
-# Repository-level assignments or declarations of these variables are unsupported.
 FORBIDDEN_MAKE_CONTROLS = frozenset({
     "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "MAKEFILES", "SHELL",
     ".SHELLFLAGS", ".ONESHELL", ".RECIPEPREFIX",
@@ -120,16 +120,16 @@ class GateContract:
     prerequisites: tuple[str, ...]
     recipes: tuple[tuple[str, ...], ...]
 
-def _legacy_gate() -> GateContract:
-    return GateContract(
-        prerequisites=(PREPARE_RUNTIME_DIRS,),
-        recipes=(
-            ("make", "lint"), ("make", "validate-docs"), ("make", "validate-schemas"),
-            ("make", "validate-generated-contracts"), ("make", "validate-architecture"),
-            ("make", "test-validate"), ("docker-python", PHASE_5_SCRIPT),
-            ("make", "characterization-smoke"), ("make", "probe-console-deterministic"),
-        ),
-    )
+LEGACY_GATE = GateContract(
+    prerequisites=(PREPARE_RUNTIME_DIRS,),
+    recipes=(
+        ("make", "lint"), ("make", "validate-docs"), ("make", "validate-schemas"),
+        ("make", "validate-generated-contracts"), ("make", "validate-architecture"),
+        ("make", "test-validate"), ("docker-python", PHASE_5_SCRIPT),
+        ("make", "characterization-smoke"), ("make", "probe-console-deterministic"),
+    ),
+)
+
 def _target_gate(stage: str) -> GateContract:
     return GateContract(
         prerequisites=(PREPARE_RUNTIME_DIRS,),
@@ -150,30 +150,39 @@ class StageRules:
     forbidden_targets: frozenset[str]
     required_entry_points: frozenset[str]
     forbidden_entry_points: frozenset[str]
-    final_closure: bool
-    requires_completed_workflow: bool = False
+
 STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
-        "active", LEGACY_RUNTIME_ARGV,
-        (
-            ("finalization-check", _legacy_gate()),
+        manifest_status="active",
+        expected_runtime_argv=LEGACY_RUNTIME_ARGV,
+        gates=(
+            ("finalization-check", LEGACY_GATE),
             ("finalization-check-target", _target_gate("pre-cutover")),
         ),
-        WATCHED_PRE_CUTOVER, frozenset(), frozenset(), frozenset(), False,
-    ),    "cutover": StageRules(
-        "active", TARGET_RUNTIME_ARGV,
-        (("finalization-check", _target_gate("cutover")),),
-        WATCHED_CUTOVER, frozenset({"finalization-check-target"}), TARGET_ENTRY_CUTOVER,
-        LEGACY_ENTRY_POINTS, False, True,
+        watched_targets=WATCHED_PRE_CUTOVER,
+        forbidden_targets=frozenset(),
+        required_entry_points=frozenset(),
+        forbidden_entry_points=frozenset(),
+    ),
+    "cutover": StageRules(
+        manifest_status="active",
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        gates=(("finalization-check", _target_gate("cutover")),),
+        watched_targets=WATCHED_CUTOVER,
+        forbidden_targets=frozenset({"finalization-check-target"}),
+        required_entry_points=TARGET_ENTRY_CUTOVER,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
     ),
     "final": StageRules(
-        "completed", TARGET_RUNTIME_ARGV,
-        (("finalization-check", _target_gate("final")),),
-        WATCHED_CUTOVER, frozenset({"finalization-check-target"}), TARGET_ENTRY_FINAL,
-        LEGACY_ENTRY_POINTS, True, True,
+        manifest_status="completed",
+        expected_runtime_argv=TARGET_RUNTIME_ARGV,
+        gates=(("finalization-check", _target_gate("final")),),
+        watched_targets=WATCHED_CUTOVER,
+        forbidden_targets=frozenset({"finalization-check-target"}),
+        required_entry_points=TARGET_ENTRY_FINAL,
+        forbidden_entry_points=LEGACY_ENTRY_POINTS,
     ),
 }
-
 def _strip_nonempty(value: Any, field_name: str) -> Any:
     if not isinstance(value, str):
         return value
@@ -181,7 +190,6 @@ def _strip_nonempty(value: Any, field_name: str) -> Any:
     if not stripped:
         raise ValueError(f"{field_name} must be non-empty")
     return stripped
-
 class ManifestItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["filesystem", "make_target", "workflow", "workflow_edit"]
@@ -629,19 +637,12 @@ def _validate_makefile_contracts(
                 )
     return errors
 
-def _is_comment_or_blank(line: str) -> bool:
-    return not line.strip() or line.lstrip().startswith("#")
-def _valid_compose_key(key: str, *, allow_merge: bool) -> bool:
-    if key == "<<":
-        return allow_merge
-    return YAML_SIMPLE_KEY_RE.fullmatch(key) is not None
 def _plain_compose_scalar(value: str) -> bool:
     return (
-        bool(value)
-        and value not in {"|", "|-", "|+", ">", ">-", ">+"}
-        and value[0] not in "\"'"
-        and not value.startswith(("{", "["))
+        bool(value) and value not in {"|", "|-", "|+", ">", ">-", ">+"}
+        and value[0] not in "\"'" and not value.startswith(("{", "["))
     )
+
 def _mapping_entries(
     lines: tuple[str, ...],
     *,
@@ -655,7 +656,7 @@ def _mapping_entries(
     current_value = ""
     current_block: list[str] = []
     for line in lines:
-        if _is_comment_or_blank(line):
+        if not line.strip() or line.lstrip().startswith("#"):
             if current_key is not None:
                 current_block.append(line)
             continue
@@ -680,7 +681,9 @@ def _mapping_entries(
             if not match:
                 return (), f"{label} contains unsupported mapping syntax"
             raw_key = match.group(1).strip()
-            if not _valid_compose_key(raw_key, allow_merge=allow_merge):
+            if raw_key == "<<" and not allow_merge:
+                return (), f"{label} contains unsupported mapping syntax"
+            if raw_key != "<<" and not YAML_SIMPLE_KEY_RE.fullmatch(raw_key):
                 return (), f"{label} contains unsupported mapping syntax"
             current_key = raw_key
             current_value = match.group(2).strip()
@@ -699,6 +702,7 @@ def _child_entries(
     return _mapping_entries(
         block[1:], parent_indent=indent, label=label, allow_merge=allow_merge
     )
+
 def _scalar_to_argv(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
     if not _plain_compose_scalar(raw):
         return None, "unsupported scalar syntax"
@@ -867,12 +871,13 @@ def _validate_runtime(ctx: RepoContext, rules: StageRules) -> list[str]:
             f"{rules.expected_runtime_argv!r}, got {docker_argv!r}"
         ]
     return []
+
 def _normalize_workflow_text(text: str) -> str:
     return "\n".join(
-        line.rstrip()
-        for line in text.splitlines()
+        line.rstrip() for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
+
 def _manifest_path_present(ctx: RepoContext, item: ManifestItem) -> bool:
     if item.kind == "make_target":
         return item.path in ctx.makefile.definitions
@@ -1037,7 +1042,6 @@ def _final_manifest_closure(manifest: Manifest) -> list[str]:
         for item in manifest.items
         if item.confidence == "discovery-needed"
     ]
-
 def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[str]:
     resolved = (root or REPO_ROOT).resolve()
     if stage not in STAGES:
@@ -1059,7 +1063,7 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
     for item in manifest.items:
         if item.status == "complete":
             errors.extend(_validate_item_complete(ctx, item))
-    if rules.requires_completed_workflow:
+    if stage != "pre-cutover":
         workflow_item = next(
             (
                 item for item in manifest.items
@@ -1075,19 +1079,14 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
             errors.append(
                 f"required workflow item must be complete for stage {stage!r}"
             )
-    if rules.final_closure:
+    if stage == "final":
         errors.extend(_final_manifest_closure(manifest))
         errors.extend(_validate_import_closure(resolved))
         errors.extend(_validate_dependency_closure(ctx))
     return errors
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--stage",
-        choices=tuple(STAGES),
-        required=True,
-    )
+    parser.add_argument("--stage", choices=tuple(STAGES), required=True)
     args = parser.parse_args()
     errors = validate(stage=args.stage)
     if errors:

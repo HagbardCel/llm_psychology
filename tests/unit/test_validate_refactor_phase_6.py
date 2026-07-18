@@ -114,10 +114,9 @@ _WF_COEXIST = (
 _CANONICAL_MISMATCH = "completed release workflow does not match canonical contract"
 _PHASE6_DOCKER = "\t" + _CANONICAL_VALIDATOR_RECIPE
 
-
-def _target_gate(stage: str) -> str:
+def _target_gate(stage: str, *, name: str = "finalization-check-target") -> str:
     return (
-        "finalization-check-target: prepare-runtime-dirs\n"
+        f"{name}: prepare-runtime-dirs\n"
         "\t$(MAKE) lint\n"
         "\t$(MAKE) validate-docs\n"
         "\t$(MAKE) test-target\n"
@@ -127,21 +126,6 @@ def _target_gate(stage: str) -> str:
         + "\t" + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
         + "\t$(MAKE) probe-console-v1-deterministic\n"
     )
-
-
-def _cutover_gate(stage: str) -> str:
-    return (
-        "finalization-check: prepare-runtime-dirs\n"
-        "\t$(MAKE) lint\n"
-        "\t$(MAKE) validate-docs\n"
-        "\t$(MAKE) test-target\n"
-        "\t" + _DOCKER_PY.format(
-            script="scripts/validate_refactor_phase_6.py", args=f" --stage {stage}"
-        )
-        + "\t" + _DOCKER_PY.format(script="scripts/validate_refactor_phase_5.py", args="")
-        + "\t$(MAKE) probe-console-v1-deterministic\n"
-    )
-
 
 def replace_target_block(makefile: str, target: str, replacement: str) -> str:
     pattern = re.compile(
@@ -153,7 +137,6 @@ def replace_target_block(makefile: str, target: str, replacement: str) -> str:
         raise AssertionError(f"expected exactly one {target!r} block, got {len(matches)}")
     start, end = matches[0].span()
     return makefile[:start] + replacement + makefile[end:]
-
 
 def _compose_fixture(
     command: str, *, api_extra: str = "", base_extra: str = "", test_extra: str = ""
@@ -197,7 +180,6 @@ def _compose_fixture(
         "    command: pytest\n"
     )
 
-
 _DF_LEGACY = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"python\", \"-m\", \"psychoanalyst_app.server\"]\n"
 _DF_TARGET = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"jung-api\"]\n"
 _DF_WRONG_CMD = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"echo\", \"jung-api\"]\n"
@@ -230,12 +212,10 @@ _PP_TARGET = (
 )
 _RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
 
-
 def _manifest_item(**kwargs) -> str:
     defaults = {"status": "complete", "confidence": "confirmed"}
     defaults.update(kwargs)
     return "[[items]]\n" + _ITEM.format(**defaults)
-
 
 def _retained_test_manifest() -> str:
     return (
@@ -247,7 +227,6 @@ def _retained_test_manifest() -> str:
         )
         + "requires_explicit_test_target_reference = true\n"
     )
-
 
 @dataclass
 class RepoFixture:
@@ -266,7 +245,7 @@ class RepoFixture:
         self.root.mkdir(parents=True, exist_ok=True)
         if gates is None:
             gates = (
-                _cutover_gate("cutover")
+                _target_gate("cutover", name="finalization-check")
                 if target
                 else _LEGACY_GATE + _target_gate("pre-cutover")
             )
@@ -284,8 +263,8 @@ class RepoFixture:
         )
         (self.root / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
         (self.root / "scripts").mkdir(exist_ok=True)
-        (self.root / "scripts/validate_refactor_phase_5.py").write_text("#\n", encoding="utf-8")
-        (self.root / "scripts/validate_refactor_phase_6.py").write_text("#\n", encoding="utf-8")
+        for name in ("validate_refactor_phase_5.py", "validate_refactor_phase_6.py"):
+            (self.root / "scripts" / name).write_text("#\n", encoding="utf-8")
         (self.root / "tests").mkdir(exist_ok=True)
 
     def write_workflow(self, text: str) -> None:
@@ -327,209 +306,152 @@ class RepoFixture:
                 )
             ),
         )
-        self.write_runtime(target=True, gates=_cutover_gate("final"))
+        self.write_runtime(target=True, gates=_target_gate("final", name="finalization-check"))
         self.write_workflow(_WF_CANONICAL)
         (self.root / "src").mkdir(exist_ok=True)
 
+@pytest.fixture
+def repo(tmp_path: Path) -> RepoFixture:
+    return RepoFixture(tmp_path)
 
 @pytest.mark.parametrize(
     "stage,seed",
     [("pre-cutover", "pre"), ("cutover", "cutover"), ("final", "final")],
 )
-def test_valid_stage_passes(tmp_path, stage, seed):
-    r = RepoFixture(tmp_path)
-    {"pre": r.seed_pre, "cutover": lambda: r.seed_cutover(complete=True), "final": r.seed_final}[seed]()
-    assert validate(tmp_path, stage=stage) == []
-
+def test_valid_stage_passes(repo, stage, seed):
+    {"pre": repo.seed_pre, "cutover": lambda: repo.seed_cutover(complete=True), "final": repo.seed_final}[seed]()
+    assert validate(repo.root, stage=stage) == []
 
 @pytest.mark.parametrize(
     "stage,status",
     [("pre-cutover", "completed"), ("cutover", "completed"), ("final", "active")],
 )
-def test_manifest_status_rejected(tmp_path, stage, status):
-    r = RepoFixture(tmp_path)
-    r.seed_pre()
-    r.write_manifest(status=status, items=_MANIFEST_TAIL.format(wf="in_progress"))
-    assert any("manifest status" in e for e in validate(tmp_path, stage=stage))
-
+def test_manifest_status_rejected(repo, stage, status):
+    repo.seed_pre()
+    repo.write_manifest(status=status, items=_MANIFEST_TAIL.format(wf="in_progress"))
+    assert any("manifest status" in e for e in validate(repo.root, stage=stage))
 
 @pytest.mark.parametrize(
     "old,new,frag",
     [
-        ("--stage cutover", "--stage pre-cutover", "recipe contract mismatch"),
-        (
-            "\t$(MAKE) probe-console-v1-deterministic\n",
-            "",
-            "recipe contract mismatch",
-        ),
-        (
+        pytest.param("--stage cutover", "--stage pre-cutover", "recipe contract mismatch", id="wrong_stage"),
+        pytest.param("\t$(MAKE) probe-console-v1-deterministic\n", "", "recipe contract mismatch", id="missing_recipe"),
+        pytest.param(
             "\t$(MAKE) probe-console-v1-deterministic\n",
             "\t$(MAKE) probe-console-v1-deterministic\n\tbash -c 'make characterization-smoke'\n",
             "unsupported recipe",
+            id="extra_recipe",
         ),
-        ("\t$(MAKE) test-target\n", "\t-$(MAKE) test-target\n", "unsupported recipe prefix"),
-        ("\t$(MAKE) lint\n", "\t@-$(MAKE) lint\n", "unsupported recipe prefix"),
-        (_PHASE6_DOCKER, "\t@-" + _PHASE6_DOCKER.lstrip(), "unsupported recipe prefix"),
-        (
+        pytest.param("\t$(MAKE) test-target\n", "\t-$(MAKE) test-target\n", "unsupported recipe prefix", id="ignored_failure"),
+        pytest.param("\t$(MAKE) lint\n", "\t@-$(MAKE) lint\n", "unsupported recipe prefix", id="at_prefix_make"),
+        pytest.param(_PHASE6_DOCKER, "\t@-" + _PHASE6_DOCKER.lstrip(), "unsupported recipe prefix", id="at_prefix_docker"),
+        pytest.param(
             "finalization-check: prepare-runtime-dirs",
             "finalization-check: characterization-smoke",
             "prerequisite contract mismatch",
+            id="wrong_prerequisite",
         ),
-        (
+        pytest.param(
             " finalization-check finalization-check-target",
             " finalization-check-target",
             "must be phony",
+            id="not_phony",
         ),
-        ("\t$(MAKE) lint\n", "\t+$(MAKE) lint\n", "unsupported recipe prefix"),
-    ],
-    ids=[
-        "wrong_stage",
-        "missing_recipe",
-        "extra_recipe",
-        "ignored_failure",
-        "at_prefix_make",
-        "at_prefix_docker",
-        "wrong_prerequisite",
-        "not_phony",
-        "plus_prefix",
+        pytest.param("\t$(MAKE) lint\n", "\t+$(MAKE) lint\n", "unsupported recipe prefix", id="plus_prefix"),
     ],
 )
-def test_gate_replacements(tmp_path, old, new, frag):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+def test_gate_replacements(repo, old, new, frag):
+    repo.seed_cutover(complete=True)
+    makefile = (repo.root / "Makefile").read_text(encoding="utf-8")
     assert makefile.count(old) == 1
-    (tmp_path / "Makefile").write_text(makefile.replace(old, new, 1), encoding="utf-8")
-    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
-
+    (repo.root / "Makefile").write_text(makefile.replace(old, new, 1), encoding="utf-8")
+    assert any(frag in e for e in validate(repo.root, stage="cutover"))
 
 @pytest.mark.parametrize(
     "old,new",
     [
-        ("-f docker-compose.yml ", ""),
-        ("--no-deps ", ""),
-        ("$(CURDIR):/workspace:ro", "$(CURDIR):/other:ro"),
-        ("--workdir /workspace", "--workdir /app"),
+        pytest.param("-f docker-compose.yml ", "", id="missing_compose_file"),
+        pytest.param("--no-deps ", "", id="missing_no_deps"),
+        pytest.param("$(CURDIR):/workspace:ro", "$(CURDIR):/other:ro", id="wrong_workspace_mount"),
+        pytest.param("--workdir /workspace", "--workdir /app", id="wrong_workdir"),
     ],
-    ids=["missing_compose_file", "missing_no_deps", "wrong_workspace_mount", "wrong_workdir"],
 )
-def test_validator_bootstrap_recipe_mutations(tmp_path, old, new):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
+def test_validator_bootstrap_recipe_mutations(repo, old, new):
+    repo.seed_cutover(complete=True)
+    makefile = (repo.root / "Makefile").read_text(encoding="utf-8")
     assert makefile.count(_CANONICAL_VALIDATOR_RECIPE) == 1
     assert _CANONICAL_VALIDATOR_RECIPE.count(old) == 1
     mutated = _CANONICAL_VALIDATOR_RECIPE.replace(old, new, 1)
-    (tmp_path / "Makefile").write_text(
+    (repo.root / "Makefile").write_text(
         makefile.replace(_CANONICAL_VALIDATOR_RECIPE, mutated, 1),
         encoding="utf-8",
     )
     assert any(
         "recipe contract mismatch" in e or "unsupported recipe" in e
-        for e in validate(tmp_path, stage="cutover")
+        for e in validate(repo.root, stage="cutover")
     )
-
 
 @pytest.mark.parametrize(
     "prefix,suffix,frag",
     [
-        ("", "\nfinalization-check: prepare-runtime-dirs\n\t@true\n", "exactly one definition"),
-        (
-            "",
-            "\nfinalization-check helper: prepare-runtime-dirs\n\t@true\n",
-            "unsupported multi-target header",
-        ),
-        (".IGNORE:\n", "", ".IGNORE"),
-        (".ONESHELL:\n", "", "forbidden control"),
-        (".RECIPEPREFIX := >\n", "", "forbidden control"),
-        ("GNUMAKEFLAGS += -i\n", "", "forbidden control"),
-        ("MAKEFILES := extra.mk\n", "", "forbidden control MAKEFILES"),
-        ("include extra.mk\n", "", "include directives are unsupported"),
-        (
-            "GATE := finalization-check\n$(GATE): characterization-smoke\n",
-            "",
-            "variable-expanded target headers are unsupported",
-        ),
-        (
-            "HIDDEN := $(eval finalization-check: characterization-smoke)\n",
-            "",
-            "eval expressions are unsupported",
-        ),
-        ("export COMPOSE_FILE := alternate.yml\n", "", "forbidden control COMPOSE_FILE"),
-        ("MAKE := true\n", "", "forbidden control MAKE"),
-        ("export PATH := ./fake-bin:$(PATH)\n", "", "forbidden control PATH"),
-        ("CURDIR := /tmp/alternate-checkout\n", "", "forbidden control CURDIR"),
-        ("export DOCKER_HOST := tcp://evil:2375\n", "", "forbidden control DOCKER_HOST"),
-        ("DOCKER_CONTEXT := evil\n", "", "forbidden control DOCKER_CONTEXT"),
-        ("export DOCKER_CONFIG := ./fake-docker\n", "", "forbidden control DOCKER_CONFIG"),
-    ],
-    ids=[
-        "duplicate_definition",
-        "forbidden_multi_target",
-        "ignore_directive",
-        "oneshell",
-        "recipeprefix",
-        "gnuflags",
-        "makefiles",
-        "include",
-        "expanded_target",
-        "eval_assignment",
-        "compose_file",
-        "make_override",
-        "path_override",
-        "curdir_override",
-        "docker_host",
-        "docker_context",
-        "docker_config",
+        pytest.param('', '\nfinalization-check: prepare-runtime-dirs\n\t@true\n', 'exactly one definition', id='duplicate_definition'),
+        pytest.param('', '\nfinalization-check helper: prepare-runtime-dirs\n\t@true\n', 'unsupported multi-target header', id='forbidden_multi_target'),
+        pytest.param('.IGNORE:\n', '', '.IGNORE', id='ignore_directive'),
+        pytest.param('.ONESHELL:\n', '', 'forbidden control', id='oneshell'),
+        pytest.param('.RECIPEPREFIX := >\n', '', 'forbidden control', id='recipeprefix'),
+        pytest.param('GNUMAKEFLAGS += -i\n', '', 'forbidden control', id='gnuflags'),
+        pytest.param('MAKEFILES := extra.mk\n', '', 'forbidden control MAKEFILES', id='makefiles'),
+        pytest.param('include extra.mk\n', '', 'include directives are unsupported', id='include'),
+        pytest.param('GATE := finalization-check\n$(GATE): characterization-smoke\n', '', 'variable-expanded target headers are unsupported', id='expanded_target'),
+        pytest.param('HIDDEN := $(eval finalization-check: characterization-smoke)\n', '', 'eval expressions are unsupported', id='eval_assignment'),
+        pytest.param('export COMPOSE_FILE := alternate.yml\n', '', 'forbidden control COMPOSE_FILE', id='compose_file'),
+        pytest.param('MAKE := true\n', '', 'forbidden control MAKE', id='make_override'),
+        pytest.param('export PATH := ./fake-bin:$(PATH)\n', '', 'forbidden control PATH', id='path_override'),
+        pytest.param('CURDIR := /tmp/alternate-checkout\n', '', 'forbidden control CURDIR', id='curdir_override'),
+        pytest.param('export DOCKER_HOST := tcp://evil:2375\n', '', 'forbidden control DOCKER_HOST', id='docker_host'),
+        pytest.param('DOCKER_CONTEXT := evil\n', '', 'forbidden control DOCKER_CONTEXT', id='docker_context'),
+        pytest.param('export DOCKER_CONFIG := ./fake-docker\n', '', 'forbidden control DOCKER_CONFIG', id='docker_config'),
     ],
 )
-def test_gate_additions(tmp_path, prefix, suffix, frag):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    makefile = (tmp_path / "Makefile").read_text(encoding="utf-8")
-    (tmp_path / "Makefile").write_text(prefix + makefile + suffix, encoding="utf-8")
-    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
+def test_gate_additions(repo, prefix, suffix, frag):
+    repo.seed_cutover(complete=True)
+    makefile = (repo.root / "Makefile").read_text(encoding="utf-8")
+    (repo.root / "Makefile").write_text(prefix + makefile + suffix, encoding="utf-8")
+    assert any(frag in e for e in validate(repo.root, stage="cutover"))
 
-
-def test_empty_gate_body_fails(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    (tmp_path / "Makefile").write_text(
+def test_empty_gate_body_fails(repo):
+    repo.seed_cutover(complete=True)
+    (repo.root / "Makefile").write_text(
         replace_target_block(
-            (tmp_path / "Makefile").read_text(encoding="utf-8"),
+            (repo.root / "Makefile").read_text(encoding="utf-8"),
             "finalization-check",
             "finalization-check: prepare-runtime-dirs\n",
         ),
         encoding="utf-8",
     )
-    assert any("recipe contract mismatch" in e for e in validate(tmp_path, stage="cutover"))
+    assert any("recipe contract mismatch" in e for e in validate(repo.root, stage="cutover"))
 
-
-def test_cutover_rejects_target_gate_present(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    (tmp_path / "Makefile").write_text(
-        (tmp_path / "Makefile").read_text(encoding="utf-8") + _target_gate("cutover"),
+def test_cutover_rejects_target_gate_present(repo):
+    repo.seed_cutover(complete=True)
+    (repo.root / "Makefile").write_text(
+        (repo.root / "Makefile").read_text(encoding="utf-8") + _target_gate("cutover"),
         encoding="utf-8",
     )
-    assert any("finalization-check-target must be absent" in e for e in validate(tmp_path, stage="cutover"))
-
+    assert any("finalization-check-target must be absent" in e for e in validate(repo.root, stage="cutover"))
 
 @pytest.mark.parametrize(
     "stage,setup,frag",
     [
-        ("cutover", "incomplete", "required workflow item must be complete"),
-        ("final", "absent", "required complete item missing"),
+        pytest.param("cutover", "incomplete", "required workflow item must be complete", id="cutover_incomplete"),
+        pytest.param("final", "absent", "required complete item missing", id="final_absent"),
     ],
-    ids=["cutover_incomplete", "final_absent"],
 )
-def test_workflow_lifecycle_requirements(tmp_path, stage, setup, frag):
-    r = RepoFixture(tmp_path)
+def test_workflow_lifecycle_requirements(repo, stage, setup, frag):
     if stage == "cutover":
-        r.seed_cutover(complete=False)
+        repo.seed_cutover(complete=False)
     else:
-        r.seed_final()
-        r.write_manifest(
+        repo.seed_final()
+        repo.write_manifest(
             status="completed",
             items=_manifest_item(
                 path="gone/",
@@ -540,8 +462,7 @@ def test_workflow_lifecycle_requirements(tmp_path, stage, setup, frag):
             )
             + "aggregate = true\n",
         )
-    assert any(frag in e for e in validate(tmp_path, stage=stage))
-
+    assert any(frag in e for e in validate(repo.root, stage=stage))
 
 @pytest.mark.parametrize(
     "extra,setup,frag",
@@ -551,29 +472,35 @@ def test_workflow_lifecycle_requirements(tmp_path, stage, setup, frag):
         ({"path": "missing-target", "kind": "make_target", "action": "retain"}, None, "retained path missing"),
     ],
 )
-def test_manifest_item_failures(tmp_path, extra, setup, frag):
-    r = RepoFixture(tmp_path)
-    r.seed_pre()
+def test_manifest_item_failures(repo, extra, setup, frag):
+    repo.seed_pre()
     item = _manifest_item(**extra)
     if setup == "touch":
-        (tmp_path / extra["path"]).write_text("x", encoding="utf-8")
+        (repo.root / extra["path"]).write_text("x", encoding="utf-8")
     elif setup == "replacements":
         item += 'replacements = ["missing/replacement.py"]\n'
-    r.write_manifest(items=_MANIFEST_TAIL.format(wf="in_progress") + item)
-    assert any(frag in e for e in validate(tmp_path, stage="pre-cutover"))
+    repo.write_manifest(items=_MANIFEST_TAIL.format(wf="in_progress") + item)
+    assert any(frag in e for e in validate(repo.root, stage="pre-cutover"))
 
+def _planned_manifest(**item_overrides) -> str:
+    defaults = {
+        "path": "x", "kind": "filesystem", "action": "delete",
+        "status": "planned", "confidence": "confirmed",
+    }
+    defaults.update(item_overrides)
+    return f'schema_version = 1\nstatus = "active"\n\n{_manifest_item(**defaults)}'
 
 @pytest.mark.parametrize(
     "body,frag",
     [
-        ('schema_version = true\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"), "schema_version"),
-        ('schema_version = 1\nstatus = "active"\nextra = true\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="delete", status="planned", confidence="confirmed"), "extra"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="edit", status="planned", confidence="confirmed"), "action"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\n' + _ITEM.format(path="x", kind="filesystem", action="retain", status="planned", confidence="confirmed") + "requires_explicit_test_target_reference = false\n", "requires_explicit_test_target_reference"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "/abs/path"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n', "repository-relative"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "a/../b"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\n', "must not contain"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "dup"\nkind = "filesystem"\naction = "delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\nreplacements = ["dup", "dup"]\n', "duplicate path entry"),
-        ('schema_version = 1\nstatus = "active"\n\n[[items]]\npath = "x"\nkind = "filesystem"\naction = "port_then_delete"\nowner_pr = "6C"\nstatus = "planned"\nconfidence = "confirmed"\nresponsibility = "x"\nevidence = ["e", "e"]\n', "duplicate path entry"),
+        pytest.param(_planned_manifest().replace("schema_version = 1", "schema_version = true", 1), "schema_version", id="bad_schema_version"),
+        pytest.param(_planned_manifest().replace('status = "active"\n', 'status = "active"\nextra = true\n', 1), "extra", id="extra_top_level"),
+        pytest.param(_planned_manifest(action="edit"), "action", id="bad_action"),
+        pytest.param(_planned_manifest(action="retain") + "requires_explicit_test_target_reference = false\n", "requires_explicit_test_target_reference", id="retain_flag"),
+        pytest.param(_planned_manifest(path="/abs/path"), "repository-relative", id="abs_path"),
+        pytest.param(_planned_manifest(path="a/../b"), "must not contain", id="dotdot_path"),
+        pytest.param(_planned_manifest(path="dup") + 'replacements = ["dup", "dup"]\n', "duplicate path entry", id="dup_replacements"),
+        pytest.param(_planned_manifest(action="port_then_delete") + 'evidence = ["e", "e"]\n', "duplicate path entry", id="dup_evidence"),
     ],
 )
 def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
@@ -584,24 +511,11 @@ def test_malformed_manifest_inputs_fail(tmp_path, body, frag):
     assert manifest is None
     assert any(frag in error for error in errors)
 
-
 def test_manifest_duplicate_normalized_paths_fail(tmp_path):
     body = (
         'schema_version = 1\nstatus = "active"\n\n'
-        + _manifest_item(
-            path="a//b",
-            kind="filesystem",
-            action="delete",
-            status="planned",
-            confidence="confirmed",
-        )
-        + _manifest_item(
-            path="a/b",
-            kind="filesystem",
-            action="delete",
-            status="planned",
-            confidence="confirmed",
-        )
+        + _manifest_item(path="a//b", kind="filesystem", action="delete", status="planned", confidence="confirmed")
+        + _manifest_item(path="a/b", kind="filesystem", action="delete", status="planned", confidence="confirmed")
     )
     (tmp_path / "docs/refactor").mkdir(parents=True)
     (tmp_path / "docs/refactor/deletion-manifest.toml").write_text(body, encoding="utf-8")
@@ -609,194 +523,137 @@ def test_manifest_duplicate_normalized_paths_fail(tmp_path):
     assert manifest is None
     assert any("duplicate kind/path" in error for error in errors)
 
-
 @pytest.mark.parametrize(
     "stage,dockerfile,compose,ok,err",
     [
-        ("pre-cutover", _DF_LEGACY, _CP_LEGACY, True, ""),
-        ("cutover", _DF_TARGET, _compose_fixture("python -m psychoanalyst_app.server"), False, "docker-compose api command must select"),
-        ("cutover", _DF_WRONG_CMD, _CP_TARGET, False, "CMD must select"),
-        ("cutover", _DF_MALFORMED_CMD, _CP_TARGET, False, "malformed"),
-        ("cutover", _DF_SHELL_CMD, _CP_TARGET, False, "Dockerfile CMD must use JSON exec form"),
-        ("cutover", _DF_ENTRYPOINT, _CP_TARGET, False, "ENTRYPOINT is unsupported"),
-        ("cutover", _DF_TARGET, _compose_fixture("jung-api", api_extra="    command: jung-api\n"), False, "must not declare local 'command'"),
-        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target"),
-        (
-            "cutover",
-            _DF_TARGET,
-            _compose_fixture("jung-api", test_extra="      target: production\n"),
-            False,
-            "services.test build",
-        ),
-        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("  command: jung-api\n", ""), False, "exactly one command"),
-        ("cutover", _DF_NONSELECTED, _CP_TARGET, True, ""),
-        ("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api"),
-        ("cutover", _DF_DUP_STAGE, _CP_TARGET, False, "exactly one 'development' stage"),
-    ],
-    ids=[
-        "legacy_ok",
-        "compose_wrong_command",
-        "docker_wrong_cmd",
-        "docker_malformed_cmd",
-        "docker_shell_cmd",
-        "docker_entrypoint",
-        "api_local_override",
-        "unknown_build_target",
-        "test_service_build_target",
-        "missing_command",
-        "nonselected_stage_ok",
-        "duplicate_api",
-        "duplicate_docker_stage",
+        pytest.param("pre-cutover", _DF_LEGACY, _CP_LEGACY, True, "", id="legacy_ok"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("python -m psychoanalyst_app.server"), False, "docker-compose api command must select", id="compose_wrong_command"),
+        pytest.param("cutover", _DF_WRONG_CMD, _CP_TARGET, False, "CMD must select", id="docker_wrong_cmd"),
+        pytest.param("cutover", _DF_MALFORMED_CMD, _CP_TARGET, False, "malformed", id="docker_malformed_cmd"),
+        pytest.param("cutover", _DF_SHELL_CMD, _CP_TARGET, False, "Dockerfile CMD must use JSON exec form", id="docker_shell_cmd"),
+        pytest.param("cutover", _DF_ENTRYPOINT, _CP_TARGET, False, "ENTRYPOINT is unsupported", id="docker_entrypoint"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("jung-api", api_extra="    command: jung-api\n"), False, "must not declare local 'command'", id="api_local_override"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("target: development", "target: production"), False, "build.target", id="unknown_build_target"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("jung-api", test_extra="      target: production\n"), False, "services.test build", id="test_service_build_target"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("  command: jung-api\n", ""), False, "exactly one command", id="missing_command"),
+        pytest.param("cutover", _DF_NONSELECTED, _CP_TARGET, True, "", id="nonselected_stage_ok"),
+        pytest.param("cutover", _DF_TARGET, _compose_fixture("jung-api").replace("services:\n  api:", "services:\n  api:\n  api:"), False, "exactly one services.api", id="duplicate_api"),
+        pytest.param("cutover", _DF_DUP_STAGE, _CP_TARGET, False, "exactly one 'development' stage", id="duplicate_docker_stage"),
     ],
 )
-def test_compose_runtime(tmp_path, stage, dockerfile, compose, ok, err):
-    r = RepoFixture(tmp_path)
-    (r.seed_cutover(complete=True) if stage == "cutover" else r.seed_pre())
-    r.write_runtime(target=stage != "pre-cutover", dockerfile=dockerfile, compose=compose)
-    errors = validate(tmp_path, stage=stage)
+def test_compose_runtime(repo, stage, dockerfile, compose, ok, err):
+    (repo.seed_cutover(complete=True) if stage == "cutover" else repo.seed_pre())
+    repo.write_runtime(target=stage != "pre-cutover", dockerfile=dockerfile, compose=compose)
+    errors = validate(repo.root, stage=stage)
     assert (errors == []) if ok else any(err in e for e in errors)
-
 
 @pytest.mark.parametrize(
     "compose,frag",
     [
-        (_compose_fixture("jung-api").replace("services:\n", "services: # duplicate\nservices:\n", 1), "exactly one services"),
-        (_compose_fixture("jung-api").replace("x-api-base:", "x-api-base: # duplicate\nx-api-base:", 1), "exactly one x-api-base"),
-        ('"services":\n  api:\n    image: x\n' + _compose_fixture("jung-api").split("services:", 1)[1], "unsupported mapping syntax"),
-        (_compose_fixture("jung-api", api_extra='    "command": jung-api\n'), "unsupported mapping syntax"),
-        ("? services\n" + _compose_fixture("jung-api"), "unsupported mapping syntax"),
-        (_compose_fixture("jung-api").replace("<<: *api-base", "<<: *other"), "merge must be <<: *api-base"),
-        (_compose_fixture("jung-api", api_extra="    profiles:\n      - dev\n"), "must not declare local 'profiles'"),
-        (_compose_fixture("jung-api", api_extra="    deploy:\n      replicas: 1\n"), "must not declare local 'deploy'"),
-        (_compose_fixture("jung-api", api_extra="    scale: 2\n"), "must not declare local 'scale'"),
-        (_compose_fixture("jung-api", base_extra="  entrypoint: echo\n"), "x-api-base must not declare 'entrypoint'"),
-        (_compose_fixture("jung-api", base_extra="  profiles:\n    - dev\n"), "x-api-base must not declare 'profiles'"),
-        ("include:\n  - alternate-compose.yml\n" + _compose_fixture("jung-api"), "must not declare top-level include"),
-        (_compose_fixture("jung-api", test_extra="    entrypoint: [\"true\"]\n"), "services.test must not declare 'entrypoint'"),
-    ],
-    ids=[
-        "dup_services_comment",
-        "dup_api_base_comment",
-        "quoted_services",
-        "quoted_command",
-        "explicit_key",
-        "wrong_merge",
-        "profiles_local",
-        "deploy_local",
-        "scale_local",
-        "entrypoint_base",
-        "profiles_base",
-        "top_level_include",
-        "test_entrypoint",
+        pytest.param(_compose_fixture("jung-api").replace("services:\n", "services: # duplicate\nservices:\n", 1), "exactly one services", id="dup_services_comment"),
+        pytest.param(_compose_fixture("jung-api").replace("x-api-base:", "x-api-base: # duplicate\nx-api-base:", 1), "exactly one x-api-base", id="dup_api_base_comment"),
+        pytest.param('"services":\n  api:\n    image: x\n' + _compose_fixture("jung-api").split("services:", 1)[1], "unsupported mapping syntax", id="quoted_services"),
+        pytest.param(_compose_fixture("jung-api", api_extra='    "command": jung-api\n'), "unsupported mapping syntax", id="quoted_command"),
+        pytest.param("? services\n" + _compose_fixture("jung-api"), "unsupported mapping syntax", id="explicit_key"),
+        pytest.param(_compose_fixture("jung-api").replace("<<: *api-base", "<<: *other"), "merge must be <<: *api-base", id="wrong_merge"),
+        pytest.param(_compose_fixture("jung-api", api_extra="    profiles:\n      - dev\n"), "must not declare local 'profiles'", id="profiles_local"),
+        pytest.param(_compose_fixture("jung-api", api_extra="    deploy:\n      replicas: 1\n"), "must not declare local 'deploy'", id="deploy_local"),
+        pytest.param(_compose_fixture("jung-api", api_extra="    scale: 2\n"), "must not declare local 'scale'", id="scale_local"),
+        pytest.param(_compose_fixture("jung-api", base_extra="  entrypoint: echo\n"), "x-api-base must not declare 'entrypoint'", id="entrypoint_base"),
+        pytest.param(_compose_fixture("jung-api", base_extra="  profiles:\n    - dev\n"), "x-api-base must not declare 'profiles'", id="profiles_base"),
+        pytest.param("include:\n  - alternate-compose.yml\n" + _compose_fixture("jung-api"), "must not declare top-level include", id="top_level_include"),
+        pytest.param(_compose_fixture("jung-api", test_extra='    entrypoint: ["true"]\n'), "services.test must not declare 'entrypoint'", id="test_entrypoint"),
     ],
 )
-def test_compose_syntax_categories(tmp_path, compose, frag):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_runtime(target=True, compose=compose)
-    assert any(frag in e for e in validate(tmp_path, stage="cutover"))
-
+def test_compose_syntax_categories(repo, compose, frag):
+    repo.seed_cutover(complete=True)
+    repo.write_runtime(target=True, compose=compose)
+    assert any(frag in e for e in validate(repo.root, stage="cutover"))
 
 @pytest.mark.parametrize(
     "workflow,expect_fail",
     [
-        (_WF_CANONICAL.replace("make finalization-check", "make other-gate"), True),
-        (
-            _WF_CANONICAL.replace(
-                "jobs:\n",
-                "jobs:\n  extra:\n    runs-on: ubuntu-latest\n",
-            ),
-            True,
+        pytest.param(
+            _WF_CANONICAL.replace("make finalization-check", "make other-gate"), True, id="altered_gate",
         ),
-        (
+        pytest.param(
+            _WF_CANONICAL.replace("jobs:\n", "jobs:\n  extra:\n    runs-on: ubuntu-latest\n"),
+            True, id="extra_job",
+        ),
+        pytest.param(
             _WF_CANONICAL.replace(
                 "run: make finalization-check\n",
                 "  # whole-line comment\n\n        run: make finalization-check   \n",
             ),
-            False,
+            False, id="normalization_ok",
         ),
     ],
-    ids=["altered_gate", "extra_job", "normalization_ok"],
 )
-def test_workflow_contract(tmp_path, workflow, expect_fail):
-    r = RepoFixture(tmp_path)
-    r.seed_cutover(complete=True)
-    r.write_workflow(workflow)
-    errors = validate(tmp_path, stage="cutover")
+def test_workflow_contract(repo, workflow, expect_fail):
+    repo.seed_cutover(complete=True)
+    repo.write_workflow(workflow)
+    errors = validate(repo.root, stage="cutover")
     if expect_fail:
         assert any(_CANONICAL_MISMATCH in e for e in errors)
     else:
         assert not any(_CANONICAL_MISMATCH in e for e in errors)
 
-
-
-def test_forbidden_import_and_dependency(tmp_path):
-    r = RepoFixture(tmp_path)
-    r.seed_final()
-    p = tmp_path / "src/legacy.py"
+def test_forbidden_import_and_dependency(repo):
+    repo.seed_final()
+    p = repo.root / "src/legacy.py"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("import psychoanalyst_app\n", encoding="utf-8")
-    assert any("imports forbidden module" in e for e in validate(tmp_path, stage="final"))
-    r.write_pyproject(_PP_TARGET.replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "trio"]'))
-    assert any("forbidden dependency" in e for e in validate(tmp_path, stage="final"))
-
+    assert any("imports forbidden module" in e for e in validate(repo.root, stage="final"))
+    repo.write_pyproject(_PP_TARGET.replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "trio"]'))
+    assert any("forbidden dependency" in e for e in validate(repo.root, stage="final"))
 
 @pytest.mark.parametrize(
-    "makefile_patch,referenced,control_error",
+    "makefile_patch,referenced",
     [
-        ("TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n" "test-target:\n\tpytest tests/unit/jung/\n", False, False),
-        ("test-target:\n\techo $(TARGET_SUPPORT_TESTS)\n", False, False),
-        ("test-target:\n\techo pytest tests/unit/test_validate_refactor_phase_6.py\n", False, False),
-        ("test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n", True, False),
-        (
-            "test-target:\n\t"
-            + _DOCKER_TEST_RUN
-            + " pytest tests/unit/test_validate_refactor_phase_6.py\n",
-            True,
-            False,
-        ),
-        (
+        pytest.param(
             "TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n"
-            "test-target:\n\t"
-            + _DOCKER_TEST_RUN
-            + " pytest $(TARGET_SUPPORT_TESTS)\n",
-            True,
-            False,
+            "test-target:\n\tpytest tests/unit/jung/\n", False, id="unused_var",
         ),
-        ("test-target:\n\t@-pytest tests/unit/test_validate_refactor_phase_6.py\n", False, False),
-        (
+        pytest.param("test-target:\n\techo $(TARGET_SUPPORT_TESTS)\n", False, id="echo_var"),
+        pytest.param(
+            "test-target:\n\techo pytest tests/unit/test_validate_refactor_phase_6.py\n",
+            False, id="echo_pytest",
+        ),
+        pytest.param(
+            "test-target:\n\tpytest tests/unit/test_validate_refactor_phase_6.py\n",
+            True, id="direct_pytest",
+        ),
+        pytest.param(
+            "test-target:\n\t" + _DOCKER_TEST_RUN + " pytest tests/unit/test_validate_refactor_phase_6.py\n",
+            True, id="docker_pytest",
+        ),
+        pytest.param(
+            "TARGET_SUPPORT_TESTS := tests/unit/test_validate_refactor_phase_6.py\n"
+            "test-target:\n\t" + _DOCKER_TEST_RUN + " pytest $(TARGET_SUPPORT_TESTS)\n",
+            True, id="var_expansion",
+        ),
+        pytest.param(
+            "test-target:\n\t@-pytest tests/unit/test_validate_refactor_phase_6.py\n",
+            False, id="at_prefix_pytest",
+        ),
+        pytest.param(
             "test-target:\n\tpytest -k SHELL tests/unit/test_validate_refactor_phase_6.py\n",
-            True,
-            False,
+            True, id="shell_word_in_pytest",
         ),
-    ],
-    ids=[
-        "unused_var",
-        "echo_var",
-        "echo_pytest",
-        "direct_pytest",
-        "docker_pytest",
-        "var_expansion",
-        "at_prefix_pytest",
-        "shell_word_in_pytest",
     ],
 )
-def test_retained_test_reference_rules(tmp_path, makefile_patch, referenced, control_error):
-    r = RepoFixture(tmp_path)
-    r.write_manifest(items=_retained_test_manifest())
-    r.write_runtime(target=True)
-    r.write_workflow(_WF_CANONICAL)
-    base = (tmp_path / "Makefile").read_text(encoding="utf-8")
+def test_retained_test_reference_rules(repo, makefile_patch, referenced):
+    repo.write_manifest(items=_retained_test_manifest())
+    repo.write_runtime(target=True)
+    repo.write_workflow(_WF_CANONICAL)
+    base = (repo.root / "Makefile").read_text(encoding="utf-8")
     base = re.sub(r"test-target:\n\tpytest tests/\n", makefile_patch, base)
-    (tmp_path / "Makefile").write_text(base, encoding="utf-8")
-    (tmp_path / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
-    errors = validate(tmp_path, stage="cutover")
+    (repo.root / "Makefile").write_text(base, encoding="utf-8")
+    (repo.root / _RETAINED_TEST).parent.mkdir(parents=True, exist_ok=True)
+    (repo.root / _RETAINED_TEST).write_text("#\n", encoding="utf-8")
+    errors = validate(repo.root, stage="cutover")
     if referenced:
         assert not any("retained test not referenced" in e for e in errors)
     else:
         assert any("retained test not referenced" in e for e in errors)
-    if control_error:
-        assert any("forbidden control" in e for e in errors)
-    else:
-        assert not any("forbidden control" in e for e in errors)
+    assert not any("forbidden control" in e for e in errors)
