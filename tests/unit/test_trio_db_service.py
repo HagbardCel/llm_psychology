@@ -850,7 +850,10 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
 
     migration_service = MigrationService(db_path)
     db = TrioDatabaseService(db_path, migration_service=migration_service)
-    with pytest.raises(RuntimeError, match="make reset-foundation-db"):
+    with pytest.raises(
+        RuntimeError,
+        match="delete the SQLite database",
+    ):
         await db.initialize()
 
 

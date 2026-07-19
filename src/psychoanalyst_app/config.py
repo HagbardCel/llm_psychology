@@ -182,7 +182,6 @@ class Settings(BaseSettings):
 
     # Database Configuration
     DATABASE_PATH: str = Field(default="data/psychoanalyst.db")
-    DATABASE_BACKUP_DIR: str = Field(default="data/backups")
 
     # Therapy style packs retain knowledge assets for a future retrieval extension.
     STYLES_DIR: str | None = Field(

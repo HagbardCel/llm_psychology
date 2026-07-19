@@ -304,15 +304,31 @@ responsibility = "Legacy JSON schema validation for psychoanalyst_app models"
 evidence = ["src/jung/api/contracts.py"]
 
 [[items]]
-path = "src/psychoanalyst_app/tools/db_backup.py"
+path = "src/psychoanalyst_app/tools/"
 kind = "filesystem"
-action = "reimplement_then_delete"
+action = "delete"
 owner_pr = "6B"
-status = "planned"
+status = "complete"
 confidence = "confirmed"
-responsibility = "Legacy database backup and restore CLI"
-replacements = ["src/jung/tools/db_backup.py"]
-evidence = ["tests/unit/jung/tools/test_db_backup.py"]
+responsibility = "Obsolete pre-production database backup and maintenance CLI package"
+
+[[items]]
+path = "tests/unit/test_db_backup_tool.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy backup and restore tests removed with the obsolete CLI"
+
+[[items]]
+path = "scripts/purge_databases.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete pre-production database purge CLI"
 
 [[items]]
 path = "src/psychoanalyst_app/agents/intake/record_merge.py"
@@ -538,7 +554,7 @@ path = "test-real-llm"
 kind = "make_target"
 action = "delete"
 owner_pr = "6B"
-status = "planned"
+status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy real-LLM test Make target"
 
@@ -556,7 +572,7 @@ path = "test-validate-no-mocks"
 kind = "make_target"
 action = "delete"
 owner_pr = "6B"
-status = "planned"
+status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy no-mocks validation Make target"
 
@@ -565,7 +581,7 @@ path = "reset-usertest"
 kind = "make_target"
 action = "delete"
 owner_pr = "6B"
-status = "planned"
+status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy usertest database reset Make target"
 
@@ -574,9 +590,45 @@ path = "reset-foundation-db"
 kind = "make_target"
 action = "delete"
 owner_pr = "6B"
-status = "planned"
+status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy foundation database reset Make target"
+
+[[items]]
+path = "clean-testdb"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete host-side database cleanup target superseded by Docker test-volume reset"
+
+[[items]]
+path = "docker-db-backup"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete local SQLite backup Make target"
+
+[[items]]
+path = "docker-db-backup-verify"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete local SQLite backup verification Make target"
+
+[[items]]
+path = "docker-db-restore"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete local SQLite restore Make target"
 
 [[items]]
 path = ".github/workflows/architecture-governance.yml"

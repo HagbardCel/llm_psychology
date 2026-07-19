@@ -34,9 +34,9 @@ maintenance guidance.
 
 ## Local Database
 
-Back up SQLite with `make docker-db-backup`. Before an intentional pre-release
-schema reset, create a backup and then run `make reset-foundation-db`. Older
-therapy-plan schemas are rejected at startup instead of migrated implicitly.
+Databases with incompatible development schemas must be deleted and recreated.
+Stop the application and remove the SQLite database together with any `-wal` and
+`-shm` sibling files, or use a fresh data directory.
 
 ## Optional Devcontainer
 

@@ -62,14 +62,19 @@ FORBIDDEN_IMPORT_ROOTS = (
 FORBIDDEN_DEP_PREFIXES = FORBIDDEN_IMPORT_ROOTS + ("langchain",)
 LEGACY_RUNTIME_ARGV = ("python", "-m", "psychoanalyst_app.server")
 TARGET_RUNTIME_ARGV = ("jung-api",)
-LEGACY_ENTRY_POINTS = frozenset({"psychoanalyst-server", "psychoanalyst-db"})
-TARGET_ENTRY_POINTS = {
+ENTRY_POINT_TARGETS = {
+    "psychoanalyst-server": "psychoanalyst_app.server:cli",
     "jung-api": "jung.api.app:cli",
     "jung-console": "jung.client.terminal:cli",
-    "jung-db": "jung.tools.db_backup:main",
 }
-TARGET_ENTRY_CUTOVER = frozenset({"jung-api", "jung-console"})
-TARGET_ENTRY_FINAL = frozenset(TARGET_ENTRY_POINTS)
+PRE_CUTOVER_REQUIRED_ENTRY_POINTS = frozenset(
+    {"psychoanalyst-server", "jung-api", "jung-console"}
+)
+TARGET_REQUIRED_ENTRY_POINTS = frozenset({"jung-api", "jung-console"})
+PRE_CUTOVER_FORBIDDEN_ENTRY_POINTS = frozenset({"psychoanalyst-db", "jung-db"})
+POST_CUTOVER_FORBIDDEN_ENTRY_POINTS = frozenset(
+    {"psychoanalyst-server", "psychoanalyst-db", "jung-db"}
+)
 MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PREPARE_RUNTIME_RECIPES = (
     "@mkdir -p data logs logs/workflow-probes",
@@ -150,6 +155,7 @@ class StageRules:
     forbidden_targets: frozenset[str]
     required_entry_points: frozenset[str]
     forbidden_entry_points: frozenset[str]
+    required_complete_owner_prs: frozenset[str]
 
 STAGES: dict[str, StageRules] = {
     "pre-cutover": StageRules(
@@ -161,8 +167,9 @@ STAGES: dict[str, StageRules] = {
         ),
         watched_targets=WATCHED_PRE_CUTOVER,
         forbidden_targets=frozenset(),
-        required_entry_points=frozenset(),
-        forbidden_entry_points=frozenset(),
+        required_entry_points=PRE_CUTOVER_REQUIRED_ENTRY_POINTS,
+        forbidden_entry_points=PRE_CUTOVER_FORBIDDEN_ENTRY_POINTS,
+        required_complete_owner_prs=frozenset({"6A", "6B"}),
     ),
     "cutover": StageRules(
         manifest_status="active",
@@ -170,8 +177,9 @@ STAGES: dict[str, StageRules] = {
         gates=(("finalization-check", _target_gate("cutover")),),
         watched_targets=WATCHED_CUTOVER,
         forbidden_targets=frozenset({"finalization-check-target"}),
-        required_entry_points=TARGET_ENTRY_CUTOVER,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        required_entry_points=TARGET_REQUIRED_ENTRY_POINTS,
+        forbidden_entry_points=POST_CUTOVER_FORBIDDEN_ENTRY_POINTS,
+        required_complete_owner_prs=frozenset({"6A", "6B", "6C"}),
     ),
     "final": StageRules(
         manifest_status="completed",
@@ -179,8 +187,9 @@ STAGES: dict[str, StageRules] = {
         gates=(("finalization-check", _target_gate("final")),),
         watched_targets=WATCHED_CUTOVER,
         forbidden_targets=frozenset({"finalization-check-target"}),
-        required_entry_points=TARGET_ENTRY_FINAL,
-        forbidden_entry_points=LEGACY_ENTRY_POINTS,
+        required_entry_points=TARGET_REQUIRED_ENTRY_POINTS,
+        forbidden_entry_points=POST_CUTOVER_FORBIDDEN_ENTRY_POINTS,
+        required_complete_owner_prs=frozenset({"6A", "6B", "6C", "6D"}),
     ),
 }
 def _strip_nonempty(value: Any, field_name: str) -> Any:
@@ -968,22 +977,45 @@ def _validate_entry_points(ctx: RepoContext, rules: StageRules) -> list[str]:
     errors: list[str] = []
     names = set(scripts)
     for entry in rules.required_entry_points - names:
-        errors.append(f"missing target entry point: {entry}")
-    for legacy in rules.forbidden_entry_points & names:
-        errors.append(f"legacy entry point still present: {legacy}")
+        errors.append(f"missing required entry point: {entry}")
+    for forbidden in rules.forbidden_entry_points & names:
+        errors.append(f"forbidden entry point still present: {forbidden}")
     for name, value in scripts.items():
         if not isinstance(value, str):
             errors.append(f"entry point {name!r} must be a string")
             continue
+        if name in rules.forbidden_entry_points:
+            continue
+        if name in rules.required_entry_points:
+            expected = ENTRY_POINT_TARGETS[name]
+            if value != expected:
+                errors.append(
+                    f"entry point {name!r} must be {expected!r}, got {value!r}"
+                )
+            continue
         module = value.split(":", 1)[0].strip()
         if module == "psychoanalyst_app" or module.startswith("psychoanalyst_app."):
-            errors.append(f"legacy entry point value still present: {name}")
-        elif name in rules.required_entry_points and value != TARGET_ENTRY_POINTS[name]:
-            expected = TARGET_ENTRY_POINTS[name]
-            errors.append(
-                f"entry point {name!r} must be {expected!r}, got {value!r}"
-            )
+            errors.append(f"forbidden legacy entry point value: {name}")
     return errors
+
+
+def _validate_required_owner_closure(
+    manifest: Manifest,
+    rules: StageRules,
+) -> list[str]:
+    return [
+        (
+            f"manifest item owned by {item.owner_pr} must be complete "
+            f"for this stage: {item.path}"
+        )
+        for item in manifest.items
+        if (
+            item.owner_pr in rules.required_complete_owner_prs
+            and item.status != "complete"
+        )
+    ]
+
+
 def _validate_import_closure(root: Path) -> list[str]:
     errors: list[str] = []
     for base in (root / "src", root / "scripts", root / "tests"):
@@ -1032,16 +1064,14 @@ def _validate_dependency_closure(ctx: RepoContext) -> list[str]:
     if isinstance(package_data, dict) and "psychoanalyst_app" in package_data:
         errors.append("pyproject package-data still references psychoanalyst_app")
     return errors
-def _final_manifest_closure(manifest: Manifest) -> list[str]:
+def _validate_final_confidence_closure(manifest: Manifest) -> list[str]:
     return [
-        f"manifest item not complete: {item.path}"
-        for item in manifest.items
-        if item.status != "complete"
-    ] + [
         f"discovery-needed item remains: {item.path}"
         for item in manifest.items
         if item.confidence == "discovery-needed"
     ]
+
+
 def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[str]:
     resolved = (root or REPO_ROOT).resolve()
     if stage not in STAGES:
@@ -1060,6 +1090,7 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
     errors.extend(_validate_runtime(ctx, rules))
     if rules.required_entry_points or rules.forbidden_entry_points:
         errors.extend(_validate_entry_points(ctx, rules))
+    errors.extend(_validate_required_owner_closure(manifest, rules))
     for item in manifest.items:
         if item.status == "complete":
             errors.extend(_validate_item_complete(ctx, item))
@@ -1073,14 +1104,10 @@ def validate(root: Path | None = None, *, stage: str = "pre-cutover") -> list[st
         )
         if workflow_item is None:
             errors.append(
-                f"required complete item missing from manifest: {WORKFLOW_EDIT_PATH}"
-            )
-        elif workflow_item.status != "complete":
-            errors.append(
-                f"required workflow item must be complete for stage {stage!r}"
+                f"required manifest item missing: {WORKFLOW_EDIT_PATH}"
             )
     if stage == "final":
-        errors.extend(_final_manifest_closure(manifest))
+        errors.extend(_validate_final_confidence_closure(manifest))
         errors.extend(_validate_import_closure(resolved))
         errors.extend(_validate_dependency_closure(ctx))
     return errors

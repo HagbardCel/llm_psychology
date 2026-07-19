@@ -15,7 +15,7 @@ _SPEC.loader.exec_module(_MOD)
 validate, parse_manifest = _MOD.validate, _MOD.parse_manifest
 
 _ITEM = (
-    'path = "{path}"\nkind = "{kind}"\naction = "{action}"\nowner_pr = "6C"\n'
+    'path = "{path}"\nkind = "{kind}"\naction = "{action}"\nowner_pr = "{owner_pr}"\n'
     'status = "{status}"\nconfidence = "{confidence}"\nresponsibility = "x"\n'
 )
 _MANIFEST_TAIL = """
@@ -199,21 +199,27 @@ _DF_DUP_STAGE = (
 )
 _CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server")
 _CP_TARGET = _compose_fixture("jung-api")
-_PP_LEGACY = (
+_PP_PRE_CUTOVER = (
     '[project]\nname = "x"\nversion = "0.0.0"\ndependencies = ["fastapi"]\n'
-    '[project.scripts]\npsychoanalyst-server = "psychoanalyst_app.server:cli"\n'
+    "[project.scripts]\n"
+    'psychoanalyst-server = "psychoanalyst_app.server:cli"\n'
+    'jung-api = "jung.api.app:cli"\n'
+    'jung-console = "jung.client.terminal:cli"\n'
 )
 _PP_TARGET = (
     '[project]\nname = "x"\nversion = "0.0.0"\ndependencies = ["fastapi"]\n'
     "[project.scripts]\n"
     'jung-api = "jung.api.app:cli"\n'
     'jung-console = "jung.client.terminal:cli"\n'
-    'jung-db = "jung.tools.db_backup:main"\n'
 )
 _RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
 
 def _manifest_item(**kwargs) -> str:
-    defaults = {"status": "complete", "confidence": "confirmed"}
+    defaults = {
+        "status": "complete",
+        "confidence": "confirmed",
+        "owner_pr": "6C",
+    }
     defaults.update(kwargs)
     return "[[items]]\n" + _ITEM.format(**defaults)
 
@@ -259,7 +265,7 @@ class RepoFixture:
             compose or (_CP_TARGET if target else _CP_LEGACY), encoding="utf-8"
         )
         (self.root / "pyproject.toml").write_text(
-            pyproject or (_PP_TARGET if target else _PP_LEGACY), encoding="utf-8"
+            pyproject or (_PP_TARGET if target else _PP_PRE_CUTOVER), encoding="utf-8"
         )
         (self.root / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
         (self.root / "scripts").mkdir(exist_ok=True)
@@ -442,8 +448,18 @@ def test_cutover_rejects_target_gate_present(repo):
 @pytest.mark.parametrize(
     "stage,setup,frag",
     [
-        pytest.param("cutover", "incomplete", "required workflow item must be complete", id="cutover_incomplete"),
-        pytest.param("final", "absent", "required complete item missing", id="final_absent"),
+        pytest.param(
+            "cutover",
+            "incomplete",
+            "manifest item owned by 6C must be complete",
+            id="cutover_incomplete",
+        ),
+        pytest.param(
+            "final",
+            "absent",
+            "required manifest item missing",
+            id="final_absent",
+        ),
     ],
 )
 def test_workflow_lifecycle_requirements(repo, stage, setup, frag):
@@ -462,7 +478,11 @@ def test_workflow_lifecycle_requirements(repo, stage, setup, frag):
             )
             + "aggregate = true\n",
         )
-    assert any(frag in e for e in validate(repo.root, stage=stage))
+    errors = validate(repo.root, stage=stage)
+    assert any(frag in e for e in errors)
+    if stage == "cutover":
+        assert sum("must be complete" in e for e in errors) == 1
+        assert not any("required workflow item must be complete" in e for e in errors)
 
 @pytest.mark.parametrize(
     "extra,setup,frag",
@@ -657,3 +677,172 @@ def test_retained_test_reference_rules(repo, makefile_patch, referenced):
     else:
         assert any("retained test not referenced" in e for e in errors)
     assert not any("forbidden control" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "scripts,frag",
+    [
+        pytest.param(
+            _PP_PRE_CUTOVER.replace(
+                'psychoanalyst-server = "psychoanalyst_app.server:cli"\n', ""
+            ),
+            "missing required entry point: psychoanalyst-server",
+            id="missing_server",
+        ),
+        pytest.param(
+            _PP_PRE_CUTOVER.replace(
+                'psychoanalyst-server = "psychoanalyst_app.server:cli"',
+                'psychoanalyst-server = "psychoanalyst_app.other:cli"',
+            ),
+            "entry point 'psychoanalyst-server' must be",
+            id="wrong_server_mapping",
+        ),
+        pytest.param(
+            _PP_PRE_CUTOVER.replace(
+                'jung-api = "jung.api.app:cli"\n', ""
+            ),
+            "missing required entry point: jung-api",
+            id="missing_jung_api",
+        ),
+        pytest.param(
+            _PP_PRE_CUTOVER
+            + 'psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"\n',
+            "forbidden entry point still present: psychoanalyst-db",
+            id="forbidden_db",
+        ),
+        pytest.param(
+            _PP_PRE_CUTOVER + 'jung-db = "jung.tools.db_backup:main"\n',
+            "forbidden entry point still present: jung-db",
+            id="forbidden_jung_db",
+        ),
+        pytest.param(
+            _PP_PRE_CUTOVER
+            + 'legacy-alias = "psychoanalyst_app.tools.db_backup:main"\n',
+            "forbidden legacy entry point value: legacy-alias",
+            id="legacy_alias",
+        ),
+    ],
+)
+def test_pre_cutover_entry_point_contract(repo, scripts, frag):
+    repo.seed_pre()
+    repo.write_pyproject(scripts)
+    assert any(frag in e for e in validate(repo.root, stage="pre-cutover"))
+
+
+@pytest.mark.parametrize(
+    "extra,frag",
+    [
+        pytest.param(
+            'psychoanalyst-server = "psychoanalyst_app.server:cli"\n',
+            "forbidden entry point still present: psychoanalyst-server",
+            id="server",
+        ),
+        pytest.param(
+            'psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"\n',
+            "forbidden entry point still present: psychoanalyst-db",
+            id="db",
+        ),
+        pytest.param(
+            'jung-db = "jung.tools.db_backup:main"\n',
+            "forbidden entry point still present: jung-db",
+            id="jung_db",
+        ),
+    ],
+)
+def test_cutover_rejects_forbidden_entry_points(repo, extra, frag):
+    repo.seed_cutover(complete=True)
+    repo.write_pyproject(_PP_TARGET + extra)
+    assert any(frag in e for e in validate(repo.root, stage="cutover"))
+
+
+def test_owner_closure_pre_cutover_rejects_incomplete_6b(repo):
+    repo.seed_pre()
+    repo.write_manifest(
+        items=(
+            _MANIFEST_TAIL.format(wf="in_progress")
+            + _manifest_item(
+                path="scripts/purge_databases.py",
+                kind="filesystem",
+                action="delete",
+                owner_pr="6B",
+                status="planned",
+            )
+        )
+    )
+    errors = validate(repo.root, stage="pre-cutover")
+    assert any(
+        "manifest item owned by 6B must be complete" in e for e in errors
+    )
+
+
+def test_owner_closure_pre_cutover_allows_planned_6c_and_6d(repo):
+    repo.seed_pre()
+    assert validate(repo.root, stage="pre-cutover") == []
+
+
+def test_owner_closure_cutover_rejects_incomplete_6c_allows_6d(repo):
+    repo.seed_cutover(complete=False)
+    repo.write_manifest(
+        items=(
+            _MANIFEST_TAIL.format(wf="in_progress")
+            + _manifest_item(
+                path="legacy-6d.txt",
+                kind="filesystem",
+                action="delete",
+                owner_pr="6D",
+                status="planned",
+            )
+        )
+    )
+    errors = validate(repo.root, stage="cutover")
+    assert any("owned by 6C must be complete" in e for e in errors)
+    assert not any("owned by 6D must be complete" in e for e in errors)
+
+
+def test_owner_closure_final_rejects_incomplete_without_duplicate(repo):
+    repo.seed_final()
+    repo.write_manifest(
+        status="completed",
+        items=(
+            _manifest_item(
+                path="gone/",
+                kind="filesystem",
+                action="delete",
+                owner_pr="6D",
+                status="planned",
+            )
+            + "aggregate = true\n"
+            + _manifest_item(
+                path=".github/workflows/release-candidate-validation.yml",
+                kind="workflow_edit",
+                action="edit",
+                owner_pr="6C",
+            )
+        ),
+    )
+    errors = validate(repo.root, stage="final")
+    matches = [e for e in errors if "owned by 6D must be complete" in e]
+    assert len(matches) == 1
+    assert not any("manifest item not complete:" in e for e in errors)
+
+
+def test_complete_directory_delete_semantics(repo):
+    repo.seed_pre()
+    legacy = repo.root / "legacy-tools"
+    legacy.mkdir()
+    (legacy / "__init__.py").write_text("#\n", encoding="utf-8")
+    item = _manifest_item(
+        path="legacy-tools/",
+        kind="filesystem",
+        action="delete",
+        owner_pr="6B",
+    )
+    repo.write_manifest(items=_MANIFEST_TAIL.format(wf="in_progress") + item)
+    assert any(
+        "complete item still present: legacy-tools/" in e
+        for e in validate(repo.root, stage="pre-cutover")
+    )
+    for child in legacy.iterdir():
+        child.unlink()
+    legacy.rmdir()
+    assert validate(repo.root, stage="pre-cutover") == []
