@@ -591,7 +591,9 @@ docker-logs-api:
 # Usage:
 #   make docker-db-view             # View local DB (default)
 #   make docker-db-view DB=usertest # View usertest DB
-# Note: Test databases use in-memory SQLite and don't create viewable files
+# Note: The automated test database is stored in the Docker-managed test-data
+# volume. It is intentionally not exposed through docker-db-view. Use
+# make docker-test-reset to remove it; the next test run recreates it.
 docker-db-view:
 	@DB_NAME=$${DB:-local}; \
 	case $$DB_NAME in \
@@ -599,8 +601,10 @@ docker-db-view:
 		usertest) DB_FILE=psychoanalyst_usertest.db ;; \
 		*) echo "❌ Invalid DB. Use: local or usertest"; \
 		   echo ""; \
-		   echo "Note: Test databases use in-memory SQLite (:memory:) and"; \
-		   echo "      don't create persistent files to view."; \
+		   echo "Note: The automated test database is stored in the Docker-managed"; \
+		   echo "      test-data volume. It is intentionally not exposed through"; \
+		   echo "      docker-db-view. Use make docker-test-reset to remove it;"; \
+		   echo "      the next test run recreates it."; \
 		   echo ""; \
 		   echo "Example: make docker-db-view DB=usertest"; \
 		   exit 1 ;; \

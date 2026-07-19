@@ -1,6 +1,7 @@
 import importlib.util
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -199,19 +200,37 @@ _DF_DUP_STAGE = (
 )
 _CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server")
 _CP_TARGET = _compose_fixture("jung-api")
-_PP_PRE_CUTOVER = (
-    '[project]\nname = "x"\nversion = "0.0.0"\ndependencies = ["fastapi"]\n'
-    "[project.scripts]\n"
-    'psychoanalyst-server = "psychoanalyst_app.server:cli"\n'
-    'jung-api = "jung.api.app:cli"\n'
-    'jung-console = "jung.client.terminal:cli"\n'
-)
-_PP_TARGET = (
-    '[project]\nname = "x"\nversion = "0.0.0"\ndependencies = ["fastapi"]\n'
-    "[project.scripts]\n"
-    'jung-api = "jung.api.app:cli"\n'
-    'jung-console = "jung.client.terminal:cli"\n'
-)
+
+
+def _scripts(entries: Mapping[str, str]) -> str:
+    lines = [
+        "[project]",
+        'name = "x"',
+        'version = "0.0.0"',
+        'dependencies = ["fastapi"]',
+        "",
+        "[project.scripts]",
+    ]
+    lines.extend(f'{name} = "{target}"' for name, target in entries.items())
+    return "\n".join(lines) + "\n"
+
+
+_PRE_CUTOVER_SCRIPTS = {
+    "psychoanalyst-server": "psychoanalyst_app.server:cli",
+    "jung-api": "jung.api.app:cli",
+    "jung-console": "jung.client.terminal:cli",
+}
+_TARGET_SCRIPTS = {
+    "jung-api": "jung.api.app:cli",
+    "jung-console": "jung.client.terminal:cli",
+}
+_PP_PRE_CUTOVER = _scripts(_PRE_CUTOVER_SCRIPTS)
+_PP_TARGET = _scripts(_TARGET_SCRIPTS)
+_FORBIDDEN_TARGETS = {
+    "psychoanalyst-server": "psychoanalyst_app.server:cli",
+    "psychoanalyst-db": "psychoanalyst_app.tools.db_backup:main",
+    "jung-db": "jung.tools.db_backup:main",
+}
 _RETAINED_TEST = "tests/unit/test_validate_refactor_phase_6.py"
 
 def _manifest_item(**kwargs) -> str:
@@ -280,6 +299,13 @@ class RepoFixture:
 
     def write_pyproject(self, text: str) -> None:
         (self.root / "pyproject.toml").write_text(text, encoding="utf-8")
+
+    def append_manifest_item(self, item: str) -> None:
+        path = self.root / "docs/refactor/deletion-manifest.toml"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n" + item,
+            encoding="utf-8",
+        )
 
     def seed_pre(self) -> None:
         self.write_manifest(items=_MANIFEST_TAIL.format(wf="in_progress"))
@@ -679,151 +705,125 @@ def test_retained_test_reference_rules(repo, makefile_patch, referenced):
     assert not any("forbidden control" in e for e in errors)
 
 
-@pytest.mark.parametrize(
-    "scripts,frag",
-    [
-        pytest.param(
-            _PP_PRE_CUTOVER.replace(
-                'psychoanalyst-server = "psychoanalyst_app.server:cli"\n', ""
-            ),
-            "missing required entry point: psychoanalyst-server",
-            id="missing_server",
-        ),
-        pytest.param(
-            _PP_PRE_CUTOVER.replace(
-                'psychoanalyst-server = "psychoanalyst_app.server:cli"',
-                'psychoanalyst-server = "psychoanalyst_app.other:cli"',
-            ),
-            "entry point 'psychoanalyst-server' must be",
-            id="wrong_server_mapping",
-        ),
-        pytest.param(
-            _PP_PRE_CUTOVER.replace(
-                'jung-api = "jung.api.app:cli"\n', ""
-            ),
-            "missing required entry point: jung-api",
-            id="missing_jung_api",
-        ),
-        pytest.param(
-            _PP_PRE_CUTOVER
-            + 'psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"\n',
-            "forbidden entry point still present: psychoanalyst-db",
-            id="forbidden_db",
-        ),
-        pytest.param(
-            _PP_PRE_CUTOVER + 'jung-db = "jung.tools.db_backup:main"\n',
-            "forbidden entry point still present: jung-db",
-            id="forbidden_jung_db",
-        ),
-        pytest.param(
-            _PP_PRE_CUTOVER
-            + 'legacy-alias = "psychoanalyst_app.tools.db_backup:main"\n',
-            "forbidden legacy entry point value: legacy-alias",
-            id="legacy_alias",
-        ),
-    ],
-)
-def test_pre_cutover_entry_point_contract(repo, scripts, frag):
-    repo.seed_pre()
-    repo.write_pyproject(scripts)
-    assert any(frag in e for e in validate(repo.root, stage="pre-cutover"))
+def _seed_stage(repo: RepoFixture, stage: str) -> None:
+    if stage == "pre-cutover":
+        repo.seed_pre()
+    elif stage == "cutover":
+        repo.seed_cutover(complete=True)
+    else:
+        repo.seed_final()
+
+
+def _canonical_scripts(stage: str) -> dict[str, str]:
+    return dict(
+        _PRE_CUTOVER_SCRIPTS if stage == "pre-cutover" else _TARGET_SCRIPTS
+    )
 
 
 @pytest.mark.parametrize(
-    "extra,frag",
+    ("stage", "name", "mode"),
     [
-        pytest.param(
-            'psychoanalyst-server = "psychoanalyst_app.server:cli"\n',
-            "forbidden entry point still present: psychoanalyst-server",
-            id="server",
-        ),
-        pytest.param(
-            'psychoanalyst-db = "psychoanalyst_app.tools.db_backup:main"\n',
-            "forbidden entry point still present: psychoanalyst-db",
-            id="db",
-        ),
-        pytest.param(
-            'jung-db = "jung.tools.db_backup:main"\n',
-            "forbidden entry point still present: jung-db",
-            id="jung_db",
-        ),
+        ("pre-cutover", "psychoanalyst-server", "missing"),
+        ("pre-cutover", "psychoanalyst-server", "misrouted"),
+        ("pre-cutover", "jung-api", "missing"),
+        ("pre-cutover", "jung-api", "misrouted"),
+        ("pre-cutover", "jung-console", "missing"),
+        ("pre-cutover", "jung-console", "misrouted"),
+        ("cutover", "jung-api", "missing"),
+        ("cutover", "jung-api", "misrouted"),
+        ("cutover", "jung-console", "missing"),
+        ("cutover", "jung-console", "misrouted"),
+        ("final", "jung-api", "missing"),
+        ("final", "jung-api", "misrouted"),
+        ("final", "jung-console", "missing"),
+        ("final", "jung-console", "misrouted"),
     ],
 )
-def test_cutover_rejects_forbidden_entry_points(repo, extra, frag):
-    repo.seed_cutover(complete=True)
-    repo.write_pyproject(_PP_TARGET + extra)
-    assert any(frag in e for e in validate(repo.root, stage="cutover"))
+def test_required_entry_point_mappings(repo, stage, name, mode):
+    _seed_stage(repo, stage)
+    entries = _canonical_scripts(stage)
+    if mode == "missing":
+        entries.pop(name)
+        expected_fragment = f"missing required entry point: {name}"
+    else:
+        entries[name] = "wrong.module:cli"
+        expected_fragment = f"entry point '{name}' must be"
+    repo.write_pyproject(_scripts(entries))
+    errors = validate(repo.root, stage=stage)
+    assert len(errors) == 1
+    assert expected_fragment in errors[0]
 
 
-def test_owner_closure_pre_cutover_rejects_incomplete_6b(repo):
-    repo.seed_pre()
-    repo.write_manifest(
-        items=(
-            _MANIFEST_TAIL.format(wf="in_progress")
-            + _manifest_item(
-                path="scripts/purge_databases.py",
-                kind="filesystem",
-                action="delete",
-                owner_pr="6B",
-                status="planned",
-            )
+@pytest.mark.parametrize(
+    ("stage", "name"),
+    [
+        ("pre-cutover", "psychoanalyst-db"),
+        ("pre-cutover", "jung-db"),
+        ("cutover", "psychoanalyst-server"),
+        ("cutover", "psychoanalyst-db"),
+        ("cutover", "jung-db"),
+        ("final", "psychoanalyst-server"),
+        ("final", "psychoanalyst-db"),
+        ("final", "jung-db"),
+    ],
+)
+def test_forbidden_entry_points(repo, stage, name):
+    _seed_stage(repo, stage)
+    entries = _canonical_scripts(stage)
+    entries[name] = _FORBIDDEN_TARGETS[name]
+    repo.write_pyproject(_scripts(entries))
+    errors = validate(repo.root, stage=stage)
+    name_error = f"forbidden entry point still present: {name}"
+    assert errors.count(name_error) == 1
+    assert f"forbidden legacy entry point value: {name}" not in errors
+
+
+@pytest.mark.parametrize("stage", ["pre-cutover", "cutover"])
+def test_legacy_entry_point_alias(repo, stage):
+    _seed_stage(repo, stage)
+    entries = _canonical_scripts(stage)
+    entries["legacy-alias"] = "psychoanalyst_app.anything:cli"
+    repo.write_pyproject(_scripts(entries))
+    assert validate(repo.root, stage=stage) == [
+        "forbidden legacy entry point value: legacy-alias"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage", "owner_pr", "status", "should_fail"),
+    [
+        ("pre-cutover", "6A", "planned", True),
+        ("pre-cutover", "6B", "planned", True),
+        ("pre-cutover", "6B", "in_progress", True),
+        ("pre-cutover", "6C", "planned", False),
+        ("pre-cutover", "6D", "planned", False),
+        ("cutover", "6C", "planned", True),
+        ("cutover", "6D", "planned", False),
+        ("final", "6D", "planned", True),
+    ],
+)
+def test_owner_closure_by_stage(repo, stage, owner_pr, status, should_fail):
+    _seed_stage(repo, stage)
+    repo.append_manifest_item(
+        _manifest_item(
+            path=f"incomplete-{stage}-{owner_pr}-{status}.txt",
+            kind="filesystem",
+            action="delete",
+            owner_pr=owner_pr,
+            status=status,
         )
     )
-    errors = validate(repo.root, stage="pre-cutover")
-    assert any(
-        "manifest item owned by 6B must be complete" in e for e in errors
-    )
-
-
-def test_owner_closure_pre_cutover_allows_planned_6c_and_6d(repo):
-    repo.seed_pre()
-    assert validate(repo.root, stage="pre-cutover") == []
-
-
-def test_owner_closure_cutover_rejects_incomplete_6c_allows_6d(repo):
-    repo.seed_cutover(complete=False)
-    repo.write_manifest(
-        items=(
-            _MANIFEST_TAIL.format(wf="in_progress")
-            + _manifest_item(
-                path="legacy-6d.txt",
-                kind="filesystem",
-                action="delete",
-                owner_pr="6D",
-                status="planned",
-            )
+    errors = validate(repo.root, stage=stage)
+    fragment = f"manifest item owned by {owner_pr} must be complete"
+    matches = [error for error in errors if fragment in error]
+    if should_fail:
+        assert len(matches) == 1
+    else:
+        assert errors == []
+    if stage == "final" and owner_pr == "6D":
+        assert not any(
+            "manifest item not complete:" in error for error in errors
         )
-    )
-    errors = validate(repo.root, stage="cutover")
-    assert any("owned by 6C must be complete" in e for e in errors)
-    assert not any("owned by 6D must be complete" in e for e in errors)
-
-
-def test_owner_closure_final_rejects_incomplete_without_duplicate(repo):
-    repo.seed_final()
-    repo.write_manifest(
-        status="completed",
-        items=(
-            _manifest_item(
-                path="gone/",
-                kind="filesystem",
-                action="delete",
-                owner_pr="6D",
-                status="planned",
-            )
-            + "aggregate = true\n"
-            + _manifest_item(
-                path=".github/workflows/release-candidate-validation.yml",
-                kind="workflow_edit",
-                action="edit",
-                owner_pr="6C",
-            )
-        ),
-    )
-    errors = validate(repo.root, stage="final")
-    matches = [e for e in errors if "owned by 6D must be complete" in e]
-    assert len(matches) == 1
-    assert not any("manifest item not complete:" in e for e in errors)
 
 
 def test_complete_directory_delete_semantics(repo):
