@@ -1,0 +1,606 @@
+schema_version = 1
+status = "active"
+
+# Aggregate closure sentinel for the legacy package. Granular rows below own
+# replacements, blockers, and evidence; this row only ensures the root is gone.
+[[items]]
+path = "src/psychoanalyst_app/"
+kind = "filesystem"
+action = "delete"
+aggregate = true
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Final legacy package removal after granular ports and exceptions"
+
+[[items]]
+path = "src/psychoanalyst_app/api/user_routes.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Registration, login, and user scoping HTTP routes"
+blocker = "v1 profile contract"
+replacements = ["src/jung/api/routes.py"]
+evidence = ["tests/integration/jung/api/"]
+
+[[items]]
+path = "src/psychoanalyst_app/context/user_context.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Multi-user context and user ID scoping"
+blocker = "singleton profile contract"
+replacements = ["src/jung/domain/profile.py"]
+evidence = ["tests/unit/jung/domain/"]
+
+[[items]]
+path = "src/psychoanalyst_app/container/service_container.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "String-based service lookup and agent registry"
+blocker = "typed composition root"
+replacements = ["src/jung/composition.py"]
+evidence = ["tests/unit/jung/test_composition.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/orchestration/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy workflow, concurrency, and session orchestration"
+blocker = "target application workflow"
+replacements = ["src/jung/application.py", "src/jung/workflow.py", "src/jung/supervisor.py"]
+evidence = ["tests/integration/jung/test_application_workflow.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/orchestration/response_jobs.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Hierarchical job tree and retry orchestration"
+blocker = "Operation and ChatTurn schema"
+replacements = ["src/jung/domain/operation.py"]
+evidence = ["tests/unit/jung/domain/test_operation.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/api/job_routes.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy job status HTTP API"
+blocker = "operation schema and recovery"
+replacements = ["src/jung/api/routes.py"]
+evidence = ["tests/integration/jung/api/"]
+
+[[items]]
+path = "src/psychoanalyst_app/services/trio_db_service.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy Trio persistence stack entry point"
+blocker = "SQLiteStore transactions"
+replacements = ["src/jung/persistence/sqlite_store.py"]
+evidence = ["tests/unit/jung/persistence/", "tests/integration/jung/persistence/"]
+
+[[items]]
+path = "src/psychoanalyst_app/services/db/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy persistence executor, repositories, and facade stack"
+blocker = "SQLiteStore transactions"
+replacements = ["src/jung/persistence/sqlite_store.py"]
+evidence = ["tests/unit/jung/persistence/", "tests/integration/jung/persistence/"]
+
+[[items]]
+path = "src/psychoanalyst_app/api/ws_handler.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy WebSocket transport handler"
+blocker = "v1 WebSocket adapter"
+replacements = ["src/jung/api/websocket.py"]
+evidence = ["tests/integration/jung/api/test_websocket.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/utils/ws_protocol.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Generated legacy WebSocket protocol constants"
+blocker = "discriminated v1 contract models"
+replacements = ["src/jung/api/contracts.py"]
+evidence = ["tests/unit/jung/api/test_contracts.py"]
+
+[[items]]
+path = "console-ui/"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "likely"
+responsibility = "Legacy console HTTP/WebSocket client and workflow probes"
+blocker = "jung.client console and v1 probes"
+replacements = ["src/jung/client/console.py", "src/jung/client/terminal.py"]
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/trio_server.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy Quart HTTP/WebSocket server wiring"
+blocker = "v1 API cutover"
+replacements = ["src/jung/api/app.py"]
+evidence = ["tests/integration/jung/api/"]
+
+[[items]]
+path = "src/psychoanalyst_app/api/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy multi-user workflow and job HTTP routes"
+blocker = "v1 endpoint matrix parity"
+replacements = ["src/jung/api/routes.py"]
+evidence = ["tests/integration/jung/api/"]
+
+[[items]]
+path = "schemas/ws_protocol.json"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Generated legacy WebSocket protocol JSON schema"
+blocker = "generated contract validation"
+replacements = ["src/jung/api/contracts.py"]
+evidence = ["tests/unit/jung/api/test_contracts.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/agents/planning/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "likely"
+responsibility = "Cross-agent planning orchestration"
+blocker = "typed phase processors"
+replacements = ["src/jung/phases/planning/"]
+evidence = ["tests/unit/jung/phases/"]
+
+[[items]]
+path = "src/psychoanalyst_app/agents/memory/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "likely"
+responsibility = "Cross-agent memory and reflection wiring"
+blocker = "typed phase processors"
+replacements = ["src/jung/phases/"]
+evidence = ["tests/unit/jung/phases/"]
+
+[[items]]
+path = "src/psychoanalyst_app/services/llm/"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "likely"
+responsibility = "LangChain provider graph, inactive RAG, and key rotation"
+blocker = "OpenAI LLMGateway adapter"
+replacements = ["src/jung/llm/"]
+evidence = ["tests/unit/jung/llm/"]
+
+[[items]]
+path = "src/psychoanalyst_app/persistence/schema.sql"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Multi-user user_id persistence columns and legacy DTO fields"
+blocker = "singleton profile schema reset"
+replacements = ["src/jung/persistence/schema.sql"]
+evidence = ["tests/unit/jung/persistence/"]
+
+[[items]]
+path = "docker-compose.probe-deterministic.yml"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "discovery-needed"
+responsibility = "Legacy deterministic workflow probe compose overlay"
+blocker = "console v1 deterministic probe"
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "docker-compose.probe-intake-notes.yml"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "discovery-needed"
+responsibility = "Legacy intake-note workflow probe compose overlay"
+blocker = "console v1 probe coverage"
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "scripts/probe_deterministic.sh"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy deterministic probe shell wrapper"
+replacements = ["Makefile"]
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "scripts/probe_intake_notes.sh"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy intake-note probe shell wrapper"
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "scripts/generate_ws_protocol.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy WebSocket protocol code generation"
+replacements = ["src/jung/api/contracts.py"]
+evidence = ["tests/unit/jung/api/test_contracts.py"]
+
+[[items]]
+path = "scripts/check_architecture_budgets.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy architecture line-budget checks"
+evidence = ["scripts/validate_refactor_phase_6.py"]
+
+[[items]]
+path = "scripts/validate_schemas.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy JSON schema validation for psychoanalyst_app models"
+evidence = ["src/jung/api/contracts.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/tools/db_backup.py"
+kind = "filesystem"
+action = "reimplement_then_delete"
+owner_pr = "6B"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy database backup and restore CLI"
+replacements = ["src/jung/tools/db_backup.py"]
+evidence = ["tests/unit/jung/tools/test_db_backup.py"]
+
+[[items]]
+path = "src/psychoanalyst_app/agents/intake/record_merge.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Intake record merge logic"
+replacements = ["src/jung/phases/intake/"]
+evidence = ["tests/unit/jung/phases/intake/"]
+
+[[items]]
+path = "src/psychoanalyst_app/agents/planning/analysis.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Planning analysis agent logic"
+replacements = ["src/jung/phases/planning/"]
+evidence = ["tests/unit/jung/phases/"]
+
+[[items]]
+path = "tests/unit/test_intake_record_merge.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy intake record merge unit test superseded by Jung-native coverage"
+replacements = ["tests/unit/jung/phases/intake/test_merge.py"]
+
+[[items]]
+path = "tests/unit/test_planning_analysis.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "discovery-needed"
+responsibility = "Planning analysis decisions and recommendations until Jung-native coverage exists"
+
+[[items]]
+path = "tests/unit/test_measure_codebase.py"
+kind = "filesystem"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Codebase measurement regression coverage"
+requires_explicit_test_target_reference = true
+
+[[items]]
+path = "tests/unit/test_validate_refactor_phase_5.py"
+kind = "filesystem"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Phase 5 external-contract validator test support"
+requires_explicit_test_target_reference = true
+
+[[items]]
+path = "tests/unit/test_recording_fake_llm.py"
+kind = "filesystem"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Recording fake LLM test support"
+requires_explicit_test_target_reference = true
+
+[[items]]
+path = "tests/unit/test_validate_refactor_phase_6.py"
+kind = "filesystem"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Phase 6 cutover validator test support"
+requires_explicit_test_target_reference = true
+
+[[items]]
+path = "tests/e2e/test_console_v1_workflow.py"
+kind = "filesystem"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "API-backed deterministic console workflow probe coverage"
+
+[[items]]
+path = "scripts/validate_refactor_phase_1.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Phase 1 evidence validator superseded by Phase 6 manifest lifecycle"
+evidence = ["scripts/validate_refactor_phase_6.py"]
+
+[[items]]
+path = "tests/unit/test_validate_refactor_phase_1.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Phase 1 validator unit tests removed with Phase 1 validator"
+evidence = ["tests/unit/test_validate_refactor_phase_6.py"]
+
+[[items]]
+path = "characterization-smoke"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy characterization smoke Make target"
+
+[[items]]
+path = "characterization-full"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy full characterization Make target"
+
+[[items]]
+path = "characterization-test"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy characterization test Make target"
+
+[[items]]
+path = "probe-console-deterministic"
+kind = "make_target"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy deterministic console probe Make target"
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "probe-console-v1-deterministic"
+kind = "make_target"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Target API-backed deterministic console probe"
+
+[[items]]
+path = "probe-console-intake-notes"
+kind = "make_target"
+action = "delete"
+owner_pr = "6D"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy intake-note console probe Make target"
+
+[[items]]
+path = "generate-schemas"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy schema generation Make target"
+
+[[items]]
+path = "validate-schemas"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy schema validation Make target"
+
+[[items]]
+path = "generate-ws-protocol"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy WebSocket protocol generation Make target"
+
+[[items]]
+path = "validate-generated-contracts"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy generated-contract validation Make target"
+
+[[items]]
+path = "validate-architecture"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy architecture budget validation Make target"
+
+[[items]]
+path = "finalization-check-full"
+kind = "make_target"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy extended finalization Make target"
+
+[[items]]
+path = "test-real-llm"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy real-LLM test Make target"
+
+[[items]]
+path = "smoke-target-local-llm"
+kind = "make_target"
+action = "retain"
+owner_pr = "6A"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Target manual local-model smoke alias"
+
+[[items]]
+path = "test-validate-no-mocks"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy no-mocks validation Make target"
+
+[[items]]
+path = "reset-usertest"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy usertest database reset Make target"
+
+[[items]]
+path = "reset-foundation-db"
+kind = "make_target"
+action = "delete"
+owner_pr = "6B"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy foundation database reset Make target"
+
+[[items]]
+path = ".github/workflows/architecture-governance.yml"
+kind = "workflow"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy architecture governance CI workflow"
+
+[[items]]
+path = ".github/workflows/type-safety.yml"
+kind = "workflow"
+action = "delete"
+owner_pr = "6C"
+status = "planned"
+confidence = "confirmed"
+responsibility = "Legacy type-safety CI workflow"
+
+[[items]]
+path = ".github/workflows/release-candidate-validation.yml"
+kind = "workflow_edit"
+action = "edit"
+owner_pr = "6C"
+status = "in_progress"
+confidence = "confirmed"
+responsibility = "Release-candidate CI workflow cutover to target-only gate"

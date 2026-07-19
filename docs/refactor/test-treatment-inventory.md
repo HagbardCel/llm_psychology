@@ -8,12 +8,16 @@ source_of_truth_for: Refactor test treatment plan
 
 # Test Treatment Inventory
 
-Test retirement actions are recorded in the `Test action` column of [Deletion Inventory](deletion-inventory.md). Allowed values are `retain`, `port`, `rewrite_application`, `rewrite_api`, `delete_with_component`, and `delete_redundant`.
+Test retirement actions are recorded in the Phase 6 [deletion manifest](deletion-manifest.toml) (`action` and `evidence` fields). See [deletion-inventory.md](deletion-inventory.md) for the overview.
 
 | Existing test area | Test action | Reason / target home |
 |---|---|---|
-| intake record merge, completeness, evidence provenance, turn persistence | retain | durable domain behavior; `phases/intake` and store tests |
-| note-taker patch, planning analysis/extractors, reflection snapshots | port | pure helpers become phase tests |
+| intake merge durable behavior | port | Jung-native merge in `tests/unit/jung/phases/intake/test_merge.py` |
+| Jung intake merge coverage (`test_merge.py`) | retain | preserves ported merge behavior |
+| legacy intake merge test file (`test_intake_record_merge.py`) | delete after port | superseded by Jung-native merge test |
+| planning analysis durable behavior | discovery-needed port | concrete Jung test pending in Phase 6D |
+| legacy planning analysis test file | delete after port | removed once Jung coverage exists |
+| note-taker patch, reflection snapshots | port | pure helpers become phase tests |
 | LLM structured output, phase metadata, prompts, fake LLM | retain | gateway/phase seam remains |
 | profile merge and immutable plan/history linkage | rewrite_application | target commands and SQLite transactions own it; Phase 2 `SQLiteStore` covers profile/plan linkage |
 | console workflow/probe tests | rewrite_api | console becomes the reference v1 client |

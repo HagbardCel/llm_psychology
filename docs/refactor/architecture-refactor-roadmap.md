@@ -481,7 +481,7 @@ Expose the new application through the final API and switch the console to it.
 
 ## Phase 6 — Cutover and legacy deletion
 
-Phase 5 handoff: the authoritative deletion checklist lives in [deletion-inventory.md](deletion-inventory.md), grouped by **Owner PR** with **Confidence** ratings. Run `make validate-refactor-phase-5` before starting Phase 6 slices; do not delete legacy runtime paths until the corresponding inventory row’s blocker is cleared and characterization coverage exists.
+Phase 5 handoff: the authoritative deletion checklist lives in [deletion-manifest.toml](deletion-manifest.toml) (see [deletion-inventory.md](deletion-inventory.md) for the human overview). Items are grouped by **Owner PR** with **Confidence** ratings. Run `make validate-refactor-phase-5` before starting Phase 6 slices; do not delete legacy runtime paths until the corresponding manifest item’s blocker is cleared and characterization coverage exists.
 
 ### Goal
 
@@ -513,7 +513,10 @@ Reset the development database and update seed/test fixtures.
 - no compatibility aliases remain;
 - new database creation is the only supported startup path;
 - all deterministic and optional smoke checks pass;
-- deletion inventory is empty.
+- deletion manifest status is `completed`;
+- every Phase 6 manifest item is `complete`;
+- all item action semantics are satisfied;
+- no `discovery-needed` item remains.
 
 ## Phase 7 — Tooling, Docker and documentation finalization
 

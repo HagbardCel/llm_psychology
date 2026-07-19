@@ -1988,7 +1988,7 @@ Mitigation:
 
 All criteria are blocking:
 
-> **Phase 5 exit evidence (2026-07-16):** `make validate-refactor-phase-5` — scoped ruff, `scripts/validate_refactor_phase_5.py` static/runtime checks, and `phase-5-test` (unit/integration resilience plus `_phase-5-console-v1` E2E). Phase 6 handoff: [deletion-inventory.md](deletion-inventory.md).
+> **Phase 5 exit evidence (2026-07-16):** `make validate-refactor-phase-5` — scoped ruff, `scripts/validate_refactor_phase_5.py` static/runtime checks, and `phase-5-test` (unit/integration resilience plus `_phase-5-console-v1` E2E). Phase 6 handoff: [deletion-manifest.toml](deletion-manifest.toml).
 
 - [x] FastAPI wraps the Phase 4 `application_context()` without duplicating lifecycle logic.
 - [x] Startup recovery completes before the API reports healthy.

@@ -67,10 +67,10 @@ def test_validate_placeholder_characterization_fails(tmp_path):
     assert any("placeholder characterization" in error for error in errors)
 
 
-def test_validate_incomplete_deletion_inventory_fails(tmp_path):
+def test_validate_inactive_deletion_manifest_fails(tmp_path):
     broken = tmp_path / "broken-deletion"
     _copy_phase1_tree(broken)
-    inventory = broken / "docs/refactor/deletion-inventory.md"
-    inventory.write_text("| Path / symbols | Responsibility |\n|---|---|\n")
+    manifest = broken / "docs/refactor/deletion-manifest.toml"
+    manifest.write_text("schema_version = 1\nstatus = \"completed\"\nitems = []\n")
     errors = validate(broken)
-    assert any("deletion inventory column" in error for error in errors)
+    assert any("deletion manifest" in error for error in errors)
