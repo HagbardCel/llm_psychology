@@ -432,9 +432,9 @@ Docker packages the system but does not define internal boundaries.
 
 Target Compose services:
 
-- `api`
+- `api` — default Jung API service
+- `api-usertest` — same Jung API build target and runtime implementation with an isolated `JUNG_DATA_DIR` (`/app/data/usertest`) under the `usertest-console` profile
 - `web` when implemented
-- optional `console` profile
 
 Native development must remain supported:
 
@@ -444,7 +444,7 @@ uv run jung-console --api-url http://127.0.0.1:8000
 uv run pytest
 ```
 
-Test profiles use temporary data volumes or databases, not duplicate API implementations or test-user services.
+Test profiles use temporary data volumes or isolated data directories, not duplicate API implementations or test-user directories.
 
 ## Observability
 

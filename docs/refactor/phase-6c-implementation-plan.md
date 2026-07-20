@@ -29,7 +29,7 @@ Baseline: `main` at Phase 6B merge (`1db767f`). Authoritative checklist: [deleti
 - Do not expand into 6D.
 - Lean evidence (retarget existing Jung tests).
 - Docs governance cutover, not rewrite.
-- Extend the existing narrow Compose parser; no general YAML resolver.
+- Prefer executable gates and resolved `docker compose config` JSON over bespoke Make/YAML parsers.
 
 ## 3. Work packages
 
@@ -37,7 +37,7 @@ Baseline: `main` at Phase 6B merge (`1db767f`). Authoritative checklist: [deleti
 2. Runtime and configuration cutover (CMD, env merge, healthcheck, loopback ports, db-viewer, `env_file`/usertest profile).
 3. Supported launcher and advertised-surface cutover (Make, VS Code, `.env*`, AGENTS, README).
 4. Documentation-governance cutover (`ACTIVE_DOCS`, docs/README, DOCS_GOVERNANCE, ui-scope, exact index equality).
-5. Strengthen Phase 6 validator (structural Compose contracts).
+5. Lean Phase 6 validator (manifest evidence, Make-target presence, resolved Compose semantics, supported-tree import closure).
 6. Delete 6C filesystem items.
 7. Delete 6C Make targets; rewrite `finalization-check` and RC workflow.
 8. Mark every 6C item complete; validate cutover + Compose smoke.

@@ -5,6 +5,7 @@
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: validate-docs finalization-check
 .PHONY: prepare-runtime-dirs test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm smoke-target-local-llm phase-5-test validate-refactor-phase-5 validate-refactor-phase-6 test-target _phase-5-console-v1 hook-commit hook-push
+.PHONY: resolve-compose-config smoke-compose-api _validate-phase-6-cutover-contract _validate-phase-5-external-contract
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -17,7 +18,7 @@ help:
 	@echo "Available targets:"
 	@echo ""
 	@echo "Default (Docker) Development:"
-	@echo "  install-uv        - Deprecated local installer target (no-op)"
+	@echo "  install-uv        - No-op; install uv externally for native workflows"
 	@echo "  install           - Build API container (installs backend deps inside Docker)"
 	@echo "  dev-install       - Build API container"
 	@echo "  format            - Format code with black (Docker)"
@@ -78,8 +79,8 @@ prepare-runtime-dirs:
 
 # Install UV package manager
 install-uv:
-	@echo "⚠️  install-uv is deprecated in Docker-only workflow."
-	@echo "    Use 'make requirements' to compile lockfiles in Docker."
+	@echo "install-uv is a no-op; install uv externally for native workflows."
+	@echo "Use 'make requirements' to compile lockfiles in Docker."
 
 # Install runtime dependencies inside Docker
 install:
@@ -132,36 +133,77 @@ test-target: prepare-runtime-dirs
 
 smoke-target-local-llm: smoke-refactor-phase-3-local-llm
 
-validate-refactor-phase-6: prepare-runtime-dirs
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
-		scripts/validate_refactor_phase_6.py \
-		tests/unit/test_validate_refactor_phase_6.py
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
-		--entrypoint /usr/local/bin/python \
-		--volume "$(CURDIR):/workspace:ro" \
-		--workdir /workspace \
-		--env PYTHONPATH=/workspace/src \
-		test scripts/validate_refactor_phase_6.py --stage cutover
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
-		$(PHASE_6_PYTEST_OPTIONS) \
-		tests/unit/test_validate_refactor_phase_6.py -q
+resolve-compose-config: prepare-runtime-dirs
+	@set -eu; \
+	tmp="logs/compose-config.resolved.json.tmp"; \
+	trap 'rm -f "$$tmp"' EXIT; \
+	rm -f "$$tmp"; \
+	ENV_FILE="$${ENV_FILE:-.env.example}" \
+		docker compose \
+			-f docker-compose.yml \
+			--profile '*' \
+			config \
+			--format json \
+			--no-env-resolution > "$$tmp"; \
+	mv "$$tmp" logs/compose-config.resolved.json
 
-finalization-check: prepare-runtime-dirs
-	$(MAKE) lint
-	$(MAKE) validate-docs
-	$(MAKE) test-target
+_validate-phase-6-cutover-contract: resolve-compose-config
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
 		--entrypoint /usr/local/bin/python \
 		--volume "$(CURDIR):/workspace:ro" \
 		--workdir /workspace \
 		--env PYTHONPATH=/workspace/src \
-		test scripts/validate_refactor_phase_6.py --stage cutover
+		test scripts/validate_refactor_phase_6.py --stage cutover \
+		--compose-config /workspace/logs/compose-config.resolved.json
+
+_validate-phase-5-external-contract: prepare-runtime-dirs
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
 		--entrypoint /usr/local/bin/python \
 		--volume "$(CURDIR):/workspace:ro" \
 		--workdir /workspace \
 		--env PYTHONPATH=/workspace/src \
 		test scripts/validate_refactor_phase_5.py
+
+validate-refactor-phase-6: prepare-runtime-dirs
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
+		scripts/validate_refactor_phase_6.py \
+		tests/unit/test_validate_refactor_phase_6.py
+	$(MAKE) _validate-phase-6-cutover-contract
+	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
+		$(PHASE_6_PYTEST_OPTIONS) \
+		tests/unit/test_validate_refactor_phase_6.py -q
+
+smoke-compose-api: prepare-runtime-dirs
+	@set -eu; \
+	export ENV_FILE="$${ENV_FILE:-.env.example}"; \
+	export COMPOSE_PROJECT_NAME=jung-phase6c-smoke; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT; \
+		if [ "$$status" -ne 0 ]; then \
+			docker compose -f docker-compose.yml \
+				logs --no-color api || true; \
+		fi; \
+		docker compose -f docker-compose.yml \
+			down --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	docker compose -f docker-compose.yml up \
+		--build \
+		--force-recreate \
+		--remove-orphans \
+		--wait \
+		--wait-timeout 90 \
+		api
+
+finalization-check: prepare-runtime-dirs
+	$(MAKE) lint
+	$(MAKE) validate-docs
+	$(MAKE) test-target
+	$(MAKE) _validate-phase-6-cutover-contract
+	$(MAKE) _validate-phase-5-external-contract
+	$(MAKE) smoke-compose-api
 	$(MAKE) probe-console-v1-deterministic
 
 # Fast Phase 1 checkpoint: retained deterministic unit coverage plus real smoke.
@@ -467,7 +509,7 @@ docker-shell:
 docker-logs:
 	docker compose logs -f $(SERVICE)
 
-# View API logs only (useful when console-ui is running interactively)
+# View API service logs
 docker-logs-api:
 	@echo "📋 Viewing API logs..."
 	@echo "API logs are suppressed from console output to keep UI clean."

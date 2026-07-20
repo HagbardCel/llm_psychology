@@ -13,6 +13,16 @@ Local-laptop therapy workflow research tool backed by an asyncio FastAPI
 4. Start the API with `make docker-up`, or start the supported client with
    `make ui-console`.
 
+Native alternatives remain supported:
+
+```bash
+uv run jung-api
+uv run jung-console --api-url http://127.0.0.1:8000
+```
+
+`api-usertest` is the same Jung API build target and runtime implementation with
+an isolated `JUNG_DATA_DIR` (`data/usertest`), not a second application.
+
 ## Maintainer Checks
 
 Run the release-candidate validation path through Docker:

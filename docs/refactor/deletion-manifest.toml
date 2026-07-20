@@ -385,7 +385,6 @@ owner_pr = "6A"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Codebase measurement regression coverage"
-requires_explicit_test_target_reference = true
 
 [[items]]
 path = "tests/unit/test_validate_refactor_phase_5.py"
@@ -395,7 +394,6 @@ owner_pr = "6A"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Phase 5 external-contract validator test support"
-requires_explicit_test_target_reference = true
 
 [[items]]
 path = "tests/unit/test_recording_fake_llm.py"
@@ -405,7 +403,6 @@ owner_pr = "6A"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Recording fake LLM test support"
-requires_explicit_test_target_reference = true
 
 [[items]]
 path = "tests/unit/test_validate_refactor_phase_6.py"
@@ -415,7 +412,6 @@ owner_pr = "6A"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Phase 6 cutover validator test support"
-requires_explicit_test_target_reference = true
 
 [[items]]
 path = "tests/e2e/test_console_v1_workflow.py"
@@ -680,3 +676,219 @@ owner_pr = "6C"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Gemini-specific usertest API-key Make helper superseded by target-neutral check-usertest-env"
+
+[[items]]
+path = "scripts/debug/debug_usertest.sh"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Obsolete usertest diagnostic script tied to fixed container names and /health"
+
+[[items]]
+path = "tests/unit/test_service_container.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Tests for deleted ServiceContainer infrastructure"
+
+[[items]]
+path = "tests/unit/test_db_executor.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Tests for deleted Trio SQLite executor infrastructure"
+
+[[items]]
+path = "tests/unit/test_trio_db_service.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Tests for deleted TrioDatabaseService infrastructure"
+
+[[items]]
+path = "tests/unit/test_trio_server.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Tests for deleted TrioServer infrastructure"
+
+[[items]]
+path = "tests/test_trio_validation.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Cross-cutting Trio validation tests for deleted persistence stack"
+
+[[items]]
+path = "tests/unit/test_rag_backend_config.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy NoOp RAG container wiring with no Jung RAG subsystem"
+
+[[items]]
+path = "tests/unit/test_user_routes.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy user HTTP route tests via deleted TrioServer harness"
+replacements = ["src/jung/api/routes.py"]
+evidence = ["tests/integration/jung/api/test_http_routes.py"]
+
+[[items]]
+path = "tests/unit/test_workflow_routes.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy workflow HTTP route tests via deleted TrioServer harness"
+replacements = [
+  "src/jung/api/routes.py",
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+]
+evidence = [
+  "tests/integration/jung/api/test_http_routes.py",
+  "tests/integration/jung/test_application_workflow.py",
+]
+
+[[items]]
+path = "tests/integration/test_websocket_protocol_contract.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy WebSocket protocol contract tests via deleted TrioServer"
+replacements = ["src/jung/api/routes.py", "src/jung/api/websocket.py"]
+evidence = [
+  "tests/integration/jung/api/test_websocket_chat.py",
+  "tests/unit/jung/api/test_contracts.py",
+]
+
+[[items]]
+path = "tests/integration/test_natural_patient_flow.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy natural patient flow coverage via deleted Trio harness"
+replacements = [
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+  "src/jung/client/terminal.py",
+]
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "tests/integration/test_console_ui_patient_flow.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy console-ui patient flow coverage superseded by jung-console probe"
+replacements = [
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+  "src/jung/client/terminal.py",
+]
+evidence = ["tests/e2e/test_console_v1_workflow.py"]
+
+[[items]]
+path = "tests/integration/test_trio_flow.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy HTTP-to-database flow coverage via deleted Trio stack"
+replacements = [
+  "src/jung/api/routes.py",
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+]
+evidence = [
+  "tests/integration/jung/api/test_http_routes.py",
+  "tests/integration/jung/test_application_workflow.py",
+  "tests/integration/jung/test_store_workflow.py",
+]
+
+[[items]]
+path = "tests/integration/test_trio_orchestration.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy orchestration and conversation handling coverage"
+replacements = [
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+  "src/jung/supervisor.py",
+]
+evidence = [
+  "tests/integration/jung/test_application_workflow.py",
+  "tests/integration/jung/test_application_chat.py",
+  "tests/integration/jung/test_application_recovery.py",
+  "tests/unit/jung/test_workflow.py",
+  "tests/unit/jung/test_supervisor.py",
+]
+
+[[items]]
+path = "tests/integration/test_trio_agents.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy six-agent behavioral coverage superseded by Jung phases"
+replacements = [
+  "src/jung/phases/",
+  "src/jung/application.py",
+  "src/jung/workflow.py",
+]
+evidence = [
+  "tests/unit/jung/phases/",
+  "tests/integration/jung/test_application_workflow.py",
+]
+
+[[items]]
+path = "tests/unit/test_multi_model_config.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy multi-model Settings wiring via deleted ServiceContainer"
+replacements = ["src/jung/composition.py"]
+evidence = ["tests/unit/jung/test_composition_settings.py"]
+
+[[items]]
+path = "tests/real_llm/test_lmstudio_local_smoke.py"
+kind = "filesystem"
+action = "port_then_delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy LM Studio smoke via deleted ServiceContainer"
+replacements = ["src/jung/llm/openai_compatible.py"]
+evidence = ["tests/smoke/jung/test_phase3_local_llm.py"]

@@ -36,28 +36,9 @@ x-api-base: &api-base
     retries: 15
     start_period: 5s
 
-x-console-base: &console-base
-  build:
-    context: ./console-ui
-    dockerfile: Dockerfile
-  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-  volumes:
-    - ./console-ui/src:/app/src:delegated
-    - ./console-ui/main.py:/app/main.py:delegated
-    - ./console-ui/scenarios:/app/scenarios:ro
-    - ./data:/app/data
-    - ./logs:/app/logs
-  environment:
-    - PYTHONUNBUFFERED=1
-  networks:
-    - app-network
-  stdin_open: true
-  tty: true
-
 services:
   api:
     <<: *api-base
-    container_name: psychoanalyst_api
     environment:
       <<: *api-environment
       JUNG_DATA_DIR: /app/data/local
@@ -66,27 +47,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
-  console-ui:
-    <<: *console-base
-    container_name: psychoanalyst_console
-    profiles: ["console"]
-    environment:
-      - PYTHONUNBUFFERED=1
-      - BACKEND_URL=http://api:8000
-      - WEBSOCKET_URL=http://api:8000
-      - WEBSOCKET_ORIGIN=http://localhost
-      - USER_ID=console_user
-      - AUTH_TOKEN=console_token
-      - CONSOLE_LOG_PATH=/app/logs/console-ui.log
-    env_file:
-      - ${ENV_FILE:-.env}
-    depends_on:
-      api:
-        condition: service_healthy
-
   api-usertest:
     <<: *api-base
-    container_name: psychoanalyst_api_usertest
     profiles: ["usertest-console"]
     environment:
       <<: *api-environment
@@ -96,30 +58,11 @@ services:
     ports:
       - "127.0.0.1:8001:8000"
 
-  console-ui-usertest:
-    <<: *console-base
-    container_name: psychoanalyst_console_usertest
-    profiles: ["usertest-console"]
-    environment:
-      - PYTHONUNBUFFERED=1
-      - BACKEND_URL=http://api-usertest:8000
-      - WEBSOCKET_URL=http://api-usertest:8000
-      - WEBSOCKET_ORIGIN=http://localhost
-      - USER_ID=console_user_test
-      - AUTH_TOKEN=console_token_test
-      - CONSOLE_LOG_PATH=/app/logs/console-ui-usertest.log
-    env_file:
-      - .env.usertest
-    depends_on:
-      api-usertest:
-        condition: service_healthy
-
   test:
     build:
       context: .
       dockerfile: Dockerfile
       target: development
-    container_name: psychoanalyst_test
     profiles: ["test"]
     volumes:
       - ./src:/app/src:ro
@@ -127,7 +70,6 @@ services:
       - ./tests:/app/tests:ro
       - ./docs:/app/docs:ro
       - ./schemas:/app/schemas:ro
-      - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./Makefile:/app/Makefile:ro
       - ./docker-compose.yml:/app/docker-compose.yml:ro
@@ -148,7 +90,6 @@ services:
 
   db-viewer:
     image: coleifer/sqlite-web
-    container_name: psychoanalyst_db_viewer
     profiles: ["debug"]
     volumes:
       - ./data:/data:ro
@@ -168,7 +109,6 @@ services:
       - tail
       - -f
       - /dev/null
-    container_name: psychoanalyst_devcontainer
     environment:
       SESSION_DURATION_MINUTES: "45"
     env_file:
@@ -187,4 +127,3 @@ volumes:
 networks:
   app-network:
     driver: bridge
-    name: psychoanalyst_network

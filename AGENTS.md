@@ -22,8 +22,12 @@
 - `src/jung/application.py`: Application use cases.
 - Remaining `src/psychoanalyst_app/` and `console-ui/` are unsupported deletion-pending code.
 
-## Docker-Only Command Execution
-Run all commands inside containers. Do not run Python or Node on the host.
+## Docker-First Command Execution
+
+Docker is the canonical reproducible workflow. Native `uv` commands remain
+supported for local development.
+
+Canonical Docker workflow:
 
 - Build images: `make dev-install`
 - Start backend: `make docker-up` (or `make run-server`)
@@ -32,13 +36,23 @@ Run all commands inside containers. Do not run Python or Node on the host.
 - Supported frontend: `make ui-console` (`jung-console`)
 - Manual usertest: `make ui-console-test`
 
-## Tests (Docker-Only)
+Native alternatives (same entry points):
+
+```bash
+uv run jung-api
+uv run jung-console --api-url http://127.0.0.1:8000
+uv run pytest
+```
+
+## Tests (Docker-First)
+
 - Target suite: `make test`, `make test-validate`, or `make docker-test` (all resolve to `test-target`)
 - Unit: `make test-unit`
 - Integration: `make test-integration`
 - Single path: `make docker-test-one TEST=tests/unit/jung/...`
 - Deterministic console probe: `make probe-console-v1-deterministic`
 - Release-candidate validation: `make finalization-check`
+- Native alternative: `uv run pytest tests/unit/jung tests/integration/jung`
 
 ## Core Developer Guidance
 - The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).

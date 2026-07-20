@@ -456,6 +456,16 @@ async def test_response_format_for_structured_mode(
         assert response_format.get("type") == expected_type
 
 
+async def test_default_client_accepts_empty_api_key() -> None:
+    gateway = OpenAICompatibleLLM(
+        AdapterConfig(
+            base_url="http://127.0.0.1:8080/v1",
+            api_key="",
+        )
+    )
+    await gateway.aclose()
+
+
 @pytest.mark.parametrize(
     ("config", "expected_extra"),
     [
