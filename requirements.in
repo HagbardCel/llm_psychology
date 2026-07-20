@@ -1,10 +1,6 @@
 
 # LLM Abstraction & Interaction
 openai>=1.68.0
-langchain-core
-langchain-google-genai
-langchain-ollama==1.0.0
-langchain-openai==1.0.3
 
 # Utilities
 python-dotenv
@@ -19,11 +15,3 @@ fastapi
 uvicorn
 httpx
 websockets
-
-# Trio-based Server & WebSocket (structured concurrency)
-trio
-quart
-hypercorn
-trio-websocket
-quart-trio
-quart-cors

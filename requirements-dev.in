@@ -8,4 +8,3 @@ mypy
 # Testing
 pytest
 pytest-asyncio
-pytest-trio

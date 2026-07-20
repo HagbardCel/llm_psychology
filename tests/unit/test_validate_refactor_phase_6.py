@@ -18,16 +18,21 @@ _SPEC.loader.exec_module(_MODULE)
 Manifest = _MODULE.Manifest
 ManifestItem = _MODULE.ManifestItem
 REQUIRED_TEST_COMMAND = _MODULE.REQUIRED_TEST_COMMAND
+load_pyproject = _MODULE.load_pyproject
 make_targets = _MODULE.make_targets
 normalize_repo_path = _MODULE.normalize_repo_path
+requirement_name = _MODULE.requirement_name
 supported_python_files = _MODULE.supported_python_files
 validate = _MODULE.validate
 validate_compose_config_file = _MODULE.validate_compose_config_file
 validate_compose_model = _MODULE.validate_compose_model
+validate_dependency_closure = _MODULE.validate_dependency_closure
 validate_dockerfile = _MODULE.validate_dockerfile
+validate_forbidden_imports = _MODULE.validate_forbidden_imports
 validate_item_complete = _MODULE.validate_item_complete
 validate_required_owner_closure = _MODULE.validate_required_owner_closure
 validate_supported_imports = _MODULE.validate_supported_imports
+validate_test_surface_closure = _MODULE.validate_test_surface_closure
 validate_workflow = _MODULE.validate_workflow
 
 
@@ -198,6 +203,23 @@ def test_test_service_incorrect_command_fails() -> None:
     assert any("services.test.command" in err for err in errors)
 
 
+def test_test_service_legacy_trio_mode_command_fails() -> None:
+    model = _valid_compose_model()
+    model["services"]["test"]["command"] = [
+        "pytest",
+        "-o",
+        "trio_mode=false",
+        "-o",
+        "asyncio_mode=auto",
+        "-m",
+        "not real_llm",
+        "tests/unit/jung",
+        "tests/integration/jung",
+    ]
+    errors = validate_compose_model(model)
+    assert any("services.test.command" in err for err in errors)
+
+
 def test_missing_compose_config_file_fails(tmp_path: Path) -> None:
     missing = tmp_path / "missing.json"
     errors = validate_compose_config_file(missing)
@@ -333,3 +355,212 @@ def test_workflow_without_finalization_check_fails(tmp_path: Path) -> None:
     ).write_text("name: rc\njobs: {}\n", encoding="utf-8")
     errors = validate_workflow(tmp_path)
     assert any("finalization-check" in err for err in errors)
+
+
+def test_requirement_name_parses_and_canonicalizes_names() -> None:
+    assert requirement_name("trio>=0.30") == "trio"
+    assert requirement_name("quart[dotenv]>=0.20") == "quart"
+    assert requirement_name("langchain-core==1.0.0") == "langchain_core"
+    assert requirement_name("langchain.core==1.0") == "langchain_core"
+    assert requirement_name("pytest.trio") == "pytest_trio"
+    assert requirement_name("quart-trio") == "quart_trio"
+    assert requirement_name("langchain_openai @ file:///tmp/pkg") == "langchain_openai"
+    assert requirement_name("-r requirements.in") is None
+    assert requirement_name("--index-url https://example") is None
+    assert requirement_name("# comment") is None
+
+
+def test_load_pyproject_missing(tmp_path: Path) -> None:
+    data, errors = load_pyproject(tmp_path)
+    assert data is None
+    assert errors == ["missing pyproject.toml"]
+
+
+def test_load_pyproject_malformed(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("project = [\n", encoding="utf-8")
+    data, errors = load_pyproject(tmp_path)
+    assert data is None
+    assert len(errors) == 1
+    assert "unable to read pyproject.toml" in errors[0]
+
+
+def test_load_pyproject_encoding_failure(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_bytes(b"\xff\xfe invalid")
+
+    data, errors = load_pyproject(tmp_path)
+    assert data is None
+    assert len(errors) == 1
+    assert "unable to read pyproject.toml" in errors[0]
+
+
+def test_entry_points_and_deps_skipped_when_pyproject_missing(tmp_path: Path) -> None:
+    # Manifest present so validation reaches the pyproject loader.
+    manifest = tmp_path / "docs" / "refactor"
+    manifest.mkdir(parents=True)
+    (manifest / "deletion-manifest.toml").write_text(
+        'schema_version = 1\nstatus = "active"\nitems = []\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Makefile").write_text("finalization-check:\n\ttrue\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.11 AS development\nCMD ["jung-api"]\n',
+        encoding="utf-8",
+    )
+    workflow = tmp_path / ".github" / "workflows"
+    workflow.mkdir(parents=True)
+    (workflow / "release-candidate-validation.yml").write_text(
+        "make finalization-check\n",
+        encoding="utf-8",
+    )
+    compose = tmp_path / "logs"
+    compose.mkdir()
+    (compose / "compose-config.resolved.json").write_text(
+        '{"services":{}}', encoding="utf-8"
+    )
+    for relative in _MODULE.SUPPORTED_TEST_FILES:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# ok\n", encoding="utf-8")
+    for relative in _MODULE.SUPPORTED_TEST_ROOTS:
+        root = tmp_path / relative
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+
+    errors = validate(tmp_path, stage="cutover")
+    assert "missing pyproject.toml" in errors
+    assert not any("entry point" in err for err in errors)
+
+
+def test_project_not_table_fails_entry_points() -> None:
+    errors = _MODULE.validate_entry_points({"project": "invalid"})
+    assert errors == ["pyproject.toml project must be a table"]
+
+
+def test_dependencies_not_list_fails_dependency_closure(tmp_path: Path) -> None:
+    for name in _MODULE.REQUIRED_REQUIREMENT_FILES:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    errors = validate_dependency_closure(
+        tmp_path, {"project": {"dependencies": "openai"}}
+    )
+    assert errors == ["pyproject.toml project.dependencies must be a list"]
+
+
+def test_scripts_not_mapping_fails_entry_points() -> None:
+    errors = _MODULE.validate_entry_points({"project": {"scripts": ["jung-api"]}})
+    assert errors == ["pyproject.toml project.scripts must be a mapping"]
+
+
+def test_forbidden_dep_in_requirements_in_fails(tmp_path: Path) -> None:
+    for name in _MODULE.REQUIRED_REQUIREMENT_FILES:
+        path = tmp_path / name
+        path.write_text("", encoding="utf-8")
+    (tmp_path / "requirements.in").write_text("trio>=0.30\n", encoding="utf-8")
+    errors = validate_dependency_closure(
+        tmp_path, {"project": {"dependencies": ["openai"]}}
+    )
+    assert any("forbidden dependency present: trio" in err for err in errors)
+
+
+def test_forbidden_dep_in_requirements_dev_in_fails(tmp_path: Path) -> None:
+    for name in _MODULE.REQUIRED_REQUIREMENT_FILES:
+        path = tmp_path / name
+        path.write_text("", encoding="utf-8")
+    (tmp_path / "requirements-dev.in").write_text(
+        "-r requirements.in\npytest-trio\n", encoding="utf-8"
+    )
+    errors = validate_dependency_closure(
+        tmp_path, {"project": {"dependencies": ["openai"]}}
+    )
+    assert any("forbidden dependency present: pytest_trio" in err for err in errors)
+
+
+def test_missing_requirement_file_fails(tmp_path: Path) -> None:
+    (tmp_path / "requirements.in").write_text("openai\n", encoding="utf-8")
+    errors = validate_dependency_closure(
+        tmp_path, {"project": {"dependencies": ["openai"]}}
+    )
+    assert any("missing requirement file: requirements-dev.in" in err for err in errors)
+
+
+def test_clean_dependency_set_passes(tmp_path: Path) -> None:
+    for name in _MODULE.REQUIRED_REQUIREMENT_FILES:
+        (tmp_path / name).write_text("openai\n", encoding="utf-8")
+    (tmp_path / "requirements-dev.in").write_text(
+        "-r requirements.in\npytest\n", encoding="utf-8"
+    )
+    errors = validate_dependency_closure(
+        tmp_path, {"project": {"dependencies": ["openai>=1"]}}
+    )
+    assert errors == []
+
+
+def test_forbidden_imports_detect_langchain_and_quart(tmp_path: Path) -> None:
+    src = tmp_path / "src" / "jung"
+    src.mkdir(parents=True)
+    (src / "bad.py").write_text(
+        "import trio\nfrom quart_trio import run\nimport langchain_core\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts").mkdir()
+    errors = validate_forbidden_imports(
+        tmp_path, (Path("src/jung"), Path("tests"), Path("scripts"))
+    )
+    assert any("trio" in err for err in errors)
+    assert any("quart_trio" in err for err in errors)
+    assert any("langchain_core" in err for err in errors)
+
+
+def test_forbidden_import_fixture_strings_allowed(tmp_path: Path) -> None:
+    src = tmp_path / "src" / "jung"
+    src.mkdir(parents=True)
+    (src / "ok.py").write_text(
+        'TEXT = "import trio\\nfrom psychoanalyst_app import x"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts").mkdir()
+    errors = validate_forbidden_imports(
+        tmp_path, (Path("src/jung"), Path("tests"), Path("scripts"))
+    )
+    assert errors == []
+
+
+def test_missing_final_scan_root_fails(tmp_path: Path) -> None:
+    (tmp_path / "src" / "jung").mkdir(parents=True)
+    (tmp_path / "src" / "jung" / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    errors = validate_forbidden_imports(
+        tmp_path, (Path("src/jung"), Path("tests"), Path("scripts"))
+    )
+    assert any("missing scan root: scripts" in err for err in errors)
+
+
+def test_test_surface_closure_rejects_unexpected(tmp_path: Path) -> None:
+    for relative in _MODULE.SUPPORTED_TEST_FILES:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# ok\n", encoding="utf-8")
+    for relative in _MODULE.SUPPORTED_TEST_ROOTS:
+        root = tmp_path / relative
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+    legacy = tmp_path / "tests" / "unit" / "test_legacy.py"
+    legacy.write_text("x = 1\n", encoding="utf-8")
+    errors = validate_test_surface_closure(tmp_path)
+    assert any("test_legacy.py" in err for err in errors)
+
+
+def test_test_surface_closure_allows_declared_files(tmp_path: Path) -> None:
+    for relative in _MODULE.SUPPORTED_TEST_FILES:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# ok\n", encoding="utf-8")
+    for relative in _MODULE.SUPPORTED_TEST_ROOTS:
+        root = tmp_path / relative
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+    assert validate_test_surface_closure(tmp_path) == []

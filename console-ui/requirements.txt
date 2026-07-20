@@ -1,9 +1,0 @@
-# Trio for structured concurrency
-trio>=0.32.0
-
-# WebSocket client for Trio
-trio-websocket>=0.12.2
-
-# HTTP client for API requests
-httpx>=0.28.1
-

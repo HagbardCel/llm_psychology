@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def _mock(path: Path, name: str, body: str) -> None:
     target = path / name
@@ -36,13 +38,19 @@ def _run_push(tmp_path: Path, remote_ref: str) -> str:
     return calls.read_text(encoding="utf-8")
 
 
-def test_pre_push_uses_remote_phase_ref_not_checked_out_branch(tmp_path):
-    calls = _run_push(tmp_path, "refs/heads/refactor/single-user-architecture")
-    assert "hook-push" in calls
-    assert "validate-refactor-phase-1" in calls
+@pytest.mark.parametrize(
+    ("remote_ref", "expects_finalization"),
+    [
+        ("refs/heads/topic", False),
+        ("refs/heads/main", True),
+    ],
+)
+def test_pre_push_validation_policy(
+    tmp_path: Path,
+    remote_ref: str,
+    expects_finalization: bool,
+) -> None:
+    calls = _run_push(tmp_path, remote_ref)
 
-
-def test_pre_push_runs_full_gate_for_main_remote_ref(tmp_path):
-    calls = _run_push(tmp_path, "refs/heads/main")
     assert "hook-push" in calls
-    assert "finalization-check" in calls
+    assert ("finalization-check" in calls) is expects_finalization

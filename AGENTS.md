@@ -2,8 +2,6 @@
 
 ## Project Structure
 - `src/jung/`: Supported asyncio application (API, composition, workflow, phases, LLM, persistence, client).
-- `src/psychoanalyst_app/`: Unsupported deletion-pending legacy package (retained until Phase 6D).
-- `console-ui/`: Unsupported deletion-pending legacy console (retained until Phase 6D).
 - `tests/`: Pytest suites; supported Make targets collect Jung and retained support tests.
 - `data/`: SQLite databases (`local/jung.db`, `usertest/jung.db`).
 - `docs/`: Architecture, contracts, and guides (see Active Docs in `docs/README.md`).
@@ -20,7 +18,6 @@
 - `src/jung/composition.py`: Typed composition root.
 - `src/jung/client/terminal.py`: Supported `jung-console` client.
 - `src/jung/application.py`: Application use cases.
-- Remaining `src/psychoanalyst_app/` and `console-ui/` are unsupported deletion-pending code.
 
 ## Docker-First Command Execution
 
@@ -42,7 +39,6 @@ Native alternatives (same entry points):
 uv run jung-api
 uv run jung-console --api-url http://127.0.0.1:8000
 uv run pytest \
-  -o trio_mode=false \
   -o asyncio_mode=auto \
   -m "not real_llm" \
   tests/unit/jung \
@@ -72,7 +68,7 @@ uv run pytest \
 Treat the Jung backend, workflow, persistence, `/api/v1` contracts, LLM gateway, deterministic tests, and `jung-console` probes as the main product.
 
 - Maintain `jung-console` as the only supported frontend.
-- Do not recreate, repair, test, or optimize removed or deletion-pending UIs unless explicitly requested.
+- Do not recreate, repair, test, or optimize removed UIs unless explicitly requested.
 - Do not add multi-frontend orchestration modes.
 - Prefer Jung unit/integration tests and the v1 console probe.
 

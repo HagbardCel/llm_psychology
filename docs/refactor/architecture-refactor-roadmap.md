@@ -502,7 +502,7 @@ Delete:
 - legacy job DTOs and workers;
 - unused provider adapters and rate limiting;
 - generated protocol constants and redundant schemas;
-- legacy package and container naming;
+- legacy import namespaces, runtime entry points, container commands, and compatibility aliases (distribution metadata naming is finalized in Phase 7);
 - tests tied only to deleted internals.
 
 Reset the development database and update seed/test fixtures.
