@@ -63,7 +63,8 @@ workflow.
 ## Naming
 
 The user-facing product language is **therapist**. The supported runtime package
-is `jung`. Legacy import namespaces, runtime entry points, compatibility
-aliases, and container identifiers (including the `jung-devcontainer` image)
-were removed in Phase 6D. The Python distribution metadata name
-`psychoanalyst-app` remains until Phase 7 packaging finalization.
+is `jung`. Legacy import namespaces, runtime entry points, and compatibility
+aliases were removed in Phase 6D. Legacy container identifiers were removed in
+Phase 6D; the supported devcontainer image is `jung-devcontainer`. The Python
+distribution metadata name `psychoanalyst-app` remains until Phase 7 packaging
+finalization.

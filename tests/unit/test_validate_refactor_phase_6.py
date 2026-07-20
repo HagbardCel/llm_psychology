@@ -357,10 +357,13 @@ def test_workflow_without_finalization_check_fails(tmp_path: Path) -> None:
     assert any("finalization-check" in err for err in errors)
 
 
-def test_requirement_name_parses_versioned_and_extras() -> None:
+def test_requirement_name_parses_and_canonicalizes_names() -> None:
     assert requirement_name("trio>=0.30") == "trio"
     assert requirement_name("quart[dotenv]>=0.20") == "quart"
     assert requirement_name("langchain-core==1.0.0") == "langchain_core"
+    assert requirement_name("langchain.core==1.0") == "langchain_core"
+    assert requirement_name("pytest.trio") == "pytest_trio"
+    assert requirement_name("quart-trio") == "quart_trio"
     assert requirement_name("langchain_openai @ file:///tmp/pkg") == "langchain_openai"
     assert requirement_name("-r requirements.in") is None
     assert requirement_name("--index-url https://example") is None

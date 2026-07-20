@@ -113,6 +113,7 @@ SUPPORTED_TEST_FILES = (
     Path("tests/unit/test_validate_docs_metadata.py"),
     Path("tests/unit/test_recording_fake_llm.py"),
     Path("tests/unit/test_measure_codebase.py"),
+    Path("tests/unit/test_git_hooks.py"),
 )
 FINAL_IMPORT_SCAN_ROOTS = (
     Path("src/jung"),
@@ -137,7 +138,7 @@ def _strip_nonempty(value: Any, field_name: str) -> Any:
 
 
 def _norm_pkg_name(name: str) -> str:
-    return name.replace("-", "_").lower()
+    return re.sub(r"[-_.]+", "_", name).lower()
 
 
 def requirement_name(value: str) -> str | None:

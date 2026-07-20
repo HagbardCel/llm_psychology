@@ -79,6 +79,7 @@ Implemented in the Phase 6 validator during WP5. Do not expand without execution
 | `tests/unit/test_validate_docs_metadata.py` | `TARGET_SUPPORT_TESTS` via `make test-target` |
 | `tests/unit/test_recording_fake_llm.py` | `TARGET_SUPPORT_TESTS` via `make test-target` |
 | `tests/unit/test_measure_codebase.py` | `TARGET_SUPPORT_TESTS` via `make test-target` |
+| `tests/unit/test_git_hooks.py` | `TARGET_SUPPORT_TESTS` via `make test-target` |
 | `tests/__init__.py` | Package marker for `tests` imports |
 | `tests/integration/__init__.py` | Package marker (if retained after attic deletion) |
 

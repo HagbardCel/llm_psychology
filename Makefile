@@ -116,7 +116,8 @@ TARGET_SUPPORT_TESTS := \
 	tests/unit/test_validate_refactor_phase_6.py \
 	tests/unit/test_validate_docs_metadata.py \
 	tests/unit/test_recording_fake_llm.py \
-	tests/unit/test_measure_codebase.py
+	tests/unit/test_measure_codebase.py \
+	tests/unit/test_git_hooks.py
 
 PHASE_6_PYTEST_OPTIONS := \
 	-o asyncio_mode=auto
