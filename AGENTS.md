@@ -41,7 +41,12 @@ Native alternatives (same entry points):
 ```bash
 uv run jung-api
 uv run jung-console --api-url http://127.0.0.1:8000
-uv run pytest
+uv run pytest \
+  -o trio_mode=false \
+  -o asyncio_mode=auto \
+  -m "not real_llm" \
+  tests/unit/jung \
+  tests/integration/jung
 ```
 
 ## Tests (Docker-First)
@@ -52,7 +57,7 @@ uv run pytest
 - Single path: `make docker-test-one TEST=tests/unit/jung/...`
 - Deterministic console probe: `make probe-console-v1-deterministic`
 - Release-candidate validation: `make finalization-check`
-- Native alternative: `uv run pytest tests/unit/jung tests/integration/jung`
+- Native alternative (core Jung trees): same `uv run pytest` command above; use `make test-target` for the complete supported suite including validator and support tests
 
 ## Core Developer Guidance
 - The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).

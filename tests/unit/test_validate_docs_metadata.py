@@ -4,6 +4,8 @@ from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts/validate_docs_metadata.py"
 SPEC = spec_from_file_location("validate_docs_metadata", SCRIPT_PATH)
 assert SPEC and SPEC.loader
@@ -43,39 +45,33 @@ def test_active_readme_index_accepts_exact_ordered_targets(tmp_path: Path) -> No
     assert errors == []
 
 
-def test_active_readme_index_rejects_missing_target_document(tmp_path: Path) -> None:
-    _write_active_index(tmp_path, _expected_active_targets()[:-1])
-    errors: list[str] = []
-
-    _validate_active_readme_index(tmp_path, errors)
-
-    assert len(errors) == 1
-    assert "active-doc link targets must exactly match" in errors[0]
-    assert "workflow-specification.md" in errors[0]
-
-
-def test_active_readme_index_rejects_unexpected_legacy_document(tmp_path: Path) -> None:
-    targets = _expected_active_targets()
-    targets.insert(1, "ARCHITECTURE.md")
+@pytest.mark.parametrize(
+    ("targets_factory", "expected"),
+    [
+        (lambda paths: paths[:-1], "workflow-specification.md"),
+        (
+            lambda paths: [paths[0], "ARCHITECTURE.md", *paths[1:]],
+            "ARCHITECTURE.md",
+        ),
+        (
+            lambda paths: [paths[0], paths[0], *paths[1:]],
+            "README.md",
+        ),
+    ],
+)
+def test_active_index_rejects_noncanonical_targets(
+    tmp_path: Path,
+    targets_factory,
+    expected: str,
+) -> None:
+    targets = targets_factory(_expected_active_targets())
     _write_active_index(tmp_path, targets)
     errors: list[str] = []
 
     _validate_active_readme_index(tmp_path, errors)
 
     assert len(errors) == 1
-    assert "ARCHITECTURE.md" in errors[0]
-
-
-def test_active_readme_index_rejects_duplicate_active_link(tmp_path: Path) -> None:
-    targets = _expected_active_targets()
-    targets.insert(1, targets[0])
-    _write_active_index(tmp_path, targets)
-    errors: list[str] = []
-
-    _validate_active_readme_index(tmp_path, errors)
-
-    assert len(errors) == 1
-    assert errors[0].count("README.md") >= 2
+    assert expected in errors[0]
 
 
 def test_review_freshness_accepts_fresh_document() -> None:

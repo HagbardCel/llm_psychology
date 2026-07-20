@@ -127,7 +127,9 @@ src/jung/
     └── console.py
 ```
 
-The package name may remain `psychoanalyst_app` during implementation if renaming would add risk without reducing complexity. The boundaries above are the important part.
+The remaining `psychoanalyst_app` package is unsupported and deletion-pending
+until Phase 6D. Supported runtime code lives under `jung`. The boundaries above
+are the important part.
 
 The package tree is illustrative. Begin with the fewest modules that preserve dependency boundaries; split only when a file has independently testable logic or distinct dependencies. In particular, post-session summarization/patch helpers and client transport code may start consolidated:
 

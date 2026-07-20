@@ -116,6 +116,7 @@ test-integration: prepare-runtime-dirs
 TARGET_SUPPORT_TESTS := \
 	tests/unit/test_validate_refactor_phase_5.py \
 	tests/unit/test_validate_refactor_phase_6.py \
+	tests/unit/test_validate_docs_metadata.py \
 	tests/unit/test_recording_fake_llm.py \
 	tests/unit/test_measure_codebase.py
 
@@ -511,11 +512,7 @@ docker-logs:
 
 # View API service logs
 docker-logs-api:
-	@echo "📋 Viewing API logs..."
-	@echo "API logs are suppressed from console output to keep UI clean."
-	@echo "Use this command to monitor API activity when debugging."
-	@echo ""
-	@if docker compose ps | grep -q "api-usertest"; then \
+	@if docker compose ps --services --status running | grep -qx api-usertest; then \
 		docker compose logs -f api-usertest; \
 	else \
 		docker compose logs -f api; \

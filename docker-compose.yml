@@ -43,7 +43,8 @@ services:
       <<: *api-environment
       JUNG_DATA_DIR: /app/data/local
     env_file:
-      - ${ENV_FILE:-.env}
+      - path: ${ENV_FILE:-.env}
+        required: false
     ports:
       - "127.0.0.1:8000:8000"
 
@@ -54,7 +55,8 @@ services:
       <<: *api-environment
       JUNG_DATA_DIR: /app/data/usertest
     env_file:
-      - .env.usertest
+      - path: .env.usertest
+        required: false
     ports:
       - "127.0.0.1:8001:8000"
 
@@ -69,7 +71,6 @@ services:
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
       - ./docs:/app/docs:ro
-      - ./schemas:/app/schemas:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./Makefile:/app/Makefile:ro
       - ./docker-compose.yml:/app/docker-compose.yml:ro
@@ -77,14 +78,18 @@ services:
       - ./pytest.ini:/app/pytest.ini:ro
       - test-data:/app/data
     environment:
-      - APP_ENV=testing
-      - PYTHONPATH=/app/src
-      - PYTHONUNBUFFERED=1
-      - PYTEST_ARGS=${PYTEST_ARGS:-}
-      - RUN_LMSTUDIO_SMOKE=${RUN_LMSTUDIO_SMOKE:-}
-    env_file:
-      - .env.test
-    command: pytest ${PYTEST_ARGS:-tests/}
+      PYTHONPATH: /app/src
+      PYTHONUNBUFFERED: "1"
+    command:
+      - pytest
+      - -o
+      - trio_mode=false
+      - -o
+      - asyncio_mode=auto
+      - -m
+      - "not real_llm"
+      - tests/unit/jung
+      - tests/integration/jung
     networks:
       - app-network
 
@@ -112,7 +117,8 @@ services:
     environment:
       SESSION_DURATION_MINUTES: "45"
     env_file:
-      - .env
+      - path: ${ENV_FILE:-.env}
+        required: false
     networks:
       - app-network
     stdin_open: true

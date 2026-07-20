@@ -24,7 +24,7 @@ legacy coverage retained until Phase 6D and are not part of `make test-target`.
 Docker-first:
 
 ```bash
-make test-target                            # Supported Jung suite
+make test-target                            # Complete supported suite
 make test-unit                              # tests/unit/jung + support tests
 make test-integration                       # tests/integration/jung
 make docker-test-one TEST=tests/unit/jung/...
@@ -32,10 +32,19 @@ make probe-console-v1-deterministic         # Deterministic jung-console probe
 make finalization-check                     # Release-candidate gate
 ```
 
-Native alternative:
+Bare `docker compose --profile test run test` runs the core Jung unit and
+integration trees (with asyncio overrides). `make test-target` runs the complete
+supported suite, including validator and support tests.
+
+Native alternative (core Jung trees):
 
 ```bash
-uv run pytest tests/unit/jung tests/integration/jung
+uv run pytest \
+  -o trio_mode=false \
+  -o asyncio_mode=auto \
+  -m "not real_llm" \
+  tests/unit/jung \
+  tests/integration/jung
 ```
 
 ## Conventions

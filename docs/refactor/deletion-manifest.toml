@@ -687,6 +687,15 @@ confidence = "confirmed"
 responsibility = "Obsolete usertest diagnostic script tied to fixed container names and /health"
 
 [[items]]
+path = "scripts/debug/reproduce_rate_limit_sharing.py"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy ServiceContainer rate-limit sharing diagnostic"
+
+[[items]]
 path = "tests/unit/test_service_container.py"
 kind = "filesystem"
 action = "delete"
@@ -794,7 +803,7 @@ responsibility = "Legacy natural patient flow coverage via deleted Trio harness"
 replacements = [
   "src/jung/application.py",
   "src/jung/workflow.py",
-  "src/jung/client/terminal.py",
+  "src/jung/phases/",
 ]
 evidence = ["tests/e2e/test_console_v1_workflow.py"]
 
@@ -807,8 +816,8 @@ status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy console-ui patient flow coverage superseded by jung-console probe"
 replacements = [
-  "src/jung/application.py",
-  "src/jung/workflow.py",
+  "src/jung/client/api_client.py",
+  "src/jung/client/console.py",
   "src/jung/client/terminal.py",
 ]
 evidence = ["tests/e2e/test_console_v1_workflow.py"]
@@ -879,7 +888,10 @@ owner_pr = "6C"
 status = "complete"
 confidence = "confirmed"
 responsibility = "Legacy multi-model Settings wiring via deleted ServiceContainer"
-replacements = ["src/jung/composition.py"]
+replacements = [
+  "src/jung/composition.py",
+  "src/jung/llm/policies.py",
+]
 evidence = ["tests/unit/jung/test_composition_settings.py"]
 
 [[items]]

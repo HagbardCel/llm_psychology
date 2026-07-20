@@ -10,8 +10,7 @@ import ast
 import json
 import re
 import tomllib
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -61,12 +60,42 @@ MAKE_TARGET_RE = re.compile(
     re.MULTILINE,
 )
 MAKE_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 SELECTED_DOCKER_STAGE = "development"
 REQUIRED_CMD = 'CMD ["jung-api"]'
 HEALTH_PATH = "/api/v1/health"
-LOCAL_DATA_DIR = "/app/data/local"
-USERTEST_DATA_DIR = "/app/data/usertest"
 FORBIDDEN_CONSOLE_SERVICES = frozenset({"console-ui", "console-ui-usertest"})
+REQUIRED_TEST_COMMAND = [
+    "pytest",
+    "-o",
+    "trio_mode=false",
+    "-o",
+    "asyncio_mode=auto",
+    "-m",
+    "not real_llm",
+    "tests/unit/jung",
+    "tests/integration/jung",
+]
+SERVICE_SPECS = {
+    "api": {
+        "profiles": None,
+        "data_dir": "/app/data/local",
+        "published": "8000",
+    },
+    "api-usertest": {
+        "profiles": ["usertest-console"],
+        "data_dir": "/app/data/usertest",
+        "published": "8001",
+    },
+}
+STAGE_MANIFEST_STATUS = {
+    "cutover": "active",
+    "final": "completed",
+}
+STAGE_OWNER_PRS = {
+    "cutover": frozenset({"6A", "6B", "6C"}),
+    "final": frozenset({"6A", "6B", "6C", "6D"}),
+}
 
 SUPPORTED_TEST_ROOTS = (
     Path("tests/unit/jung"),
@@ -80,39 +109,10 @@ SUPPORTED_TEST_FILES = (
     Path("tests/console_probe_support.py"),
     Path("tests/unit/test_validate_refactor_phase_5.py"),
     Path("tests/unit/test_validate_refactor_phase_6.py"),
+    Path("tests/unit/test_validate_docs_metadata.py"),
     Path("tests/unit/test_recording_fake_llm.py"),
     Path("tests/unit/test_measure_codebase.py"),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class StageRules:
-    manifest_status: str
-    required_entry_points: frozenset[str]
-    forbidden_entry_points: frozenset[str]
-    required_complete_owner_prs: frozenset[str]
-    check_supported_import_closure: bool
-    check_final_closures: bool
-
-
-STAGES: dict[str, StageRules] = {
-    "cutover": StageRules(
-        manifest_status="active",
-        required_entry_points=TARGET_REQUIRED_ENTRY_POINTS,
-        forbidden_entry_points=POST_CUTOVER_FORBIDDEN_ENTRY_POINTS,
-        required_complete_owner_prs=frozenset({"6A", "6B", "6C"}),
-        check_supported_import_closure=True,
-        check_final_closures=False,
-    ),
-    "final": StageRules(
-        manifest_status="completed",
-        required_entry_points=TARGET_REQUIRED_ENTRY_POINTS,
-        forbidden_entry_points=POST_CUTOVER_FORBIDDEN_ENTRY_POINTS,
-        required_complete_owner_prs=frozenset({"6A", "6B", "6C", "6D"}),
-        check_supported_import_closure=True,
-        check_final_closures=True,
-    ),
-}
 
 
 def _strip_nonempty(value: Any, field_name: str) -> Any:
@@ -128,30 +128,26 @@ def _norm_pkg_name(name: str) -> str:
     return name.lower().replace("-", "_").replace(".", "_")
 
 
-def _norm_fs_path(path: str) -> str:
-    cleaned = path.strip().replace("\\", "/")
-    while "//" in cleaned:
-        cleaned = cleaned.replace("//", "/")
-    return cleaned
+def normalize_repo_path(value: str, field_name: str) -> str:
+    stripped = value.strip()
+    is_directory = stripped.endswith(("/", "\\"))
+    normalized = re.sub(r"/+", "/", stripped.replace("\\", "/")).rstrip("/")
+
+    if (
+        not normalized
+        or normalized == "."
+        or normalized.startswith("/")
+        or _WINDOWS_DRIVE_RE.match(normalized)
+        or ".." in normalized.split("/")
+    ):
+        raise ValueError(f"{field_name} must be a repository-relative path")
+
+    return f"{normalized}/" if is_directory else normalized
 
 
-def _is_absolute_repo_path(path: str) -> bool:
-    return (
-        path.startswith("/")
-        or PureWindowsPath(path).is_absolute()
-        or PurePosixPath(path).is_absolute()
-    )
-
-
-def _validate_repo_relative_path(
-    path: str, field_name: str
-) -> tuple[str | None, str | None]:
-    cleaned = _norm_fs_path(path)
-    if not cleaned or cleaned in {".", ".."} or ".." in cleaned.split("/"):
-        return None, f"{field_name} must be a repo-relative path"
-    if _is_absolute_repo_path(cleaned):
-        return None, f"{field_name} must be repo-relative, got absolute {cleaned!r}"
-    return cleaned, None
+def path_exists(root: Path, value: str) -> bool:
+    path = root / value
+    return path.is_dir() if value.endswith("/") else path.exists()
 
 
 def _format_validation_errors(exc: ValidationError) -> list[str]:
@@ -190,7 +186,10 @@ class ManifestItem(BaseModel):
                 normalized[field] = _strip_nonempty(normalized[field], field)
         kind = normalized.get("kind")
         if isinstance(normalized.get("path"), str) and kind != "make_target":
-            normalized["path"] = _norm_fs_path(normalized["path"])
+            try:
+                normalized["path"] = normalize_repo_path(normalized["path"], "path")
+            except ValueError:
+                pass
         return normalized
 
     @field_validator("replacements", "evidence")
@@ -199,10 +198,7 @@ class ManifestItem(BaseModel):
         seen: set[str] = set()
         normalized: list[str] = []
         for entry in value:
-            norm, err = _validate_repo_relative_path(entry, "path")
-            if err:
-                raise ValueError(err)
-            assert norm is not None
+            norm = normalize_repo_path(entry, "path")
             if norm in seen:
                 raise ValueError(f"duplicate path entry {norm!r}")
             seen.add(norm)
@@ -237,9 +233,10 @@ class ManifestItem(BaseModel):
             if not MAKE_TARGET_NAME_RE.match(self.path):
                 raise ValueError(f"invalid make target name: {self.path!r}")
         else:
-            _, err = _validate_repo_relative_path(self.path, "path")
-            if err:
-                raise ValueError(err)
+            try:
+                normalize_repo_path(self.path, "path")
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
             if self.kind in {"workflow", "workflow_edit"} and not self.path.startswith(
                 ".github/workflows/"
             ):
@@ -290,10 +287,6 @@ def make_targets(text: str) -> set[str]:
     return set(MAKE_TARGET_RE.findall(text))
 
 
-def _port_scalar(value: Any) -> str:
-    return str(value)
-
-
 def _healthcheck_has_path(service: dict[str, Any], path: str) -> bool:
     health = service.get("healthcheck") or {}
     test = health.get("test")
@@ -318,14 +311,50 @@ def _validate_published_port(
             continue
         if (
             entry.get("host_ip") == host_ip
-            and _port_scalar(entry.get("published")) == published
-            and _port_scalar(entry.get("target")) == target
+            and str(entry.get("published")) == published
+            and str(entry.get("target")) == target
         ):
             return []
     return [
         f"{label} must publish {host_ip}:{published}->{target} "
         f"(got {ports!r})"
     ]
+
+
+def _validate_test_service(services: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    test_service = services.get("test")
+    if not isinstance(test_service, dict):
+        return ["compose model missing services.test"]
+
+    if test_service.get("env_file"):
+        errors.append("services.test must not declare env_file")
+
+    environment = test_service.get("environment")
+    environment = environment if isinstance(environment, dict) else {}
+    legacy_keys = sorted(
+        {"APP_ENV", "GOOGLE_API_KEY", "DATABASE_PATH"} & environment.keys()
+    )
+    if legacy_keys:
+        errors.append(
+            f"services.test declares legacy environment keys: {legacy_keys}"
+        )
+
+    if test_service.get("command") != REQUIRED_TEST_COMMAND:
+        errors.append(
+            "services.test.command must run the core supported Jung test trees "
+            f"(got {test_service.get('command')!r})"
+        )
+
+    volumes = test_service.get("volumes")
+    if isinstance(volumes, list):
+        for volume in volumes:
+            text = volume if isinstance(volume, str) else str(volume)
+            if "/app/schemas" in text or ":./schemas" in text or "schemas:" in text:
+                errors.append("services.test must not mount ./schemas")
+                break
+
+    return errors
 
 
 def validate_compose_model(model: dict[str, Any]) -> list[str]:
@@ -338,84 +367,75 @@ def validate_compose_model(model: dict[str, Any]) -> list[str]:
         if forbidden in services:
             errors.append(f"compose must not define services.{forbidden}")
 
-    api = services.get("api")
-    usertest = services.get("api-usertest")
-    if not isinstance(api, dict):
-        errors.append("compose model missing services.api")
-        return errors
-    if not isinstance(usertest, dict):
-        errors.append("compose model missing services.api-usertest")
-        return errors
+    resolved: dict[str, dict[str, Any]] = {}
+    for name, spec in SERVICE_SPECS.items():
+        service = services.get(name)
+        if not isinstance(service, dict):
+            errors.append(f"compose model missing services.{name}")
+            continue
+        resolved[name] = service
 
-    if api.get("profiles"):
-        errors.append("services.api must not declare profiles")
-    if usertest.get("profiles") != ["usertest-console"]:
-        errors.append(
-            "services.api-usertest.profiles must be ['usertest-console'] "
-            f"(got {usertest.get('profiles')!r})"
+        expected_profiles = spec["profiles"]
+        if expected_profiles is None:
+            if service.get("profiles"):
+                errors.append(f"services.{name} must not declare profiles")
+        elif service.get("profiles") != expected_profiles:
+            errors.append(
+                f"services.{name}.profiles must be {expected_profiles!r} "
+                f"(got {service.get('profiles')!r})"
+            )
+
+        if service.get("command") != ["jung-api"]:
+            errors.append(
+                f"services.{name}.command must be ['jung-api'] "
+                f"(got {service.get('command')!r})"
+            )
+        if service.get("entrypoint") not in (None, [], ""):
+            errors.append(f"services.{name} must not declare entrypoint")
+
+        env = (
+            service.get("environment")
+            if isinstance(service.get("environment"), dict)
+            else {}
         )
+        data_dir = spec["data_dir"]
+        if env.get("JUNG_DATA_DIR") != data_dir:
+            errors.append(
+                f"services.{name} JUNG_DATA_DIR must be {data_dir!r} "
+                f"(got {env.get('JUNG_DATA_DIR')!r})"
+            )
 
-    if api.get("command") != ["jung-api"]:
-        errors.append(
-            f"services.api.command must be ['jung-api'] (got {api.get('command')!r})"
+        errors.extend(
+            _validate_published_port(
+                service,
+                label=f"services.{name}",
+                host_ip="127.0.0.1",
+                published=str(spec["published"]),
+                target="8000",
+            )
         )
-    if usertest.get("command") != ["jung-api"]:
-        errors.append(
-            "services.api-usertest.command must be ['jung-api'] "
-            f"(got {usertest.get('command')!r})"
+        if not _healthcheck_has_path(service, HEALTH_PATH):
+            errors.append(f"services.{name} healthcheck must target {HEALTH_PATH}")
+
+    api = resolved.get("api")
+    usertest = resolved.get("api-usertest")
+    if api is not None and usertest is not None:
+        if api.get("build") != usertest.get("build"):
+            errors.append("services.api.build must equal services.api-usertest.build")
+        api_env = (
+            api.get("environment")
+            if isinstance(api.get("environment"), dict)
+            else {}
         )
-
-    if api.get("entrypoint") not in (None, [], ""):
-        errors.append("services.api must not declare entrypoint")
-    if usertest.get("entrypoint") not in (None, [], ""):
-        errors.append("services.api-usertest must not declare entrypoint")
-
-    if api.get("build") != usertest.get("build"):
-        errors.append("services.api.build must equal services.api-usertest.build")
-
-    api_env = api.get("environment") if isinstance(api.get("environment"), dict) else {}
-    usertest_env = (
-        usertest.get("environment")
-        if isinstance(usertest.get("environment"), dict)
-        else {}
-    )
-    if api_env.get("JUNG_DATA_DIR") != LOCAL_DATA_DIR:
-        errors.append(
-            f"services.api JUNG_DATA_DIR must be {LOCAL_DATA_DIR!r} "
-            f"(got {api_env.get('JUNG_DATA_DIR')!r})"
+        usertest_env = (
+            usertest.get("environment")
+            if isinstance(usertest.get("environment"), dict)
+            else {}
         )
-    if usertest_env.get("JUNG_DATA_DIR") != USERTEST_DATA_DIR:
-        errors.append(
-            f"services.api-usertest JUNG_DATA_DIR must be {USERTEST_DATA_DIR!r} "
-            f"(got {usertest_env.get('JUNG_DATA_DIR')!r})"
-        )
-    if api_env.get("JUNG_DATA_DIR") == usertest_env.get("JUNG_DATA_DIR"):
-        errors.append("api and api-usertest JUNG_DATA_DIR values must differ")
+        if api_env.get("JUNG_DATA_DIR") == usertest_env.get("JUNG_DATA_DIR"):
+            errors.append("api and api-usertest JUNG_DATA_DIR values must differ")
 
-    errors.extend(
-        _validate_published_port(
-            api,
-            label="services.api",
-            host_ip="127.0.0.1",
-            published="8000",
-            target="8000",
-        )
-    )
-    errors.extend(
-        _validate_published_port(
-            usertest,
-            label="services.api-usertest",
-            host_ip="127.0.0.1",
-            published="8001",
-            target="8000",
-        )
-    )
-
-    if not _healthcheck_has_path(api, HEALTH_PATH):
-        errors.append(f"services.api healthcheck must target {HEALTH_PATH}")
-    if not _healthcheck_has_path(usertest, HEALTH_PATH):
-        errors.append(f"services.api-usertest healthcheck must target {HEALTH_PATH}")
-
+    errors.extend(_validate_test_service(services))
     return errors
 
 
@@ -452,7 +472,7 @@ def _dockerfile_stage_cmd(text: str, stage: str) -> str | None:
     return cmd
 
 
-def _validate_dockerfile(root: Path) -> list[str]:
+def validate_dockerfile(root: Path) -> list[str]:
     path = root / "Dockerfile"
     if not path.is_file():
         return ["missing Dockerfile"]
@@ -465,14 +485,7 @@ def _validate_dockerfile(root: Path) -> list[str]:
     return []
 
 
-def _manifest_path_present(root: Path, item: ManifestItem) -> bool:
-    target = root / item.path
-    if item.path.endswith("/"):
-        return target.is_dir()
-    return target.exists()
-
-
-def _validate_item_complete(
+def validate_item_complete(
     root: Path, makefile_targets: set[str], item: ManifestItem
 ) -> list[str]:
     errors: list[str] = []
@@ -485,25 +498,19 @@ def _validate_item_complete(
         return errors
 
     if item.kind in {"filesystem", "workflow"}:
-        present = _manifest_path_present(root, item)
+        present = path_exists(root, item.path)
         if item.action in {"delete", "port_then_delete", "reimplement_then_delete"}:
             if present:
                 errors.append(f"complete {item.action} path still present: {item.path}")
         elif item.action == "retain" and not present:
             errors.append(f"complete retain path missing: {item.path}")
         for replacement in item.replacements:
-            if not (root / replacement).exists():
+            if not path_exists(root, replacement):
                 errors.append(
                     f"replacement missing for {item.path}: {replacement}"
                 )
         for evidence in item.evidence:
-            evidence_path = root / evidence
-            if evidence.endswith("/"):
-                if not evidence_path.is_dir():
-                    errors.append(
-                        f"evidence directory missing for {item.path}: {evidence}"
-                    )
-            elif not evidence_path.exists():
+            if not path_exists(root, evidence):
                 errors.append(f"evidence missing for {item.path}: {evidence}")
     elif item.kind == "workflow_edit":
         if not (root / item.path).is_file():
@@ -511,7 +518,7 @@ def _validate_item_complete(
     return errors
 
 
-def _validate_entry_points(root: Path, rules: StageRules) -> list[str]:
+def validate_entry_points(root: Path) -> list[str]:
     errors: list[str] = []
     pyproject_path = root / "pyproject.toml"
     if not pyproject_path.is_file():
@@ -520,24 +527,24 @@ def _validate_entry_points(root: Path, rules: StageRules) -> list[str]:
     scripts = data.get("project", {}).get("scripts", {})
     if not isinstance(scripts, dict):
         return ["pyproject.toml project.scripts must be a mapping"]
-    for name in rules.required_entry_points:
+    for name in TARGET_REQUIRED_ENTRY_POINTS:
         expected = ENTRY_POINT_TARGETS[name]
         actual = scripts.get(name)
         if actual != expected:
             errors.append(
                 f"entry point {name!r} must map to {expected!r} (got {actual!r})"
             )
-    for name in rules.forbidden_entry_points:
+    for name in POST_CUTOVER_FORBIDDEN_ENTRY_POINTS:
         if name in scripts:
             errors.append(f"forbidden entry point still present: {name}")
     return errors
 
 
-def _validate_required_owner_closure(
-    manifest: Manifest, rules: StageRules
+def validate_required_owner_closure(
+    manifest: Manifest, owners: frozenset[str]
 ) -> list[str]:
     errors: list[str] = []
-    for owner in rules.required_complete_owner_prs:
+    for owner in owners:
         incomplete = [
             item.path
             for item in manifest.items
@@ -550,23 +557,36 @@ def _validate_required_owner_closure(
     return errors
 
 
-def _iter_supported_python_files(root: Path) -> list[Path]:
+def supported_python_files(root: Path) -> tuple[list[Path], list[str]]:
+    """Return Python files in the explicitly enumerated supported test tree.
+
+    This is a direct scan of declared roots and files, not a recursive
+    local-import dependency graph.
+    """
     files: list[Path] = []
-    for rel in SUPPORTED_TEST_FILES:
-        path = root / rel
-        if path.is_file():
+    errors: list[str] = []
+
+    for relative in SUPPORTED_TEST_FILES:
+        path = root / relative
+        if not path.is_file():
+            errors.append(f"missing supported test file: {relative}")
+        else:
             files.append(path)
-    for rel_root in SUPPORTED_TEST_ROOTS:
-        base = root / rel_root
-        if base.is_dir():
-            files.extend(sorted(base.rglob("*.py")))
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for path in files:
-        if path not in seen:
-            seen.add(path)
-            unique.append(path)
-    return unique
+
+    for relative in SUPPORTED_TEST_ROOTS:
+        path = root / relative
+        if not path.is_dir():
+            errors.append(f"missing supported test root: {relative}")
+        else:
+            python_files = sorted(path.rglob("*.py"))
+            if not python_files:
+                errors.append(
+                    f"supported test root contains no Python files: {relative}"
+                )
+            else:
+                files.extend(python_files)
+
+    return list(dict.fromkeys(files)), errors
 
 
 def _imports_in_file(path: Path) -> list[str]:
@@ -580,9 +600,10 @@ def _imports_in_file(path: Path) -> list[str]:
     return modules
 
 
-def _validate_supported_import_closure(root: Path) -> list[str]:
-    errors: list[str] = []
-    for path in _iter_supported_python_files(root):
+def validate_supported_imports(root: Path) -> list[str]:
+    """Direct import scan of the enumerated supported test tree."""
+    files, errors = supported_python_files(root)
+    for path in files:
         try:
             modules = _imports_in_file(path)
         except SyntaxError as exc:
@@ -596,7 +617,7 @@ def _validate_supported_import_closure(root: Path) -> list[str]:
     return errors
 
 
-def _validate_dependency_closure(root: Path) -> list[str]:
+def validate_dependency_closure(root: Path) -> list[str]:
     errors: list[str] = []
     names: set[str] = set()
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
@@ -623,7 +644,7 @@ def _validate_dependency_closure(root: Path) -> list[str]:
     return errors
 
 
-def _validate_final_confidence_closure(manifest: Manifest) -> list[str]:
+def validate_final_confidence_closure(manifest: Manifest) -> list[str]:
     incomplete = [
         item.path
         for item in manifest.items
@@ -637,7 +658,7 @@ def _validate_final_confidence_closure(manifest: Manifest) -> list[str]:
     return []
 
 
-def _validate_workflow(root: Path) -> list[str]:
+def validate_workflow(root: Path) -> list[str]:
     path = root / WORKFLOW_EDIT_PATH
     if not path.is_file():
         return [f"missing workflow: {WORKFLOW_EDIT_PATH}"]
@@ -654,25 +675,28 @@ def validate(
     compose_config: Path | None = None,
 ) -> list[str]:
     resolved = (root or REPO_ROOT).resolve()
-    if stage not in STAGES:
+    if stage not in STAGE_MANIFEST_STATUS:
         return [f"unknown stage: {stage}"]
-    rules = STAGES[stage]
+    is_final = stage == "final"
     manifest, errors = parse_manifest(resolved)
     if manifest is None:
         return errors
-    if manifest.status != rules.manifest_status:
+    expected_status = STAGE_MANIFEST_STATUS[stage]
+    if manifest.status != expected_status:
         errors.append(
-            f"manifest status must be {rules.manifest_status!r} for stage {stage!r}, "
+            f"manifest status must be {expected_status!r} for stage {stage!r}, "
             f"got {manifest.status!r}"
         )
 
     makefile_text = (resolved / "Makefile").read_text(encoding="utf-8")
     targets = make_targets(makefile_text)
 
-    errors.extend(_validate_entry_points(resolved, rules))
-    errors.extend(_validate_required_owner_closure(manifest, rules))
-    errors.extend(_validate_dockerfile(resolved))
-    errors.extend(_validate_workflow(resolved))
+    errors.extend(validate_entry_points(resolved))
+    errors.extend(
+        validate_required_owner_closure(manifest, STAGE_OWNER_PRS[stage])
+    )
+    errors.extend(validate_dockerfile(resolved))
+    errors.extend(validate_workflow(resolved))
 
     compose_path = compose_config or (
         resolved / "logs" / "compose-config.resolved.json"
@@ -681,19 +705,20 @@ def validate(
 
     for item in manifest.items:
         if item.status == "complete":
-            errors.extend(_validate_item_complete(resolved, targets, item))
+            errors.extend(validate_item_complete(resolved, targets, item))
 
-    if rules.check_supported_import_closure:
-        errors.extend(_validate_supported_import_closure(resolved))
-    if rules.check_final_closures:
-        errors.extend(_validate_final_confidence_closure(manifest))
-        errors.extend(_validate_dependency_closure(resolved))
+    errors.extend(validate_supported_imports(resolved))
+    if is_final:
+        errors.extend(validate_final_confidence_closure(manifest))
+        errors.extend(validate_dependency_closure(resolved))
     return errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=tuple(STAGES), required=True)
+    parser.add_argument(
+        "--stage", choices=tuple(STAGE_MANIFEST_STATUS), required=True
+    )
     parser.add_argument(
         "--compose-config",
         type=Path,
