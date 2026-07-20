@@ -68,8 +68,6 @@ FORBIDDEN_CONSOLE_SERVICES = frozenset({"console-ui", "console-ui-usertest"})
 REQUIRED_TEST_COMMAND = [
     "pytest",
     "-o",
-    "trio_mode=false",
-    "-o",
     "asyncio_mode=auto",
     "-m",
     "not real_llm",
@@ -103,15 +101,29 @@ SUPPORTED_TEST_ROOTS = (
     Path("tests/smoke/jung"),
 )
 SUPPORTED_TEST_FILES = (
+    Path("tests/__init__.py"),
     Path("tests/conftest.py"),
+    Path("tests/e2e/conftest.py"),
     Path("tests/e2e/test_console_v1_workflow.py"),
     Path("tests/jung_api_fixtures.py"),
     Path("tests/console_probe_support.py"),
+    Path("tests/integration/__init__.py"),
     Path("tests/unit/test_validate_refactor_phase_5.py"),
     Path("tests/unit/test_validate_refactor_phase_6.py"),
     Path("tests/unit/test_validate_docs_metadata.py"),
     Path("tests/unit/test_recording_fake_llm.py"),
     Path("tests/unit/test_measure_codebase.py"),
+)
+FINAL_IMPORT_SCAN_ROOTS = (
+    Path("src/jung"),
+    Path("tests"),
+    Path("scripts"),
+)
+REQUIRED_REQUIREMENT_FILES = (
+    Path("requirements.in"),
+    Path("requirements-dev.in"),
+    Path("requirements.txt"),
+    Path("requirements-dev.txt"),
 )
 
 
@@ -125,7 +137,30 @@ def _strip_nonempty(value: Any, field_name: str) -> Any:
 
 
 def _norm_pkg_name(name: str) -> str:
-    return name.lower().replace("-", "_").replace(".", "_")
+    return name.replace("-", "_").lower()
+
+
+def requirement_name(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped or stripped.startswith(("#", "-")):
+        return None
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", stripped)
+    if match is None:
+        return None
+    return _norm_pkg_name(match.group(0))
+
+
+def load_pyproject(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return None, ["missing pyproject.toml"]
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        return None, [f"unable to read pyproject.toml: {exc}"]
+    if not isinstance(data, dict):
+        return None, ["pyproject.toml must be a table"]
+    return data, []
 
 
 def normalize_repo_path(value: str, field_name: str) -> str:
@@ -518,13 +553,12 @@ def validate_item_complete(
     return errors
 
 
-def validate_entry_points(root: Path) -> list[str]:
+def validate_entry_points(pyproject: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    pyproject_path = root / "pyproject.toml"
-    if not pyproject_path.is_file():
-        return ["missing pyproject.toml"]
-    data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    scripts = data.get("project", {}).get("scripts", {})
+    project = pyproject.get("project")
+    if not isinstance(project, dict):
+        return ["pyproject.toml project must be a table"]
+    scripts = project.get("scripts")
     if not isinstance(scripts, dict):
         return ["pyproject.toml project.scripts must be a mapping"]
     for name in TARGET_REQUIRED_ENTRY_POINTS:
@@ -600,46 +634,132 @@ def _imports_in_file(path: Path) -> list[str]:
     return modules
 
 
-def validate_supported_imports(root: Path) -> list[str]:
-    """Direct import scan of the enumerated supported test tree."""
-    files, errors = supported_python_files(root)
-    for path in files:
+def _is_forbidden_import(module: str) -> bool:
+    root_name = module.split(".", 1)[0]
+    return root_name in FORBIDDEN_IMPORT_ROOTS or root_name.startswith("langchain")
+
+
+def _python_files_under(root: Path, scan_root: Path) -> tuple[list[Path], list[str]]:
+    path = root / scan_root
+    if scan_root.suffix == ".py":
+        if not path.is_file():
+            return [], [f"missing scan file: {scan_root}"]
+        return [path], []
+    if not path.is_dir():
+        return [], [f"missing scan root: {scan_root}"]
+    return sorted(p for p in path.rglob("*.py") if "__pycache__" not in p.parts), []
+
+
+def validate_forbidden_imports(
+    root: Path,
+    scan_roots: tuple[Path, ...],
+) -> list[str]:
+    """AST import scan over declared roots/files; paths are deduplicated."""
+    files: list[Path] = []
+    errors: list[str] = []
+    for scan_root in scan_roots:
+        found, root_errors = _python_files_under(root, scan_root)
+        errors.extend(root_errors)
+        files.extend(found)
+
+    for path in dict.fromkeys(files):
         try:
             modules = _imports_in_file(path)
         except SyntaxError as exc:
             errors.append(f"{path.relative_to(root)}: syntax error: {exc}")
             continue
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"{path.relative_to(root)}: unable to read: {exc}")
+            continue
         for module in modules:
-            root_name = module.split(".")[0]
-            if root_name in FORBIDDEN_IMPORT_ROOTS or root_name.startswith("langchain"):
+            if _is_forbidden_import(module):
                 rel = path.relative_to(root)
                 errors.append(f"{rel} imports forbidden module {module}")
     return errors
 
 
-def validate_dependency_closure(root: Path) -> list[str]:
+def validate_supported_imports(root: Path) -> list[str]:
+    """Direct import scan of the enumerated supported test tree."""
+    _, errors = supported_python_files(root)
+    errors.extend(
+        validate_forbidden_imports(
+            root,
+            SUPPORTED_TEST_FILES + SUPPORTED_TEST_ROOTS,
+        )
+    )
+    return errors
+
+
+def validate_test_surface_closure(root: Path) -> list[str]:
+    allowed, errors = supported_python_files(root)
+    tests_root = root / "tests"
+    if not tests_root.is_dir():
+        errors.append("missing scan root: tests")
+        return errors
+    discovered = sorted(
+        p for p in tests_root.rglob("*.py") if "__pycache__" not in p.parts
+    )
+    unexpected = sorted(set(discovered) - set(allowed))
+    for path in unexpected:
+        errors.append(
+            f"unexpected test surface file outside allowlist: {path.relative_to(root)}"
+        )
+    return errors
+
+
+def validate_dependency_closure(
+    root: Path, pyproject: dict[str, Any]
+) -> list[str]:
     errors: list[str] = []
     names: set[str] = set()
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    deps = pyproject.get("project", {}).get("dependencies", [])
-    if isinstance(deps, list):
-        for dep in deps:
-            if isinstance(dep, str):
-                names.add(_norm_pkg_name(dep.split(";")[0].strip()))
-    for req_name in ("requirements.txt", "requirements-dev.txt"):
+
+    project = pyproject.get("project")
+    if not isinstance(project, dict):
+        return ["pyproject.toml project must be a table"]
+    deps = project.get("dependencies")
+    if deps is None:
+        deps = []
+    if not isinstance(deps, list):
+        return ["pyproject.toml project.dependencies must be a list"]
+    for dep in deps:
+        if isinstance(dep, str):
+            parsed = requirement_name(dep.split(";")[0])
+            if parsed:
+                names.add(parsed)
+
+    for req_name in REQUIRED_REQUIREMENT_FILES:
         req_path = root / req_name
-        if req_path.is_file():
-            for line in req_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    token = re.split(r"[<>=!~\[]", stripped, maxsplit=1)[0].strip()
-                    if token:
-                        names.add(_norm_pkg_name(token))
+        if not req_path.is_file():
+            errors.append(f"missing requirement file: {req_name}")
+            continue
+        try:
+            lines = req_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"unable to read {req_name}: {exc}")
+            continue
+        for line in lines:
+            parsed = requirement_name(line)
+            if parsed:
+                names.add(parsed)
+
     for forbidden in FORBIDDEN_DEP_PREFIXES:
         if any(name == forbidden or name.startswith(forbidden + "_") for name in names):
             errors.append(f"forbidden dependency present: {forbidden}")
-    package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data")
-    if isinstance(package_data, dict) and "psychoanalyst_app" in package_data:
+
+    tool = pyproject.get("tool")
+    if tool is not None and not isinstance(tool, dict):
+        errors.append("pyproject.toml tool must be a table")
+        return errors
+    setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+    if setuptools is not None and not isinstance(setuptools, dict):
+        errors.append("pyproject.toml tool.setuptools must be a table")
+        return errors
+    package_data = (
+        setuptools.get("package-data") if isinstance(setuptools, dict) else None
+    )
+    if package_data is not None and not isinstance(package_data, dict):
+        errors.append("pyproject.toml tool.setuptools.package-data must be a table")
+    elif isinstance(package_data, dict) and "psychoanalyst_app" in package_data:
         errors.append("pyproject package-data still references psychoanalyst_app")
     return errors
 
@@ -691,7 +811,13 @@ def validate(
     makefile_text = (resolved / "Makefile").read_text(encoding="utf-8")
     targets = make_targets(makefile_text)
 
-    errors.extend(validate_entry_points(resolved))
+    pyproject, pyproject_errors = load_pyproject(resolved)
+    errors.extend(pyproject_errors)
+    if pyproject is not None:
+        errors.extend(validate_entry_points(pyproject))
+        if is_final:
+            errors.extend(validate_dependency_closure(resolved, pyproject))
+
     errors.extend(
         validate_required_owner_closure(manifest, STAGE_OWNER_PRS[stage])
     )
@@ -707,10 +833,12 @@ def validate(
         if item.status == "complete":
             errors.extend(validate_item_complete(resolved, targets, item))
 
-    errors.extend(validate_supported_imports(resolved))
     if is_final:
         errors.extend(validate_final_confidence_closure(manifest))
-        errors.extend(validate_dependency_closure(resolved))
+        errors.extend(validate_forbidden_imports(resolved, FINAL_IMPORT_SCAN_ROOTS))
+        errors.extend(validate_test_surface_closure(resolved))
+    else:
+        errors.extend(validate_supported_imports(resolved))
     return errors
 
 

@@ -29,7 +29,7 @@ These docs are the only canonical, actively governed set.
 ## Legacy supporting reference pending Phase 7 rewrite
 These documents describe retired or deletion-pending architecture, contracts, and
 workflow. They are retained temporarily for migration context and are not
-canonical for the supported Phase 6C runtime.
+canonical for the supported Jung runtime.
 
 - [Design Principles](design-principles.md)
 - [Architecture](ARCHITECTURE.md)
@@ -71,7 +71,7 @@ make docker-test-one TEST=tests/unit/jung/test_workflow.py
 Equivalent direct pytest-in-Docker form:
 
 ```bash
-docker compose --profile test run --rm test pytest tests/unit/test_llm_service.py
+docker compose --profile test run --rm test pytest tests/unit/jung/test_workflow.py
 ```
 
 ### Real LLM Tests
@@ -86,25 +86,17 @@ docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 For a single real-LLM test through the Makefile, include `--no-mocks` in `TEST`:
 
 ```bash
-make docker-test-one TEST="tests/real_llm/test_file.py --no-mocks"
+make docker-test-one TEST="tests/smoke/jung/test_phase3_local_llm.py --no-mocks"
 ```
 
 ### Local LM Studio Smoke Test
-The LM Studio smoke test is intentionally double opt-in:
-- `--no-mocks` disables the global `real_llm` skip.
-- `RUN_LMSTUDIO_SMOKE=1` confirms that the test should call a host-local model.
-
-Start LM Studio on the host with the OpenAI-compatible server listening on
-`localhost:1234`, then run:
+The local-model smoke is intentionally opt-in via `make smoke-target-local-llm`
+(or the Phase 3 smoke target it aliases). Start an OpenAI-compatible server on
+the host, set the `PHASE3_SMOKE_*` environment variables as needed, then run:
 
 ```bash
-docker compose --profile test run --rm \
-  -e RUN_LMSTUDIO_SMOKE=1 \
-  test pytest tests/real_llm/test_lmstudio_local_smoke.py --no-mocks
+make smoke-target-local-llm
 ```
-
-The test container reaches the host service at
-`http://host.docker.internal:1234/v1`.
 
 ## Governance
 Documentation policy, metadata requirements, and review cadence:

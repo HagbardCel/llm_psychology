@@ -16,8 +16,8 @@ tests/
 └── console_probe_support.py # Probe helpers used by jung-console e2e
 ```
 
-Remaining files under `tests/` that target `psychoanalyst_app` are deletion-pending
-legacy coverage retained until Phase 6D and are not part of `make test-target`.
+Remaining files under `tests/` outside the declared supported Jung roots and
+allowlisted support files are not part of `make test-target`.
 
 ## Running tests
 
@@ -40,7 +40,6 @@ Native alternative (core Jung trees):
 
 ```bash
 uv run pytest \
-  -o trio_mode=false \
   -o asyncio_mode=auto \
   -m "not real_llm" \
   tests/unit/jung \

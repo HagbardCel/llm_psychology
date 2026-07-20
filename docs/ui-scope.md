@@ -16,11 +16,6 @@ sessions, `/api/v1` contract integration, and deterministic workflow probes.
 All clients interact with the backend exclusively through `/api/v1`; clients
 must not import backend application, workflow, persistence, or domain internals.
 
-## Unsupported Legacy Frontend
-
-`console-ui/` is unsupported and deletion-pending until Phase 6D. Do not
-recreate, repair, test, or optimize it unless explicitly instructed.
-
 ## Development Priority
 
 1. backend workflow and persistence correctness

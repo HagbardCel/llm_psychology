@@ -69,8 +69,6 @@
       "args": [
         "tests/unit/jung/",
         "-o",
-        "trio_mode=false",
-        "-o",
         "asyncio_mode=auto",
         "-v",
         "--tb=short"
@@ -90,8 +88,6 @@
       "module": "pytest",
       "args": [
         "tests/integration/jung/",
-        "-o",
-        "trio_mode=false",
         "-o",
         "asyncio_mode=auto",
         "-v",

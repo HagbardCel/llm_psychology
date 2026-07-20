@@ -1,11 +1,11 @@
 .PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate install-hooks clean run-server
 .PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean
 .PHONY: ui-console ui-console-test
-.PHONY: probe probe-console-deterministic probe-console-v1-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
+.PHONY: probe-console-v1-deterministic check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
 .PHONY: validate-docs finalization-check
-.PHONY: prepare-runtime-dirs test-refactor-fast validate-refactor-phase-1 phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm smoke-target-local-llm phase-5-test validate-refactor-phase-5 validate-refactor-phase-6 test-target _phase-5-console-v1 hook-commit hook-push
-.PHONY: resolve-compose-config smoke-compose-api _validate-phase-6-cutover-contract _validate-phase-5-external-contract
+.PHONY: prepare-runtime-dirs phase-2-test validate-refactor-phase-2 phase-3-test validate-refactor-phase-3 smoke-refactor-phase-3-local-llm smoke-target-local-llm phase-5-test validate-refactor-phase-5 validate-refactor-phase-6 test-target _phase-5-console-v1 hook-commit hook-push
+.PHONY: resolve-compose-config smoke-compose-api _validate-phase-6-final-contract _validate-phase-5-external-contract
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -37,7 +37,7 @@ help:
 	@echo "  validate-docs     - Validate docs metadata + canonical active-doc index (Docker)"
 	@echo "  finalization-check - Target-runtime release gate (Phase 6)"
 	@echo "  test-target         - Complete deterministic Jung test suite once (Phase 6)"
-	@echo "  validate-refactor-phase-6 - Validate Phase 6 cutover invariants (Docker)"
+	@echo "  validate-refactor-phase-6 - Validate Phase 6 final closure invariants (Docker)"
 	@echo "  smoke-target-local-llm - Manual local-model smoke alias (Phase 6 closure)"
 	@echo "  validate-refactor-phase-2 - Validate Phase 2 jung domain/persistence (Docker)"
 	@echo "  phase-3-test            - Run Phase 3 LLM and processor tests (Docker)"
@@ -48,8 +48,6 @@ help:
 	@echo "  ui-console        - Run jung-console against Compose api"
 	@echo "  ui-console-test   - Run jung-console against usertest Compose api"
 	@echo "  probe-console-v1-deterministic - Run Phase 5 Jung console deterministic probes"
-	@echo "  probe-logs        - Print latest workflow probe summary"
-	@echo "  probe-db          - Print rows created by latest workflow probe"
 	@echo ""
 	@echo "Docker Development:"
 	@echo "  docker-up         - Start backend API service"
@@ -121,7 +119,6 @@ TARGET_SUPPORT_TESTS := \
 	tests/unit/test_measure_codebase.py
 
 PHASE_6_PYTEST_OPTIONS := \
-	-o trio_mode=false \
 	-o asyncio_mode=auto
 
 test-target: prepare-runtime-dirs
@@ -148,13 +145,13 @@ resolve-compose-config: prepare-runtime-dirs
 			--no-env-resolution > "$$tmp"; \
 	mv "$$tmp" logs/compose-config.resolved.json
 
-_validate-phase-6-cutover-contract: resolve-compose-config
+_validate-phase-6-final-contract: resolve-compose-config
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps \
 		--entrypoint /usr/local/bin/python \
 		--volume "$(CURDIR):/workspace:ro" \
 		--workdir /workspace \
 		--env PYTHONPATH=/workspace/src \
-		test scripts/validate_refactor_phase_6.py --stage cutover \
+		test scripts/validate_refactor_phase_6.py --stage final \
 		--compose-config /workspace/logs/compose-config.resolved.json
 
 _validate-phase-5-external-contract: prepare-runtime-dirs
@@ -169,7 +166,7 @@ validate-refactor-phase-6: prepare-runtime-dirs
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps test ruff check \
 		scripts/validate_refactor_phase_6.py \
 		tests/unit/test_validate_refactor_phase_6.py
-	$(MAKE) _validate-phase-6-cutover-contract
+	$(MAKE) _validate-phase-6-final-contract
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
 		$(PHASE_6_PYTEST_OPTIONS) \
 		tests/unit/test_validate_refactor_phase_6.py -q
@@ -205,18 +202,10 @@ finalization-check: prepare-runtime-dirs
 	$(MAKE) lint
 	$(MAKE) validate-docs
 	$(MAKE) test-target
-	$(MAKE) _validate-phase-6-cutover-contract
+	$(MAKE) _validate-phase-6-final-contract
 	$(MAKE) _validate-phase-5-external-contract
 	$(MAKE) smoke-compose-api
 	$(MAKE) probe-console-v1-deterministic
-
-# Fast Phase 1 checkpoint: retained deterministic unit coverage plus real smoke.
-test-refactor-fast: prepare-runtime-dirs
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/unit/test_intake_record_merge.py tests/unit/test_intake_slot_evidence_adapter.py tests/unit/test_note_taker_intake_patch.py tests/unit/test_planning_analysis.py tests/unit/test_reflection_plan_snapshot.py tests/unit/test_agent_output_validators.py
-validate-refactor-phase-1: prepare-runtime-dirs
-	$(MAKE) validate-docs
-	docker compose run --rm -v "$(PWD)/scripts:/app/scripts" -v "$(PWD)/docs:/app/docs" -v "$(PWD)/requirements.in:/app/requirements.in:ro" -v "$(PWD)/requirements-dev.in:/app/requirements-dev.in:ro" api python scripts/validate_refactor_phase_1.py
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest tests/unit/test_measure_codebase.py tests/unit/test_validate_refactor_phase_1.py
 
 phase-2-test: prepare-runtime-dirs
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
@@ -251,7 +240,6 @@ validate-refactor-phase-2: prepare-runtime-dirs
 
 phase-3-test: prepare-runtime-dirs
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
-		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/llm \
 		tests/unit/jung/phases \
@@ -263,7 +251,6 @@ phase-3-test: prepare-runtime-dirs
 
 phase-4-test: prepare-runtime-dirs
 	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest \
-		-o trio_mode=false \
 		-o asyncio_mode=auto \
 		tests/unit/jung/test_events.py \
 		tests/unit/jung/test_supervisor.py \
@@ -285,7 +272,6 @@ phase-4-test: prepare-runtime-dirs
 		-q
 
 PHASE_5_PYTEST_OPTIONS := \
-	-o trio_mode=false \
 	-o asyncio_mode=auto
 
 PHASE_5_CONSOLE_TEST := tests/e2e/test_console_v1_workflow.py
@@ -394,7 +380,6 @@ validate-refactor-phase-4: prepare-runtime-dirs
 	$(MAKE) phase-4-test
 
 validate-refactor-target-all: prepare-runtime-dirs
-	$(MAKE) validate-refactor-phase-1
 	$(MAKE) validate-refactor-phase-2
 	$(MAKE) validate-refactor-phase-3
 	$(MAKE) validate-refactor-phase-4
@@ -431,7 +416,7 @@ smoke-refactor-phase-3-local-llm: prepare-runtime-dirs
 		-e PHASE3_SMOKE_LOG_PROMPT_PREVIEWS \
 		test pytest $(PHASE3_SMOKE_TARGET) \
 			-m real_llm --no-mocks \
-			-o trio_mode=false -o asyncio_mode=strict \
+			-o asyncio_mode=strict \
 			$(PHASE3_SMOKE_PYTEST_ARGS)
 
 # Fast local validation. Full release validation remains an explicit checkpoint.
@@ -599,32 +584,6 @@ ui-console-test: prepare-runtime-dirs check-usertest-env
 		up --build --wait -d api-usertest
 	docker compose --profile usertest-console exec api-usertest \
 		jung-console --api-url http://127.0.0.1:8000
-
-# Local full-stack diagnostic probe. This is intentionally not a CI gate.
-probe: prepare-runtime-dirs
-	@./scripts/probe_local_llm.sh
-
-probe-console-deterministic: prepare-runtime-dirs
-	@./scripts/probe_deterministic.sh
-
-probe-console-intake-notes: prepare-runtime-dirs
-	@./scripts/probe_intake_notes.sh
-
-probe-logs:
-	@if [ -f logs/workflow-probes/latest/summary.md ]; then \
-		cat logs/workflow-probes/latest/summary.md; \
-	else \
-		echo "No workflow probe summary found at logs/workflow-probes/latest/summary.md"; \
-		exit 1; \
-	fi
-
-probe-db:
-	@if [ -f logs/workflow-probes/latest/created_rows.json ]; then \
-		cat logs/workflow-probes/latest/created_rows.json; \
-	else \
-		echo "No workflow probe database artifact found at logs/workflow-probes/latest/created_rows.json"; \
-		exit 1; \
-	fi
 
 # ============================================
 # DevContainer Commands

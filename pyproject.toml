@@ -10,10 +10,6 @@ requires-python = ">=3.11"
 authors = [{ name = "Therapist Team" }]
 dependencies = [
     "openai>=1.68.0",
-    "langchain-core",
-    "langchain-google-genai",
-    "langchain-ollama==1.0.0",
-    "langchain-openai==1.0.3",
     "python-dotenv",
     "pydantic",
     "pydantic-settings",
@@ -23,12 +19,6 @@ dependencies = [
     "uvicorn",
     "httpx",
     "websockets",
-    "trio",
-    "quart",
-    "hypercorn",
-    "trio-websocket",
-    "quart-trio",
-    "quart-cors",
 ]
 
 [project.scripts]
@@ -43,7 +33,6 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"psychoanalyst_app" = ["styles/**/*", "prompts/**/*"]
 "jung.persistence" = ["schema.sql"]
 "jung.styles" = ["*/*.txt"]
 
@@ -73,8 +62,6 @@ max-complexity = 32
 "src/jung/api/routes.py" = ["B008"]
 "**/prompts.py" = ["E501"]
 "tests/**" = ["C901", "E501", "E402"]
-"src/psychoanalyst_app/orchestration/response_handler.py" = ["C901"]
-"src/psychoanalyst_app/agents/therapist/prompt_context.py" = ["C901"]
 "src/jung/persistence/sqlite_store.py" = ["E501"]
 
 [tool.mypy]
@@ -85,9 +72,6 @@ disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = [
-    "langchain.*",
-    "langchain_google_genai.*",
-    "google.generativeai.*",
     "dotenv.*",
     "pydantic.*",
     "pydantic_settings.*",

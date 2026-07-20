@@ -2,12 +2,10 @@
 # Fast branch-aware push validation; set HOOK_FULL=1 for release validation.
 set -euo pipefail
 updates=false
-phase_one_push=false
 main_push=false
 while read -r local_ref local_sha remote_ref remote_sha; do
   if [[ "$local_sha" != 0000000000000000000000000000000000000000 ]]; then
     updates=true
-    [[ "$remote_ref" = "refs/heads/refactor/single-user-architecture" ]] && phase_one_push=true
     [[ "$remote_ref" = "refs/heads/main" ]] && main_push=true
   fi
 done
@@ -26,10 +24,6 @@ run() {
 }
 
 run "fast validation" make hook-push
-if [[ "$phase_one_push" = true ]]; then
-  run "Phase 1 validation" make validate-refactor-phase-1
-  run "Phase 1 fast checkpoint" make test-refactor-fast
-fi
 if [[ "${HOOK_FULL:-0}" = "1" || "$main_push" = true ]]; then
   run "full finalization" make finalization-check
 fi
