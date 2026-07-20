@@ -10,7 +10,7 @@ x-api-base: &api-base
     - ./tests:/app/tests:delegated
     - ./scripts:/app/scripts:delegated
     - ./pyproject.toml:/app/pyproject.toml:ro
-    - ./data:/app/data
+    - "${JUNG_HOST_DATA_DIR:-./data}:/app/data"
     - ./logs:/app/logs
   environment: &api-environment
     PYTHONUNBUFFERED: "1"

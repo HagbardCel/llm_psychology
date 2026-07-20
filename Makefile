@@ -176,6 +176,8 @@ validate-refactor-phase-6: prepare-runtime-dirs
 
 smoke-compose-api: prepare-runtime-dirs
 	@set -eu; \
+	smoke_data="$$(mktemp -d)"; \
+	export JUNG_HOST_DATA_DIR="$$smoke_data"; \
 	export ENV_FILE="$${ENV_FILE:-.env.example}"; \
 	export COMPOSE_PROJECT_NAME=jung-phase6c-smoke; \
 	cleanup() { \
@@ -187,6 +189,7 @@ smoke-compose-api: prepare-runtime-dirs
 		fi; \
 		docker compose -f docker-compose.yml \
 			down --remove-orphans || true; \
+		rm -rf "$$smoke_data"; \
 		exit "$$status"; \
 	}; \
 	trap cleanup EXIT; \
