@@ -114,8 +114,6 @@ services:
       - tail
       - -f
       - /dev/null
-    environment:
-      SESSION_DURATION_MINUTES: "45"
     env_file:
       - path: ${ENV_FILE:-.env}
         required: false

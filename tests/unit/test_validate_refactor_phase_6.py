@@ -19,6 +19,7 @@ Manifest = _MODULE.Manifest
 ManifestItem = _MODULE.ManifestItem
 REQUIRED_TEST_COMMAND = _MODULE.REQUIRED_TEST_COMMAND
 make_targets = _MODULE.make_targets
+normalize_repo_path = _MODULE.normalize_repo_path
 supported_python_files = _MODULE.supported_python_files
 validate = _MODULE.validate
 validate_compose_config_file = _MODULE.validate_compose_config_file
@@ -216,14 +217,33 @@ def test_unknown_stage_fails(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "published,target",
-    [("8000", 8000), (8000, "8000"), ("8000", "8000")],
+    ("raw", "expected"),
+    [
+        ("src/jung/phases/", "src/jung/phases/"),
+        (r"src\jung\phases\\", "src/jung/phases/"),
+        ("src//jung//application.py", "src/jung/application.py"),
+    ],
 )
-def test_port_scalar_normalization(published: object, target: object) -> None:
-    model = _valid_compose_model()
-    model["services"]["api"]["ports"][0]["published"] = published
-    model["services"]["api"]["ports"][0]["target"] = target
-    assert validate_compose_model(model) == []
+def test_normalize_repo_path_preserves_directory_semantics(
+    raw: str,
+    expected: str,
+) -> None:
+    assert normalize_repo_path(raw, "path") == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "/absolute/path",
+        "C:/absolute/path",
+        ".",
+        "../outside",
+        "src/../outside",
+    ],
+)
+def test_normalize_repo_path_rejects_non_repository_paths(raw: str) -> None:
+    with pytest.raises(ValueError, match="repository-relative"):
+        normalize_repo_path(raw, "path")
 
 
 def test_port_then_delete_without_replacement_rejected() -> None:

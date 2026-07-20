@@ -669,6 +669,15 @@ confidence = "confirmed"
 responsibility = "Unconditional healthcheck override that masks real API readiness"
 
 [[items]]
+path = ".env.test"
+kind = "filesystem"
+action = "delete"
+owner_pr = "6C"
+status = "complete"
+confidence = "confirmed"
+responsibility = "Legacy automated-test environment superseded by explicit Jung test fixtures and target-only Compose configuration"
+
+[[items]]
 path = "check-usertest-key"
 kind = "make_target"
 action = "delete"
