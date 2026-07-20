@@ -1,57 +1,37 @@
-# Multi-stage build for local development images
-# Uses UV package manager for 10-100x faster dependency installation
+# Runtime-only packaging image for jung-api.
+# Uses uv for locked, non-editable installs.
 
-# ============================================
-# Base stage: System dependencies + UV
-# ============================================
 FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# Install system dependencies and UV
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /usr/local/bin/uv
+
+# ============================================
+# Runtime: production install without tests/tools
+# ============================================
+FROM base AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir uv
+    && rm -rf /var/lib/apt/lists/*
 
-# ============================================
-# Dependencies stage: Install Python packages
-# ============================================
-FROM base AS dependencies
-
-# Copy requirements files
-COPY requirements.txt pyproject.toml ./
-
-# Install backend dependencies with UV.
-RUN uv pip install --system --no-cache-dir -r requirements.txt
-
-# ============================================
-# Development stage: Add dev dependencies
-# ============================================
-FROM dependencies AS development
-
-# Copy dev requirements and install
-COPY requirements-dev.txt ./
-RUN uv pip install --system -r requirements-dev.txt
-
-# Copy application source code and configuration
-COPY pyproject.toml pytest.ini ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
-COPY scripts/ ./scripts/
-COPY tests/ ./tests/
+
+RUN uv sync --locked --no-dev --no-editable \
+    && python -c "import jung" \
+    && python -c "from importlib.resources import files; assert files('jung.persistence').joinpath('schema.sql').is_file()" \
+    && python -c "from jung.styles import load_styles; assert load_styles()" \
+    && test -x /app/.venv/bin/jung-api
+
 RUN mkdir -p /app/data
-
-# Install the backend package in editable mode for live reload
-RUN uv pip install --system -e .
-
-# Set environment for development
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# Declare a volume for persistent data
 VOLUME /app/data
 
-# Command to run the application
 CMD ["jung-api"]

@@ -32,7 +32,9 @@ class _Answer(BaseModel):
     value: str
 
 
-def _policy(*, mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT) -> ModelPolicy:
+def _policy(
+    *, mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT
+) -> ModelPolicy:
     return ModelPolicy(
         task=LLMTask.ASSESSMENT,
         model="test-model",
@@ -241,7 +243,9 @@ async def test_http_failure_translates_and_records_attempt_metadata(
     assert events[0].error_type == expected_error_type
 
 
-async def test_provider_attempt_event_records_empty_content_correction_metadata() -> None:
+async def test_provider_attempt_event_records_empty_content_correction_metadata() -> (
+    None
+):
     events: list[ProviderAttemptEvent] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -532,7 +536,9 @@ async def test_extra_body_merge_applies_task_overrides(
         AdapterConfig(
             base_url="http://testserver/v1",
             api_key="test",
-            task_extra_body={LLMTask.ASSESSMENT: {"response_format": {"type": "json_object"}}},
+            task_extra_body={
+                LLMTask.ASSESSMENT: {"response_format": {"type": "json_object"}}
+            },
         ),
         AdapterConfig(
             base_url="http://testserver/v1",
@@ -547,7 +553,9 @@ async def test_extra_body_merge_applies_task_overrides(
     ],
 )
 async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -> None:
-    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+    with pytest.raises(
+        ValueError, match="extra_body cannot override adapter-owned fields"
+    ):
         OpenAICompatibleLLM(config)
 
 
@@ -563,7 +571,9 @@ async def test_extra_body_rejects_forbidden_global_field_before_sdk_construction
         api_key="test",
         extra_body={"model": "override"},
     )
-    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+    with pytest.raises(
+        ValueError, match="extra_body cannot override adapter-owned fields"
+    ):
         OpenAICompatibleLLM(config)
 
 
@@ -579,7 +589,9 @@ async def test_extra_body_rejects_forbidden_task_field_before_sdk_construction(
         api_key="test",
         task_extra_body={LLMTask.ASSESSMENT: {"stream": True}},
     )
-    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+    with pytest.raises(
+        ValueError, match="extra_body cannot override adapter-owned fields"
+    ):
         OpenAICompatibleLLM(config)
 
 
@@ -893,7 +905,9 @@ async def test_response_chars_measures_raw_content_before_fence_strip() -> None:
     assert events[0].response_chars != len('{"value":"ok"}')
 
 
-async def test_validator_invalid_llm_output_records_semantic_correction_trigger() -> None:
+async def test_validator_invalid_llm_output_records_semantic_correction_trigger() -> (
+    None
+):
     events: list[ProviderAttemptEvent] = []
     calls = {"count": 0}
 

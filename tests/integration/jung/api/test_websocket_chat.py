@@ -91,9 +91,7 @@ async def _recv_matching_progress(
             f"for client_message_id={client_message_id}"
         )
 
-    pytest.fail(
-        "matching message_in_progress was not observed within the event limit"
-    )
+    pytest.fail("matching message_in_progress was not observed within the event limit")
 
 
 async def _recv_matching_token(
@@ -106,15 +104,11 @@ async def _recv_matching_token(
         async with asyncio.timeout(timeout):
             for _ in range(15):
                 event = await _recv_json(ws, timeout=timeout)
-                if (
-                    event["type"] == "token"
-                    and event["request_id"] == str(request_id)
-                ):
+                if event["type"] == "token" and event["request_id"] == str(request_id):
                     return event
     except TimeoutError:
         pytest.fail(
-            "timed out waiting for token correlated to "
-            f"request_id={request_id}"
+            f"timed out waiting for token correlated to request_id={request_id}"
         )
 
     pytest.fail("matching token was not observed within the event limit")
@@ -310,7 +304,9 @@ async def test_non_final_intake_streaming_order(
         events = await receive_until_completion_snapshot(ws, max_events=25)
         types = [event["type"] for event in events]
         tokens = [event for event in events if event["type"] == "token"]
-        completed = next(event for event in events if event["type"] == "message_completed")
+        completed = next(
+            event for event in events if event["type"] == "message_completed"
+        )
 
         assert len(types) >= 5
         assert types[:2] == ["message_in_progress", "snapshot_changed"]
@@ -674,7 +670,10 @@ async def test_final_intake_schedules_assessment_operation(
         for _ in range(40):
             event = await _recv_json(ws)
             final_events.append(event)
-            if event["type"] == "snapshot_changed" and event["snapshot"]["stage"] == "assessment":
+            if (
+                event["type"] == "snapshot_changed"
+                and event["snapshot"]["stage"] == "assessment"
+            ):
                 saw_assessment_snapshot = True
                 break
 
@@ -682,7 +681,11 @@ async def test_final_intake_schedules_assessment_operation(
 
         assert len(types) >= 6
         assert types[:2] == ["message_in_progress", "snapshot_changed"]
-        assert types[-3:] == ["message_completed", "operation_changed", "snapshot_changed"]
+        assert types[-3:] == [
+            "message_completed",
+            "operation_changed",
+            "snapshot_changed",
+        ]
         assert types[2:-3]
         assert all(event_type == "token" for event_type in types[2:-3])
 
@@ -693,7 +696,9 @@ async def test_final_intake_schedules_assessment_operation(
         assert operation_event["operation"]["status"] == "pending"
         assert operation_event["snapshot"]["stage"] == "assessment"
         assert trailing["snapshot"]["stage"] == "assessment"
-        assert trailing["snapshot"]["revision"] == operation_event["snapshot"]["revision"]
+        assert (
+            trailing["snapshot"]["revision"] == operation_event["snapshot"]["revision"]
+        )
         assert saw_assessment_snapshot
 
 

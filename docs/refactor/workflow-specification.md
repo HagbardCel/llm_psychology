@@ -8,7 +8,7 @@ source_of_truth_for: Supported workflow, recovery, and concurrency semantics
 
 # Workflow Specification
 
-> This document governs the supported Phase 6C workflow runtime. Legacy
+> This document governs the supported Jung workflow runtime. Legacy
 > `WorkflowState`, user status, jobs, events, and next actions are supporting
 > reference only. Wire DTO shapes live in [API v1 Contract](api-v1-contract.md).
 

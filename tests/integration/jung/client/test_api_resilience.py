@@ -1,4 +1,4 @@
-"""Phase 5 client-boundary resilience integration tests."""
+"""Client-boundary resilience integration tests."""
 
 from __future__ import annotations
 

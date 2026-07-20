@@ -213,10 +213,7 @@ def build_context_sections(input: TherapyTurnInput) -> list[str]:
 
 def build_opening_context_sections(input: TherapyTurnInput) -> list[str]:
     sections = [
-        (
-            f"Patient: {input.profile.name}, "
-            f"language={input.profile.primary_language}"
-        ),
+        (f"Patient: {input.profile.name}, language={input.profile.primary_language}"),
         *build_therapy_context(input, include_current_message=False),
     ]
     return sections

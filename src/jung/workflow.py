@@ -102,9 +102,7 @@ def stage_after_operation_completion(
 
 def stage_after_style_selection(current: Stage) -> Stage:
     if current != Stage.STYLE_SELECTION:
-        raise InvalidCommand(
-            f"select_style is not allowed in stage {current.value}"
-        )
+        raise InvalidCommand(f"select_style is not allowed in stage {current.value}")
     return Stage.READY
 
 

@@ -8,7 +8,7 @@ source_of_truth_for: Supported architecture for the single-user Jung runtime
 
 # Target Architecture
 
-> This document governs the supported Phase 6C Jung runtime. It defines the
+> This document governs the supported Jung runtime. It defines the
 > architecture, dependency direction, and runtime boundaries for current work.
 
 ## Goals
@@ -128,7 +128,10 @@ src/jung/
 ```
 
 The supported runtime package is `jung`. The boundaries above are the
-important part.
+important part. `config.py` holds environment-backed `ApplicationSettings`
+(database path, LLM settings, tracing/logging flags); the composition root
+constructs the application from these settings rather than reading the
+environment itself.
 
 The package tree is illustrative. Begin with the fewest modules that preserve dependency boundaries; split only when a file has independently testable logic or distinct dependencies. In particular, post-session summarization/patch helpers and client transport code may start consolidated:
 
@@ -433,9 +436,13 @@ Docker packages the system but does not define internal boundaries.
 
 Target Compose services:
 
-- `api` — default Jung API service
-- `api-usertest` — same Jung API build target and runtime implementation with an isolated `JUNG_DATA_DIR` (`/app/data/usertest`) under the `usertest-console` profile
+- `api` — single Jung API service definition
 - `web` when implemented
+
+Manual user testing reuses the single parameterized `api` service under an
+isolated Compose project and data directory (`make ui-console-test`: separate
+Compose project, host port `8001`, `.env.usertest`, `/app/data/usertest`). No
+duplicate Compose service is defined.
 
 Native development must remain supported:
 

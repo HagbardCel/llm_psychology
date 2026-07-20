@@ -3,18 +3,15 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "psychoanalyst-app"
+name = "jung"
 version = "0.1.0"
-description = "Virtual LLM-driven therapist backend services"
+description = "Local single-user therapy workflow runtime (jung-api / jung-console)"
 requires-python = ">=3.11"
 authors = [{ name = "Therapist Team" }]
 dependencies = [
     "openai>=1.68.0",
     "python-dotenv",
     "pydantic",
-    "pydantic-settings",
-    "typing-extensions==4.15.0",
-    "python-multipart>=0.0.6",
     "fastapi",
     "uvicorn",
     "httpx",
@@ -24,6 +21,13 @@ dependencies = [
 [project.scripts]
 jung-api = "jung.api.app:cli"
 jung-console = "jung.client.terminal:cli"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -36,44 +40,26 @@ where = ["src"]
 "jung.persistence" = ["schema.sql"]
 "jung.styles" = ["*/*.txt"]
 
-[tool.black]
-line-length = 88
-target-version = ['py311']
-
 [tool.ruff]
 line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
 select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "C",    # mccabe
-    "B",    # bugbear
-    "UP",   # pyupgrade
+    "E",
+    "W",
+    "F",
+    "I",
+    "C",
+    "B",
+    "UP",
 ]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 32
+max-complexity = 20
 
 [tool.ruff.lint.per-file-ignores]
 "src/jung/api/routes.py" = ["B008"]
 "**/prompts.py" = ["E501"]
 "tests/**" = ["C901", "E501", "E402"]
 "src/jung/persistence/sqlite_store.py" = ["E501"]
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-
-[[tool.mypy.overrides]]
-module = [
-    "dotenv.*",
-    "pydantic.*",
-    "pydantic_settings.*",
-]
-ignore_missing_imports = true

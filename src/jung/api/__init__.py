@@ -1,1 +1,1 @@
-"""Target /api/v1 transport adapters (Phase 5)."""
+"""Target /api/v1 transport adapters."""

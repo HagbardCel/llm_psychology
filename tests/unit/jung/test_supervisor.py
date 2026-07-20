@@ -126,6 +126,7 @@ async def test_create_task_failure_rolls_back_active_name_and_closes_coro() -> N
 
     async with TaskSupervisor() as supervisor:
         assert supervisor._task_group is not None
+
         def recording_create_task(coro, *, name=None):
             captured.append(coro)
             raise RuntimeError("create failed")

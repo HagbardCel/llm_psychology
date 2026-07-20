@@ -15,9 +15,7 @@ _ANALYSIS_TRANSCRIPT_LIMIT = 12000
 
 
 def build_analysis_messages(input: PostSessionInput) -> list[ChatMessage]:
-    transcript_lines = [
-        f"{turn.role}: {turn.content}" for turn in input.transcript
-    ]
+    transcript_lines = [f"{turn.role}: {turn.content}" for turn in input.transcript]
     transcript = "\n".join(
         newest_lines_within_budget(transcript_lines, _ANALYSIS_TRANSCRIPT_LIMIT)
     )

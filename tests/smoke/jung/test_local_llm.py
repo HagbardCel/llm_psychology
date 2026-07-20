@@ -1,4 +1,4 @@
-"""Required manual smoke for real local LLM processors before Phase 3 merge."""
+"""Required manual smoke for real local LLM processors."""
 
 from __future__ import annotations
 
@@ -46,23 +46,23 @@ from tests.smoke.jung.smoke_recorder import SmokeAttemptRecorder
 def _required_smoke_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        pytest.fail(f"{name} must be set for Phase 3 smoke")
+        pytest.fail(f"{name} must be set for local-model smoke")
     return value
 
 
 def _structured_mode() -> StructuredOutputMode:
-    raw = os.environ.get("PHASE3_SMOKE_STRUCTURED_MODE", "json_schema")
+    raw = os.environ.get("LOCAL_LLM_SMOKE_STRUCTURED_MODE", "json_schema")
     return StructuredOutputMode(raw)
 
 
 @pytest.fixture(scope="session")
 def smoke_extra_body() -> dict[str, object] | None:
-    return parse_smoke_extra_body(os.environ.get("PHASE3_SMOKE_EXTRA_BODY"))
+    return parse_smoke_extra_body(os.environ.get("LOCAL_LLM_SMOKE_EXTRA_BODY"))
 
 
 def _policies() -> dict[LLMTask, object]:
     completion_caps = parse_completion_caps(
-        os.environ.get("PHASE3_SMOKE_MAX_COMPLETION_TOKENS")
+        os.environ.get("LOCAL_LLM_SMOKE_MAX_COMPLETION_TOKENS")
     )
     COLLECTOR.effective_completion_caps = effective_completion_cap_labels(
         completion_caps
@@ -70,8 +70,8 @@ def _policies() -> dict[LLMTask, object]:
     request_timeout = smoke_request_timeout_seconds()
     COLLECTOR.request_timeout_seconds = request_timeout
     settings = LLMSettings(
-        default_model=_required_smoke_env("PHASE3_SMOKE_MODEL"),
-        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
+        default_model=_required_smoke_env("LOCAL_LLM_SMOKE_MODEL"),
+        base_url=_required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
         task_structured_modes=dict.fromkeys(LLMTask, _structured_mode()),
         task_timeouts=dict.fromkeys(LLMTask, request_timeout),
@@ -100,13 +100,13 @@ def _plan() -> Plan:
 def configure_smoke_metadata(
     smoke_extra_body: dict[str, object] | None,
 ) -> None:
-    if not os.environ.get("PHASE3_SMOKE_BASE_URL"):
+    if not os.environ.get("LOCAL_LLM_SMOKE_BASE_URL"):
         return
-    COLLECTOR.server = _required_smoke_env("PHASE3_SMOKE_SERVER")
-    COLLECTOR.base_url = _required_smoke_env("PHASE3_SMOKE_BASE_URL")
-    COLLECTOR.model = _required_smoke_env("PHASE3_SMOKE_MODEL")
+    COLLECTOR.server = _required_smoke_env("LOCAL_LLM_SMOKE_SERVER")
+    COLLECTOR.base_url = _required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL")
+    COLLECTOR.model = _required_smoke_env("LOCAL_LLM_SMOKE_MODEL")
     COLLECTOR.structured_mode = os.environ.get(
-        "PHASE3_SMOKE_STRUCTURED_MODE",
+        "LOCAL_LLM_SMOKE_STRUCTURED_MODE",
         "json_schema",
     )
     COLLECTOR.request_extras = smoke_extra_body or {}
@@ -120,12 +120,12 @@ def configure_smoke_metadata(
 
 @pytest_asyncio.fixture
 async def gateway(smoke_extra_body: dict[str, object] | None):
-    _required_smoke_env("PHASE3_SMOKE_SERVER")
-    _required_smoke_env("PHASE3_SMOKE_BASE_URL")
-    _required_smoke_env("PHASE3_SMOKE_MODEL")
+    _required_smoke_env("LOCAL_LLM_SMOKE_SERVER")
+    _required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL")
+    _required_smoke_env("LOCAL_LLM_SMOKE_MODEL")
     attempt_recorder = SmokeAttemptRecorder(COLLECTOR)
     config = AdapterConfig(
-        base_url=_required_smoke_env("PHASE3_SMOKE_BASE_URL"),
+        base_url=_required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
         extra_body=smoke_extra_body,
     )

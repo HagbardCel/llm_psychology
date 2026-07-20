@@ -243,7 +243,9 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
         for content in turn_messages:
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content=content,

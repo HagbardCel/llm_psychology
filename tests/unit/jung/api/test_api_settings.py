@@ -14,7 +14,7 @@ from jung.api.settings import (
     validate_api_settings,
     validate_bind_host,
 )
-from jung.composition import build_settings
+from jung.config import build_settings
 
 API_ENV_NAMES = (
     "LLM_BASE_URL",
@@ -167,7 +167,9 @@ def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> N
     assert type(captured["app"]).__name__ == "FastAPI"
 
 
-def test_cli_rejects_remote_bind_before_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_rejects_remote_bind_before_uvicorn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from jung.api import app as app_module
 
     run = MagicMock()

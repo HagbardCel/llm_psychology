@@ -34,14 +34,14 @@ from jung.api.errors import (
 from jung.api.routes import router
 from jung.api.settings import ApiSettings, validate_api_settings
 from jung.api.websocket import router as websocket_router
-from jung.composition import Settings as CompositionSettings
 from jung.composition import application_context
+from jung.config import ApplicationSettings
 from jung.domain.errors import DomainError, RevisionConflict
 
 logger = logging.getLogger(__name__)
 
 RuntimeFactory = Callable[
-    [CompositionSettings],
+    [ApplicationSettings],
     AbstractAsyncContextManager[ApiRuntime],
 ]
 

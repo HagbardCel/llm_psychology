@@ -251,10 +251,7 @@ def test_token_matching_captured_turn_rejects_wrong_request_id() -> None:
     )
     with pytest.raises(ChatEventViolation) as exc_info:
         matches_token(token, identity)
-    assert (
-        exc_info.value.expected_model
-        == "TokenEvent matching correlated request_id"
-    )
+    assert exc_info.value.expected_model == "TokenEvent matching correlated request_id"
 
 
 def test_token_unrelated_turn_id_ignored() -> None:

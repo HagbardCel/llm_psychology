@@ -27,7 +27,9 @@ def _therapy_ready(store: SQLiteStore):
 
 
 @pytest.mark.parametrize("stage_setup", ["intake", "therapy"])
-def test_chat_turn_acceptance_and_completion(store: SQLiteStore, stage_setup: str) -> None:
+def test_chat_turn_acceptance_and_completion(
+    store: SQLiteStore, stage_setup: str
+) -> None:
     now = datetime.now(UTC)
     if stage_setup == "intake":
         session_id, now = open_intake(store)
@@ -198,7 +200,9 @@ def test_failed_non_retryable_u1_does_not_associate_later_assistant_with_u1(
     assert messages[2].client_message_id != u1_client_id
 
 
-def test_duplicate_user_message_id_rejected_on_second_accept(store: SQLiteStore) -> None:
+def test_duplicate_user_message_id_rejected_on_second_accept(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     user_message_id = uuid4()
     store.accept_chat_message(
@@ -229,7 +233,9 @@ def test_duplicate_user_message_id_rejected_on_second_accept(store: SQLiteStore)
         )
 
 
-def test_duplicate_assistant_message_id_rejected_on_complete(store: SQLiteStore) -> None:
+def test_duplicate_assistant_message_id_rejected_on_complete(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     turn_one = uuid4()
     assistant_id = uuid4()
@@ -447,7 +453,10 @@ def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
         retry_turn_id,
         assistant_message_id=uuid4(),
         content="response two",
-        intake_record={"schema_version": 1, "presenting_problem": {"summary": "updated"}},
+        intake_record={
+            "schema_version": 1,
+            "presenting_problem": {"summary": "updated"},
+        },
         now=now,
     )
     session = store.get_session(intake_id)

@@ -9,23 +9,28 @@ Local-laptop therapy workflow research tool backed by an asyncio FastAPI
 1. Start an OpenAI-compatible local model server such as llama.cpp, LM Studio,
    or Ollama on the host.
 2. Copy `.env.example` to `.env` and set `LLM_BASE_URL` and `MODEL_NAME`.
-3. Build the Docker images with `make dev-install`.
-4. Start the API with `make docker-up`, or start the supported client with
-   `make ui-console`.
-
-Native alternatives remain supported:
+3. Install and run natively:
 
 ```bash
-uv run jung-api
-uv run jung-console --api-url http://127.0.0.1:8000
+uv sync --locked
+make run-api
+make run-console
 ```
 
-`api-usertest` is the same Jung API build target and runtime implementation with
-an isolated `JUNG_DATA_DIR` (`data/usertest`), not a second application.
+Optional packaged Docker path:
+
+```bash
+make docker-build
+make docker-up
+```
+
+Or start the supported client against a packaged API with `make ui-console`.
+
+Manual user testing reuses the single parameterized `api` service under an
+isolated Compose project and data directory (`make ui-console-test`). No
+duplicate Compose service is defined.
 
 ## Maintainer Checks
-
-Run the release-candidate validation path through Docker:
 
 ```bash
 make finalization-check
@@ -36,8 +41,8 @@ For faster partial feedback while iterating:
 ```bash
 make lint
 make validate-docs
-make test-target
-make probe-console-v1-deterministic
+make test
+make probe-console
 ```
 
 See [docs/README.md](docs/README.md) for architecture, contracts, and local
@@ -53,18 +58,8 @@ contents should be retained, first archive the SQLite database together with
 any existing `-wal` and `-shm` sibling files; then delete the original files or
 use a fresh data directory.
 
-## Optional Devcontainer
-
-The checked-in devcontainer is supported optional tooling for contributors who
-want a containerized editor environment. Validate its setup with
-`make devcontainer-test`; the Docker-first commands above remain the canonical
-workflow.
-
 ## Naming
 
 The user-facing product language is **therapist**. The supported runtime package
 is `jung`. Legacy import namespaces, runtime entry points, and compatibility
-aliases were removed in Phase 6D. Legacy container identifiers were removed in
-Phase 6D; the supported devcontainer image is `jung-devcontainer`. The Python
-distribution metadata name `psychoanalyst-app` remains until Phase 7 packaging
-finalization.
+aliases have been removed.

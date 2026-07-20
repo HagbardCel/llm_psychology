@@ -540,7 +540,4 @@ def test_contract_schema_does_not_expose_user_id(model: type[BaseModel]) -> None
 def test_error_response_inherits_error_envelope_fields() -> None:
     assert tuple(ErrorResponse.model_fields) == tuple(ErrorEnvelope.model_fields)
     for name, envelope_field in ErrorEnvelope.model_fields.items():
-        assert (
-            ErrorResponse.model_fields[name].annotation
-            == envelope_field.annotation
-        )
+        assert ErrorResponse.model_fields[name].annotation == envelope_field.annotation

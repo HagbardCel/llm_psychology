@@ -141,8 +141,10 @@ def test_parse_bool_env_accepts_known_values(
     raw: str,
     expected: bool,
 ) -> None:
-    monkeypatch.setenv("PHASE3_SMOKE_STRICT_ACCEPTANCE", raw)
-    assert parse_bool_env("PHASE3_SMOKE_STRICT_ACCEPTANCE", default=False) is expected
+    monkeypatch.setenv("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", raw)
+    assert (
+        parse_bool_env("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", default=False) is expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -153,9 +155,9 @@ def test_parse_bool_env_rejects_unknown_values(
     monkeypatch: pytest.MonkeyPatch,
     raw: str,
 ) -> None:
-    monkeypatch.setenv("PHASE3_SMOKE_STRICT_ACCEPTANCE", raw)
-    with pytest.raises(ValueError, match="PHASE3_SMOKE_STRICT_ACCEPTANCE"):
-        parse_bool_env("PHASE3_SMOKE_STRICT_ACCEPTANCE", default=False)
+    monkeypatch.setenv("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", raw)
+    with pytest.raises(ValueError, match="LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE"):
+        parse_bool_env("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", default=False)
 
 
 @pytest.mark.parametrize(
@@ -166,10 +168,10 @@ def test_parse_positive_finite_float_env_rejects_invalid_values(
     monkeypatch: pytest.MonkeyPatch,
     raw: str,
 ) -> None:
-    monkeypatch.setenv("PHASE3_SMOKE_THERAPY_MAX_SECONDS", raw)
+    monkeypatch.setenv("LOCAL_LLM_SMOKE_THERAPY_MAX_SECONDS", raw)
     with pytest.raises(ValueError):
         parse_positive_finite_float_env(
-            "PHASE3_SMOKE_THERAPY_MAX_SECONDS",
+            "LOCAL_LLM_SMOKE_THERAPY_MAX_SECONDS",
             default=300.0,
         )
 
@@ -257,7 +259,7 @@ def test_render_smoke_evidence_emits_one_line_for_real_metadata() -> None:
     )
     line = render_smoke_evidence(collector)
     assert line is not None
-    assert line.startswith("PHASE3_SMOKE_EVIDENCE=")
+    assert line.startswith("LOCAL_LLM_SMOKE_EVIDENCE=")
     assert '"server":"llama.cpp"' in line
 
 
@@ -452,7 +454,7 @@ def test_run_smoke_path_strict_vs_diagnostic_acceptance(
     async def _run() -> None:
         collector = SmokeEvidenceCollector()
         monkeypatch.setenv(
-            "PHASE3_SMOKE_STRICT_ACCEPTANCE",
+            "LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE",
             "1" if strict else "0",
         )
 
@@ -491,7 +493,7 @@ def test_run_smoke_path_inner_timeout_error_is_not_path_timeout(
 ) -> None:
     async def _run() -> None:
         collector = SmokeEvidenceCollector()
-        monkeypatch.setenv("PHASE3_SMOKE_STRICT_ACCEPTANCE", "1")
+        monkeypatch.setenv("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", "1")
 
         async def operation() -> SmokeOperationResult[str]:
             raise TimeoutError("inner timeout")

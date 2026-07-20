@@ -96,7 +96,9 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
             mutation_started.set()
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=therapy_id,
                     client_message_id=new_client_message_id,
                     content=new_content,
@@ -122,4 +124,6 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
         assert all(message.content != new_content for message in history.messages)
 
         follow_up_history = await runtime.application.get_session_history(therapy_id)
-        assert any(message.content == new_content for message in follow_up_history.messages)
+        assert any(
+            message.content == new_content for message in follow_up_history.messages
+        )

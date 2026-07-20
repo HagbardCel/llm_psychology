@@ -1,62 +1,44 @@
 # Jung Target Test Suite
 
-Supported tests for the asyncio Jung runtime. Docker is the canonical
-reproducible workflow; native `uv run pytest` remains supported.
+Supported tests for the asyncio Jung runtime. Native `uv` is the canonical
+developer workflow; Docker remains available for reproducible CI/runtime images.
 
 ## Layout
 
 ```
 tests/
 ├── conftest.py              # Generic pytest options and collection hooks
-├── unit/jung/               # Deterministic Jung unit tests
+├── unit/                    # Unit tests (jung/ + support scripts)
 ├── integration/jung/        # Jung API / application / store integration tests
-├── smoke/jung/              # Opt-in local-model smoke (make smoke-target-local-llm)
+├── smoke/jung/              # Opt-in local-model smoke (make smoke-local-llm)
 ├── e2e/                     # Deterministic jung-console workflow probe
 ├── jung_api_fixtures.py     # Shared API fixtures for probes and e2e
 └── console_probe_support.py # Probe helpers used by jung-console e2e
 ```
 
-Remaining files under `tests/` outside the declared supported Jung roots and
-allowlisted support files are not part of `make test-target`.
+Pytest discovery under `tests/unit` and `tests/integration` is authoritative.
+There is no Makefile path allowlist. Console E2E lives under `tests/e2e` and is
+run separately via `make probe-console`.
 
 ## Running tests
 
-Docker-first:
-
 ```bash
-make test-target                            # Complete supported suite
-make test-unit                              # tests/unit/jung + support tests
-make test-integration                       # tests/integration/jung
-make docker-test-one TEST=tests/unit/jung/...
-make probe-console-v1-deterministic         # Deterministic jung-console probe
-make finalization-check                     # Release-candidate gate
+make test                                   # unit + integration (not real_llm)
+make test-unit
+make test-integration
+make probe-console                          # Deterministic jung-console E2E once
+make finalization-check                     # Release gate (format/lint/docs/test/probe/compose)
 ```
 
-Bare `docker compose --profile test run test` runs the core Jung unit and
-integration trees (with asyncio overrides). `make test-target` runs the complete
-supported suite, including validator and support tests.
-
-Native alternative (core Jung trees):
+Native equivalent:
 
 ```bash
-uv run pytest \
-  -o asyncio_mode=auto \
-  -m "not real_llm" \
-  tests/unit/jung \
-  tests/integration/jung
+uv run --locked pytest -m "not real_llm" tests/unit tests/integration
+uv run --locked pytest tests/unit/jung/...
 ```
 
 ## Conventions
 
-- Target async tests use asyncio (`@pytest.mark.asyncio` / `asyncio_mode=auto`).
-- Prefer asserting on observable behavior (HTTP/WebSocket responses, store state)
-  over internal implementation details.
-- Keep tests deterministic: avoid wall-clock dependencies and live LLM calls in
-  the default suite. Use `tests/smoke/jung/` with `--no-mocks` only when validating
-  a real local model.
-
-## Related documentation
-
-- [AGENTS.md](../AGENTS.md)
-- [Target architecture](../docs/refactor/target-architecture.md)
-- [API v1 contract](../docs/refactor/api-v1-contract.md)
+- Prefer deterministic fakes over live model calls.
+- Mark opt-in live-model tests with `real_llm`.
+- Keep import-boundary tests durable and directory-discovered.

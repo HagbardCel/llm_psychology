@@ -122,7 +122,9 @@ async def test_submit_message_completes_intake_turn(store: SQLiteStore) -> None:
     fake.assert_exhausted()
 
 
-async def test_duplicate_client_message_id_returns_same_turn(store: SQLiteStore) -> None:
+async def test_duplicate_client_message_id_returns_same_turn(
+    store: SQLiteStore,
+) -> None:
     fake = FakeLLM(intake_message_expectations("Welcome."))
     client_message_id = uuid4()
     async with build_test_application(store, fake) as runtime:
@@ -193,7 +195,9 @@ async def test_second_message_while_pending_raises_busy(store: SQLiteStore) -> N
         with pytest.raises(Busy, match="another chat generation is active"):
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content="second",
@@ -225,7 +229,9 @@ async def test_chat_tokens_are_published_during_generation(store: SQLiteStore) -
         async with runtime.events.subscribe() as events:
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session.id,
                     client_message_id=uuid4(),
                     content="I need help sleeping.",
@@ -254,7 +260,9 @@ async def test_chat_tokens_are_published_during_generation(store: SQLiteStore) -
     fake.assert_exhausted()
 
 
-async def test_failed_chat_retry_uses_persisted_original_content(store: SQLiteStore) -> None:
+async def test_failed_chat_retry_uses_persisted_original_content(
+    store: SQLiteStore,
+) -> None:
     fake = FakeLLM(
         [
             StructuredExpectation(
@@ -262,7 +270,9 @@ async def test_failed_chat_retry_uses_persisted_original_content(store: SQLiteSt
                 output_type=IntakeRecordPatch,
                 response=IntakeRecordPatch(),
             ),
-            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            FailureExpectation(
+                task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")
+            ),
             *intake_message_expectations("Retry response."),
         ]
     )
@@ -306,7 +316,9 @@ async def test_failed_chat_retry_uses_persisted_original_content(store: SQLiteSt
             ChatTurnStatus.COMPLETE,
         )
         messages = runtime.store.list_messages(session_id)
-        user_messages = [message for message in messages if message.role is MessageRole.USER]
+        user_messages = [
+            message for message in messages if message.role is MessageRole.USER
+        ]
         assert len(user_messages) == 1
         assert user_messages[0].content == original_content
         assert completed.status is ChatTurnStatus.COMPLETE
@@ -319,7 +331,9 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
     advance_to_ready(store)
     fake = FakeLLM(
         [
-            FailureExpectation(task=LLMTask.THERAPY_RESPONSE, error=LLMTimeout("timeout")),
+            FailureExpectation(
+                task=LLMTask.THERAPY_RESPONSE, error=LLMTimeout("timeout")
+            ),
             *post_session_expectations(),
         ]
     )
@@ -353,7 +367,9 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
         with pytest.raises(StoredWorkFailure) as exc_info:
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry",
@@ -373,7 +389,9 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
                 output_type=IntakeRecordPatch,
                 response=IntakeRecordPatch(),
             ),
-            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            FailureExpectation(
+                task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")
+            ),
             StructuredExpectation(
                 task=LLMTask.INTAKE_PATCH,
                 output_type=IntakeRecordPatch,
@@ -426,7 +444,9 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
         with pytest.raises(StoredWorkFailure) as exc_info:
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session_id,
                     client_message_id=failed_client_id,
                     content="retry failed turn",
@@ -450,7 +470,9 @@ async def test_failed_chat_retry_with_stale_revision_raises_revision_conflict(
                 output_type=IntakeRecordPatch,
                 response=IntakeRecordPatch(),
             ),
-            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            FailureExpectation(
+                task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")
+            ),
         ]
     )
     async with build_test_application(store, fake) as runtime:
@@ -526,7 +548,9 @@ async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
                 output_type=IntakeRecordPatch,
                 response=IntakeRecordPatch(),
             ),
-            FailureExpectation(task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")),
+            FailureExpectation(
+                task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")
+            ),
             StructuredExpectation(
                 task=LLMTask.INTAKE_PATCH,
                 output_type=IntakeRecordPatch,
@@ -767,7 +791,9 @@ async def test_submit_message_cancel_during_accepted_event_publication(
         submit_task = asyncio.create_task(
             runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content="hello",

@@ -8,9 +8,7 @@ source_of_truth_for: Supported /api/v1 external semantics
 
 # API v1 Contract
 
-> This document governs the supported Phase 6C `/api/v1` runtime contract.
-> The legacy contracts in `docs/contracts/` and `docs/WEBSOCKET_PROTOCOL.md`
-> are supporting references only.
+> This document governs the supported `/api/v1` runtime contract.
 
 All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no generic workflow mutation route.
 
@@ -122,7 +120,7 @@ Policy decisions:
 - `PUT /profile` is allowed only in `SETUP` and `INTAKE`;
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
 - most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
-- `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for Phase 1 clients.
+- `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for v1 clients.
 - `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read.
 - `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available.
 - `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text.

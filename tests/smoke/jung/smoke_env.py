@@ -1,4 +1,4 @@
-"""Strict environment parsing for Phase 3 local-model smoke."""
+"""Strict environment parsing for local-model smoke."""
 
 from __future__ import annotations
 
@@ -51,15 +51,15 @@ def _parse_positive_finite_float(name: str, raw: str) -> float:
 
 
 def smoke_log_prompt_previews() -> bool:
-    return parse_bool_env("PHASE3_SMOKE_LOG_PROMPT_PREVIEWS", default=False)
+    return parse_bool_env("LOCAL_LLM_SMOKE_LOG_PROMPT_PREVIEWS", default=False)
 
 
 def smoke_strict_acceptance() -> bool:
-    return parse_bool_env("PHASE3_SMOKE_STRICT_ACCEPTANCE", default=True)
+    return parse_bool_env("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", default=True)
 
 
 def smoke_request_timeout_seconds() -> float:
-    for name in ("PHASE3_SMOKE_REQUEST_TIMEOUT", "PHASE3_SMOKE_TIMEOUT"):
+    for name in ("LOCAL_LLM_SMOKE_REQUEST_TIMEOUT", "LOCAL_LLM_SMOKE_TIMEOUT"):
         raw = os.environ.get(name)
         if raw is not None and raw.strip():
             return _parse_positive_finite_float(name, raw)
@@ -68,9 +68,9 @@ def smoke_request_timeout_seconds() -> float:
 
 def smoke_path_budget_seconds(name: str, *, default: float = 300.0) -> float:
     env_name = {
-        "therapy": "PHASE3_SMOKE_THERAPY_MAX_SECONDS",
-        "assessment": "PHASE3_SMOKE_ASSESSMENT_MAX_SECONDS",
-        "post_session": "PHASE3_SMOKE_POST_SESSION_MAX_SECONDS",
+        "therapy": "LOCAL_LLM_SMOKE_THERAPY_MAX_SECONDS",
+        "assessment": "LOCAL_LLM_SMOKE_ASSESSMENT_MAX_SECONDS",
+        "post_session": "LOCAL_LLM_SMOKE_POST_SESSION_MAX_SECONDS",
     }[name]
     return parse_positive_finite_float_env(env_name, default=default)
 
@@ -81,13 +81,17 @@ def parse_completion_caps(raw: str | None) -> dict[LLMTask, int]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("PHASE3_SMOKE_MAX_COMPLETION_TOKENS must be valid JSON") from exc
+        raise ValueError(
+            "LOCAL_LLM_SMOKE_MAX_COMPLETION_TOKENS must be valid JSON"
+        ) from exc
     if not isinstance(parsed, dict):
-        raise ValueError("PHASE3_SMOKE_MAX_COMPLETION_TOKENS must be a JSON object")
+        raise ValueError("LOCAL_LLM_SMOKE_MAX_COMPLETION_TOKENS must be a JSON object")
     caps: dict[LLMTask, int] = {}
     for key, value in parsed.items():
         if not isinstance(key, str):
-            raise ValueError("PHASE3_SMOKE_MAX_COMPLETION_TOKENS keys must be strings")
+            raise ValueError(
+                "LOCAL_LLM_SMOKE_MAX_COMPLETION_TOKENS keys must be strings"
+            )
         task = _SMOKE_COMPLETION_CAP_KEYS.get(key)
         if task is None:
             raise ValueError(f"unknown completion cap task: {key}")
@@ -113,7 +117,7 @@ def parse_smoke_extra_body(raw: str | None) -> dict[str, object] | None:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("PHASE3_SMOKE_EXTRA_BODY must be valid JSON") from exc
+        raise ValueError("LOCAL_LLM_SMOKE_EXTRA_BODY must be valid JSON") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("PHASE3_SMOKE_EXTRA_BODY must be a JSON object")
+        raise ValueError("LOCAL_LLM_SMOKE_EXTRA_BODY must be a JSON object")
     return parsed

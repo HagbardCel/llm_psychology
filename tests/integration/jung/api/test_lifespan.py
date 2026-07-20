@@ -13,7 +13,9 @@ from tests.jung_api_fixtures import runtime_factory
 
 
 @pytest.mark.asyncio
-async def test_state_without_lifespan_returns_not_ready(api_client: AsyncClient) -> None:
+async def test_state_without_lifespan_returns_not_ready(
+    api_client: AsyncClient,
+) -> None:
     response = await api_client.get("/api/v1/state")
     assert response.status_code == 503
     body = response.json()
@@ -36,7 +38,9 @@ async def test_malformed_request_id_before_lifespan_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_health_without_lifespan_returns_not_ready(api_client: AsyncClient) -> None:
+async def test_health_without_lifespan_returns_not_ready(
+    api_client: AsyncClient,
+) -> None:
     response = await api_client.get("/api/v1/health")
     assert response.status_code == 503
     assert response.json()["code"] == "not_ready"
@@ -71,15 +75,9 @@ async def test_lifespan_logs_ready_and_shutdown_complete(
 
     with caplog.at_level(logging.INFO, logger="jung.api.app"):
         async with app.router.lifespan_context(app):
-            assert any(
-                record.message == "api_ready"
-                for record in caplog.records
-            )
+            assert any(record.message == "api_ready" for record in caplog.records)
 
-    assert any(
-        record.message == "api_shutdown_complete"
-        for record in caplog.records
-    )
+    assert any(record.message == "api_shutdown_complete" for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -112,8 +110,7 @@ async def test_failed_runtime_exit_does_not_log_shutdown_complete(
     )
 
     assert not any(
-        record.message == "api_shutdown_complete"
-        for record in caplog.records
+        record.message == "api_shutdown_complete" for record in caplog.records
     )
 
 

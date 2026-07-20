@@ -94,10 +94,7 @@ class TerminalConsoleOutput:
         if options.recommendations:
             print("\nRecommendations:")
             for rec in options.recommendations:
-                print(
-                    f"  {rec.style_id} (score={rec.score:.2f}): "
-                    f"{rec.rationale}"
-                )
+                print(f"  {rec.style_id} (score={rec.score:.2f}): {rec.rationale}")
 
     def render_identity_conflict(
         self,

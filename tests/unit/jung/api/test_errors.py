@@ -145,7 +145,13 @@ def test_to_error_response_wraps_envelope() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exc", "expected_code", "expected_status", "expected_retryable", "expected_message"),
+    (
+        "exc",
+        "expected_code",
+        "expected_status",
+        "expected_retryable",
+        "expected_message",
+    ),
     [
         (
             RequestIdError("bad"),

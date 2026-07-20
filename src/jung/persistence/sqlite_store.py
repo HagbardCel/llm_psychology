@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -293,21 +293,34 @@ class SQLiteStore:
         profile: Profile,
         *,
         expected_revision: int,
+        intake_session_id: UUID | None,
         now: datetime,
     ) -> AppState:
         def mutate(conn: sqlite3.Connection) -> None:
             stage = self._require_stage(conn, {Stage.SETUP, Stage.INTAKE})
-            if stage == Stage.INTAKE and not is_profile_complete(profile):
-                raise InvariantViolation(
-                    "profile must remain complete during intake"
-                )
+            profile_complete = is_profile_complete(profile)
+            if stage == Stage.INTAKE:
+                if not profile_complete:
+                    raise InvariantViolation(
+                        "profile must remain complete during intake"
+                    )
+                if intake_session_id is not None:
+                    raise InvariantViolation(
+                        "intake_session_id must be None during intake"
+                    )
+                self._upsert_profile(conn, profile, now=now)
+                return
+
             self._upsert_profile(conn, profile, now=now)
-            if stage == Stage.SETUP and is_profile_complete(profile):
+            if profile_complete:
+                if intake_session_id is None:
+                    raise InvariantViolation(
+                        "intake_session_id is required when profile becomes complete"
+                    )
                 if conn.execute(
                     "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
                 ).fetchone():
                     raise InvariantViolation("open session already exists")
-                intake_session_id = uuid4()
                 conn.execute(
                     """
                     INSERT INTO sessions (
@@ -322,12 +335,14 @@ class SQLiteStore:
                     ),
                 )
                 self._set_stage(conn, Stage.INTAKE, now)
+            elif intake_session_id is not None:
+                raise InvariantViolation(
+                    "intake_session_id must be None while profile remains incomplete"
+                )
 
         return self._write(expected_revision, mutate, now=now)
 
-    def get_latest_completed_operation(
-        self, kind: OperationKind
-    ) -> Operation | None:
+    def get_latest_completed_operation(self, kind: OperationKind) -> Operation | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -807,7 +822,9 @@ class SQLiteStore:
                 "FROM profile WHERE singleton_id = 1"
             ).fetchone()
             existing_profile = (
-                sql.json_loads(profile_row[0]) if profile_row and profile_row[0] else None
+                sql.json_loads(profile_row[0])
+                if profile_row and profile_row[0]
+                else None
             )
             profile_changed = not _derived_profiles_equal(
                 existing_profile, validated_profile
@@ -1189,9 +1206,7 @@ class SQLiteStore:
                         OperationStatus.RUNNING.value,
                     ),
                 )
-                recovered = [
-                    self._load_operation(conn, UUID(row[0])) for row in rows
-                ]
+                recovered = [self._load_operation(conn, UUID(row[0])) for row in rows]
                 self._increment_revision(conn, now)
                 conn.commit()
                 return recovered
@@ -1226,9 +1241,7 @@ class SQLiteStore:
                         ChatTurnStatus.PENDING.value,
                     ),
                 )
-                recovered = [
-                    self._load_chat_turn(conn, UUID(row[0])) for row in rows
-                ]
+                recovered = [self._load_chat_turn(conn, UUID(row[0])) for row in rows]
                 self._increment_revision(conn, now)
                 conn.commit()
                 return recovered
@@ -1294,9 +1307,7 @@ class SQLiteStore:
         ).fetchone()
         if row is None:
             raise NotFound(f"chat turn {turn_id}")
-        raise InvariantViolation(
-            f"chat turn {turn_id} is in invalid state {row[0]}"
-        )
+        raise InvariantViolation(f"chat turn {turn_id} is in invalid state {row[0]}")
 
     def _load_chat_turn_by_client_id(
         self,
@@ -1411,9 +1422,7 @@ class SQLiteStore:
             raise NotFound("app_state")
         return Stage(row[0])
 
-    def _require_stage(
-        self, conn: sqlite3.Connection, allowed: set[Stage]
-    ) -> Stage:
+    def _require_stage(self, conn: sqlite3.Connection, allowed: set[Stage]) -> Stage:
         stage = self._load_stage(conn)
         if stage not in allowed:
             raise InvariantViolation(
@@ -1421,9 +1430,7 @@ class SQLiteStore:
             )
         return stage
 
-    def _set_stage(
-        self, conn: sqlite3.Connection, stage: Stage, now: datetime
-    ) -> None:
+    def _set_stage(self, conn: sqlite3.Connection, stage: Stage, now: datetime) -> None:
         conn.execute(
             "UPDATE app_state SET stage = ?, updated_at = ? WHERE singleton_id = 1",
             (stage.value, sql.dt(now)),
@@ -1480,7 +1487,9 @@ class SQLiteStore:
             raise NotFound(f"plan {plan_id}")
         return sql.row_to_plan(row)
 
-    def _load_operation(self, conn: sqlite3.Connection, operation_id: UUID) -> Operation:
+    def _load_operation(
+        self, conn: sqlite3.Connection, operation_id: UUID
+    ) -> Operation:
         row = conn.execute(
             """
             SELECT id, kind, status, source_session_id, attempt, result_json,
@@ -1513,10 +1522,14 @@ class SQLiteStore:
         profile_row = conn.execute(
             "SELECT name, primary_language FROM profile WHERE singleton_id = 1"
         ).fetchone()
-        profile = Profile(
-            name=profile_row[0],
-            primary_language=profile_row[1],
-        ) if profile_row else Profile(name="", primary_language="")
+        profile = (
+            Profile(
+                name=profile_row[0],
+                primary_language=profile_row[1],
+            )
+            if profile_row
+            else Profile(name="", primary_language="")
+        )
         active_session = conn.execute(
             "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
         ).fetchone()

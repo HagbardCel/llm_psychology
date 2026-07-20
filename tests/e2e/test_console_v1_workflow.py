@@ -1,4 +1,4 @@
-"""Deterministic end-to-end console workflow probes for Phase 5 PR E."""
+"""Deterministic console E2E workflow probes."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def probe_root(tmp_path: Path) -> Path:
     configured = os.environ.get("PROBE_OUTPUT_DIR")
     if configured:
         return Path(configured)
-    return tmp_path / "phase-5-v1"
+    return tmp_path / "console-v1"
 
 
 def _intake_expectations() -> list[StructuredExpectation | StreamExpectation]:

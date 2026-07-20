@@ -32,8 +32,7 @@ def inspect_durable_chat_messages(
     users = [
         message
         for message in history.messages
-        if message.client_message_id == client_message_id
-        and message.role == "user"
+        if message.client_message_id == client_message_id and message.role == "user"
     ]
     assistants = [
         message
@@ -43,8 +42,7 @@ def inspect_durable_chat_messages(
     ]
 
     if any(
-        message.session_id != expected_session_id
-        for message in (*users, *assistants)
+        message.session_id != expected_session_id for message in (*users, *assistants)
     ):
         raise DurableChatViolation("SessionHistoryResponse")
 

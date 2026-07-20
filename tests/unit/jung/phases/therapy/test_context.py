@@ -131,13 +131,13 @@ def test_opening_context_respects_total_budget() -> None:
         )
     )
     compressible = [
-        section
-        for section in sections
-        if not section.startswith("Patient:")
+        section for section in sections if not section.startswith("Patient:")
     ]
     rendered = _SECTION_SEPARATOR.join(compressible)
     style_section = next(
-        section for section in compressible if section.startswith("Therapy style instructions:")
+        section
+        for section in compressible
+        if section.startswith("Therapy style instructions:")
     )
     plan_section = next(
         section for section in compressible if section.startswith("Current plan:")
@@ -166,13 +166,13 @@ def test_dual_core_sections_preserve_style_and_plan_bodies() -> None:
         )
     )
     compressible = [
-        section
-        for section in sections
-        if not section.startswith("Patient:")
+        section for section in sections if not section.startswith("Patient:")
     ]
     rendered = _SECTION_SEPARATOR.join(compressible)
     style_section = next(
-        section for section in compressible if section.startswith("Therapy style instructions:")
+        section
+        for section in compressible
+        if section.startswith("Therapy style instructions:")
     )
     plan_section = next(
         section for section in compressible if section.startswith("Current plan:")
@@ -209,7 +209,9 @@ def test_oversized_transcript_retains_final_exchange() -> None:
     )
     combined = "\n\n".join(sections)
     transcript_section = next(
-        section for section in sections if section.startswith("Active session transcript:")
+        section
+        for section in sections
+        if section.startswith("Active session transcript:")
     )
     transcript_body = transcript_section.split(":\n", 1)[1]
     assert combined.count("Current patient message:\nbrand new answer") == 1

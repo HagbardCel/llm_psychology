@@ -178,6 +178,151 @@ async def chat_websocket(websocket: WebSocket) -> None:
     await _handle_chat_connection(websocket, runtime, settings)
 
 
+def _parse_command(text: str) -> tuple[SendMessageCommand | None, UUID]:
+    """Parse one inbound text frame; preserve recoverable request_id on failure."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, new_request_id()
+
+    recovered_id = recover_request_id(payload)
+    request_id = recovered_id or new_request_id()
+    try:
+        command = SendMessageCommand.model_validate(payload)
+    except ValidationError:
+        return None, request_id
+    return command, command.request_id
+
+
+async def _submit_chat_command(
+    *,
+    runtime: WebSocketRuntime,
+    command: SendMessageCommand,
+    connection_id: str,
+    send_event,
+) -> None:
+    domain_command = SendMessage(
+        expected_revision=command.expected_revision,
+        session_id=command.session_id,
+        client_message_id=command.client_message_id,
+        content=command.content,
+        request_id=command.request_id,
+    )
+    try:
+        turn = await runtime.application.submit_message(domain_command)
+    except RevisionConflict as exc:
+        context = MappingContext(request_id=command.request_id)
+        wire_snapshot = None
+        try:
+            snapshot = await runtime.application.get_snapshot()
+            wire_snapshot = to_snapshot_response(snapshot, context=context)
+        except Exception as enrichment_exc:
+            logger.error(
+                "Failed to enrich WebSocket revision conflict",
+                extra={
+                    "connection_id": connection_id,
+                    "request_id": str(command.request_id),
+                    "exception_type": type(enrichment_exc).__name__,
+                },
+            )
+        envelope = to_error_envelope(
+            exc,
+            request_id=context.request_id,
+            current_snapshot=wire_snapshot,
+        )
+        _log_command_rejected(
+            connection_id=connection_id,
+            command=command,
+            error_code=envelope.code,
+        )
+        await send_event(
+            build_error_event(
+                envelope,
+                context=context,
+                session_id=command.session_id,
+                client_message_id=command.client_message_id,
+            )
+        )
+    except DomainError as exc:
+        context = MappingContext(request_id=command.request_id)
+        envelope = to_error_envelope(exc, request_id=context.request_id)
+        exception_type = (
+            type(exc).__name__
+            if envelope.code == "internal_error"
+            and not isinstance(exc, StoredWorkFailure)
+            else None
+        )
+        _log_command_rejected(
+            connection_id=connection_id,
+            command=command,
+            error_code=envelope.code,
+            exception_type=exception_type,
+        )
+        await send_event(
+            build_error_event(
+                envelope,
+                context=context,
+                session_id=command.session_id,
+                client_message_id=command.client_message_id,
+            )
+        )
+    except Exception as exc:
+        context = MappingContext(request_id=command.request_id)
+        envelope = to_error_envelope(exc, request_id=context.request_id)
+        _log_command_rejected(
+            connection_id=connection_id,
+            command=command,
+            error_code=envelope.code,
+            exception_type=type(exc).__name__,
+        )
+        await send_event(
+            build_error_event(
+                envelope,
+                context=context,
+                session_id=command.session_id,
+                client_message_id=command.client_message_id,
+            )
+        )
+    else:
+        logger.info(
+            "chat_command_resolved",
+            extra={
+                "connection_id": connection_id,
+                "request_id": str(command.request_id),
+                "session_id": str(command.session_id),
+                "client_message_id": str(command.client_message_id),
+                "turn_id": str(turn.id),
+                "turn_status": turn.status.value,
+            },
+        )
+
+
+async def _supervise_connection_tasks(
+    inbound_task: asyncio.Task[None],
+    outbound_task: asyncio.Task[None],
+) -> None:
+    tasks = {inbound_task, outbound_task}
+    try:
+        _done, pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                continue
+            if isinstance(result, BaseException):
+                raise result
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _handle_chat_connection(
     websocket: WebSocket,
     runtime: WebSocketRuntime,
@@ -252,130 +397,17 @@ async def _handle_chat_connection(
                             await send_validation_error(request_id=new_request_id())
                             continue
 
-                        try:
-                            payload = json.loads(text)
-                        except json.JSONDecodeError:
-                            await send_validation_error(request_id=new_request_id())
-                            continue
-
-                        recovered_id = recover_request_id(payload)
-                        request_id = recovered_id or new_request_id()
-
-                        try:
-                            command = SendMessageCommand.model_validate(payload)
-                        except ValidationError:
+                        command, request_id = _parse_command(text)
+                        if command is None:
                             await send_validation_error(request_id=request_id)
                             continue
 
-                        domain_command = SendMessage(
-                            expected_revision=command.expected_revision,
-                            session_id=command.session_id,
-                            client_message_id=command.client_message_id,
-                            content=command.content,
-                            request_id=command.request_id,
+                        await _submit_chat_command(
+                            runtime=runtime,
+                            command=command,
+                            connection_id=connection_id,
+                            send_event=send_event,
                         )
-                        try:
-                            turn = await runtime.application.submit_message(
-                                domain_command
-                            )
-                        except RevisionConflict as exc:
-                            context = MappingContext(request_id=command.request_id)
-                            wire_snapshot = None
-                            try:
-                                snapshot = await runtime.application.get_snapshot()
-                                wire_snapshot = to_snapshot_response(
-                                    snapshot,
-                                    context=context,
-                                )
-                            except Exception as enrichment_exc:
-                                logger.error(
-                                    "Failed to enrich WebSocket revision conflict",
-                                    extra={
-                                        "connection_id": connection_id,
-                                        "request_id": str(command.request_id),
-                                        "exception_type": type(
-                                            enrichment_exc
-                                        ).__name__,
-                                    },
-                                )
-                            envelope = to_error_envelope(
-                                exc,
-                                request_id=context.request_id,
-                                current_snapshot=wire_snapshot,
-                            )
-                            _log_command_rejected(
-                                connection_id=connection_id,
-                                command=command,
-                                error_code=envelope.code,
-                            )
-                            await send_event(
-                                build_error_event(
-                                    envelope,
-                                    context=context,
-                                    session_id=command.session_id,
-                                    client_message_id=command.client_message_id,
-                                )
-                            )
-                        except DomainError as exc:
-                            context = MappingContext(request_id=command.request_id)
-                            envelope = to_error_envelope(
-                                exc,
-                                request_id=context.request_id,
-                            )
-                            exception_type = (
-                                type(exc).__name__
-                                if envelope.code == "internal_error"
-                                and not isinstance(exc, StoredWorkFailure)
-                                else None
-                            )
-                            _log_command_rejected(
-                                connection_id=connection_id,
-                                command=command,
-                                error_code=envelope.code,
-                                exception_type=exception_type,
-                            )
-                            await send_event(
-                                build_error_event(
-                                    envelope,
-                                    context=context,
-                                    session_id=command.session_id,
-                                    client_message_id=command.client_message_id,
-                                )
-                            )
-                        except Exception as exc:
-                            context = MappingContext(request_id=command.request_id)
-                            envelope = to_error_envelope(
-                                exc,
-                                request_id=context.request_id,
-                            )
-                            _log_command_rejected(
-                                connection_id=connection_id,
-                                command=command,
-                                error_code=envelope.code,
-                                exception_type=type(exc).__name__,
-                            )
-                            await send_event(
-                                build_error_event(
-                                    envelope,
-                                    context=context,
-                                    session_id=command.session_id,
-                                    client_message_id=command.client_message_id,
-                                )
-                            )
-                        else:
-                            logger.info(
-                                "chat_command_resolved",
-                                extra={
-                                    "connection_id": connection_id,
-                                    "request_id": str(command.request_id),
-                                    "session_id": str(command.session_id),
-                                    "client_message_id": str(
-                                        command.client_message_id
-                                    ),
-                                    "turn_id": str(turn.id),
-                                    "turn_status": turn.status.value,
-                                },
-                            )
                 except _SlowClient:
                     return
                 except WebSocketDisconnect:
@@ -398,27 +430,7 @@ async def _handle_chat_connection(
 
             inbound_task = asyncio.create_task(inbound_loop(), name="ws-inbound")
             outbound_task = asyncio.create_task(outbound_loop(), name="ws-outbound")
-            tasks = {inbound_task, outbound_task}
-
-            try:
-                _done, pending = await asyncio.wait(
-                    tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, asyncio.CancelledError):
-                        continue
-                    if isinstance(result, BaseException):
-                        raise result
-            finally:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+            await _supervise_connection_tasks(inbound_task, outbound_task)
     finally:
         logger.info(
             "websocket_disconnected",

@@ -11,8 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from jung._env import parse_bool, parse_positive_finite_float
-from jung.composition import Settings as CompositionSettings
-from jung.composition import load_composition_settings
+from jung.config import ApplicationSettings, load_application_settings
 
 _VALID_LOG_LEVELS = frozenset(
     {"critical", "error", "warning", "info", "debug", "trace"}
@@ -21,7 +20,7 @@ _VALID_LOG_LEVELS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class ApiSettings:
-    application: CompositionSettings
+    application: ApplicationSettings
     host: str = "127.0.0.1"
     port: int = 8000
     log_level: str = "info"
@@ -68,11 +67,7 @@ def validate_api_settings(settings: ApiSettings) -> ApiSettings:
         raise ValueError("host must be non-empty")
 
     port = settings.port
-    if (
-        isinstance(port, bool)
-        or not isinstance(port, int)
-        or not 1 <= port <= 65535
-    ):
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be an integer between 1 and 65535")
 
     _validate_positive_finite_number(
@@ -126,7 +121,7 @@ def validate_bind_host(settings: ApiSettings) -> None:
         return
     raise ValueError(
         "JUNG_API_HOST must be a loopback address unless "
-        "JUNG_API_ALLOW_REMOTE_BIND=true. Phase 5 has no authentication or "
+        "JUNG_API_ALLOW_REMOTE_BIND=true. The API has no authentication or "
         "transport encryption."
     )
 
@@ -162,7 +157,7 @@ def load_api_settings() -> ApiSettings:
         raise ValueError(f"invalid JUNG_API_PORT: {port_raw!r}") from exc
 
     settings = ApiSettings(
-        application=load_composition_settings(
+        application=load_application_settings(
             os.environ,
             database_path=database_path,
         ),

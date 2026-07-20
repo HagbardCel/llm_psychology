@@ -608,10 +608,7 @@ class JungApiClient:
             status=response.status_code,
         )
         allowed_statuses = _ALLOWED_ERROR_STATUSES.get(error.code)
-        if (
-            allowed_statuses is None
-            or response.status_code not in allowed_statuses
-        ):
+        if allowed_statuses is None or response.status_code not in allowed_statuses:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
                 route=route,

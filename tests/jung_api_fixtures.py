@@ -19,8 +19,7 @@ from httpx import ASGITransport
 
 from jung.api.app import create_app
 from jung.api.settings import ApiSettings
-from jung.composition import Settings as CompositionSettings
-from jung.composition import build_settings
+from jung.config import ApplicationSettings, build_settings
 from jung.llm.fake import Expectation, FakeLLM
 from jung.llm.gateway import ChatMessage, LLMTask, ModelPolicy
 from jung.persistence.sqlite_store import SQLiteStore
@@ -178,10 +177,10 @@ def runtime_factory(
     store: SQLiteStore,
     fake_llm: FakeLLM | RecordingFakeLLM,
     runtime_probe: RuntimeProbe | None = None,
-) -> Callable[[CompositionSettings], Any]:
+) -> Callable[[ApplicationSettings], Any]:
     @asynccontextmanager
     async def factory(
-        _settings: CompositionSettings,
+        _settings: ApplicationSettings,
     ) -> AsyncIterator[object]:
         async with build_test_application(store, fake_llm) as runtime:
             if runtime_probe is not None:

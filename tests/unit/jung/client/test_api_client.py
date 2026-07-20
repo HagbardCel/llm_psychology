@@ -678,7 +678,13 @@ async def test_durable_failure_requires_turn_identity() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("session_id", "client_message_id"),
-    ((None, None), (None, "retained"), ("retained", None), ("other", "retained"), ("retained", "other")),
+    (
+        (None, None),
+        (None, "retained"),
+        ("retained", None),
+        ("other", "retained"),
+        ("retained", "other"),
+    ),
 )
 async def test_correlated_no_turn_error_requires_exact_identity(
     session_id: UUID | None | str,
@@ -697,7 +703,9 @@ async def test_correlated_no_turn_error_requires_exact_identity(
             ),
             request_id=command.request_id,
             session_id=(
-                intent.session_id if session_id == "retained" else uuid4()
+                intent.session_id
+                if session_id == "retained"
+                else uuid4()
                 if session_id == "other"
                 else None
             ),
@@ -775,9 +783,10 @@ async def test_progress_events_require_internal_consistency_then_match_intent() 
             turn=_turn(session_id=uuid4(), client_message_id=uuid4()),
         )
 
-        assert client._match_decisive_event(
-            exact, intent=intent, command=command
-        ) == (True, None)
+        assert client._match_decisive_event(exact, intent=intent, command=command) == (
+            True,
+            None,
+        )
         assert client._match_decisive_event(
             same_session_other_message,
             intent=intent,
@@ -787,19 +796,21 @@ async def test_progress_events_require_internal_consistency_then_match_intent() 
             other_session, intent=intent, command=command
         ) == (False, None)
         with pytest.raises(JungProtocolError) as raised:
-            client._match_decisive_event(
-                inconsistent, intent=intent, command=command
-            )
+            client._match_decisive_event(inconsistent, intent=intent, command=command)
         assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
 
 
 @pytest.mark.asyncio
-async def test_completion_events_require_internal_consistency_then_match_intent() -> None:
+async def test_completion_events_require_internal_consistency_then_match_intent() -> (
+    None
+):
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         intent = client.new_chat_intent(uuid4(), "hello")
         command = client.new_message_command(intent, expected_revision=1)
 
-        def completed(*, session_id: UUID, client_message_id: UUID) -> MessageCompletedEvent:
+        def completed(
+            *, session_id: UUID, client_message_id: UUID
+        ) -> MessageCompletedEvent:
             return MessageCompletedEvent(
                 type="message_completed",
                 session_id=session_id,
@@ -860,9 +871,10 @@ async def test_completion_events_require_internal_consistency_then_match_intent(
             }
         )
 
-        assert client._match_decisive_event(
-            exact, intent=intent, command=command
-        ) == (True, None)
+        assert client._match_decisive_event(exact, intent=intent, command=command) == (
+            True,
+            None,
+        )
         assert client._match_decisive_event(
             same_session_other_message,
             intent=intent,
@@ -884,7 +896,9 @@ async def test_completion_events_require_internal_consistency_then_match_intent(
 
 
 @pytest.mark.asyncio
-async def test_exact_no_turn_error_matches_and_durable_other_identity_is_ignored() -> None:
+async def test_exact_no_turn_error_matches_and_durable_other_identity_is_ignored() -> (
+    None
+):
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         intent = client.new_chat_intent(uuid4(), "hello")
         command = client.new_message_command(intent, expected_revision=1)

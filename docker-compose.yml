@@ -1,15 +1,14 @@
-# Shared backend configuration for local development and user testing.
-x-api-base: &api-base
+# Jung Compose stack: runtime API packaging only.
+# Manual user testing reuses the single parameterized api service under an
+# isolated Compose project and data directory (see Makefile ui-console-test).
+
+x-api-runtime: &api-runtime
   build:
     context: .
     dockerfile: Dockerfile
-    target: development
+    target: runtime
   user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
   volumes:
-    - ./src:/app/src:delegated
-    - ./tests:/app/tests:delegated
-    - ./scripts:/app/scripts:delegated
-    - ./pyproject.toml:/app/pyproject.toml:ro
     - "${JUNG_HOST_DATA_DIR:-./data}:/app/data"
     - ./logs:/app/logs
   environment: &api-environment
@@ -17,8 +16,6 @@ x-api-base: &api-base
     JUNG_API_HOST: 0.0.0.0
     JUNG_API_PORT: "8000"
     JUNG_API_ALLOW_REMOTE_BIND: "true"
-    RUFF_CACHE_DIR: /tmp/ruff_cache
-    BLACK_CACHE_DIR: /tmp/black_cache
     UV_CACHE_DIR: /tmp/uv_cache
     XDG_CACHE_HOME: /tmp/.cache
   networks:
@@ -38,93 +35,15 @@ x-api-base: &api-base
 
 services:
   api:
-    <<: *api-base
+    <<: *api-runtime
     environment:
       <<: *api-environment
-      JUNG_DATA_DIR: /app/data/local
+      JUNG_DATA_DIR: ${JUNG_DATA_DIR:-/app/data/local}
     env_file:
       - path: ${ENV_FILE:-.env}
         required: false
     ports:
-      - "127.0.0.1:8000:8000"
-
-  api-usertest:
-    <<: *api-base
-    profiles: ["usertest-console"]
-    environment:
-      <<: *api-environment
-      JUNG_DATA_DIR: /app/data/usertest
-    env_file:
-      - path: .env.usertest
-        required: false
-    ports:
-      - "127.0.0.1:8001:8000"
-
-  test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: development
-    profiles: ["test"]
-    volumes:
-      - ./src:/app/src:ro
-      - ./scripts:/app/scripts:ro
-      - ./tests:/app/tests:ro
-      - ./docs:/app/docs:ro
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./Makefile:/app/Makefile:ro
-      - ./docker-compose.yml:/app/docker-compose.yml:ro
-      - ./Dockerfile:/app/Dockerfile:ro
-      - ./pytest.ini:/app/pytest.ini:ro
-      - test-data:/app/data
-    environment:
-      PYTHONPATH: /app/src
-      PYTHONUNBUFFERED: "1"
-    command:
-      - pytest
-      - -o
-      - asyncio_mode=auto
-      - -m
-      - "not real_llm"
-      - tests/unit/jung
-      - tests/integration/jung
-    networks:
-      - app-network
-
-  db-viewer:
-    image: coleifer/sqlite-web
-    profiles: ["debug"]
-    volumes:
-      - ./data:/data:ro
-    ports:
-      - "127.0.0.1:8080:8080"
-    networks:
-      - app-network
-    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-local/jung.db}"]
-
-  devcontainer:
-    build:
-      context: .
-      dockerfile: Dockerfile.devcontainer
-    image: jung-devcontainer:latest
-    profiles: ["devcontainer"]
-    command:
-      - tail
-      - -f
-      - /dev/null
-    env_file:
-      - path: ${ENV_FILE:-.env}
-        required: false
-    networks:
-      - app-network
-    stdin_open: true
-    tty: true
-    volumes:
-      - .:/app
-
-volumes:
-  test-data:
-    driver: local
+      - "127.0.0.1:${JUNG_API_HOST_PORT:-8000}:8000"
 
 networks:
   app-network:

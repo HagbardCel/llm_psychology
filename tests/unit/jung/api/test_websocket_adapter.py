@@ -26,7 +26,7 @@ from jung.api.websocket import (
     mapping_context_for_event,
     recover_request_id,
 )
-from jung.composition import build_settings
+from jung.config import build_settings
 from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
@@ -280,26 +280,40 @@ def test_recover_request_id(payload: object, expected: bool) -> None:
         assert recovered is None
 
 
+FIXED_INVALID_REQUEST_ID = uuid4()
+
+
 @pytest.mark.parametrize(
-    "text_payload",
+    ("text_payload", "expected_request_id"),
     [
-        "not json",
-        json.dumps([]),
-        json.dumps({"type": "send_message", "request_id": str(uuid4())}),
-        json.dumps(
-            {
-                "type": "unknown",
-                "request_id": str(uuid4()),
-                "session_id": str(uuid4()),
-                "client_message_id": str(uuid4()),
-                "expected_revision": 0,
-                "content": "secret-content",
-            }
+        ("not json", None),
+        (
+            json.dumps(
+                {
+                    "type": "send_message",
+                    "request_id": str(FIXED_INVALID_REQUEST_ID),
+                }
+            ),
+            FIXED_INVALID_REQUEST_ID,
+        ),
+        (
+            json.dumps(
+                {
+                    "type": "unknown",
+                    "request_id": str(FIXED_INVALID_REQUEST_ID),
+                    "session_id": str(uuid4()),
+                    "client_message_id": str(uuid4()),
+                    "expected_revision": 0,
+                    "content": "secret-content",
+                }
+            ),
+            FIXED_INVALID_REQUEST_ID,
         ),
     ],
 )
 async def test_invalid_inbound_produces_validation_error_without_content_echo(
     text_payload: str,
+    expected_request_id: object,
 ) -> None:
     events = EventStream()
     runtime = MockRuntime(application=MockApplication(), events=events)
@@ -317,6 +331,9 @@ async def test_invalid_inbound_produces_validation_error_without_content_echo(
     dumped = json.dumps(errors[0])
     assert "secret-content" not in dumped
     assert "input" not in dumped
+    actual = UUID(errors[0]["request_id"])
+    if expected_request_id is not None:
+        assert actual == expected_request_id
 
 
 async def test_binary_frame_then_valid_command() -> None:
@@ -661,7 +678,9 @@ async def test_dual_observer_healthy_receives_while_slow_blocked() -> None:
     events = TrackingEventStream()
     settings = _default_settings(send_timeout=30.0)
 
-    async def start_observer(fake: FakeWebSocket, *, block_first: bool) -> asyncio.Task[None]:
+    async def start_observer(
+        fake: FakeWebSocket, *, block_first: bool
+    ) -> asyncio.Task[None]:
         runtime = MockRuntime(application=MockApplication(), events=events)
         fake.app.state.api = ApiState(runtime=runtime, ready=True)  # type: ignore[arg-type]
         if block_first:
@@ -1018,9 +1037,7 @@ async def test_websocket_lifecycle_logs_connected_and_disconnected(
         await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
 
     connected = [
-        record
-        for record in caplog.records
-        if record.message == "websocket_connected"
+        record for record in caplog.records if record.message == "websocket_connected"
     ]
     disconnected = [
         record

@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from jung._env import parse_optional_json_object
-from jung.composition import Settings, load_composition_settings
+from jung.config import ApplicationSettings, load_application_settings
 from jung.llm.gateway import LLMSettings, LLMTask, StructuredOutputMode
 from jung.llm.policies import build_model_policies
 
@@ -21,8 +21,8 @@ def _valid_llm() -> LLMSettings:
     )
 
 
-def test_load_composition_settings_defaults() -> None:
-    settings = load_composition_settings({}, database_path="data/jung.db")
+def test_load_application_settings_defaults() -> None:
+    settings = load_application_settings({}, database_path="data/jung.db")
     assert settings.database_path == "data/jung.db"
     assert settings.llm.default_model == "local-model"
     assert settings.llm.base_url == "http://127.0.0.1:8080/v1"
@@ -35,8 +35,8 @@ def test_load_composition_settings_defaults() -> None:
     assert settings.llm.default_headers is None
 
 
-def test_load_composition_settings_scalar_overrides() -> None:
-    settings = load_composition_settings(
+def test_load_application_settings_scalar_overrides() -> None:
+    settings = load_application_settings(
         {
             "JUNG_SHUTDOWN_TIMEOUT": "45",
             "JUNG_EVENT_QUEUE_SIZE": "128",
@@ -67,7 +67,7 @@ def test_absent_scalar_uses_default(
     environ: dict[str, str] = {}
     if env_value is not None:
         environ[env_name] = env_value
-    settings = load_composition_settings(environ, database_path="data/jung.db")
+    settings = load_application_settings(environ, database_path="data/jung.db")
     if env_name == "JUNG_ENABLE_LLM_TRACING":
         assert settings.enable_llm_tracing is default
     elif env_name == "JUNG_SHUTDOWN_TIMEOUT":
@@ -82,11 +82,11 @@ def test_absent_scalar_uses_default(
 )
 def test_blank_scalar_raises(env_name: str) -> None:
     with pytest.raises(ValueError, match=env_name):
-        load_composition_settings({env_name: "   "}, database_path="data/jung.db")
+        load_application_settings({env_name: "   "}, database_path="data/jung.db")
 
 
 def test_required_strings_are_trimmed() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "LLM_BASE_URL": "  http://example.test/v1  ",
             "MODEL_NAME": "  custom-model  ",
@@ -103,7 +103,7 @@ def test_required_strings_are_trimmed() -> None:
 
 
 def test_llm_api_key_is_not_stripped() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {"LLM_API_KEY": "  secret  "},
         database_path="data/jung.db",
     )
@@ -111,7 +111,7 @@ def test_llm_api_key_is_not_stripped() -> None:
 
 
 def test_extra_body_parsed_separately_from_task_extra_body() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_EXTRA_BODY_JSON": json.dumps(
                 {
@@ -151,7 +151,7 @@ def test_extra_body_parsed_separately_from_task_extra_body() -> None:
 
 
 def test_nested_null_allowed_inside_extra_body() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_EXTRA_BODY_JSON": json.dumps(
                 {"some_provider_option": None},
@@ -163,7 +163,7 @@ def test_nested_null_allowed_inside_extra_body() -> None:
 
 
 def test_task_config_builds_model_policies() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                 {
@@ -199,8 +199,8 @@ def test_streaming_task_rejects_non_prompt_structured_mode(
     task_name: str,
     mode: str,
 ) -> None:
-    with pytest.raises(ValueError, match="must be \"prompt\""):
-        load_composition_settings(
+    with pytest.raises(ValueError, match='must be "prompt"'):
+        load_application_settings(
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                     {task_name: {"structured_output_mode": mode}}
@@ -211,7 +211,7 @@ def test_streaming_task_rejects_non_prompt_structured_mode(
 
 
 def test_streaming_task_accepts_prompt_mode() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                 {"therapy_response": {"structured_output_mode": "prompt"}}
@@ -227,7 +227,7 @@ def test_streaming_task_accepts_prompt_mode() -> None:
 
 
 def test_structured_task_accepts_json_object() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                 {"assessment": {"structured_output_mode": "json_object"}}
@@ -255,11 +255,9 @@ def test_task_config_rejects_boolean_numeric_fields(
     value: bool,
 ) -> None:
     with pytest.raises(ValueError):
-        load_composition_settings(
+        load_application_settings(
             {
-                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                    {"assessment": {field: value}}
-                ),
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"assessment": {field: value}}),
             },
             database_path="data/jung.db",
         )
@@ -267,7 +265,7 @@ def test_task_config_rejects_boolean_numeric_fields(
 
 def test_typed_null_task_field_rejected() -> None:
     with pytest.raises(ValueError, match="must not be null"):
-        load_composition_settings(
+        load_application_settings(
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                     {"assessment": {"model": None}}
@@ -279,7 +277,7 @@ def test_typed_null_task_field_rejected() -> None:
 
 def test_non_object_task_entry_rejected() -> None:
     with pytest.raises(ValueError, match="must be a JSON object"):
-        load_composition_settings(
+        load_application_settings(
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                     {"assessment": "not-an-object"}
@@ -320,7 +318,7 @@ def test_task_config_rejects_unknown_schema_entries(
     expected_path: str,
 ) -> None:
     with pytest.raises(ValueError) as exc_info:
-        load_composition_settings(
+        load_application_settings(
             {"JUNG_LLM_TASK_CONFIG_JSON": json.dumps(payload)},
             database_path="data/jung.db",
         )
@@ -339,7 +337,7 @@ def test_task_config_rejects_unknown_schema_entries(
 )
 def test_extra_body_rejects_non_object_top_level_json(raw: str) -> None:
     with pytest.raises(ValueError) as exc_info:
-        load_composition_settings(
+        load_application_settings(
             {"JUNG_LLM_EXTRA_BODY_JSON": raw},
             database_path="data/jung.db",
         )
@@ -350,7 +348,7 @@ def test_extra_body_rejects_non_object_top_level_json(raw: str) -> None:
 @pytest.mark.parametrize("name", ["LLM_BASE_URL", "MODEL_NAME"])
 def test_blank_required_string_rejected(name: str) -> None:
     with pytest.raises(ValueError) as exc_info:
-        load_composition_settings(
+        load_application_settings(
             {name: "   "},
             database_path="data/jung.db",
         )
@@ -359,7 +357,7 @@ def test_blank_required_string_rejected(name: str) -> None:
 
 
 def test_blank_optional_json_treated_as_unset() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_EXTRA_BODY_JSON": "   ",
             "JUNG_LLM_TASK_CONFIG_JSON": "",
@@ -375,7 +373,7 @@ def test_default_header_non_string_rejected() -> None:
         ValueError,
         match="JUNG_LLM_DEFAULT_HEADERS_JSON.Authorization must be a string",
     ):
-        load_composition_settings(
+        load_application_settings(
             {
                 "JUNG_LLM_DEFAULT_HEADERS_JSON": json.dumps(
                     {"Authorization": 123},
@@ -388,7 +386,7 @@ def test_default_header_non_string_rejected() -> None:
 def test_default_header_error_does_not_leak_secret() -> None:
     secret = "super-secret-header-value"
     with pytest.raises(ValueError) as exc_info:
-        load_composition_settings(
+        load_application_settings(
             {
                 "JUNG_LLM_DEFAULT_HEADERS_JSON": json.dumps(
                     {"Authorization": {"token": secret}},
@@ -409,15 +407,17 @@ def test_default_header_error_does_not_leak_secret() -> None:
 )
 def test_extra_body_rejects_non_finite_numbers(payload: str) -> None:
     with pytest.raises(ValueError):
-        load_composition_settings(
+        load_application_settings(
             {"JUNG_LLM_EXTRA_BODY_JSON": payload},
             database_path="data/jung.db",
         )
 
 
 def test_log_prompt_previews_requires_tracing() -> None:
-    with pytest.raises(ValueError, match="log_prompt_previews requires enable_llm_tracing"):
-        load_composition_settings(
+    with pytest.raises(
+        ValueError, match="log_prompt_previews requires enable_llm_tracing"
+    ):
+        load_application_settings(
             {"JUNG_LOG_PROMPT_PREVIEWS": "true"},
             database_path="data/jung.db",
         )
@@ -430,7 +430,7 @@ def test_log_prompt_previews_requires_tracing() -> None:
 def test_task_numeric_huge_integer_raises_value_error(field: str) -> None:
     huge_int = 10**400
     with pytest.raises(ValueError) as exc_info:
-        load_composition_settings(
+        load_application_settings(
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                     {"assessment": {field: huge_int}}
@@ -442,11 +442,9 @@ def test_task_numeric_huge_integer_raises_value_error(field: str) -> None:
 
 
 def test_empty_task_extra_body_is_omitted() -> None:
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
-            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                {"assessment": {"extra_body": {}}}
-            ),
+            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"assessment": {"extra_body": {}}}),
         },
         database_path="data/jung.db",
     )
@@ -454,8 +452,10 @@ def test_empty_task_extra_body_is_omitted() -> None:
 
 
 def test_settings_post_init_rejects_prompt_previews_without_tracing() -> None:
-    with pytest.raises(ValueError, match="log_prompt_previews requires enable_llm_tracing"):
-        Settings(
+    with pytest.raises(
+        ValueError, match="log_prompt_previews requires enable_llm_tracing"
+    ):
+        ApplicationSettings(
             database_path="data/jung.db",
             llm=_valid_llm(),
             enable_llm_tracing=False,
@@ -465,7 +465,7 @@ def test_settings_post_init_rejects_prompt_previews_without_tracing() -> None:
 
 def test_settings_post_init_rejects_invalid_queue_size() -> None:
     with pytest.raises(ValueError, match="event_queue_size"):
-        Settings(
+        ApplicationSettings(
             database_path="data/jung.db",
             llm=_valid_llm(),
             event_queue_size=0,
@@ -474,7 +474,7 @@ def test_settings_post_init_rejects_invalid_queue_size() -> None:
 
 def test_settings_post_init_rejects_invalid_shutdown_timeout() -> None:
     with pytest.raises(ValueError, match="shutdown_timeout_seconds"):
-        Settings(
+        ApplicationSettings(
             database_path="data/jung.db",
             llm=_valid_llm(),
             shutdown_timeout_seconds=0,
@@ -483,7 +483,7 @@ def test_settings_post_init_rejects_invalid_shutdown_timeout() -> None:
 
 def test_settings_rejects_huge_shutdown_timeout() -> None:
     with pytest.raises(ValueError, match="shutdown_timeout_seconds"):
-        Settings(
+        ApplicationSettings(
             database_path="data/jung.db",
             llm=_valid_llm(),
             shutdown_timeout_seconds=10**400,

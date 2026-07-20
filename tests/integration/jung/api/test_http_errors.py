@@ -63,7 +63,9 @@ async def test_success_generates_request_id(started_api_client: AsyncClient) -> 
 
 
 @pytest.mark.asyncio
-async def test_success_preserves_valid_request_id(started_api_client: AsyncClient) -> None:
+async def test_success_preserves_valid_request_id(
+    started_api_client: AsyncClient,
+) -> None:
     request_id = str(uuid4())
     response = await started_api_client.get(
         "/api/v1/state",
@@ -311,9 +313,7 @@ def test_openapi_route_surface(api_app) -> None:
     assert api_app.openapi_url == "/api/v1/openapi.json"
     from starlette.routing import Route
 
-    paths = {
-        route.path for route in api_app.routes if isinstance(route, Route)
-    }
+    paths = {route.path for route in api_app.routes if isinstance(route, Route)}
     assert "/docs" not in paths
     assert "/redoc" not in paths
     assert "/openapi.json" not in paths

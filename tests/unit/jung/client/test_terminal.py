@@ -56,7 +56,9 @@ async def test_human_input_provider_eof_raises() -> None:
             await provider.read(PromptSpec(text="> "))
 
 
-def test_terminal_output_assistant_stream_lifecycle(capsys: pytest.CaptureFixture[str]) -> None:
+def test_terminal_output_assistant_stream_lifecycle(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     output = TerminalConsoleOutput()
     output.begin_assistant_message()
     output.append_assistant_token("hi")
@@ -96,23 +98,28 @@ async def test_async_cli_passes_transport_timeout_to_settings() -> None:
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch(
-        "sys.argv",
-        [
-            "jung-console",
-            "--api-url",
-            "http://localhost:8000",
-            "--transport-timeout",
-            "12.5",
-        ],
-    ), patch(
-        "jung.client.terminal.ClientSettings",
-    ) as mock_settings, patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleExitRequested),
+    with (
+        patch(
+            "sys.argv",
+            [
+                "jung-console",
+                "--api-url",
+                "http://localhost:8000",
+                "--transport-timeout",
+                "12.5",
+            ],
+        ),
+        patch(
+            "jung.client.terminal.ClientSettings",
+        ) as mock_settings,
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleExitRequested),
+        ),
     ):
         mock_settings.return_value = MagicMock()
         assert await _async_cli() == 0
@@ -127,12 +134,16 @@ async def test_async_cli_maps_exit_zero_on_console_exit() -> None:
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleExitRequested),
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleExitRequested),
+        ),
     ):
         assert await _async_cli() == 0
 
@@ -142,12 +153,16 @@ async def test_async_cli_maps_operation_failure_to_exit_one() -> None:
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleOperationFailed()),
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleOperationFailed()),
+        ),
     ):
         assert await _async_cli() == 1
 
@@ -157,12 +172,16 @@ async def test_async_cli_maps_chat_failure_to_exit_one() -> None:
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleChatFailed()),
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleChatFailed()),
+        ),
     ):
         assert await _async_cli() == 1
 
@@ -172,12 +191,16 @@ async def test_async_cli_maps_uncertain_delivery_to_exit_two() -> None:
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(side_effect=ConsoleUncertainDelivery()),
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleUncertainDelivery()),
+        ),
     ):
         assert await _async_cli() == 2
 
@@ -190,21 +213,25 @@ async def test_async_cli_maps_jung_client_errors_to_exit_three(
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    with patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]), patch(
-        "jung.client.terminal.JungApiClient",
-        return_value=mock_client,
-    ), patch(
-        "jung.client.terminal.ConsoleApp.run",
-        AsyncMock(
-            side_effect=JungApiError(
-                status=503,
-                error=ErrorResponse(
-                    code="not_ready",
-                    message="x",
-                    request_id=request_id,
-                    retryable=True,
-                ),
-            )
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.JungApiClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(
+                side_effect=JungApiError(
+                    status=503,
+                    error=ErrorResponse(
+                        code="not_ready",
+                        message="x",
+                        request_id=request_id,
+                        retryable=True,
+                    ),
+                )
+            ),
         ),
     ):
         assert await _async_cli() == 3

@@ -58,7 +58,9 @@ async def test_recover_on_startup_reschedules_pending_operation(
     fake.assert_exhausted()
 
 
-async def test_recover_on_startup_marks_stale_chat_turn_failed(store: SQLiteStore) -> None:
+async def test_recover_on_startup_marks_stale_chat_turn_failed(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(

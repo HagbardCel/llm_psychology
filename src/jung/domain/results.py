@@ -1,4 +1,4 @@
-"""Application read models for Phase 4 and Phase 5 adapters."""
+"""Application read models for API and client adapters."""
 
 from __future__ import annotations
 

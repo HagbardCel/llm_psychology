@@ -117,9 +117,8 @@ def _merge_evidence(
     patch_rank = _CONFIDENCE_RANK[patch.confidence]
     if patch_rank > existing_rank:
         return patch
-    if (
-        patch_rank == existing_rank
-        and len(patch.value or "") > len(existing.value or "")
+    if patch_rank == existing_rank and len(patch.value or "") > len(
+        existing.value or ""
     ):
         return patch
     return existing
@@ -179,15 +178,13 @@ def _validated_patch_dump(
             return {
                 key: cleaned
                 for key, item in value.__dict__.items()
-                if (cleaned := clean(item, f"{path}.{key}"))
-                not in (None, [], {})
+                if (cleaned := clean(item, f"{path}.{key}")) not in (None, [], {})
             }
         if isinstance(value, dict):
             return {
                 key: cleaned
                 for key, item in value.items()
-                if (cleaned := clean(item, f"{path}.{key}"))
-                not in (None, [], {})
+                if (cleaned := clean(item, f"{path}.{key}")) not in (None, [], {})
             }
         if isinstance(value, (list, tuple)):
             return [

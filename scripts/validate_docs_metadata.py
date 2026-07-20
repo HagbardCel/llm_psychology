@@ -23,6 +23,19 @@ REQUIRED_KEYS = {
     "source_of_truth_for",
 }
 
+LINKED_DOC_GLOBS = ["README.md", "AGENTS.md", "docs/**/*.md"]
+
+FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})")
+INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+LINK_TARGET_RE = re.compile(
+    r"!?\[[^\]\n]*\]\(\s*(<[^>\n]*>|[^()\s]+)(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*\)"
+)
+REFERENCE_DEFINITION_RE = re.compile(
+    r"^[ \t]{0,3}\[[^\]\n]+\]:\s*(<[^>\n]*>|\S+)",
+    re.MULTILINE,
+)
+EXTERNAL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
 
 def _parse_front_matter(path: Path) -> dict[str, str]:
     text = path.read_text(encoding="utf-8")
@@ -110,6 +123,83 @@ def _validate_review_freshness(
         )
 
 
+def _strip_code_blocks(text: str) -> str:
+    """Blank out fenced code blocks (``` or ~~~), preserving line count."""
+    lines = text.split("\n")
+    result: list[str] = []
+    fence_char: str | None = None
+    fence_len = 0
+    for line in lines:
+        stripped = line.strip()
+        if fence_char is not None:
+            closing_pattern = rf"^{re.escape(fence_char)}{{{fence_len},}}\s*$"
+            if re.match(closing_pattern, stripped):
+                fence_char = None
+                fence_len = 0
+            result.append("")
+            continue
+        opening = FENCE_OPEN_RE.match(stripped)
+        if opening:
+            token = opening.group(1)
+            fence_char = token[0]
+            fence_len = len(token)
+            result.append("")
+            continue
+        result.append(line)
+    return "\n".join(result)
+
+
+def _strip_code(text: str) -> str:
+    """Remove fenced code blocks and inline code spans before link scanning."""
+    return INLINE_CODE_RE.sub("", _strip_code_blocks(text))
+
+
+def _extract_link_targets(text: str) -> list[str]:
+    targets = [match.group(1) for match in LINK_TARGET_RE.finditer(text)]
+    targets += [match.group(1) for match in REFERENCE_DEFINITION_RE.finditer(text)]
+    return targets
+
+
+def _normalize_link_target(raw_target: str) -> str | None:
+    target = raw_target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    if not target or target.startswith("#"):
+        return None
+    if EXTERNAL_SCHEME_RE.match(target):
+        return None
+    local_target = re.split(r"[?#]", target, maxsplit=1)[0].strip()
+    if not local_target:
+        return None
+    return local_target
+
+
+def _resolve_local_link(repo_root: Path, doc_path: Path, target: str) -> Path:
+    if target.startswith("/"):
+        return repo_root / target.lstrip("/")
+    return doc_path.parent / target
+
+
+def _validate_local_links(repo_root: Path, errors: list[str]) -> None:
+    doc_paths: set[Path] = set()
+    for pattern in LINKED_DOC_GLOBS:
+        doc_paths.update(repo_root.glob(pattern))
+
+    for doc_path in sorted(doc_paths):
+        rel_doc = doc_path.relative_to(repo_root).as_posix()
+        text = doc_path.read_text(encoding="utf-8")
+        scannable_text = _strip_code(text)
+
+        for raw_target in _extract_link_targets(scannable_text):
+            local_target = _normalize_link_target(raw_target)
+            if local_target is None:
+                continue
+
+            resolved = _resolve_local_link(repo_root, doc_path, local_target)
+            if not resolved.exists():
+                errors.append(f"{rel_doc}: unresolved local link target '{raw_target}'")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     errors: list[str] = []
@@ -149,6 +239,7 @@ def main() -> int:
                 )
 
     _validate_active_readme_index(repo_root, errors)
+    _validate_local_links(repo_root, errors)
 
     if errors:
         print("Documentation metadata validation failed:")
