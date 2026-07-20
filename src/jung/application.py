@@ -45,6 +45,7 @@ from jung.domain.models import (
     Session,
     SessionKind,
     Stage,
+    is_profile_complete,
 )
 from jung.domain.results import (
     ProfileView,
@@ -246,9 +247,7 @@ class TherapyApplication:
                 available_style_ids,
             )
         except (ValidationError, ValueError) as exc:
-            raise InvariantViolation(
-                "completed assessment result is invalid"
-            ) from exc
+            raise InvariantViolation("completed assessment result is invalid") from exc
 
         if assessment.style_recommendations != normalized.style_recommendations:
             raise InvariantViolation(
@@ -287,10 +286,16 @@ class TherapyApplication:
             self._reject_if_shutdown()
             facts = await self._run_store(self._store.load_snapshot_facts)
             workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
+            intake_session_id = (
+                self._new_id()
+                if facts.stage is Stage.SETUP and is_profile_complete(command.profile)
+                else None
+            )
             await self._run_store(
                 self._store.update_profile,
                 command.profile,
                 expected_revision=command.expected_revision,
+                intake_session_id=intake_session_id,
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
@@ -909,9 +914,7 @@ class TherapyApplication:
                     assistant_message=assistant_message,
                 )
             )
-            await self._publish_non_authoritative(
-                OperationChanged(operation, snapshot)
-            )
+            await self._publish_non_authoritative(OperationChanged(operation, snapshot))
             await self._publish_non_authoritative(SnapshotChanged(snapshot))
         finally:
             if operation is not None:

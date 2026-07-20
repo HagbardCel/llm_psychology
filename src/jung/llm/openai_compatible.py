@@ -78,8 +78,7 @@ class ProviderAttemptEvent:
 
 def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
     return [
-        {"role": message.role.value, "content": message.content}
-        for message in messages
+        {"role": message.role.value, "content": message.content} for message in messages
     ]
 
 
@@ -95,8 +94,7 @@ def _merge_extra_body(
     forbidden = merged.keys() & _FORBIDDEN_EXTRA_BODY_KEYS
     if forbidden:
         raise ValueError(
-            "extra_body cannot override adapter-owned fields: "
-            f"{sorted(forbidden)}"
+            f"extra_body cannot override adapter-owned fields: {sorted(forbidden)}"
         )
     return merged or None
 

@@ -130,7 +130,9 @@ def test_map_chat_turn_failed_uses_sanitized_fields() -> None:
     )
     request_id = uuid4()
     event = ChatTurnFailed(session_id=turn.session_id, turn_id=turn.id, turn=turn)
-    wire = to_chat_turn_failed_event(event, context=MappingContext(request_id=request_id))
+    wire = to_chat_turn_failed_event(
+        event, context=MappingContext(request_id=request_id)
+    )
     assert wire.type == "error"
     assert wire.error.code == "llm_timeout"
     assert wire.error.message == "The language model request timed out."

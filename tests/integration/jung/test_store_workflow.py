@@ -48,6 +48,7 @@ def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
     store.update_profile(
         Profile(name="", primary_language="English"),
         expected_revision=0,
+        intake_session_id=None,
         now=datetime.now(UTC),
     )
     assert store.get_app_state().stage == Stage.SETUP
@@ -59,6 +60,7 @@ def test_write_uses_transaction_now_for_revision_timestamp(store: SQLiteStore) -
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
         expected_revision=0,
+        intake_session_id=uuid4(),
         now=fixed_now,
     )
     state = store.get_app_state()
@@ -85,6 +87,7 @@ def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
     store.update_profile(
         Profile(name="Alexandra", primary_language="English"),
         expected_revision=revision,
+        intake_session_id=None,
         now=now,
     )
     active_after = store.get_active_session()
@@ -98,6 +101,38 @@ def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) 
         store.update_profile(
             Profile(name=" ", primary_language="English"),
             expected_revision=store.get_app_state().revision,
+            intake_session_id=None,
+            now=datetime.now(UTC),
+        )
+
+
+def test_setup_complete_profile_requires_intake_session_id(store: SQLiteStore) -> None:
+    with pytest.raises(InvariantViolation):
+        store.update_profile(
+            Profile(name="Alex", primary_language="English"),
+            expected_revision=0,
+            intake_session_id=None,
+            now=datetime.now(UTC),
+        )
+
+
+def test_setup_incomplete_profile_rejects_intake_session_id(store: SQLiteStore) -> None:
+    with pytest.raises(InvariantViolation):
+        store.update_profile(
+            Profile(name="", primary_language="English"),
+            expected_revision=0,
+            intake_session_id=uuid4(),
+            now=datetime.now(UTC),
+        )
+
+
+def test_intake_profile_edit_rejects_intake_session_id(store: SQLiteStore) -> None:
+    open_intake(store)
+    with pytest.raises(InvariantViolation):
+        store.update_profile(
+            Profile(name="Alexandra", primary_language="English"),
+            expected_revision=store.get_app_state().revision,
+            intake_session_id=uuid4(),
             now=datetime.now(UTC),
         )
 
@@ -383,9 +418,7 @@ def test_complete_assessment_requires_running_operation(store: SQLiteStore) -> N
 
 
 @pytest.mark.parametrize("action", ["complete", "fail"])
-def test_late_operation_callback_rejected(
-    store: SQLiteStore, action: str
-) -> None:
+def test_late_operation_callback_rejected(store: SQLiteStore, action: str) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -625,7 +658,9 @@ def test_invalid_plan_fields_raise_invariant_violation(
         )
 
 
-def test_complete_post_session_empty_profile_patch_preserves_none(store: SQLiteStore) -> None:
+def test_complete_post_session_empty_profile_patch_preserves_none(
+    store: SQLiteStore,
+) -> None:
     scenario = advance_to_post_session(store)
     stored_before = store.get_profile()
     assert stored_before is not None

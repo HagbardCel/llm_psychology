@@ -121,7 +121,5 @@ class PostSessionInput(BaseModel):
     @model_validator(mode="after")
     def validate_style_matches_plan(self) -> PostSessionInput:
         if self.selected_style.id != self.current_plan.selected_style:
-            raise ValueError(
-                "selected_style must match current_plan.selected_style"
-            )
+            raise ValueError("selected_style must match current_plan.selected_style")
         return self

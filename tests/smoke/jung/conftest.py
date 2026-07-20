@@ -1,4 +1,4 @@
-"""Pytest hooks and fixtures for Phase 3 smoke evidence output."""
+"""Pytest hooks and fixtures for local-model smoke evidence output."""
 
 from __future__ import annotations
 
@@ -14,6 +14,5 @@ def verify_smoke_instrumentation():
     if evidence_line is not None:
         print(evidence_line)
     assert not COLLECTOR.instrumentation_errors, (
-        "smoke instrumentation errors: "
-        f"{COLLECTOR.instrumentation_errors}"
+        f"smoke instrumentation errors: {COLLECTOR.instrumentation_errors}"
     )

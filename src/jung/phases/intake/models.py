@@ -28,9 +28,7 @@ class IntakeEvidence(BaseModel):
     @model_validator(mode="after")
     def validate_direct_ask_status(self) -> IntakeEvidence:
         if self.response_status != "informative" and not self.direct_ask:
-            raise ValueError(
-                "unknown/unable intake evidence requires direct_ask=True"
-            )
+            raise ValueError("unknown/unable intake evidence requires direct_ask=True")
         return self
 
     def has_patient_source(self) -> bool:
@@ -62,16 +60,10 @@ class TimeCourseRecord(BaseModel):
     triggers: tuple[IntakeEvidence, ...] = ()
 
     def has_required_time_course(self) -> bool:
-        return (
-            self.duration_or_onset.is_present()
-            or self.frequency.is_present()
-        )
+        return self.duration_or_onset.is_present() or self.frequency.is_present()
 
     def has_addressed_time_course(self) -> bool:
-        return (
-            self.duration_or_onset.is_addressed()
-            or self.frequency.is_addressed()
-        )
+        return self.duration_or_onset.is_addressed() or self.frequency.is_addressed()
 
 
 class PresentingProblemRecord(BaseModel):
@@ -183,9 +175,7 @@ class IntakeTurnInput(BaseModel):
         if not self.transcript and self.latest_user_message is None:
             return self
         if not self.transcript:
-            raise ValueError(
-                "latest_user_message requires a nonempty transcript"
-            )
+            raise ValueError("latest_user_message requires a nonempty transcript")
         final_turn = self.transcript[-1]
         if final_turn.role != "user":
             raise ValueError(

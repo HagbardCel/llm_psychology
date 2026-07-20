@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from jung.composition import Settings, application_context, load_composition_settings
+from jung.composition import application_context
+from jung.config import ApplicationSettings, load_application_settings
 from jung.domain.models import Stage
 from jung.llm.fake import FakeLLM
 from jung.llm.gateway import AdapterConfig, LLMSettings, LLMTask
@@ -21,7 +22,9 @@ def failing_load_styles() -> None:
     raise RuntimeError("boom")
 
 
-async def test_application_context_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_application_context_smoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     closed = False
 
     class TrackingFakeLLM(FakeLLM):
@@ -33,7 +36,7 @@ async def test_application_context_smoke(tmp_path: Path, monkeypatch: pytest.Mon
             closed = True
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
-    settings = Settings(
+    settings = ApplicationSettings(
         database_path=tmp_path / "composition.db",
         llm=LLMSettings(
             default_model="fake",
@@ -72,7 +75,7 @@ async def test_application_context_rejects_unsupported_schema(
         "jung.composition.OpenAICompatibleLLM",
         lambda *args, **kwargs: FakeLLM([]),
     )
-    settings = Settings(
+    settings = ApplicationSettings(
         database_path=tmp_path / "composition-invalid.db",
         llm=LLMSettings(
             default_model="fake",
@@ -102,7 +105,7 @@ async def test_application_context_closes_llm_when_load_styles_fails(
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
     monkeypatch.setattr("jung.composition.load_styles", failing_load_styles)
-    settings = Settings(
+    settings = ApplicationSettings(
         database_path=tmp_path / "composition-load-styles.db",
         llm=LLMSettings(
             default_model="fake",
@@ -139,7 +142,7 @@ async def test_application_context_closes_llm_when_recover_on_startup_fails(
         "jung.application.TherapyApplication.recover_on_startup",
         failing_recover_on_startup,
     )
-    settings = Settings(
+    settings = ApplicationSettings(
         database_path=tmp_path / "composition-recover.db",
         llm=LLMSettings(
             default_model="fake",
@@ -183,7 +186,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CapturingLLM)
     monkeypatch.setattr("jung.composition.TracingLLMGateway", RecordingTracingGateway)
 
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_ENABLE_LLM_TRACING": "true",
             "JUNG_LOG_PROMPT_PREVIEWS": "true",
@@ -226,13 +229,15 @@ async def test_application_context_rejects_forbidden_extra_body_before_readiness
 
     monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", fail_openai)
 
-    settings = load_composition_settings(
+    settings = load_application_settings(
         {
             "JUNG_LLM_EXTRA_BODY_JSON": json.dumps({"model": "override"}),
         },
         database_path=tmp_path / "forbidden.db",
     )
 
-    with pytest.raises(ValueError, match="extra_body cannot override adapter-owned fields"):
+    with pytest.raises(
+        ValueError, match="extra_body cannot override adapter-owned fields"
+    ):
         async with application_context(settings):
             pass

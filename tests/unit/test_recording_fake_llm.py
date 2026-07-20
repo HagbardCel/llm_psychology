@@ -20,7 +20,4 @@ def test_recording_fake_exposes_gateway_methods() -> None:
         )
         if not name.startswith("_")
     }
-    assert all(
-        callable(getattr(wrapper, name, None))
-        for name in required_methods
-    )
+    assert all(callable(getattr(wrapper, name, None)) for name in required_methods)

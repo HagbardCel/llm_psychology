@@ -77,6 +77,7 @@ def normalize_public_error_code(stored_code: str) -> ErrorCode:
         return cast(ErrorCode, stored_code)
     return "operation_failed"
 
+
 SessionKindWire = Literal["intake", "therapy"]
 MessageRoleWire = Literal["user", "assistant", "system"]
 OperationKindWire = Literal["assessment", "post_session"]

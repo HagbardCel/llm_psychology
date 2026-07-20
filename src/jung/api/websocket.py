@@ -293,9 +293,7 @@ async def _handle_chat_connection(
                                     extra={
                                         "connection_id": connection_id,
                                         "request_id": str(command.request_id),
-                                        "exception_type": type(
-                                            enrichment_exc
-                                        ).__name__,
+                                        "exception_type": type(enrichment_exc).__name__,
                                     },
                                 )
                             envelope = to_error_envelope(
@@ -369,9 +367,7 @@ async def _handle_chat_connection(
                                     "connection_id": connection_id,
                                     "request_id": str(command.request_id),
                                     "session_id": str(command.session_id),
-                                    "client_message_id": str(
-                                        command.client_message_id
-                                    ),
+                                    "client_message_id": str(command.client_message_id),
                                     "turn_id": str(turn.id),
                                     "turn_status": turn.status.value,
                                 },

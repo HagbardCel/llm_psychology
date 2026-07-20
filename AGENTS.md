@@ -2,7 +2,7 @@
 
 ## Project Structure
 - `src/jung/`: Supported asyncio application (API, composition, workflow, phases, LLM, persistence, client).
-- `tests/`: Pytest suites; supported Make targets collect Jung and retained support tests.
+- `tests/`: Pytest suites; `make test` collects `tests/unit` and `tests/integration`.
 - `data/`: SQLite databases (`local/jung.db`, `usertest/jung.db`).
 - `docs/`: Architecture, contracts, and guides (see Active Docs in `docs/README.md`).
 
@@ -16,15 +16,28 @@
 ## Key Entry Points (Code)
 - `src/jung/api/app.py`: FastAPI server factory and `jung-api` CLI.
 - `src/jung/composition.py`: Typed composition root.
+- `src/jung/config.py`: Environment-backed application settings.
 - `src/jung/client/terminal.py`: Supported `jung-console` client.
 - `src/jung/application.py`: Application use cases.
 
-## Docker-First Command Execution
+## Command Execution
 
-Docker is the canonical reproducible workflow. Native `uv` commands remain
-supported for local development.
+Native `uv` is the canonical local workflow. Docker is used for packaging and
+CI parity, not as a requirement for day-to-day development.
 
-Canonical Docker workflow:
+Canonical native workflow:
+
+```bash
+uv sync --locked
+uv run jung-api
+uv run jung-console --api-url http://127.0.0.1:8000
+uv run pytest -m "not real_llm" tests/unit tests/integration
+```
+
+Equivalent `make` targets: `make sync`, `make run-api`, `make run-console`,
+`make test`.
+
+Docker packaging/CI helpers:
 
 - Build images: `make dev-install`
 - Start backend: `make docker-up` (or `make run-server`)
@@ -33,27 +46,18 @@ Canonical Docker workflow:
 - Supported frontend: `make ui-console` (`jung-console`)
 - Manual usertest: `make ui-console-test`
 
-Native alternatives (same entry points):
+## Tests
 
-```bash
-uv run jung-api
-uv run jung-console --api-url http://127.0.0.1:8000
-uv run pytest \
-  -o asyncio_mode=auto \
-  -m "not real_llm" \
-  tests/unit/jung \
-  tests/integration/jung
-```
+The ordinary test tree (`tests/unit` + `tests/integration`) is authoritative;
+there are no separate Phase-numbered validator scripts.
 
-## Tests (Docker-First)
-
-- Target suite: `make test`, `make test-validate`, or `make docker-test` (all resolve to `test-target`)
+- Default suite: `make test` (`tests/unit` + `tests/integration`, not `real_llm`)
 - Unit: `make test-unit`
 - Integration: `make test-integration`
-- Single path: `make docker-test-one TEST=tests/unit/jung/...`
-- Deterministic console probe: `make probe-console-v1-deterministic`
+- Single path: `make docker-test-one TEST=tests/unit/jung/...` (or
+  `uv run pytest tests/unit/jung/...` natively)
+- Deterministic console probe: `make probe-console` (E2E once; not part of `make test`)
 - Release-candidate validation: `make finalization-check`
-- Native alternative (core Jung trees): same `uv run pytest` command above; use `make test-target` for the complete supported suite including validator and support tests
 
 ## Core Developer Guidance
 - The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).
@@ -83,5 +87,5 @@ Do not hide workflow, LLM, persistence, protocol, or contract failures behind fa
 ## Version Control Guidelines
 - Branch from `main` using `feat/<topic>` or `fix/<topic>`.
 - Keep commits small and scoped; use conventional prefixes (`feat:`, `fix:`, `docs:`).
-- Run Docker-based tests before committing.
+- Run `make test` (or `uv run pytest -m "not real_llm" tests/unit tests/integration`) before committing.
 - Avoid force pushes to shared branches; rebase only on local branches.

@@ -54,7 +54,9 @@ pytestmark = pytest.mark.asyncio
 SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"
 
 
-async def test_operation_worker_persists_sanitized_error_message(store: SQLiteStore) -> None:
+async def test_operation_worker_persists_sanitized_error_message(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -576,7 +578,9 @@ async def test_final_intake_schedules_when_load_message_fails(
                 fail_on_next_load = True
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(await runtime.application.get_snapshot()).revision,
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content=content,

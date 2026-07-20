@@ -1,4 +1,4 @@
-name: Release Candidate Validation
+name: Release Gate
 on:
   push:
     branches:
@@ -11,8 +11,8 @@ on:
       - main
       - develop
 jobs:
-  finalization-check:
-    name: Docker Finalization Check
+  release-gate:
+    name: Release Gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -20,7 +20,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Run Docker release-candidate gate
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.4"
+          python-version: "3.11"
+      - name: Run release gate
         run: make finalization-check
       - name: Check whitespace and stale generated diffs
         run: git diff --check && git diff --exit-code

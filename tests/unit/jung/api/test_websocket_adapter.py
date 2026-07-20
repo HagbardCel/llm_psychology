@@ -26,7 +26,7 @@ from jung.api.websocket import (
     mapping_context_for_event,
     recover_request_id,
 )
-from jung.composition import build_settings
+from jung.config import build_settings
 from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
@@ -661,7 +661,9 @@ async def test_dual_observer_healthy_receives_while_slow_blocked() -> None:
     events = TrackingEventStream()
     settings = _default_settings(send_timeout=30.0)
 
-    async def start_observer(fake: FakeWebSocket, *, block_first: bool) -> asyncio.Task[None]:
+    async def start_observer(
+        fake: FakeWebSocket, *, block_first: bool
+    ) -> asyncio.Task[None]:
         runtime = MockRuntime(application=MockApplication(), events=events)
         fake.app.state.api = ApiState(runtime=runtime, ready=True)  # type: ignore[arg-type]
         if block_first:
@@ -1018,9 +1020,7 @@ async def test_websocket_lifecycle_logs_connected_and_disconnected(
         await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
 
     connected = [
-        record
-        for record in caplog.records
-        if record.message == "websocket_connected"
+        record for record in caplog.records if record.message == "websocket_connected"
     ]
     disconnected = [
         record

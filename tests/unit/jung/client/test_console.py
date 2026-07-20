@@ -200,7 +200,9 @@ def _snapshot(
     )
 
 
-def _session(session_id: UUID | None = None, *, kind: str = "intake") -> SessionSummaryResponse:
+def _session(
+    session_id: UUID | None = None, *, kind: str = "intake"
+) -> SessionSummaryResponse:
     return SessionSummaryResponse(
         id=session_id or uuid4(),
         kind=kind,  # type: ignore[arg-type]
@@ -553,7 +555,9 @@ async def test_therapy_quit_command_vs_word_quit() -> None:
     app = _app(client, inputs=ScriptedInput("/quit"), observer=observer)
     action = (await app.read_input(PromptSpec(text="> "))).strip()
     assert action == "/quit"
-    with patch.object(app, "_end_active_session", AsyncMock(return_value=therapy)) as end:
+    with patch.object(
+        app, "_end_active_session", AsyncMock(return_value=therapy)
+    ) as end:
         with patch.object(app, "_handle_chat_turn", AsyncMock()) as chat:
             if action == "/quit":
                 require_command(set(therapy.available_commands), "end_session")
@@ -566,7 +570,9 @@ async def test_therapy_quit_command_vs_word_quit() -> None:
     app = _app(client, inputs=ScriptedInput("quit"), observer=observer)
     action = (await app.read_input(PromptSpec(text="> "))).strip()
     assert action == "quit"
-    with patch.object(app, "_handle_chat_turn", AsyncMock(return_value=therapy)) as chat:
+    with patch.object(
+        app, "_handle_chat_turn", AsyncMock(return_value=therapy)
+    ) as chat:
         with patch.object(app, "_end_active_session", AsyncMock()) as end:
             if action != "/quit":
                 require_command(set(therapy.available_commands), "send_message")
@@ -1001,6 +1007,7 @@ async def test_durable_error_after_turn_id_raises_chat_failed() -> None:
     client = _mock_client()
     session = _session()
     snapshot = _snapshot(session=session)
+
     def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
         progress = _progress_event(
             session_id=session.id,
@@ -1039,6 +1046,7 @@ async def test_successful_completion_returns_get_state() -> None:
     client = _mock_client()
     session = _session()
     snapshot = _snapshot(revision=1, session=session)
+
     def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
         progress = _progress_event(
             session_id=session.id,
@@ -1168,7 +1176,9 @@ async def test_unresolved_reconciliation_raises_uncertain_delivery() -> None:
     client = _mock_client()
     session = _session()
     intent = client.new_chat_intent(session.id, "hello")
-    history = _history(session_id=session.id, client_message_id=intent.client_message_id)
+    history = _history(
+        session_id=session.id, client_message_id=intent.client_message_id
+    )
     result = ChatReconciliationResult(
         status=ChatReconciliationStatus.UNRESOLVED,
         snapshot=_snapshot(session=session),
@@ -1183,7 +1193,9 @@ async def test_identity_conflict_is_terminal_protocol_error() -> None:
     client = _mock_client()
     session = _session()
     intent = client.new_chat_intent(session.id, "hello")
-    history = _history(session_id=session.id, client_message_id=intent.client_message_id)
+    history = _history(
+        session_id=session.id, client_message_id=intent.client_message_id
+    )
     result = ChatReconciliationResult(
         status=ChatReconciliationStatus.IDENTITY_CONFLICT,
         snapshot=_snapshot(session=session),
@@ -1211,7 +1223,9 @@ async def test_pending_reconcile_budget_once_per_client_message_id() -> None:
     intent = client.new_chat_intent(session.id, "hello")
     context = PendingTurnContext(intent=intent, reconciliation_attempted=True)
     snapshot = _snapshot(session=session, pending=None)
-    history = _history(session_id=session.id, client_message_id=intent.client_message_id)
+    history = _history(
+        session_id=session.id, client_message_id=intent.client_message_id
+    )
     client.get_session = AsyncMock(return_value=history)
     client.reconcile_chat_turn = AsyncMock()
     app = _app(client)
@@ -1232,7 +1246,9 @@ async def test_profile_setup_preserves_optional_fields() -> None:
         snapshot=_snapshot(stage="setup", revision=0, commands=["update_profile"]),
     )
     client.get_profile = AsyncMock(return_value=profile)
-    client.update_profile = AsyncMock(return_value=_snapshot(stage="intake", revision=1))
+    client.update_profile = AsyncMock(
+        return_value=_snapshot(stage="intake", revision=1)
+    )
     observer = RecordingObserver()
     app = _app(client, inputs=ScriptedInput("New Name", "French"), observer=observer)
     await app._handle_setup()
@@ -1354,7 +1370,9 @@ async def test_style_selection_recovers_from_invalid_command_through_run() -> No
         recommendations=[],
     )
     initial = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
-    refreshed = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    refreshed = _snapshot(
+        stage="style_selection", revision=5, commands=["select_style"]
+    )
     ready = _snapshot(stage="ready", revision=6, commands=["start_session"])
 
     client.get_state = AsyncMock(side_effect=[initial, refreshed])
@@ -1584,9 +1602,7 @@ async def test_chat_input_recorded_before_transport_failure() -> None:
         )
 
     user_events = [
-        (event, fields)
-        for event, fields in observer.events
-        if event == "user_message"
+        (event, fields) for event, fields in observer.events if event == "user_message"
     ]
     assert user_events == [
         ("user_message", {"content": "I slept badly again."}),
@@ -1906,7 +1922,9 @@ async def test_failed_reconciliation_without_turn_id_is_command_rejection() -> N
         session_id=session.id,
         client_message_id=intent.client_message_id,
     )
-    history = _history(session_id=session.id, client_message_id=intent.client_message_id)
+    history = _history(
+        session_id=session.id, client_message_id=intent.client_message_id
+    )
     result = ChatReconciliationResult(
         status=ChatReconciliationStatus.FAILED,
         snapshot=adopted,
@@ -1976,7 +1994,9 @@ async def test_http_state_conflict_adopts_snapshot(method_name: str, call) -> No
         client.get_profile = AsyncMock(
             return_value=ProfileResponse(
                 profile=ProfileWire(name="Alex", primary_language="English"),
-                snapshot=_snapshot(stage="setup", revision=0, commands=["update_profile"]),
+                snapshot=_snapshot(
+                    stage="setup", revision=0, commands=["update_profile"]
+                ),
             )
         )
         client.update_profile = AsyncMock(side_effect=conflict)

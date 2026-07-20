@@ -121,6 +121,7 @@ def completing_intake_patch(
     quote: str,
 ) -> IntakeRecordPatch:
     """Patch satisfying intake completion rules for the final patient turn."""
+
     def evidence(value: str) -> IntakeEvidence:
         return _intake_evidence(value, quote=quote, sequence=message_sequence)
 
@@ -157,7 +158,9 @@ class ScriptedTaskSupervisor(TaskSupervisor):
         in_order: Sequence[StartScript] | None = None,
     ) -> None:
         super().__init__()
-        self._by_name = {pattern: list(outcomes) for pattern, outcomes in (by_name or {}).items()}
+        self._by_name = {
+            pattern: list(outcomes) for pattern, outcomes in (by_name or {}).items()
+        }
         self._in_order = list(in_order or [])
 
     def start(
@@ -213,7 +216,9 @@ def _test_policies() -> dict[LLMTask, ModelPolicy]:
     )
 
 
-def _build_processors(fake_llm: FakeLLM) -> tuple[
+def _build_processors(
+    fake_llm: FakeLLM,
+) -> tuple[
     IntakeProcessor,
     AssessmentProcessor,
     TherapyProcessor,
@@ -302,7 +307,9 @@ async def wait_for_stage(
             return
         await asyncio.sleep(0.01)
     snapshot = await application.get_snapshot()
-    raise TimeoutError(f"timed out waiting for stage {stage.value}, got {snapshot.stage.value}")
+    raise TimeoutError(
+        f"timed out waiting for stage {stage.value}, got {snapshot.stage.value}"
+    )
 
 
 async def wait_for_chat_turn(

@@ -81,7 +81,9 @@ def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
     sections = build_update_context_sections(
         _input(
             prior_session_briefing={"summary": "b" * 5000},
-            recent_session_summaries=tuple(f"summary-{index}" * 200 for index in range(20)),
+            recent_session_summaries=tuple(
+                f"summary-{index}" * 200 for index in range(20)
+            ),
             derived_profile={"observations": ["p" * 5000]},
         ),
         SessionAnalysisResult(
@@ -112,7 +114,9 @@ def test_optional_sections_drop_before_plan_categories() -> None:
     assert not any(
         section.startswith("Recent session summaries:") for section in sections
     )
-    plan_section = next(section for section in sections if section.startswith("Current plan:"))
+    plan_section = next(
+        section for section in sections if section.startswith("Current plan:")
+    )
     document = json.loads(plan_section.split(":\n", 1)[1])
     assert set(document) == {
         "focus",
@@ -126,7 +130,9 @@ def test_optional_sections_drop_before_plan_categories() -> None:
 
 def test_plan_section_retains_all_semantic_field_names() -> None:
     sections = build_update_context_sections(_input(), _analysis())
-    plan_section = next(section for section in sections if section.startswith("Current plan:"))
+    plan_section = next(
+        section for section in sections if section.startswith("Current plan:")
+    )
     payload = plan_section.split(":\n", 1)[1]
     document = json.loads(payload)
     assert set(document) == {
@@ -153,7 +159,9 @@ def test_newest_summaries_preferred() -> None:
         _analysis(),
     )
     summary_section = next(
-        section for section in sections if section.startswith("Recent session summaries:")
+        section
+        for section in sections
+        if section.startswith("Recent session summaries:")
     )
     body = summary_section.split(":\n", 1)[1]
     assert body == "newest summary"
@@ -166,7 +174,9 @@ def test_serialized_sections_are_valid_json_or_prose() -> None:
     for section in sections:
         if section.startswith("Session analysis:"):
             json.loads(section.split(":\n", 1)[1])
-        if section.startswith("Current plan:") or section.startswith("Derived profile:"):
+        if section.startswith("Current plan:") or section.startswith(
+            "Derived profile:"
+        ):
             json.loads(section.split(":\n", 1)[1])
         if section.startswith("Prior session briefing:"):
             assert not section.split(":\n", 1)[1].startswith("{")

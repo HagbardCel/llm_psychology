@@ -1,4 +1,4 @@
-"""Shared collector for Phase 3 local-model smoke evidence."""
+"""Shared collector for local-model smoke evidence."""
 
 from __future__ import annotations
 
@@ -190,7 +190,7 @@ def render_smoke_evidence(collector: SmokeEvidenceCollector) -> str | None:
         ensure_ascii=True,
         separators=(",", ":"),
     )
-    return f"PHASE3_SMOKE_EVIDENCE={payload}"
+    return f"LOCAL_LLM_SMOKE_EVIDENCE={payload}"
 
 
 COLLECTOR = SmokeEvidenceCollector()

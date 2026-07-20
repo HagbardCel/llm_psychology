@@ -1,4 +1,4 @@
-"""Test-only helpers for Phase 5 resilience integration tests."""
+"""Test-only helpers for resilience integration tests."""
 
 from __future__ import annotations
 
@@ -110,9 +110,7 @@ def assert_styles_equivalent(
     ):
         assert actual_item.style_id == expected_item.style_id
         assert actual_item.score == expected_item.score
-        assert frozenset(actual_item.key_topics) == frozenset(
-            expected_item.key_topics
-        )
+        assert frozenset(actual_item.key_topics) == frozenset(expected_item.key_topics)
 
 
 async def wait_for_snapshot(
@@ -134,9 +132,7 @@ async def wait_for_snapshot(
         if predicate(snapshot):
             return snapshot
         await asyncio.sleep(0.05)
-    raise TimeoutError(
-        f"timed out waiting for snapshot: {description}; last={last!r}"
-    )
+    raise TimeoutError(f"timed out waiting for snapshot: {description}; last={last!r}")
 
 
 async def receive_event(
@@ -178,10 +174,7 @@ async def wait_for_session_message(
         history = await client.get_session(session_id)
         last_count = len(history.messages)
         for message in history.messages:
-            if (
-                message.client_message_id == client_message_id
-                and message.role == role
-            ):
+            if message.client_message_id == client_message_id and message.role == role:
                 return message
         await asyncio.sleep(0.05)
     raise TimeoutError(

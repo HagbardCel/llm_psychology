@@ -44,7 +44,9 @@ def test_artifacts_emit_complete_named_set(tmp_path: Path) -> None:
         assert (tmp_path / name).exists(), name
     assert not (tmp_path / ProbeRecorder.FAILURE_ARTIFACT).exists()
 
-    timeline = (tmp_path / "timeline.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    timeline = (
+        (tmp_path / "timeline.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    )
     assert len(timeline) == 5
     assert_successful_timeline(recorder.timeline)
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")

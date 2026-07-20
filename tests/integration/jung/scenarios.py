@@ -38,14 +38,17 @@ class PostSessionScenario:
 
 def open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
     now = datetime.now(UTC)
+    intake_session_id = uuid4()
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
         expected_revision=store.get_app_state().revision,
+        intake_session_id=intake_session_id,
         now=now,
     )
     intake = store.get_active_session()
     assert intake is not None
     assert intake.kind == SessionKind.INTAKE
+    assert intake.id == intake_session_id
     return intake.id, now
 
 

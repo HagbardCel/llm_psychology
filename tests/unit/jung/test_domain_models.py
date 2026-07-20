@@ -21,7 +21,9 @@ from jung.domain.models import (
 
 def test_is_profile_complete_requires_name_and_language():
     assert is_profile_complete(Profile(name="Alex", primary_language="English")) is True
-    assert is_profile_complete(Profile(name="Guest", primary_language="English")) is True
+    assert (
+        is_profile_complete(Profile(name="Guest", primary_language="English")) is True
+    )
     assert is_profile_complete(Profile(name="  ", primary_language="English")) is False
     assert is_profile_complete(Profile(name="Alex", primary_language="  ")) is False
 

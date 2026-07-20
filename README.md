@@ -36,8 +36,8 @@ For faster partial feedback while iterating:
 ```bash
 make lint
 make validate-docs
-make test-target
-make probe-console-v1-deterministic
+make test
+make probe-console
 ```
 
 See [docs/README.md](docs/README.md) for architecture, contracts, and local
@@ -53,18 +53,8 @@ contents should be retained, first archive the SQLite database together with
 any existing `-wal` and `-shm` sibling files; then delete the original files or
 use a fresh data directory.
 
-## Optional Devcontainer
-
-The checked-in devcontainer is supported optional tooling for contributors who
-want a containerized editor environment. Validate its setup with
-`make devcontainer-test`; the Docker-first commands above remain the canonical
-workflow.
-
 ## Naming
 
 The user-facing product language is **therapist**. The supported runtime package
 is `jung`. Legacy import namespaces, runtime entry points, and compatibility
-aliases were removed in Phase 6D. Legacy container identifiers were removed in
-Phase 6D; the supported devcontainer image is `jung-devcontainer`. The Python
-distribution metadata name `psychoanalyst-app` remains until Phase 7 packaging
-finalization.
+aliases have been removed.

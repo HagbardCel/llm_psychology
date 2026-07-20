@@ -49,9 +49,7 @@ class FakeLLM:
     def assert_exhausted(self) -> None:
         if self._expectations:
             remaining = [type(item).__name__ for item in self._expectations]
-            raise AssertionError(
-                f"FakeLLM has unused expectations: {remaining}"
-            )
+            raise AssertionError(f"FakeLLM has unused expectations: {remaining}")
 
     def _pop(self, *, kind: type[Expectation], task: LLMTask) -> Expectation:
         if not self._expectations:

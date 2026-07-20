@@ -148,9 +148,11 @@ def _compact_profile_document(profile: Mapping[str, Any], limit: int) -> str:
     ordered_keys.extend(key for key in profile if key not in priority_keys)
     working: dict[str, Any] = dict(profile)
     for key in list(working):
-        if key not in ordered_keys[:1] and len(
-            json.dumps(working, ensure_ascii=True, separators=(",", ":"))
-        ) > limit:
+        if (
+            key not in ordered_keys[:1]
+            and len(json.dumps(working, ensure_ascii=True, separators=(",", ":")))
+            > limit
+        ):
             working.pop(key, None)
     for max_items in range(20, 0, -1):
         candidate: dict[str, Any] = {}

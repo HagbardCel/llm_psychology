@@ -82,6 +82,7 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     store.update_profile(
         profile,
         expected_revision=0,
+        intake_session_id=uuid4(),
         now=now,
     )
     reopened = SQLiteStore(store.database_path)
@@ -95,6 +96,7 @@ def test_stale_revision_rejected(store: SQLiteStore) -> None:
         store.update_profile(
             Profile(name="Alex", primary_language="English"),
             expected_revision=99,
+            intake_session_id=uuid4(),
             now=datetime.now(UTC),
         )
     assert store.get_app_state().revision == 0
@@ -145,7 +147,9 @@ def test_initialize_rolls_back_on_seed_failure(
     assert tables.isdisjoint(sql.TARGET_TABLES)
 
 
-def _seed_open_session(conn: sqlite3.Connection, session_id: str, *, plan_id: str | None = None) -> None:
+def _seed_open_session(
+    conn: sqlite3.Connection, session_id: str, *, plan_id: str | None = None
+) -> None:
     now = datetime.now(UTC).isoformat()
     conn.execute(
         """
@@ -247,7 +251,15 @@ def test_chat_turn_user_message_id_unique(store_path: Path) -> None:
                     created_at, updated_at, completed_at
                 ) VALUES (?, ?, ?, 'failed', ?, NULL, 'test_failure', NULL, 0, ?, ?, ?)
                 """,
-                (str(uuid4()), session_id, str(uuid4()), user_message_id, now, now, now),
+                (
+                    str(uuid4()),
+                    session_id,
+                    str(uuid4()),
+                    user_message_id,
+                    now,
+                    now,
+                    now,
+                ),
             )
             conn.commit()
 
@@ -361,6 +373,7 @@ def test_singleton_rejects_second_pending_turn(store_path: Path) -> None:
             )
             conn.commit()
 
+
 def _pending_turn_params(
     conn: sqlite3.Connection, session_id: str | None = None
 ) -> tuple[str, str, str, str]:
@@ -444,7 +457,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'complete', result_json = NULL
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "operations",
@@ -453,7 +468,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'failed', error_code = NULL
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "chat_turns",
@@ -462,7 +479,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'complete', assistant_message_id = NULL
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "chat_turns",
@@ -471,7 +490,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'failed', error_code = NULL
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "operations",
@@ -480,7 +501,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'pending', error_message = 'stale'
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "operations",
@@ -489,7 +512,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'pending', retryable = 1
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "chat_turns",
@@ -498,7 +523,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'pending', error_message = 'stale'
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
+            ),
         ),
         (
             "chat_turns",
@@ -507,7 +534,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             SET status = 'complete', retryable = 1
             WHERE id = ?
             """,
-            lambda conn: (conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],),
+            lambda conn: (
+                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
+            ),
         ),
     ],
 )

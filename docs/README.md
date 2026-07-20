@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-31
+last_reviewed: 2026-07-20
 review_cycle_days: 90
 source_of_truth_for: Documentation entrypoint and canonical navigation
 ---
@@ -26,20 +26,10 @@ These docs are the only canonical, actively governed set.
 - [API v1 Contract](refactor/api-v1-contract.md)
 - [Workflow Specification](refactor/workflow-specification.md)
 
-## Legacy supporting reference pending Phase 7 rewrite
-These documents describe retired or deletion-pending architecture, contracts, and
-workflow. They are retained temporarily for migration context and are not
-canonical for the supported Jung runtime.
-
-- [Design Principles](design-principles.md)
-- [Architecture](ARCHITECTURE.md)
-- [User Journey](user_journey.md)
-- [Session Lifecycle](session_lifecycle.md)
-- [HTTP API Contract](contracts/HTTP_API_CONTRACT.md)
-- [WebSocket Protocol](WEBSOCKET_PROTOCOL.md)
-- [Type System](TYPE_SYSTEM.md)
-- [Data Models](data-models.md)
-- [Agents](agents/README.md)
+## Completed Refactor Record
+The architecture refactor is complete. Measurement methodology, checkpoint
+metrics, and acceptance evidence are recorded in
+[Refactor Completion](refactor/refactor-completion.md).
 
 ## Historical Documentation
 Do not keep completed plans, stale assessments, migration notes, or legacy
@@ -47,24 +37,21 @@ guides in the working tree. Delete historical documentation after its durable
 guidance has been incorporated into active docs; use Git history when old
 context is needed.
 
-## Docker-First Documentation Commands
-Run documentation checks through Docker:
+## Documentation Commands
 
 ```bash
 make validate-docs
 ```
 
-## Docker-First Test Commands
-Run tests through Docker; do not run Python or Node directly on the host.
+## Test Commands
 
-### Default Deterministic Tests
 By default, tests use mocked LLM services and skip tests marked `real_llm`.
-Use these for normal development and pre-commit checks:
 
 ```bash
-make test-target
+make test
 make test-unit
 make test-integration
+make probe-console
 make docker-test-one TEST=tests/unit/jung/test_workflow.py
 ```
 
@@ -86,16 +73,16 @@ docker compose --profile test run --rm test pytest -m real_llm --no-mocks
 For a single real-LLM test through the Makefile, include `--no-mocks` in `TEST`:
 
 ```bash
-make docker-test-one TEST="tests/smoke/jung/test_phase3_local_llm.py --no-mocks"
+make docker-test-one TEST="tests/smoke/jung/test_local_llm.py --no-mocks"
 ```
 
 ### Local LM Studio Smoke Test
-The local-model smoke is intentionally opt-in via `make smoke-target-local-llm`
-(or the Phase 3 smoke target it aliases). Start an OpenAI-compatible server on
-the host, set the `PHASE3_SMOKE_*` environment variables as needed, then run:
+The local-model smoke is intentionally opt-in via `make smoke-local-llm`.
+Start an OpenAI-compatible server on the host, set the `LOCAL_LLM_SMOKE_*` /
+`LOCAL_LLM_*` environment variables as needed, then run:
 
 ```bash
-make smoke-target-local-llm
+make smoke-local-llm
 ```
 
 ## Governance

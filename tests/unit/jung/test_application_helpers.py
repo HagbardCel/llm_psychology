@@ -95,7 +95,9 @@ def test_validate_snapshot_invariants_rejects_setup_with_session() -> None:
         active_session=session,
         available_commands=frozenset(),
     )
-    with pytest.raises(InvariantViolation, match="SETUP must not have an active session"):
+    with pytest.raises(
+        InvariantViolation, match="SETUP must not have an active session"
+    ):
         _validate_snapshot_invariants(snapshot, None, load_styles())
 
 

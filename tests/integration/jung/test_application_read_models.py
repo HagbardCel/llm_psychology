@@ -1,4 +1,4 @@
-"""TherapyApplication read-model integration tests for Phase 5 WP1."""
+"""TherapyApplication read-model integration tests."""
 
 from __future__ import annotations
 

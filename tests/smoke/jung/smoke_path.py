@@ -1,4 +1,4 @@
-"""Smoke path runner for Phase 3 local-model smoke."""
+"""Smoke path runner for local-model smoke."""
 
 from __future__ import annotations
 

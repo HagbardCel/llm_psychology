@@ -29,11 +29,15 @@ from jung.workflow import (
     ("facts", "expected"),
     [
         (
-            WorkflowFacts(stage=Stage.SETUP, profile_complete=False, has_active_session=False),
+            WorkflowFacts(
+                stage=Stage.SETUP, profile_complete=False, has_active_session=False
+            ),
             frozenset({CommandName.UPDATE_PROFILE}),
         ),
         (
-            WorkflowFacts(stage=Stage.INTAKE, profile_complete=True, has_active_session=True),
+            WorkflowFacts(
+                stage=Stage.INTAKE, profile_complete=True, has_active_session=True
+            ),
             frozenset({CommandName.UPDATE_PROFILE, CommandName.SEND_MESSAGE}),
         ),
         (
@@ -59,15 +63,23 @@ from jung.workflow import (
             frozenset(),
         ),
         (
-            WorkflowFacts(stage=Stage.STYLE_SELECTION, profile_complete=True, has_active_session=False),
+            WorkflowFacts(
+                stage=Stage.STYLE_SELECTION,
+                profile_complete=True,
+                has_active_session=False,
+            ),
             frozenset({CommandName.SELECT_STYLE}),
         ),
         (
-            WorkflowFacts(stage=Stage.READY, profile_complete=True, has_active_session=False),
+            WorkflowFacts(
+                stage=Stage.READY, profile_complete=True, has_active_session=False
+            ),
             frozenset({CommandName.START_SESSION}),
         ),
         (
-            WorkflowFacts(stage=Stage.THERAPY, profile_complete=True, has_active_session=True),
+            WorkflowFacts(
+                stage=Stage.THERAPY, profile_complete=True, has_active_session=True
+            ),
             frozenset({CommandName.SEND_MESSAGE, CommandName.END_SESSION}),
         ),
         (
@@ -94,7 +106,9 @@ from jung.workflow import (
         ),
     ],
 )
-def test_available_commands_matrix(facts: WorkflowFacts, expected: frozenset[CommandName]) -> None:
+def test_available_commands_matrix(
+    facts: WorkflowFacts, expected: frozenset[CommandName]
+) -> None:
     assert available_commands(facts) == expected
 
 
@@ -109,7 +123,9 @@ def test_pending_chat_turn_blocks_commands():
 
 
 def test_require_command_allowed_rejects_invalid():
-    facts = WorkflowFacts(stage=Stage.SETUP, profile_complete=False, has_active_session=False)
+    facts = WorkflowFacts(
+        stage=Stage.SETUP, profile_complete=False, has_active_session=False
+    )
     with pytest.raises(InvalidCommand):
         require_command_allowed(CommandName.SEND_MESSAGE, facts)
 
@@ -124,7 +140,8 @@ def test_require_command_allowed_rejects_invalid():
 )
 def test_stage_after_profile_update(current, profile_complete, expected):
     assert (
-        stage_after_profile_update(current, profile_complete=profile_complete) == expected
+        stage_after_profile_update(current, profile_complete=profile_complete)
+        == expected
     )
 
 

@@ -117,9 +117,7 @@ def missing_items_from_record(record: IntakeRecord) -> IntakeCompleteness:
     directly_asked = tuple(
         item for item in ITEM_ORDER if _was_directly_asked(record, item)
     )
-    unable = tuple(
-        item for item in ITEM_ORDER if _has_unable_or_unknown(record, item)
-    )
+    unable = tuple(item for item in ITEM_ORDER if _has_unable_or_unknown(record, item))
     addressed_hard = tuple(
         item for item in HARD_ITEM_ORDER if _has_addressed(record, item)
     )

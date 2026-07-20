@@ -1,4 +1,4 @@
-"""Phase 5 API-boundary resilience integration tests."""
+"""API-boundary resilience integration tests."""
 
 from __future__ import annotations
 

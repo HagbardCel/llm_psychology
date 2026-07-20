@@ -262,9 +262,7 @@ class ConsoleApp:
                 case "intake":
                     await self._render_session_history_if_needed(snapshot)
                     require_command(commands, "send_message")
-                    content = await self.read_input(
-                        PromptSpec(text="\nYour message: ")
-                    )
+                    content = await self.read_input(PromptSpec(text="\nYour message: "))
                     snapshot = await self._handle_chat_turn(
                         snapshot,
                         content=content,
@@ -278,17 +276,14 @@ class ConsoleApp:
                     action = await self.read_input(
                         PromptSpec(
                             text=(
-                                "\nEnter 'start' to begin therapy or "
-                                "'/exit' to quit: "
+                                "\nEnter 'start' to begin therapy or '/exit' to quit: "
                             ),
                         )
                     )
                     if action.strip() == "/exit":
                         raise ConsoleExitRequested
                     if action.strip().lower() != "start":
-                        self._output.render_invalid_action(
-                            "Enter 'start' or '/exit'."
-                        )
+                        self._output.render_invalid_action("Enter 'start' or '/exit'.")
                         continue
                     require_command(commands, "start_session")
                     snapshot = await self._apply_mutation(
@@ -303,9 +298,7 @@ class ConsoleApp:
                     await self._render_session_history_if_needed(snapshot)
                     action = await self.read_input(
                         PromptSpec(
-                            text=(
-                                "\nYour message (or /quit to end session): "
-                            ),
+                            text=("\nYour message (or /quit to end session): "),
                         )
                     )
                     if action.strip() == "/quit":
@@ -355,9 +348,7 @@ class ConsoleApp:
     ) -> AppSnapshotResponse:
         options = await self._client.get_styles()
         self._output.render_style_options(options)
-        style_id = await self.read_input(
-            PromptSpec(text="\nStyle id to select: ")
-        )
+        style_id = await self.read_input(PromptSpec(text="\nStyle id to select: "))
         return await self._apply_mutation(
             self._client.select_style(
                 SelectStyleRequest(
@@ -404,9 +395,7 @@ class ConsoleApp:
                 display = ErrorDisplay(
                     code=error.code if error else "operation_failed",
                     message=(
-                        error.message
-                        if error
-                        else "The background operation failed."
+                        error.message if error else "The background operation failed."
                     ),
                     retryable=error.retryable if error else False,
                 )
@@ -415,9 +404,7 @@ class ConsoleApp:
 
             while True:
                 action = (
-                    await self.read_input(
-                        PromptSpec(text="\nEnter /retry or /exit: ")
-                    )
+                    await self.read_input(PromptSpec(text="\nEnter /retry or /exit: "))
                 ).strip()
                 if action == "/retry":
                     return await self._apply_mutation(
@@ -513,9 +500,7 @@ class ConsoleApp:
             ):
                 await asyncio.sleep(self.POLL_INTERVAL)
                 snapshot = await self._client.get_state()
-                history = await self._client.get_session(
-                    context.intent.session_id
-                )
+                history = await self._client.get_session(context.intent.session_id)
                 assistant = self._assistant_for_intent(history, context.intent)
                 if assistant is not None:
                     return await self._complete_from_history(
@@ -892,10 +877,7 @@ class ConsoleApp:
                 if correlation is ErrorCorrelation.UNRELATED:
                     return None
                 if correlation is ErrorCorrelation.COMMAND_REJECTED:
-                    if (
-                        render_state.turn_id is not None
-                        or identity.turn_id is not None
-                    ):
+                    if render_state.turn_id is not None or identity.turn_id is not None:
                         raise ChatEventViolation(
                             expected_model=(
                                 "command ErrorEvent before durable acceptance"
@@ -985,8 +967,5 @@ class ConsoleApp:
     ) -> AppSnapshotResponse:
         self._locally_submitted_client_ids.discard(intent.client_message_id)
         self._output.render_command_rejection(error_event.error)
-        snapshot = (
-            error_event.error.current_snapshot
-            or await self._client.get_state()
-        )
+        snapshot = error_event.error.current_snapshot or await self._client.get_state()
         return snapshot

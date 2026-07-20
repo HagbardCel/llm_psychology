@@ -133,13 +133,9 @@ class ProbeRecorder(ConsoleObserver):
         (scenario_dir / "transcript.md").write_text(transcript + "\n", encoding="utf-8")
 
         log_lines = [
-            line
-            for line in self.timeline
-            if line.get("category") == "server_log"
+            line for line in self.timeline if line.get("category") == "server_log"
         ]
-        server_log = "\n".join(
-            json.dumps(line, default=str) for line in log_lines
-        )
+        server_log = "\n".join(json.dumps(line, default=str) for line in log_lines)
         (scenario_dir / "server.log").write_text(
             server_log + ("\n" if server_log else ""),
             encoding="utf-8",
@@ -176,13 +172,11 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "ws_event"
-        and entry.get("sequence") is not None
+        entry.get("category") == "ws_event" and entry.get("sequence") is not None
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "ws_event"
-        and entry.get("type") == "message_completed"
+        entry.get("category") == "ws_event" and entry.get("type") == "message_completed"
         for entry in timeline
     )
     assert any(

@@ -45,7 +45,9 @@ async def test_get_state_on_fresh_database(started_api_client: AsyncClient) -> N
 
 
 @pytest.mark.asyncio
-async def test_get_profile_returns_seeded_profile(started_api_client: AsyncClient) -> None:
+async def test_get_profile_returns_seeded_profile(
+    started_api_client: AsyncClient,
+) -> None:
     response = await started_api_client.get("/api/v1/profile")
     assert response.status_code == 200
     payload = response.json()
