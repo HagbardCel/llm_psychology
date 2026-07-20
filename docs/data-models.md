@@ -41,8 +41,9 @@ separately from actionable `planned_interventions`.
 
 `UserProfile.plan_id` points to the current revision. `Session.plan_id` is a
 historical pointer to the revision effective when the therapy session started.
-Databases created before this model must be reset with
-`make reset-foundation-db`.
+Incompatible development schemas are recreated rather than migrated; see
+[ADR 0004](adr/0004-single-sqlite-store-and-schema-reset.md) for the archival
+and reset policy.
 
 - `UserStatus`
   - Workflow state persisted in the database.

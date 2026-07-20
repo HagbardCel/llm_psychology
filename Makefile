@@ -1,5 +1,5 @@
-.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-real-llm test-devcontainer test-dev test-validate test-validate-no-mocks install-hooks clean clean-testdb reset-usertest check-usertest-key
-.PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-db-backup docker-db-backup-verify docker-db-restore docker-test-reset docker-clean
+.PHONY: help install dev-install install-uv format lint test test-unit test-integration test-devcontainer test-dev test-validate install-hooks clean check-usertest-key
+.PHONY: docker-up docker-down docker-test docker-test-isolated docker-test-one docker-shell docker-logs docker-logs-api docker-db-view docker-test-reset docker-clean
 .PHONY: ui-console ui-console-test
 .PHONY: probe probe-console-deterministic probe-console-v1-deterministic probe-console-intake-notes probe-logs probe-db check-usertest-env
 .PHONY: devcontainer-rebuild devcontainer-test devcontainer-open
@@ -29,11 +29,9 @@ help:
 	@echo "  test-validate     - Full isolated Docker tests (pre-commit validation)"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests only"
-	@echo "  test-real-llm     - Run real-LLM tests only (Docker)"
 	@echo "  test-devcontainer - Run devcontainer setup tests (Docker)"
 	@echo "  install-hooks     - Install git pre-commit and pre-push hooks for automated validation"
 	@echo "  clean             - Clean up generated files and caches"
-	@echo "  clean-testdb      - Clean test databases only"
 	@echo "  requirements      - Generate locked requirements from .in files"
 	@echo "  sync              - Rebuild containers from locked requirements"
 	@echo "  run-server        - Run HTTP/WebSocket server via Docker"
@@ -68,13 +66,9 @@ help:
 	@echo "  docker-shell      - Shell into API container"
 	@echo "  docker-logs       - View logs (usage: make docker-logs SERVICE=api)"
 	@echo "  docker-logs-api   - View API logs only (useful when running console-ui)"
-	@echo "  reset-usertest    - Stop usertest containers and clear usertest database"
 	@echo "  docker-test       - Run tests in Docker (usually not needed, use 'make test')"
 	@echo "  docker-test-one   - Run specific test (usage: make docker-test-one TEST=tests/unit/test_foo.py)"
 	@echo "  docker-db-view    - View database at http://localhost:8080 (DB=local|usertest, default: local)"
-	@echo "  docker-db-backup  - Back up the local SQLite database"
-	@echo "  docker-db-backup-verify - Verify a backup (usage: make docker-db-backup-verify BACKUP=data/backups/file.db)"
-	@echo "  docker-db-restore - Restore a backup (usage: make docker-db-restore BACKUP=data/backups/file.db)"
 	@echo "  docker-test-reset - Reset test database"
 	@echo "  docker-clean      - Clean up all Docker resources"
 	@echo ""
@@ -442,12 +436,6 @@ hook-commit: lint
 
 hook-push: hook-commit
 
-# Real LLM smoke tests (Docker, requires secrets / external services)
-test-real-llm: prepare-runtime-dirs
-	$(MAKE) check-usertest-key
-	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
-	docker compose -f docker-compose.yml --profile test run --rm --no-deps test pytest -m real_llm --no-mocks
-
 # Run devcontainer setup tests (Docker)
 test-devcontainer: devcontainer-test
 
@@ -494,15 +482,6 @@ test-validate: prepare-runtime-dirs
 		tests/integration/jung/client/ \
 		tests/e2e/
 
-# Full isolated Docker tests without mocks (uses real services)
-test-validate-no-mocks: prepare-runtime-dirs
-	@echo "🔍 Running full test suite in isolated Docker environment (NO MOCKS)..."
-	@echo "⚠️  Requires valid API keys in .env.test and .env.usertest"
-	@echo ""
-	$(MAKE) check-usertest-key
-	docker compose --profile usertest-console up -d --wait --remove-orphans api-usertest
-	PYTEST_ARGS="--no-mocks" docker compose -f docker-compose.yml --profile test run --rm --no-deps test
-
 # Install git pre-commit and pre-push hooks for automated validation
 install-hooks:
 	@echo "🔧 Installing git hooks..."
@@ -520,32 +499,8 @@ clean:
 		.pytype/ \
 		build/ \
 		dist/ \
-		*.egg-info/ \
-		data/psychoanalyst.db \
-		data/psychoanalyst_test.db \
-		data/psychoanalyst_usertest.db 2>/dev/null || true
+		*.egg-info/ 2>/dev/null || true
 	@echo "✓ Cleanup complete"
-
-# Clean test databases only
-clean-testdb:
-	@echo "Cleaning test databases..."
-	@rm -rf data/psychoanalyst_test.db \
-		data/psychoanalyst_usertest.db 2>/dev/null || true
-	@echo "✓ Test databases cleaned"
-
-# Reset usertest DB and containers
-reset-foundation-db: prepare-runtime-dirs
-	@echo "Resetting incompatible foundation databases..."
-	@docker compose down --remove-orphans
-	docker compose run --rm -v "$(PWD)/data:/app/data" api python scripts/purge_databases.py
-	@echo "Foundation databases reset."
-
-# Reset usertest DB and containers
-reset-usertest:
-	@echo "Resetting usertest environment..."
-	@docker compose --profile usertest-console down --remove-orphans
-	@rm -rf data/psychoanalyst_usertest.db 2>/dev/null || true
-	@echo "✓ Usertest environment reset"
 
 # Generate locked requirements from .in files with UV
 requirements: prepare-runtime-dirs
@@ -636,7 +591,9 @@ docker-logs-api:
 # Usage:
 #   make docker-db-view             # View local DB (default)
 #   make docker-db-view DB=usertest # View usertest DB
-# Note: Test databases use in-memory SQLite and don't create viewable files
+# Note: The automated test database is stored in the Docker-managed test-data
+# volume. It is intentionally not exposed through docker-db-view. Use
+# make docker-test-reset to remove it; the next test run recreates it.
 docker-db-view:
 	@DB_NAME=$${DB:-local}; \
 	case $$DB_NAME in \
@@ -644,8 +601,10 @@ docker-db-view:
 		usertest) DB_FILE=psychoanalyst_usertest.db ;; \
 		*) echo "❌ Invalid DB. Use: local or usertest"; \
 		   echo ""; \
-		   echo "Note: Test databases use in-memory SQLite (:memory:) and"; \
-		   echo "      don't create persistent files to view."; \
+		   echo "Note: The automated test database is stored in the Docker-managed"; \
+		   echo "      test-data volume. It is intentionally not exposed through"; \
+		   echo "      docker-db-view. Use make docker-test-reset to remove it;"; \
+		   echo "      the next test run recreates it."; \
 		   echo ""; \
 		   echo "Example: make docker-db-view DB=usertest"; \
 		   exit 1 ;; \
@@ -681,30 +640,9 @@ docker-db-view:
 	echo ""; \
 	DB_FILE=$$DB_FILE docker compose --profile debug up db-viewer
 
-# Back up the local SQLite database.
-docker-db-backup:
-	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup backup
-
-# Verify a local SQLite backup.
-docker-db-backup-verify:
-	@if [ -z "$(BACKUP)" ]; then \
-		echo "Usage: make docker-db-backup-verify BACKUP=data/backups/<backup>.db"; \
-		exit 1; \
-	fi
-	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup verify "$(BACKUP)"
-
-# Restore a local SQLite backup. Stop running app containers before using this.
-docker-db-restore:
-	@if [ -z "$(BACKUP)" ]; then \
-		echo "Usage: make docker-db-restore BACKUP=data/backups/<backup>.db"; \
-		exit 1; \
-	fi
-	docker compose run --rm -v "$(PWD)/data:/app/data" api python -m psychoanalyst_app.tools.db_backup restore "$(BACKUP)" --replace
-
 # Reset test database (removes test data volume)
 docker-test-reset:
-	docker compose down
-	docker volume rm psychoanalyst_app_test-data 2>/dev/null || true
+	docker compose -f docker-compose.yml --profile test down --volumes --remove-orphans
 
 # Clean up all Docker resources
 docker-clean:

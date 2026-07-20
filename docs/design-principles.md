@@ -206,7 +206,9 @@ Rationale:
 - Preserve the exact plan context used by each completed therapy session.
 
 Existing databases from before immutable plan revisions are intentionally
-incompatible. Reset them with `make reset-foundation-db`.
+incompatible and are recreated rather than migrated; see
+[ADR 0004](adr/0004-single-sqlite-store-and-schema-reset.md) for the archival
+and reset policy.
 
 ### Tier 2 enrichment is off the request path
 Tier 2 enrichment is intentionally run by a background worker so normal reads/writes remain fast and deterministic:

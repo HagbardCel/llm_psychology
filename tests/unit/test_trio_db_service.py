@@ -707,7 +707,7 @@ async def test_plan_revision_rolls_back_when_profile_history_write_fails(
 
 @pytest.mark.trio
 @pytest.mark.unit
-async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
+async def test_migration_rejects_legacy_schema_with_recreation_instruction(tmp_path):
     """Legacy DBs fail closed because foundation rows are intentionally incompatible."""
     import sqlite3
 
@@ -850,7 +850,10 @@ async def test_migration_rejects_legacy_schema_with_reset_instruction(tmp_path):
 
     migration_service = MigrationService(db_path)
     db = TrioDatabaseService(db_path, migration_service=migration_service)
-    with pytest.raises(RuntimeError, match="make reset-foundation-db"):
+    with pytest.raises(
+        RuntimeError,
+        match="delete the SQLite database",
+    ):
         await db.initialize()
 
 

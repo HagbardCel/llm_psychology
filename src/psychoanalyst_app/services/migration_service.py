@@ -3,8 +3,9 @@
 This module previously chained numbered migrations 001-004; clean databases
 always ended up with the same shape regardless. We now declare a single
 "current schema" and apply it idempotently. Legacy databases that pre-date
-the immutable therapy plan revisions are rejected so users reset them via
-``make reset-foundation-db``.
+the immutable therapy plan revisions are rejected so users delete and recreate
+them (including any ``-wal`` / ``-shm`` siblings, or by using a fresh data
+directory).
 """
 
 from __future__ import annotations
@@ -292,7 +293,9 @@ class MigrationService:
         if not _FOUNDATION_PLAN_COLUMNS.issubset(columns):
             raise RuntimeError(
                 "Database schema is incompatible with immutable therapy plan "
-                "revisions. Run `make reset-foundation-db` before startup."
+                "revisions. Stop the application and delete the SQLite database "
+                "together with any -wal and -shm sibling files, or use a fresh "
+                "data directory."
             )
 
     @staticmethod
