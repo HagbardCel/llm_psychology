@@ -446,6 +446,15 @@ def _parse_pyproject_dependencies(root: Path) -> list[str]:
     return [str(item) for item in deps]
 
 
+def _has_dependency_group_dev(root: Path) -> bool:
+    path = root / "pyproject.toml"
+    if not path.exists():
+        return False
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    groups = data.get("dependency-groups")
+    return isinstance(groups, dict) and "dev" in groups
+
+
 def _parse_dependency_groups_dev(root: Path) -> int:
     path = root / "pyproject.toml"
     if not path.exists():
@@ -474,13 +483,9 @@ def _runtime_dependency_count(root: Path) -> int:
     return len(packages)
 
 
-def _development_dependency_count(root: Path, layout: MeasurementLayout) -> int:
-    if layout.name == "jung" and (root / "pyproject.toml").exists():
-        data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-        if isinstance(data.get("dependency-groups"), dict) and (
-            data["dependency-groups"].get("dev") is not None
-        ):
-            return _parse_dependency_groups_dev(root)
+def _development_dependency_count(root: Path) -> int:
+    if _has_dependency_group_dev(root):
+        return _parse_dependency_groups_dev(root)
     return _parse_requirements_dev(root)
 
 
@@ -558,7 +563,7 @@ def measure(root: Path) -> dict[str, object]:
         "uv_lock_present": (root / "uv.lock").is_file()
         and Path("uv.lock") in set(tracked),
         "runtime_dependency_count": _runtime_dependency_count(root),
-        "development_dependency_count": _development_dependency_count(root, layout),
+        "development_dependency_count": _development_dependency_count(root),
         "trio_importing_production_modules": trio_imports,
         "legacy_namespace_importing_modules": legacy_namespace_imports,
         "api_route_count": http_routes,

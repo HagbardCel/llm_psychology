@@ -55,10 +55,10 @@ Phase 1, Phase 6, and Phase 7 numbers remain comparable.
 | Backend Python code LOC | 17,920 | 8,961 | 8,974 |
 | Client Python files | 17 | 6 | 6 |
 | Client Python physical LOC | 5,202 | 2,311 | 2,282 |
-| Test Python physical LOC | 22,092 | 23,657 | 23,124 |
-| Script Python physical LOC | 1,504 | 2,766 | 1,372 |
-| Tracked authored text physical LOC | 64,895 | 60,933 | 43,738 |
-| Tracked authored file count | 323 | 256 | 220 |
+| Test Python physical LOC | 22,092 | 23,657 | 23,164 |
+| Script Python physical LOC | 1,504 | 2,766 | 1,377 |
+| Tracked authored text physical LOC | 64,895 | 60,933 | 40,353 |
+| Tracked authored file count | 323 | 256 | 212 |
 | `uv_lock_present` | false | false | true |
 | Runtime dependency count | 15 | 10 | 7 |
 | Development dependency count | 6 | 5 | 3 |
@@ -106,10 +106,10 @@ not this document's pre-merge gate run alone.
 
 - Backend physical LOC fell from 22,919 to 10,637 (~53.6%), meeting the ≥40%
   backend reduction target.
-- Tracked authored text fell from 64,895 to 43,738 (~32.6%). That is slightly
-  below the approximate 35–45% repository target because meaningful Jung
-  integration, API, and console coverage was retained rather than cut for the
-  metric. Architectural invariants take precedence over forcing the percentage.
+- Tracked authored text fell from 64,895 to 40,353 (~37.8%), within the
+  approximate 35–45% repository target. Transitional plans were removed; the
+  remaining authored mass reflects retained target-architecture tests,
+  API/client coverage, canonical documentation, and measurement governance.
 - Phase 6 authored-text and file-count figures exclude generated
   `requirements.txt` / `requirements-dev.txt` under the Jung layout (layout-
   independent generated-path handling).

@@ -293,6 +293,30 @@ def test_legacy_layout_blueprint_routes_and_dev_requirements(tmp_path: Path) -> 
     assert after["development_dependency_count"] == 3
 
 
+def test_dev_dependency_group_precedes_requirements_independent_of_layout(
+    tmp_path: Path,
+) -> None:
+    """Legacy layout with both sources: [dependency-groups].dev wins."""
+    _init_repo(tmp_path)
+    (tmp_path / "src/psychoanalyst_app").mkdir(parents=True)
+    (tmp_path / "console-ui").mkdir()
+    (tmp_path / "src/psychoanalyst_app/__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "console-ui/main.py").write_text("print('ui')\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="psychoanalyst-app"\ndependencies=["trio"]\n'
+        '[dependency-groups]\ndev = ["pytest", "ruff"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements-dev.in").write_text(
+        "black\nmypy\ncoverage\nisort\n",
+        encoding="utf-8",
+    )
+    _commit_all(tmp_path)
+    metrics = measure(tmp_path)
+    assert metrics["layout"] == "legacy"
+    assert metrics["development_dependency_count"] == 2
+
+
 # Accepted Phase 7 closure values. Product changes that intentionally alter
 # routes, dependencies, or contract members must update this baseline.
 ACCEPTED_EXACT = {
@@ -313,11 +337,10 @@ ACCEPTED_EXACT = {
 }
 
 # Aggregate refactor-closure maxima — not per-module line-budget rules.
-# Values filled after final staged remasure; keep as placeholders until then.
 MAXIMUMS = {
     "backend_python_physical_loc": 10_637,
-    "tracked_authored_text_physical_loc": 43_738,
-    "tracked_authored_file_count": 220,
+    "tracked_authored_text_physical_loc": 40_353,
+    "tracked_authored_file_count": 212,
 }
 
 
