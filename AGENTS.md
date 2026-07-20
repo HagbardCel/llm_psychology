@@ -1,85 +1,88 @@
 # Codex Agent Guide
 
 ## Project Structure
-- `src/`: Core Python app (agents, orchestration, services, models, styles, server).
-- `console-ui/`: Supported terminal HTTP/WebSocket client and workflow probes.
-- `tests/`: Pytest unit/integration suites.
-- `data/`: SQLite DBs, vector DBs, domain knowledge.
-- `schemas/` and `migrations/`: JSON schema outputs and DB migrations.
-- `docs/`: Architecture, guides, reference material.
+- `src/jung/`: Supported asyncio application (API, composition, workflow, phases, LLM, persistence, client).
+- `src/psychoanalyst_app/`: Unsupported deletion-pending legacy package (retained until Phase 6D).
+- `console-ui/`: Unsupported deletion-pending legacy console (retained until Phase 6D).
+- `tests/`: Pytest suites; supported Make targets collect Jung and retained support tests.
+- `data/`: SQLite databases (`local/jung.db`, `usertest/jung.db`).
+- `docs/`: Architecture, contracts, and guides (see Active Docs in `docs/README.md`).
 
 ## Documentation Map (Read First)
-- `docs/README.md`: Doc index and pointers to deeper references.
-- `docs/ui-scope.md`: Active frontend policy.
-- `docs/design-principles.md`: Non-negotiable architecture rules, layering, and workflow invariants.
-- `docs/ARCHITECTURE.md`: System overview, orchestration flow, and component responsibilities.
-- `docs/user_journey.md`: Expected user flow and endpoint usage.
-- `docs/session_lifecycle.md`: Session orchestration details and state transitions.
-
-## Contracts and Data Models (Source of Truth)
-- `docs/contracts/HTTP_API_CONTRACT.md`: HTTP endpoints, DTO shapes, and error format.
-- `docs/WEBSOCKET_PROTOCOL.md`: WebSocket message envelope and event contract.
-- `docs/data-models.md`: Domain model inventory and DTO mappings.
-- `docs/TYPE_SYSTEM.md`: Backend schema and protocol-generation pipeline.
+- `docs/README.md`: Doc index and canonical navigation.
+- `docs/ui-scope.md`: Supported frontend policy (`jung-console`).
+- `docs/refactor/target-architecture.md`: Current runtime architecture.
+- `docs/refactor/api-v1-contract.md`: Supported external HTTP/WebSocket API.
+- `docs/refactor/workflow-specification.md`: Supported Jung workflow.
 
 ## Key Entry Points (Code)
-- `src/psychoanalyst_app/trio_server.py`: Server composition, HTTP routing, WS registration.
-- `src/psychoanalyst_app/api/*_routes.py`: HTTP endpoints by domain.
-- `src/psychoanalyst_app/api/ws_handler.py`: WebSocket handler and message routing.
-- `src/psychoanalyst_app/orchestration/`: Workflow engine, orchestrator, conversation manager.
-- `console-ui/src/console_client.py`: Supported frontend behavior.
-- `console-ui/src/workflow_probe/`: Full-stack workflow probes.
+- `src/jung/api/app.py`: FastAPI server factory and `jung-api` CLI.
+- `src/jung/composition.py`: Typed composition root.
+- `src/jung/client/terminal.py`: Supported `jung-console` client.
+- `src/jung/application.py`: Application use cases.
+- Remaining `src/psychoanalyst_app/` and `console-ui/` are unsupported deletion-pending code.
 
-## Docker-Only Command Execution
-Run all commands inside containers. Do not run Python or Node on the host.
+## Docker-First Command Execution
+
+Docker is the canonical reproducible workflow. Native `uv` commands remain
+supported for local development.
+
+Canonical Docker workflow:
 
 - Build images: `make dev-install`
-- Start backend: `make docker-up`
+- Start backend: `make docker-up` (or `make run-server`)
 - Backend shell: `make docker-shell`
 - One-off backend command: `docker compose run --rm api <command>`
-- Supported frontend: `make ui-console`
-- Manual cloud usertest: `make ui-console-test`
+- Supported frontend: `make ui-console` (`jung-console`)
+- Manual usertest: `make ui-console-test`
 
-## Tests (Docker-Only)
-- Backend full suite: `make test-validate` or `make docker-test`
-- Backend single test: `make docker-test-one TEST=tests/unit/test_file.py`
-- Run individual target asyncio tests with:
-  `docker compose --profile test run --rm test pytest -o trio_mode=false -o asyncio_mode=auto <test-path>`.
-- Deterministic full-stack probe: `make probe-console-deterministic`
+Native alternatives (same entry points):
+
+```bash
+uv run jung-api
+uv run jung-console --api-url http://127.0.0.1:8000
+uv run pytest \
+  -o trio_mode=false \
+  -o asyncio_mode=auto \
+  -m "not real_llm" \
+  tests/unit/jung \
+  tests/integration/jung
+```
+
+## Tests (Docker-First)
+
+- Target suite: `make test`, `make test-validate`, or `make docker-test` (all resolve to `test-target`)
+- Unit: `make test-unit`
+- Integration: `make test-integration`
+- Single path: `make docker-test-one TEST=tests/unit/jung/...`
+- Deterministic console probe: `make probe-console-v1-deterministic`
 - Release-candidate validation: `make finalization-check`
+- Native alternative (core Jung trees): same `uv run pytest` command above; use `make test-target` for the complete supported suite including validator and support tests
 
 ## Core Developer Guidance
-- The running legacy `psychoanalyst_app` remains Trio-based until cutover.
-- Async target code under `src/jung` uses asyncio according to ADR 0002.
-- Tests for target asyncio gateways and application components must run through pytest-asyncio.
+- The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).
+- Clients use `/api/v1` only; do not import application internals from clients.
 - Do not add Trio/asyncio compatibility adapters to target code.
-- Keep agents as pure business logic; orchestration owns workflow transitions.
 - Prefer existing utilities and services before adding new ones.
 - If docs conflict with this guide, follow this guide and update the docs you touched.
-- If HTTP/WS contracts or API-facing models change, update contract docs and regenerate schemas/protocol constants.
+- If HTTP/WS contracts or API-facing models change, update the active API v1 contract docs.
 - Add deterministic tests for new behavior.
 
 ## Active Scope
-Until foundation stabilization is complete, treat the backend, workflow engine, persistence model, API DTOs, WebSocket protocol, schema generation, LLM abstraction, deterministic tests, and workflow probes as the main product.
+Treat the Jung backend, workflow, persistence, `/api/v1` contracts, LLM gateway, deterministic tests, and `jung-console` probes as the main product.
 
-- Maintain `console-ui` as the only supported frontend.
-- Do not recreate, repair, test, or optimize removed frontends unless explicitly requested.
+- Maintain `jung-console` as the only supported frontend.
+- Do not recreate, repair, test, or optimize removed or deletion-pending UIs unless explicitly requested.
 - Do not add multi-frontend orchestration modes.
-- Prefer backend, protocol, workflow-probe, and console-client tests.
+- Prefer Jung unit/integration tests and the v1 console probe.
 
 ## Foundation Failure Policy
-During foundation stabilization, do not hide workflow, LLM, persistence, protocol, or contract failures behind fallback behavior unless explicitly requested.
+Do not hide workflow, LLM, persistence, protocol, or contract failures behind fallback behavior unless explicitly requested.
 
 - Prefer fail-fast, diagnostic errors with preserved workflow state and deterministic tests.
 - Treat fallbacks as product decisions; document and test them when they are intentionally added.
-- Workflow probes may improve artifact generation and observability, but must not convert real backend failures into passes.
+- Workflow probes must not convert real backend failures into passes.
 - For LLM structured-output failures, preserve enough bounded diagnostic context to identify the phase, schema, provider, model, and parse failure without leaking full prompts or transcripts by default.
-
-## Schema and Protocol Generation (Containerized)
-- Generate JSON schemas: `make generate-schemas`
-- Validate generated schemas: `make validate-schemas`
-- Generate WS constants: `make generate-ws-protocol`
-- Validate committed WS constants: `make validate-generated-contracts`
 
 ## Version Control Guidelines
 - Branch from `main` using `feat/<topic>` or `fix/<topic>`.

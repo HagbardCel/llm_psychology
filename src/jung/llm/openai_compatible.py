@@ -138,7 +138,9 @@ class OpenAICompatibleLLM:
         self._config = config
         self._client = client or AsyncOpenAI(
             base_url=config.base_url,
-            api_key=config.api_key,
+            # OpenAI SDK rejects empty credentials; local OpenAI-compatible
+            # servers often need no auth, so use a non-empty placeholder.
+            api_key=config.api_key or "not-needed",
             max_retries=0,
             default_headers=config.default_headers,
         )

@@ -11,20 +11,27 @@ source_of_truth_for: Documentation entrypoint and canonical navigation
 ## Start Here
 Use this order if you are new to the codebase:
 
-1. `docs/design-principles.md` for architecture invariants and implementation rules.
+1. This index for canonical documentation navigation.
 2. `docs/ui-scope.md` for the supported frontend policy.
-3. `docs/ARCHITECTURE.md` for component boundaries and runtime flow.
-4. `docs/user_journey.md` for end-to-end user and protocol flow.
-5. `docs/session_lifecycle.md` for workflow/session ownership details.
-6. `docs/contracts/HTTP_API_CONTRACT.md` and `docs/WEBSOCKET_PROTOCOL.md` for API contracts.
-7. `docs/TYPE_SYSTEM.md` for schema and protocol generation.
+3. `docs/refactor/target-architecture.md` for the supported runtime architecture.
+4. `docs/refactor/api-v1-contract.md` for the public client contract.
+5. `docs/refactor/workflow-specification.md` for workflow, recovery, and concurrency semantics.
 
 ## Active Docs (Canonical)
 These docs are the only canonical, actively governed set.
 
 - [Documentation Index](README.md)
-- [Design Principles](design-principles.md)
 - [UI Scope](ui-scope.md)
+- [Target Architecture](refactor/target-architecture.md)
+- [API v1 Contract](refactor/api-v1-contract.md)
+- [Workflow Specification](refactor/workflow-specification.md)
+
+## Legacy supporting reference pending Phase 7 rewrite
+These documents describe retired or deletion-pending architecture, contracts, and
+workflow. They are retained temporarily for migration context and are not
+canonical for the supported Phase 6C runtime.
+
+- [Design Principles](design-principles.md)
 - [Architecture](ARCHITECTURE.md)
 - [User Journey](user_journey.md)
 - [Session Lifecycle](session_lifecycle.md)
@@ -33,16 +40,6 @@ These docs are the only canonical, actively governed set.
 - [Type System](TYPE_SYSTEM.md)
 - [Data Models](data-models.md)
 - [Agents](agents/README.md)
-
-## Supporting Documentation
-Use these for focused implementation work; active docs remain the source of truth.
-
-- `docs/current_issues/`: active troubleshooting and known issues.
-- `docs/reference/`: companion guides linked from active docs.
-
-## Proposed Refactor
-
-These target documents do not describe the running system: [roadmap](refactor/architecture-refactor-roadmap.md), [target architecture](refactor/target-architecture.md), [Phase 1 plan](refactor/phase-1-implementation-plan.md), [API v1 contract](refactor/api-v1-contract.md), and [workflow specification](refactor/workflow-specification.md).
 
 ## Historical Documentation
 Do not keep completed plans, stale assessments, migration notes, or legacy
@@ -55,8 +52,6 @@ Run documentation checks through Docker:
 
 ```bash
 make validate-docs
-make validate-schemas
-make generate-schemas
 ```
 
 ## Docker-First Test Commands
@@ -67,9 +62,10 @@ By default, tests use mocked LLM services and skip tests marked `real_llm`.
 Use these for normal development and pre-commit checks:
 
 ```bash
-make docker-test-one TEST=tests/unit/test_llm_service.py
-make docker-test
-make test-validate
+make test-target
+make test-unit
+make test-integration
+make docker-test-one TEST=tests/unit/jung/test_workflow.py
 ```
 
 Equivalent direct pytest-in-Docker form:

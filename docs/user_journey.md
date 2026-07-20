@@ -1,12 +1,14 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-05-31
+status: supporting
+last_reviewed: 2026-07-20
 review_cycle_days: 90
 source_of_truth_for: User-facing workflow progression and endpoint/event sequence
 ---
 
 # User Journey Overview
+
+> Legacy supporting reference. This document does not describe the supported Phase 6C runtime. See the [target architecture](refactor/target-architecture.md), [API v1 contract](refactor/api-v1-contract.md), and [workflow specification](refactor/workflow-specification.md). It remains temporarily available pending the Phase 7 documentation rewrite.
 
 This document provides a detailed overview of the journey a new user takes through the AI Therapy system. It outlines the stages, responsible agents, outputs, and available therapy styles.
 

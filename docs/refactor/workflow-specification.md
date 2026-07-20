@@ -1,14 +1,16 @@
 ---
 owner: engineering
-status: accepted
-last_reviewed: 2026-07-11
+status: active
+last_reviewed: 2026-07-20
 review_cycle_days: 30
-source_of_truth_for: Target workflow, recovery, and concurrency semantics
+source_of_truth_for: Supported workflow, recovery, and concurrency semantics
 ---
 
-# Target Workflow Specification
+# Workflow Specification
 
-> Target-only specification. Legacy `WorkflowState`, user status, jobs, events, and next actions remain current until cutover. Wire DTO shapes live in [API v1 Contract](api-v1-contract.md).
+> This document governs the supported Phase 6C workflow runtime. Legacy
+> `WorkflowState`, user status, jobs, events, and next actions are supporting
+> reference only. Wire DTO shapes live in [API v1 Contract](api-v1-contract.md).
 
 ## Stages
 

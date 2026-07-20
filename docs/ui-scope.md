@@ -1,37 +1,30 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-05-31
+last_reviewed: 2026-07-20
 review_cycle_days: 90
-source_of_truth_for: Supported frontend scope and removed-UI policy
+source_of_truth_for: Supported frontend scope and API-only client policy
 ---
 
 # UI Scope
 
-## Supported Frontend
+## Supported Reference Frontend
 
-The only actively maintained frontend is `console-ui`.
+`jung-console` is the supported reference frontend. It is used for manual
+sessions, `/api/v1` contract integration, and deterministic workflow probes.
 
-It connects to the backend through the public HTTP/WebSocket interface and is
-used for manual sessions, contract integration testing, and deterministic
-workflow probes.
+All clients interact with the backend exclusively through `/api/v1`; clients
+must not import backend application, workflow, persistence, or domain internals.
 
-## Removed Frontends
+## Unsupported Legacy Frontend
 
-Former frontend implementations are not maintained on `main`. Restoring one is
-separate product work and must not be mixed into foundation-stabilization
-changes.
+`console-ui/` is unsupported and deletion-pending until Phase 6D. Do not
+recreate, repair, test, or optimize it unless explicitly instructed.
 
-## Agent Policy
+## Development Priority
 
-Coding agents must not recreate, repair, test, or optimize removed UIs unless
-explicitly instructed.
-
-Default development priority:
-
-1. backend workflow correctness
-2. persistence correctness
-3. LLM service reliability
-4. HTTP/WebSocket contract stability
-5. `console-ui` compatibility
-6. workflow-probe reliability
+1. backend workflow and persistence correctness
+2. LLM service reliability
+3. `/api/v1` contract stability
+4. `jung-console` and target API-contract compatibility
+5. deterministic workflow-probe reliability

@@ -1,14 +1,15 @@
 ---
 owner: engineering
-status: supporting
-last_reviewed: 2026-07-11
+status: active
+last_reviewed: 2026-07-20
 review_cycle_days: 30
-source_of_truth_for: Planned target architecture for the single-user simplification refactor
+source_of_truth_for: Supported architecture for the single-user Jung runtime
 ---
 
 # Target Architecture
 
-> Planning document. This describes the intended post-refactor system, not the current implementation. Current behavior remains governed by `docs/design-principles.md` and the other active canonical documents until cutover.
+> This document governs the supported Phase 6C Jung runtime. It defines the
+> architecture, dependency direction, and runtime boundaries for current work.
 
 ## Goals
 
@@ -72,7 +73,7 @@ clients → API contracts → API adapter → application → store / LLM ports
 
 The application and phase packages must not import API or client packages.
 
-## Proposed package structure
+## Supported package structure
 
 ```text
 src/jung/
@@ -126,7 +127,9 @@ src/jung/
     └── console.py
 ```
 
-The package name may remain `psychoanalyst_app` during implementation if renaming would add risk without reducing complexity. The boundaries above are the important part.
+The remaining `psychoanalyst_app` package is unsupported and deletion-pending
+until Phase 6D. Supported runtime code lives under `jung`. The boundaries above
+are the important part.
 
 The package tree is illustrative. Begin with the fewest modules that preserve dependency boundaries; split only when a file has independently testable logic or distinct dependencies. In particular, post-session summarization/patch helpers and client transport code may start consolidated:
 
@@ -352,7 +355,7 @@ Use HTTP for commands and snapshots and WebSocket for chat streaming and state/o
 
 Use explicit SQL behind one concrete `SQLiteStore`. Avoid an ORM, repository-per-table hierarchy, connection pool abstraction, migration compatibility layer, and transitional database facade.
 
-Proposed tables:
+Supported tables:
 
 - `app_state`
 - `profile`
@@ -431,9 +434,9 @@ Docker packages the system but does not define internal boundaries.
 
 Target Compose services:
 
-- `api`
+- `api` — default Jung API service
+- `api-usertest` — same Jung API build target and runtime implementation with an isolated `JUNG_DATA_DIR` (`/app/data/usertest`) under the `usertest-console` profile
 - `web` when implemented
-- optional `console` profile
 
 Native development must remain supported:
 
@@ -443,7 +446,7 @@ uv run jung-console --api-url http://127.0.0.1:8000
 uv run pytest
 ```
 
-Test profiles use temporary data volumes or databases, not duplicate API implementations or test-user services.
+Test profiles use temporary data volumes or isolated data directories, not duplicate API implementations or test-user directories.
 
 ## Observability
 

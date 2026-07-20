@@ -1,4 +1,0 @@
-services:
-  api:
-    healthcheck:
-      test: "exit 0"

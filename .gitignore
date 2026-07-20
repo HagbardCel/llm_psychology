@@ -155,7 +155,6 @@ out_test_*
 # Generated schemas (auto-generated from backend models)
 schemas/*.json
 !schemas/.gitkeep
-!schemas/ws_protocol.json
 # AI assistant local config (not project-tracked)
 .aider*
 .qwen/

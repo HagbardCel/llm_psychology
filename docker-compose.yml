@@ -10,116 +10,67 @@ x-api-base: &api-base
     - ./tests:/app/tests:delegated
     - ./scripts:/app/scripts:delegated
     - ./pyproject.toml:/app/pyproject.toml:ro
-    - ./data:/app/data
+    - "${JUNG_HOST_DATA_DIR:-./data}:/app/data"
     - ./logs:/app/logs
-  environment:
-    - APP_ENV=development
-    - PYTHONUNBUFFERED=1
-    - SERVER_HOST=0.0.0.0
-    - SERVER_PORT=8000
-    - RUFF_CACHE_DIR=/tmp/ruff_cache
-    - BLACK_CACHE_DIR=/tmp/black_cache
-    - UV_CACHE_DIR=/tmp/uv_cache
-    - XDG_CACHE_HOME=/tmp/.cache
+  environment: &api-environment
+    PYTHONUNBUFFERED: "1"
+    JUNG_API_HOST: 0.0.0.0
+    JUNG_API_PORT: "8000"
+    JUNG_API_ALLOW_REMOTE_BIND: "true"
+    RUFF_CACHE_DIR: /tmp/ruff_cache
+    BLACK_CACHE_DIR: /tmp/black_cache
+    UV_CACHE_DIR: /tmp/uv_cache
+    XDG_CACHE_HOME: /tmp/.cache
   networks:
     - app-network
-  command: python -m psychoanalyst_app.server
+  command: jung-api
   logging:
     driver: "json-file"
     options:
       max-size: "10m"
       max-file: "3"
   healthcheck:
-    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-    start_period: 40s
-
-x-console-base: &console-base
-  build:
-    context: ./console-ui
-    dockerfile: Dockerfile
-  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-  volumes:
-    - ./console-ui/src:/app/src:delegated
-    - ./console-ui/main.py:/app/main.py:delegated
-    - ./console-ui/scenarios:/app/scenarios:ro
-    - ./data:/app/data
-    - ./logs:/app/logs
-  environment:
-    - PYTHONUNBUFFERED=1
-  networks:
-    - app-network
-  stdin_open: true
-  tty: true
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8000/api/v1/health"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+    start_period: 5s
 
 services:
   api:
     <<: *api-base
-    container_name: psychoanalyst_api
-    env_file:
-      - ${ENV_FILE:-.env}
-
-  console-ui:
-    <<: *console-base
-    container_name: psychoanalyst_console
-    profiles: ["console"]
     environment:
-      - PYTHONUNBUFFERED=1
-      - BACKEND_URL=http://api:8000
-      - WEBSOCKET_URL=http://api:8000
-      - WEBSOCKET_ORIGIN=http://localhost
-      - USER_ID=console_user
-      - AUTH_TOKEN=console_token
-      - CONSOLE_LOG_PATH=/app/logs/console-ui.log
+      <<: *api-environment
+      JUNG_DATA_DIR: /app/data/local
     env_file:
-      - ${ENV_FILE:-.env}
-    depends_on:
-      api:
-        condition: service_healthy
+      - path: ${ENV_FILE:-.env}
+        required: false
+    ports:
+      - "127.0.0.1:8000:8000"
 
   api-usertest:
     <<: *api-base
-    container_name: psychoanalyst_api_usertest
-    profiles: ["usertest-console"]
-    env_file:
-      - .env.usertest
-    ports:
-      - "8001:8000"
-
-  console-ui-usertest:
-    <<: *console-base
-    container_name: psychoanalyst_console_usertest
     profiles: ["usertest-console"]
     environment:
-      - PYTHONUNBUFFERED=1
-      - BACKEND_URL=http://api-usertest:8000
-      - WEBSOCKET_URL=http://api-usertest:8000
-      - WEBSOCKET_ORIGIN=http://localhost
-      - USER_ID=console_user_test
-      - AUTH_TOKEN=console_token_test
-      - CONSOLE_LOG_PATH=/app/logs/console-ui-usertest.log
+      <<: *api-environment
+      JUNG_DATA_DIR: /app/data/usertest
     env_file:
-      - .env.usertest
-    depends_on:
-      api-usertest:
-        condition: service_healthy
+      - path: .env.usertest
+        required: false
+    ports:
+      - "127.0.0.1:8001:8000"
 
   test:
     build:
       context: .
       dockerfile: Dockerfile
       target: development
-    container_name: psychoanalyst_test
     profiles: ["test"]
     volumes:
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
       - ./docs:/app/docs:ro
-      - ./schemas:/app/schemas:ro
-      - ./console-ui:/app/console-ui:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./Makefile:/app/Makefile:ro
       - ./docker-compose.yml:/app/docker-compose.yml:ro
@@ -127,28 +78,31 @@ services:
       - ./pytest.ini:/app/pytest.ini:ro
       - test-data:/app/data
     environment:
-      - APP_ENV=testing
-      - PYTHONPATH=/app/src
-      - PYTHONUNBUFFERED=1
-      - PYTEST_ARGS=${PYTEST_ARGS:-}
-      - RUN_LMSTUDIO_SMOKE=${RUN_LMSTUDIO_SMOKE:-}
-    env_file:
-      - .env.test
-    command: pytest ${PYTEST_ARGS:-tests/}
+      PYTHONPATH: /app/src
+      PYTHONUNBUFFERED: "1"
+    command:
+      - pytest
+      - -o
+      - trio_mode=false
+      - -o
+      - asyncio_mode=auto
+      - -m
+      - "not real_llm"
+      - tests/unit/jung
+      - tests/integration/jung
     networks:
       - app-network
 
   db-viewer:
     image: coleifer/sqlite-web
-    container_name: psychoanalyst_db_viewer
     profiles: ["debug"]
     volumes:
       - ./data:/data:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - app-network
-    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-psychoanalyst.db}"]
+    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-local/jung.db}"]
 
   devcontainer:
     build:
@@ -160,11 +114,9 @@ services:
       - tail
       - -f
       - /dev/null
-    container_name: psychoanalyst_devcontainer
-    environment:
-      SESSION_DURATION_MINUTES: "45"
     env_file:
-      - .env
+      - path: ${ENV_FILE:-.env}
+        required: false
     networks:
       - app-network
     stdin_open: true
@@ -179,4 +131,3 @@ volumes:
 networks:
   app-network:
     driver: bridge
-    name: psychoanalyst_network

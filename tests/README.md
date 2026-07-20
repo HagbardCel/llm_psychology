@@ -1,71 +1,63 @@
-# Therapist Test Suite
+# Jung Target Test Suite
 
-The backend test suite for the therapist app. Everything runs inside Docker
-(see [`AGENTS.md`](../AGENTS.md) for the canonical commands) and uses Trio as
-the async runtime.
+Supported tests for the asyncio Jung runtime. Docker is the canonical
+reproducible workflow; native `uv run pytest` remains supported.
 
 ## Layout
 
 ```
 tests/
-├── conftest.py            # Shared fixtures (settings, DB, mock services)
-├── test_entry_points.py   # Smoke tests for CLI entry points
-├── test_trio_validation.py# Cross-cutting Trio invariants
-├── unit/                  # Pure unit tests (default suite)
-├── integration/           # Cross-component tests against real services
-└── real_llm/              # Tests that hit a real LLM (opt-in only)
+├── conftest.py              # Generic pytest options and collection hooks
+├── unit/jung/               # Deterministic Jung unit tests
+├── integration/jung/        # Jung API / application / store integration tests
+├── smoke/jung/              # Opt-in local-model smoke (make smoke-target-local-llm)
+├── e2e/                     # Deterministic jung-console workflow probe
+├── jung_api_fixtures.py     # Shared API fixtures for probes and e2e
+└── console_probe_support.py # Probe helpers used by jung-console e2e
 ```
 
-- `unit/`: Fast, deterministic, mock-driven tests for individual modules
-  (agents, repos, services, helpers, route handlers). This is the default
-  `make docker-test` suite.
-- `integration/`: Trio-based flows that exercise multiple layers (HTTP API,
-  WebSocket protocol, orchestration, persistence). They use a temp SQLite DB
-  and mocked LLMs.
-- `real_llm/`: Smoke tests that talk to a real model (Gemini, LM Studio, etc.).
-  Skipped by default. Use these only when validating LLM-side behavior.
+Remaining files under `tests/` that target `psychoanalyst_app` are deletion-pending
+legacy coverage retained until Phase 6D and are not part of `make test-target`.
 
-## Running tests (Docker-only)
+## Running tests
+
+Docker-first:
 
 ```bash
-make test-validate                          # Full backend suite (unit + integration)
-make docker-test                            # Same as above
-make docker-test-one TEST=tests/unit/test_foo.py
-docker compose run --rm api pytest tests/unit/test_foo.py::test_bar
+make test-target                            # Complete supported suite
+make test-unit                              # tests/unit/jung + support tests
+make test-integration                       # tests/integration/jung
+make docker-test-one TEST=tests/unit/jung/...
+make probe-console-v1-deterministic         # Deterministic jung-console probe
+make finalization-check                     # Release-candidate gate
 ```
 
-For the supported console frontend and deterministic full-stack probe:
+Bare `docker compose --profile test run test` runs the core Jung unit and
+integration trees (with asyncio overrides). `make test-target` runs the complete
+supported suite, including validator and support tests.
+
+Native alternative (core Jung trees):
 
 ```bash
-make docker-test-one TEST=tests/unit/test_console_client_workflow.py
-make docker-test-one TEST=tests/unit/test_console_workflow_probe.py
-make probe-console-deterministic
+uv run pytest \
+  -o trio_mode=false \
+  -o asyncio_mode=auto \
+  -m "not real_llm" \
+  tests/unit/jung \
+  tests/integration/jung
 ```
 
 ## Conventions
 
-- All async tests use `pytest-trio` (`@pytest.mark.trio`). Do not introduce
-  `asyncio` tests.
-- Each test creates an isolated SQLite database via `tmp_path` fixtures; never
-  mutate `data/*.db` from a test.
-- LLM calls are mocked. Add a `real_llm/` test only when the behavior under
-  test is intrinsic to the model.
-- Markers: `@pytest.mark.unit`, `@pytest.mark.integration`. CI runs unit and
-  integration by default.
-- Keep tests deterministic: avoid wall-clock dependencies, fix random seeds,
-  freeze time when needed.
-
-## Adding new tests
-
-1. Pick the closest existing module under `unit/` or `integration/`.
-2. Reuse fixtures from `conftest.py`; add new ones there if they are shared.
-3. Prefer asserting on observable behavior (DB state, HTTP responses, WS
-   messages) over internal implementation details.
-4. Run `make docker-test-one TEST=...` for fast feedback before
-   `make test-validate`.
+- Target async tests use asyncio (`@pytest.mark.asyncio` / `asyncio_mode=auto`).
+- Prefer asserting on observable behavior (HTTP/WebSocket responses, store state)
+  over internal implementation details.
+- Keep tests deterministic: avoid wall-clock dependencies and live LLM calls in
+  the default suite. Use `tests/smoke/jung/` with `--no-mocks` only when validating
+  a real local model.
 
 ## Related documentation
 
-- [Architecture overview](../docs/ARCHITECTURE.md)
-- [Design principles](../docs/design-principles.md)
-- [HTTP / WebSocket contracts](../docs/contracts/)
+- [AGENTS.md](../AGENTS.md)
+- [Target architecture](../docs/refactor/target-architecture.md)
+- [API v1 contract](../docs/refactor/api-v1-contract.md)

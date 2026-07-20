@@ -271,3 +271,7 @@ def cli() -> None:
         log_level=settings.log_level,
         access_log=False,
     )
+
+
+if __name__ == "__main__":
+    cli()
