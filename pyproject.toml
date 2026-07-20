@@ -56,7 +56,7 @@ select = [
 ]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 32
+max-complexity = 20
 
 [tool.ruff.lint.per-file-ignores]
 "src/jung/api/routes.py" = ["B008"]

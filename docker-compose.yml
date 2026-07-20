@@ -1,6 +1,6 @@
-# Jung Compose stack: runtime API + optional test profile.
-# Usertest isolation uses the same api service with env overrides
-# (see Makefile ui-console-test / COMPOSE_PROJECT_NAME).
+# Jung Compose stack: runtime API packaging only.
+# Manual user testing reuses the single parameterized api service under an
+# isolated Compose project and data directory (see Makefile ui-console-test).
 
 x-api-runtime: &api-runtime
   build:
@@ -44,37 +44,6 @@ services:
         required: false
     ports:
       - "127.0.0.1:${JUNG_API_HOST_PORT:-8000}:8000"
-
-  test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: test
-    profiles: ["test"]
-    volumes:
-      - ./src:/app/src:ro
-      - ./scripts:/app/scripts:ro
-      - ./tests:/app/tests:ro
-      - ./docs:/app/docs:ro
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./uv.lock:/app/uv.lock:ro
-      - ./pytest.ini:/app/pytest.ini:ro
-      - test-data:/app/data
-    environment:
-      PYTHONPATH: /app/src
-      PYTHONUNBUFFERED: "1"
-    command:
-      - pytest
-      - -m
-      - "not real_llm"
-      - tests/unit
-      - tests/integration
-    networks:
-      - app-network
-
-volumes:
-  test-data:
-    driver: local
 
 networks:
   app-network:

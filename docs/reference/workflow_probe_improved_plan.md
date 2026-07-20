@@ -151,7 +151,7 @@ Treat probe artifact fields and LLM phase names as observable probe contracts.
   duration evidence classes, and risk-screen parity.
 - Add console client tests for WebSocket-preferred actions, HTTP fallback, and
   one-shot action idempotency.
-- Run targeted Docker tests with `make docker-test-one TEST=...`.
+- Run targeted tests with `uv run --locked pytest TEST=...`.
 - Run `make probe-console-deterministic`.
 - Run `make finalization-check` if schemas, contracts, or generated artifacts
   change.

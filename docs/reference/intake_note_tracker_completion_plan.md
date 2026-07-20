@@ -671,11 +671,11 @@ All commands should run through the Docker-backed Make targets from `AGENTS.md`;
 During development, run targeted checks plus architecture validation:
 
 ```bash
-make docker-test-one TEST=tests/unit/test_intake_record_models.py
-make docker-test-one TEST=tests/unit/test_intake_record_merge.py
-make docker-test-one TEST=tests/unit/test_intake_record_completeness.py
-make docker-test-one TEST=tests/unit/test_trio_db_service.py
-make docker-test-one TEST=tests/unit/test_trio_intake_agent.py
+uv run --locked pytest tests/unit/test_intake_record_models.py
+uv run --locked pytest tests/unit/test_intake_record_merge.py
+uv run --locked pytest tests/unit/test_intake_record_completeness.py
+uv run --locked pytest tests/unit/test_trio_db_service.py
+uv run --locked pytest tests/unit/test_trio_intake_agent.py
 make validate-architecture
 ```
 

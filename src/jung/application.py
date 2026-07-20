@@ -423,6 +423,52 @@ class TherapyApplication:
             if operation is not None:
                 self._schedule_operation(operation)
 
+    async def _require_generation_available_locked(
+        self,
+        *,
+        retrying_turn_id: UUID | None = None,
+    ) -> None:
+        facts = await self._run_store(self._store.load_snapshot_facts)
+        if facts.chat_turn_status is ChatTurnStatus.PENDING:
+            if retrying_turn_id is None:
+                raise Busy("another chat generation is active")
+            active = await self._run_store(self._store.get_active_chat_turn)
+            if active is not None and active.id != retrying_turn_id:
+                raise Busy("another chat generation is active")
+        if self._generation_lock.locked():
+            raise Busy("another chat generation is active")
+
+    def _accepted_chat_events(
+        self,
+        turn: ChatTurn,
+        snapshot: AppSnapshot,
+        request_id: UUID | None,
+    ) -> list[Any]:
+        return [
+            ChatTurnAccepted(
+                session_id=turn.session_id,
+                turn_id=turn.id,
+                request_id=request_id,
+                turn=turn,
+            ),
+            SnapshotChanged(snapshot),
+        ]
+
+    async def _retry_existing_chat_turn_locked(
+        self,
+        existing: ChatTurn,
+        command: SendMessage,
+    ) -> tuple[ChatTurn, list[Any]]:
+        """Persist a retry after the generation lock has already been reserved."""
+        turn = await self._run_store(
+            self._store.retry_chat_turn,
+            existing.id,
+            expected_revision=command.expected_revision,
+            now=self._now(),
+        )
+        snapshot = await self._assemble_snapshot_locked()
+        return turn, self._accepted_chat_events(turn, snapshot, command.request_id)
+
     async def submit_message(self, command: SendMessage) -> ChatTurn:
         self._reject_if_shutdown()
         generation_reserved = False
@@ -445,15 +491,9 @@ class TherapyApplication:
                     if existing.status is ChatTurnStatus.FAILED:
                         if not existing.retryable:
                             raise StoredWorkFailure.from_chat_turn(existing)
-                        facts = await self._run_store(self._store.load_snapshot_facts)
-                        if facts.chat_turn_status is ChatTurnStatus.PENDING:
-                            active = await self._run_store(
-                                self._store.get_active_chat_turn
-                            )
-                            if active is not None and active.id != existing.id:
-                                raise Busy("another chat generation is active")
-                        if self._generation_lock.locked():
-                            raise Busy("another chat generation is active")
+                        await self._require_generation_available_locked(
+                            retrying_turn_id=existing.id,
+                        )
                         if not await self._chat_retry_structurally_eligible(existing):
                             raise StoredWorkFailure(
                                 code=existing.error_code or "operation_failed",
@@ -462,29 +502,17 @@ class TherapyApplication:
                             )
                         await self._reserve_generation_lock()
                         generation_reserved = True
-                        turn = await self._run_store(
-                            self._store.retry_chat_turn,
-                            existing.id,
-                            expected_revision=command.expected_revision,
-                            now=self._now(),
+                        (
+                            turn,
+                            pending_events,
+                        ) = await self._retry_existing_chat_turn_locked(
+                            existing,
+                            command,
                         )
-                        snapshot = await self._assemble_snapshot_locked()
-                        pending_events = [
-                            ChatTurnAccepted(
-                                session_id=turn.session_id,
-                                turn_id=turn.id,
-                                request_id=command.request_id,
-                                turn=turn,
-                            ),
-                            SnapshotChanged(snapshot),
-                        ]
 
                 if turn is None:
+                    await self._require_generation_available_locked()
                     facts = await self._run_store(self._store.load_snapshot_facts)
-                    if facts.chat_turn_status is ChatTurnStatus.PENDING:
-                        raise Busy("another chat generation is active")
-                    if self._generation_lock.locked():
-                        raise Busy("another chat generation is active")
                     workflow.require_command_allowed(CommandName.SEND_MESSAGE, facts)
                     if not command.content.strip():
                         raise InvalidCommand("message content must be non-empty")
@@ -503,15 +531,11 @@ class TherapyApplication:
                         now=self._now(),
                     )
                     snapshot = await self._assemble_snapshot_locked()
-                    pending_events = [
-                        ChatTurnAccepted(
-                            session_id=turn.session_id,
-                            turn_id=turn.id,
-                            request_id=command.request_id,
-                            turn=turn,
-                        ),
-                        SnapshotChanged(snapshot),
-                    ]
+                    pending_events = self._accepted_chat_events(
+                        turn,
+                        snapshot,
+                        command.request_id,
+                    )
         except asyncio.CancelledError:
             if generation_reserved:
                 if turn is not None:

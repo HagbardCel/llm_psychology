@@ -1,8 +1,8 @@
 .PHONY: help sync format format-check lint test probe-console smoke-compose-api \
-	smoke-local-llm typecheck run-api run-console validate-docs finalization-check \
-	prepare-runtime-dirs docker-build docker-up docker-down docker-test docker-test-one \
+	smoke-local-llm run-api run-console validate-docs finalization-check \
+	prepare-runtime-dirs docker-build docker-up docker-down \
 	docker-shell docker-logs docker-clean ui-console ui-console-test check-usertest-env \
-	install-hooks clean hook-commit hook-push
+	install-hooks clean hook-commit hook-push test-unit test-integration
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
@@ -27,7 +27,7 @@ help:
 	@echo "  smoke-compose-api    - runtime-image Compose health smoke"
 	@echo ""
 	@echo "Docker packaging helpers:"
-	@echo "  docker-build docker-up docker-down docker-test docker-shell"
+	@echo "  docker-build docker-up docker-down docker-shell docker-clean"
 
 prepare-runtime-dirs:
 	@mkdir -p data logs logs/workflow-probes
@@ -57,8 +57,6 @@ probe-console: prepare-runtime-dirs
 	PROBE_OUTPUT_DIR="$(PROBE_ABS_OUTPUT_DIR)" \
 		uv run --locked pytest $(CONSOLE_E2E_TEST) -v
 
-probe-console-v1-deterministic: probe-console
-
 validate-docs:
 	uv run --locked python scripts/validate_docs_metadata.py
 
@@ -67,13 +65,6 @@ run-api:
 
 run-console:
 	uv run --locked jung-console --api-url http://127.0.0.1:8000
-
-# Type-checking policy: mypy removed (see refactor-completion.md). Target kept
-# so callers fail with a clear message rather than silently succeeding.
-typecheck:
-	@echo "mypy is not part of the project type-checking policy."
-	@echo "See docs/refactor/refactor-completion.md."
-	@exit 1
 
 smoke-compose-api: prepare-runtime-dirs
 	@set -eu; \
@@ -106,8 +97,6 @@ smoke-local-llm:
 		-o asyncio_mode=strict \
 		$(LOCAL_LLM_SMOKE_PYTEST_ARGS)
 
-smoke-target-local-llm: smoke-local-llm
-
 # Final native-first gate. Compose smoke is the only Docker-required step.
 finalization-check: prepare-runtime-dirs
 	uv sync --locked
@@ -127,12 +116,6 @@ docker-up: prepare-runtime-dirs
 docker-down:
 	docker compose down
 
-docker-test: prepare-runtime-dirs
-	docker compose --profile test run --rm --no-deps test
-
-docker-test-one: prepare-runtime-dirs
-	docker compose --profile test run --rm --no-deps test pytest $(TEST)
-
 docker-shell:
 	docker compose exec api bash
 
@@ -142,12 +125,9 @@ docker-logs:
 docker-clean:
 	docker compose down --volumes --rmi local
 
-# Convenience aliases
-install: docker-build
-dev-install: docker-build
-run-server: docker-up
 test-unit:
 	uv run --locked pytest tests/unit
+
 test-integration:
 	uv run --locked pytest tests/integration
 

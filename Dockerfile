@@ -1,4 +1,4 @@
-# Multi-stage build: lean runtime + development/test images.
+# Runtime-only packaging image for jung-api.
 # Uses uv for locked, non-editable installs.
 
 FROM python:3.11-slim AS base
@@ -35,28 +35,3 @@ RUN mkdir -p /app/data
 VOLUME /app/data
 
 CMD ["jung-api"]
-
-# ============================================
-# Test / development: include tools and sources
-# ============================================
-FROM base AS test
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml uv.lock README.md pytest.ini ./
-COPY src/ ./src/
-COPY scripts/ ./scripts/
-COPY tests/ ./tests/
-COPY docs/ ./docs/
-COPY Makefile docker-compose.yml Dockerfile ./
-
-RUN uv sync --locked \
-    && mkdir -p /app/data
-
-VOLUME /app/data
-
-CMD ["pytest", "-m", "not real_llm", "tests/unit", "tests/integration"]

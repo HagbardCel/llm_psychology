@@ -23,28 +23,27 @@
 ## Command Execution
 
 Native `uv` is the canonical local workflow. Docker is used for packaging and
-CI parity, not as a requirement for day-to-day development.
+runtime smoke, not as a requirement for day-to-day development.
 
 Canonical native workflow:
 
 ```bash
 uv sync --locked
-uv run jung-api
-uv run jung-console --api-url http://127.0.0.1:8000
-uv run pytest -m "not real_llm" tests/unit tests/integration
+uv run --locked jung-api
+uv run --locked jung-console --api-url http://127.0.0.1:8000
+uv run --locked pytest -m "not real_llm" tests/unit tests/integration
 ```
 
 Equivalent `make` targets: `make sync`, `make run-api`, `make run-console`,
 `make test`.
 
-Docker packaging/CI helpers:
+Docker packaging helpers:
 
-- Build images: `make dev-install`
-- Start backend: `make docker-up` (or `make run-server`)
+- Build runtime image: `make docker-build`
+- Start backend: `make docker-up`
 - Backend shell: `make docker-shell`
-- One-off backend command: `docker compose run --rm api <command>`
 - Supported frontend: `make ui-console` (`jung-console`)
-- Manual usertest: `make ui-console-test`
+- Manual usertest: `make ui-console-test` (parameterized `api` service)
 
 ## Tests
 
@@ -54,8 +53,7 @@ there are no separate Phase-numbered validator scripts.
 - Default suite: `make test` (`tests/unit` + `tests/integration`, not `real_llm`)
 - Unit: `make test-unit`
 - Integration: `make test-integration`
-- Single path: `make docker-test-one TEST=tests/unit/jung/...` (or
-  `uv run pytest tests/unit/jung/...` natively)
+- Single path: `uv run --locked pytest tests/unit/jung/...`
 - Deterministic console probe: `make probe-console` (E2E once; not part of `make test`)
 - Release-candidate validation: `make finalization-check`
 
@@ -87,5 +85,5 @@ Do not hide workflow, LLM, persistence, protocol, or contract failures behind fa
 ## Version Control Guidelines
 - Branch from `main` using `feat/<topic>` or `fix/<topic>`.
 - Keep commits small and scoped; use conventional prefixes (`feat:`, `fix:`, `docs:`).
-- Run `make test` (or `uv run pytest -m "not real_llm" tests/unit tests/integration`) before committing.
+- Run `make test` (or `uv run --locked pytest -m "not real_llm" tests/unit tests/integration`) before committing.
 - Avoid force pushes to shared branches; rebase only on local branches.

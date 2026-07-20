@@ -26,15 +26,15 @@ run separately via `make probe-console`.
 make test                                   # unit + integration (not real_llm)
 make test-unit
 make test-integration
-make docker-test-one TEST=tests/unit/jung/...
 make probe-console                          # Deterministic jung-console E2E once
 make finalization-check                     # Release gate (format/lint/docs/test/probe/compose)
 ```
 
-Native alternative:
+Native equivalent:
 
 ```bash
 uv run --locked pytest -m "not real_llm" tests/unit tests/integration
+uv run --locked pytest tests/unit/jung/...
 ```
 
 ## Conventions

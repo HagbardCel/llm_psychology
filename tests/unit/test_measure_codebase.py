@@ -154,20 +154,59 @@ def test_measure_excludes_uv_lock_and_fails_on_missing_tracked(
 ) -> None:
     _init_repo(tmp_path)
     (tmp_path / "src/jung").mkdir(parents=True)
-    (tmp_path / "src/jung/__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "uv.lock").write_text("x\n" * 100, encoding="utf-8")
+    (tmp_path / "src/jung/__init__.py").write_text("PACKAGE = 1\n", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname="jung"\ndependencies=[]\n', encoding="utf-8"
     )
-    _commit_all(tmp_path)
-    metrics = measure(tmp_path)
-    assert metrics["uv_lock_present"] is True
-    # 100 lines in uv.lock must not be in authored LOC
-    assert metrics["tracked_authored_text_physical_loc"] < 50
+    _commit_all(tmp_path, "before lock")
+    before = measure(tmp_path)
+    assert before["uv_lock_present"] is False
+
+    (tmp_path / "uv.lock").write_text("x\n" * 100, encoding="utf-8")
+    _commit_all(tmp_path, "add generated lock")
+    after = measure(tmp_path)
+    assert after["uv_lock_present"] is True
+    assert after["tracked_authored_file_count"] == before["tracked_authored_file_count"]
+    assert (
+        after["tracked_authored_text_physical_loc"]
+        == before["tracked_authored_text_physical_loc"]
+    )
 
     (tmp_path / "src/jung/__init__.py").unlink()
     with pytest.raises(MeasurementError, match="tracked path missing"):
         measure(tmp_path)
+
+
+def test_measure_jung_hybrid_excludes_generated_requirements(tmp_path: Path) -> None:
+    """Phase 6 hybrid: Jung layout + generated requirements, no uv.lock."""
+    _init_repo(tmp_path)
+    (tmp_path / "src/jung").mkdir(parents=True)
+    (tmp_path / "src/jung/__init__.py").write_text("PACKAGE = 1\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="jung"\ndependencies=["fastapi"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements-dev.in").write_text(
+        "pytest\nruff\nblack\n",
+        encoding="utf-8",
+    )
+    _commit_all(tmp_path, "hybrid before generated")
+    before = measure(tmp_path)
+    assert before["layout"] == "jung"
+    assert before["uv_lock_present"] is False
+    assert before["development_dependency_count"] == 3
+    before_files = before["tracked_authored_file_count"]
+    before_loc = before["tracked_authored_text_physical_loc"]
+
+    (tmp_path / "requirements.txt").write_text("fastapi==1\n" * 80, encoding="utf-8")
+    (tmp_path / "requirements-dev.txt").write_text("pytest==1\n" * 80, encoding="utf-8")
+    _commit_all(tmp_path, "add generated requirements")
+    after = measure(tmp_path)
+    assert after["layout"] == "jung"
+    assert after["uv_lock_present"] is False
+    assert after["development_dependency_count"] == 3
+    assert after["tracked_authored_file_count"] == before_files
+    assert after["tracked_authored_text_physical_loc"] == before_loc
 
 
 def test_jung_route_detector_ignores_ordinary_get_calls(tmp_path: Path) -> None:
@@ -230,42 +269,65 @@ def test_legacy_layout_blueprint_routes_and_dev_requirements(tmp_path: Path) -> 
         "-r requirements.in\nblack\nruff\npytest\n",
         encoding="utf-8",
     )
-    (tmp_path / "requirements.txt").write_text("trio==1\n", encoding="utf-8")
-    _commit_all(tmp_path)
+    _commit_all(tmp_path, "legacy before generated")
+    before = measure(tmp_path)
+    assert before["layout"] == "legacy"
+    assert before["backend_python_files"] == 3
+    assert before["client_python_files"] == 1
+    assert before["api_route_count"] == 2
+    assert before["websocket_endpoint_count"] == 1
+    assert before["legacy_workflow_representation_definitions"] == 2
+    assert before["stage_enum_definitions"] == 0
+    assert before["runtime_dependency_count"] == 2
+    assert before["development_dependency_count"] == 3
+    assert before["uv_lock_present"] is False
+    before_files = before["tracked_authored_file_count"]
+    before_loc = before["tracked_authored_text_physical_loc"]
 
-    metrics = measure(tmp_path)
-    assert metrics["layout"] == "legacy"
-    assert metrics["backend_python_files"] == 3
-    assert metrics["client_python_files"] == 1
-    assert metrics["api_route_count"] == 2
-    assert metrics["websocket_endpoint_count"] == 1
-    assert metrics["legacy_workflow_representation_definitions"] == 2
-    assert metrics["stage_enum_definitions"] == 0
-    assert metrics["runtime_dependency_count"] == 2
-    assert metrics["development_dependency_count"] == 3
-    assert metrics["uv_lock_present"] is False
-    # generated requirements.txt excluded from authored count
-    authored = metrics["tracked_authored_file_count"]
-    assert Path("requirements.txt").as_posix() not in {
-        # soft check via remeasure after deleting generated file from index isn't needed;
-        # authored count should be less than total tracked text-ish files
-        "x"
-    }
-    assert authored >= 5
+    (tmp_path / "requirements.txt").write_text("trio==1\n" * 50, encoding="utf-8")
+    (tmp_path / "requirements-dev.txt").write_text("black==1\n" * 50, encoding="utf-8")
+    _commit_all(tmp_path, "add generated requirements")
+    after = measure(tmp_path)
+    assert after["tracked_authored_file_count"] == before_files
+    assert after["tracked_authored_text_physical_loc"] == before_loc
+    assert after["development_dependency_count"] == 3
+
+
+# Accepted Phase 7 closure values. Product changes that intentionally alter
+# routes, dependencies, or contract members must update this baseline.
+ACCEPTED_EXACT = {
+    "layout": "jung",
+    "uv_lock_present": True,
+    "runtime_dependency_count": 7,
+    "development_dependency_count": 3,
+    "trio_importing_production_modules": 0,
+    "legacy_namespace_importing_modules": 0,
+    "api_route_count": 11,
+    "websocket_endpoint_count": 1,
+    "stage_enum_definitions": 1,
+    "stage_member_count": 7,
+    "command_name_definitions": 1,
+    "command_name_member_count": 6,
+    "legacy_workflow_representation_definitions": 0,
+    "public_concrete_store_implementations": 1,
+}
+
+# Aggregate refactor-closure maxima — not per-module line-budget rules.
+# Values filled after final staged remasure; keep as placeholders until then.
+MAXIMUMS = {
+    "backend_python_physical_loc": 10_637,
+    "tracked_authored_text_physical_loc": 43_738,
+    "tracked_authored_file_count": 220,
+}
 
 
 def test_measure_current_repository() -> None:
     root = Path(__file__).resolve().parents[2]
     metrics = measure(root)
-    assert metrics["layout"] == "jung"
-    assert metrics["backend_python_files"] > 0
-    assert metrics["client_python_files"] > 0
-    assert metrics["api_route_count"] >= 1
-    assert metrics["websocket_endpoint_count"] >= 1
-    assert metrics["stage_enum_definitions"] == 1
-    assert metrics["command_name_definitions"] == 1
-    assert metrics["public_concrete_store_implementations"] == 1
-    assert metrics["legacy_workflow_representation_definitions"] == 0
+    for key, expected in ACCEPTED_EXACT.items():
+        assert metrics[key] == expected, f"{key}: {metrics[key]!r} != {expected!r}"
+    for key, maximum in MAXIMUMS.items():
+        assert metrics[key] <= maximum, f"{key}: {metrics[key]} > {maximum}"
 
 
 def test_cli_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -26,14 +26,14 @@ The script:
 - requires a Git worktree and uses `git ls-files` as the authoritative file set;
 - auto-selects `LEGACY_LAYOUT` (`src/psychoanalyst_app` + `console-ui`) or
   `JUNG_LAYOUT` (`src/jung`, client under `src/jung/client`);
-- counts **tracked authored text** (UTF-8, no NUL) excluding exact generated paths
-  (`requirements.txt` / `requirements-dev.txt` for legacy; `uv.lock` for Jung);
+- counts **tracked authored text** (UTF-8, no NUL) excluding layout-independent
+  generated paths (`uv.lock`, `requirements.txt`, `requirements-dev.txt`);
 - reports category-specific **Python** LOC for backend, client, tests, and scripts;
 - counts HTTP/WebSocket routes via decorator-aware AST detection (not generic
   `.get` / `.route` method calls);
 - reads runtime deps from `[project].dependencies`;
-- reads development deps from `requirements-dev.in` (legacy / Phase 6) or
-  `[dependency-groups].dev` (Phase 7+).
+- reads development deps from `[dependency-groups].dev` when present, otherwise
+  `requirements-dev.in`.
 
 Historical trees must be measured with **this** script via temporary worktrees so
 Phase 1, Phase 6, and Phase 7 numbers remain comparable.
@@ -51,14 +51,14 @@ Phase 1, Phase 6, and Phase 7 numbers remain comparable.
 | Metric | Phase 1 start | Phase 6 cutover | Phase 7 final |
 | --- | ---: | ---: | ---: |
 | Backend Python files | 133 | 57 | 58 |
-| Backend Python physical LOC | 22,919 | 10,612 | 10,597 |
-| Backend Python code LOC | 17,920 | 8,961 | 8,941 |
+| Backend Python physical LOC | 22,919 | 10,612 | 10,637 |
+| Backend Python code LOC | 17,920 | 8,961 | 8,974 |
 | Client Python files | 17 | 6 | 6 |
 | Client Python physical LOC | 5,202 | 2,311 | 2,282 |
-| Test Python physical LOC | 22,092 | 23,657 | 23,062 |
+| Test Python physical LOC | 22,092 | 23,657 | 23,124 |
 | Script Python physical LOC | 1,504 | 2,766 | 1,372 |
-| Tracked authored text physical LOC | 64,895 | 61,131 | 43,926 |
-| Tracked authored file count | 323 | 258 | 220 |
+| Tracked authored text physical LOC | 64,895 | 60,933 | 43,738 |
+| Tracked authored file count | 323 | 256 | 220 |
 | `uv_lock_present` | false | false | true |
 | Runtime dependency count | 15 | 10 | 7 |
 | Development dependency count | 6 | 5 | 3 |
@@ -83,9 +83,9 @@ the intended final tree (see acceptance notes below).
 Static typing enforcement was dropped rather than adopted project-wide.
 Running mypy with `disallow_untyped_defs` against the Phase 7 tree surfaced 69
 errors, disproportionate to the value of introducing and maintaining a new
-type-checking gate this late in the refactor. `make typecheck` remains as an
-explicit failing target so callers get a clear message instead of silent
-success; it is not part of `make test` or `make finalization-check`.
+type-checking gate this late in the refactor. mypy and the `typecheck` Make
+target were removed. Ruff enforces a production McCabe threshold of 20; the
+final tree has zero production `C901` violations.
 
 ### Worker extraction skipped (optional)
 
@@ -104,11 +104,14 @@ not this document's pre-merge gate run alone.
 
 ## Notes
 
-- Backend physical LOC fell from 22,919 to 10,597 (~53.8%), meeting the ≥40%
+- Backend physical LOC fell from 22,919 to 10,637 (~53.6%), meeting the ≥40%
   backend reduction target.
-- Tracked authored text fell from 64,895 to 43,926 (~32.3%). That is slightly
+- Tracked authored text fell from 64,895 to 43,738 (~32.6%). That is slightly
   below the approximate 35–45% repository target because meaningful Jung
   integration, API, and console coverage was retained rather than cut for the
   metric. Architectural invariants take precedence over forcing the percentage.
+- Phase 6 authored-text and file-count figures exclude generated
+  `requirements.txt` / `requirements-dev.txt` under the Jung layout (layout-
+  independent generated-path handling).
 - Older Phase 1 tables in Git history used a different measurement
   implementation and are not directly comparable to this table.

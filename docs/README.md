@@ -52,34 +52,18 @@ make test
 make test-unit
 make test-integration
 make probe-console
-make docker-test-one TEST=tests/unit/jung/test_workflow.py
 ```
 
-Equivalent direct pytest-in-Docker form:
+Native equivalent:
 
 ```bash
-docker compose --profile test run --rm test pytest tests/unit/jung/test_workflow.py
+uv run --locked pytest -m "not real_llm" tests/unit tests/integration
 ```
 
-### Real LLM Tests
-Real LLM tests are marked `real_llm` and are skipped unless pytest receives
-`--no-mocks`. Use this only when the required API keys or local model servers
-are available:
-
-```bash
-docker compose --profile test run --rm test pytest -m real_llm --no-mocks
-```
-
-For a single real-LLM test through the Makefile, include `--no-mocks` in `TEST`:
-
-```bash
-make docker-test-one TEST="tests/smoke/jung/test_local_llm.py --no-mocks"
-```
-
-### Local LM Studio Smoke Test
-The local-model smoke is intentionally opt-in via `make smoke-local-llm`.
-Start an OpenAI-compatible server on the host, set the `LOCAL_LLM_SMOKE_*` /
-`LOCAL_LLM_*` environment variables as needed, then run:
+### Local-model smoke
+Real LLM / local-model smoke is intentionally opt-in via `make smoke-local-llm`.
+Start an OpenAI-compatible server on the host, set the `LOCAL_LLM_SMOKE_*`
+environment variables as needed, then run:
 
 ```bash
 make smoke-local-llm

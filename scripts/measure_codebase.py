@@ -17,8 +17,16 @@ import sys
 import tokenize
 import tomllib
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
+GENERATED_PATHS = frozenset(
+    {
+        Path("uv.lock"),
+        Path("requirements.txt"),
+        Path("requirements-dev.txt"),
+    }
+)
 
 HTTP_ROUTE_ATTRS = frozenset(
     {"get", "post", "put", "patch", "delete", "options", "head", "api_route"}
@@ -77,7 +85,6 @@ class MeasurementLayout:
     backend_roots: tuple[Path, ...]
     client_roots: tuple[Path, ...]
     backend_exclusions: tuple[Path, ...] = ()
-    generated_paths: frozenset[Path] = field(default_factory=frozenset)
     route_profile: str = "jung"
 
 
@@ -85,12 +92,6 @@ LEGACY_LAYOUT = MeasurementLayout(
     name="legacy",
     backend_roots=(Path("src/psychoanalyst_app"),),
     client_roots=(Path("console-ui"),),
-    generated_paths=frozenset(
-        {
-            Path("requirements.txt"),
-            Path("requirements-dev.txt"),
-        }
-    ),
     route_profile="legacy",
 )
 
@@ -99,7 +100,6 @@ JUNG_LAYOUT = MeasurementLayout(
     backend_roots=(Path("src/jung"),),
     backend_exclusions=(Path("src/jung/client"),),
     client_roots=(Path("src/jung/client"),),
-    generated_paths=frozenset({Path("uv.lock")}),
     route_profile="jung",
 )
 
@@ -214,8 +214,8 @@ def _is_known_binary(path: Path) -> bool:
     return name.endswith(".tar.gz") or name.endswith(".tar.bz2")
 
 
-def _is_authored_text(root: Path, rel: Path, layout: MeasurementLayout) -> bool:
-    if rel in layout.generated_paths:
+def _is_authored_text(root: Path, rel: Path) -> bool:
+    if rel in GENERATED_PATHS:
         return False
     if _is_known_binary(rel):
         return False
@@ -500,7 +500,7 @@ def measure(root: Path) -> dict[str, object]:
     tracked = _tracked_paths(root)
     layout = _detect_layout(root, tracked)
 
-    authored = [path for path in tracked if _is_authored_text(root, path, layout)]
+    authored = [path for path in tracked if _is_authored_text(root, path)]
     authored_loc = sum(_physical_lines(_read_text(root, path)) for path in authored)
 
     backend_py = _python_category_paths(

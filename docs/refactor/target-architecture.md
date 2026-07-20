@@ -436,9 +436,13 @@ Docker packages the system but does not define internal boundaries.
 
 Target Compose services:
 
-- `api` — default Jung API service
-- `api-usertest` — same Jung API build target and runtime implementation with an isolated `JUNG_DATA_DIR` (`/app/data/usertest`) under the `usertest-console` profile
+- `api` — single Jung API service definition
 - `web` when implemented
+
+Manual user testing reuses the single parameterized `api` service under an
+isolated Compose project and data directory (`make ui-console-test`: separate
+Compose project, host port `8001`, `.env.usertest`, `/app/data/usertest`). No
+duplicate Compose service is defined.
 
 Native development must remain supported:
 
