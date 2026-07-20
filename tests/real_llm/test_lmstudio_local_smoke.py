@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 
 import pytest
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.services.llm_phases import THERAPY_RESPONSE
 
 pytestmark = [pytest.mark.real_llm]

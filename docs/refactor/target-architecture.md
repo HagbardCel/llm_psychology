@@ -1,14 +1,15 @@
 ---
 owner: engineering
-status: supporting
-last_reviewed: 2026-07-11
+status: active
+last_reviewed: 2026-07-20
 review_cycle_days: 30
-source_of_truth_for: Planned target architecture for the single-user simplification refactor
+source_of_truth_for: Supported architecture for the single-user Jung runtime
 ---
 
 # Target Architecture
 
-> Planning document. This describes the intended post-refactor system, not the current implementation. Current behavior remains governed by `docs/design-principles.md` and the other active canonical documents until cutover.
+> This document governs the supported Phase 6C Jung runtime. It defines the
+> architecture, dependency direction, and runtime boundaries for current work.
 
 ## Goals
 
@@ -72,7 +73,7 @@ clients → API contracts → API adapter → application → store / LLM ports
 
 The application and phase packages must not import API or client packages.
 
-## Proposed package structure
+## Supported package structure
 
 ```text
 src/jung/
@@ -352,7 +353,7 @@ Use HTTP for commands and snapshots and WebSocket for chat streaming and state/o
 
 Use explicit SQL behind one concrete `SQLiteStore`. Avoid an ORM, repository-per-table hierarchy, connection pool abstraction, migration compatibility layer, and transitional database facade.
 
-Proposed tables:
+Supported tables:
 
 - `app_state`
 - `profile`

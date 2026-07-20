@@ -8,8 +8,8 @@ from datetime import datetime
 
 import pytest
 import trio
-
 from psychoanalyst_app.container.service_container import ServiceContainer
+
 from psychoanalyst_app.models.domain import UserProfile, UserStatus
 from psychoanalyst_app.orchestration.conversation_rag import retrieve_rag_context
 from psychoanalyst_app.orchestration.models import WorkflowState

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 import trio
-
 from psychoanalyst_app.trio_server import TrioServer
 
 

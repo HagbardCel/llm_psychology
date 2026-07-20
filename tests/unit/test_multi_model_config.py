@@ -1,8 +1,9 @@
 """Tests for multi-model configuration support."""
 
 
-from psychoanalyst_app.config import Settings
 from psychoanalyst_app.container.service_container import ServiceContainer
+
+from psychoanalyst_app.config import Settings
 
 
 def _clear_agent_model_env(monkeypatch):

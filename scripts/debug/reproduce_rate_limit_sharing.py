@@ -1,7 +1,7 @@
 import trio
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.container.service_container import ServiceContainer
 
 
 async def main():

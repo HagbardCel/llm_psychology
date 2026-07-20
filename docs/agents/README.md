@@ -1,12 +1,14 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-05-31
+status: supporting
+last_reviewed: 2026-07-20
 review_cycle_days: 90
 source_of_truth_for: Agent responsibilities, workflow routing, and orchestration integration contract
 ---
 
 # Agent Documentation
+
+> Legacy supporting reference. This document does not describe the supported Phase 6C runtime. See the [target architecture](../refactor/target-architecture.md), [API v1 contract](../refactor/api-v1-contract.md), and [workflow specification](../refactor/workflow-specification.md). It remains temporarily available pending the Phase 7 documentation rewrite.
 
 This section documents each agent's contract, triggers, and responsibilities.
 It is intended to be the authoritative reference for how agent logic fits into

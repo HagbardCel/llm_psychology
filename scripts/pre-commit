@@ -23,7 +23,4 @@ run() {
 git diff --cached --check
 run "lint" make hook-commit
 if grep -q '^docs/' <<<"$paths"; then run "documentation" make validate-docs; fi
-if grep -Eq '(^schemas/|ws_protocol|TYPE_SYSTEM|models/http|generate_ws_protocol)' <<<"$paths"; then
-  run "generated contracts" make validate-generated-contracts
-fi
 if [ "${HOOK_FULL:-0}" = "1" ]; then run "full finalization" make finalization-check; fi

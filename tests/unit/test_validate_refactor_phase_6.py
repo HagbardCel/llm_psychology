@@ -152,8 +152,11 @@ def _compose_fixture(
         '  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"\n'
         "  volumes:\n"
         "    - ./src:/app/src:delegated\n"
-        "  environment:\n"
-        "    - APP_ENV=development\n"
+        "  environment: &api-environment\n"
+        "    PYTHONUNBUFFERED: \"1\"\n"
+        "    JUNG_API_HOST: 0.0.0.0\n"
+        "    JUNG_API_PORT: \"8000\"\n"
+        "    JUNG_API_ALLOW_REMOTE_BIND: \"true\"\n"
         "  networks:\n"
         "    - app-network\n"
         f"  command: {command}\n"
@@ -162,15 +165,31 @@ def _compose_fixture(
         "    options:\n"
         '      max-size: "10m"\n'
         "  healthcheck:\n"
-        '    test: ["CMD", "wget"]\n'
+        '    test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8000/api/v1/health"]\n'
         "    interval: 30s\n"
         "services:\n"
         "  api:\n"
         "    <<: *api-base\n"
         "    container_name: psychoanalyst_api\n"
+        "    environment:\n"
+        "      <<: *api-environment\n"
+        "      JUNG_DATA_DIR: /app/data/local\n"
         "    env_file:\n"
         "      - ${ENV_FILE:-.env}\n"
+        "    ports:\n"
+        '      - "127.0.0.1:8000:8000"\n'
         f"{api_extra}"
+        "  api-usertest:\n"
+        "    <<: *api-base\n"
+        "    container_name: psychoanalyst_api_usertest\n"
+        '    profiles: ["usertest-console"]\n'
+        "    environment:\n"
+        "      <<: *api-environment\n"
+        "      JUNG_DATA_DIR: /app/data/usertest\n"
+        "    env_file:\n"
+        "      - .env.usertest\n"
+        "    ports:\n"
+        '      - "127.0.0.1:8001:8000"\n'
         "  test:\n"
         "    profiles: [\"test\"]\n"
         "    build:\n"
@@ -179,6 +198,10 @@ def _compose_fixture(
         "      target: development\n"
         f"{test_extra}"
         "    command: pytest\n"
+        "  db-viewer:\n"
+        "    image: coleifer/sqlite-web\n"
+        "    ports:\n"
+        '      - "127.0.0.1:8080:8080"\n'
     )
 
 _DF_LEGACY = "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"python\", \"-m\", \"psychoanalyst_app.server\"]\n"
@@ -198,7 +221,15 @@ _DF_DUP_STAGE = (
     "FROM python:3.11-slim AS base\nFROM base AS development\nCMD [\"jung-api\"]\n"
     "FROM other AS development\nCMD [\"other\"]\n"
 )
-_CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server")
+_CP_LEGACY = _compose_fixture("python -m psychoanalyst_app.server").replace(
+    "  environment: &api-environment\n"
+    '    PYTHONUNBUFFERED: "1"\n'
+    "    JUNG_API_HOST: 0.0.0.0\n"
+    '    JUNG_API_PORT: "8000"\n'
+    '    JUNG_API_ALLOW_REMOTE_BIND: "true"\n',
+    "  environment:\n    - APP_ENV=development\n",
+    1,
+)
 _CP_TARGET = _compose_fixture("jung-api")
 
 
@@ -592,6 +623,70 @@ def test_compose_runtime(repo, stage, dockerfile, compose, ok, err):
     repo.write_runtime(target=stage != "pre-cutover", dockerfile=dockerfile, compose=compose)
     errors = validate(repo.root, stage=stage)
     assert (errors == []) if ok else any(err in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "compose,fragment",
+    [
+        pytest.param(
+            _CP_TARGET.replace("    JUNG_API_HOST: 0.0.0.0\n", ""),
+            "x-api-base environment must have exactly one JUNG_API_HOST",
+            id="missing_jung_api_host",
+        ),
+        pytest.param(
+            _CP_TARGET.replace(
+                "      JUNG_DATA_DIR: /app/data/local\n",
+                "      JUNG_DATA_DIR: /app/data/wrong\n",
+            ),
+            "services.api environment.JUNG_DATA_DIR must be '/app/data/local'",
+            id="wrong_data_dir",
+        ),
+        pytest.param(
+            _CP_TARGET.replace(
+                '"127.0.0.1:8000:8000"', '"0.0.0.0:8000:8000"', 1
+            ),
+            "services.api.ports must include",
+            id="wrong_port_binding",
+        ),
+        pytest.param(
+            _CP_TARGET.replace(
+                '"http://localhost:8000/api/v1/health"',
+                '"http://localhost:8000/health"',
+                1,
+            ),
+            "x-api-base healthcheck.test must be",
+            id="wrong_healthcheck",
+        ),
+        pytest.param(
+            _CP_TARGET.replace('    profiles: ["usertest-console"]\n', "", 1),
+            "services.api-usertest must have exactly one profiles",
+            id="missing_usertest_profiles",
+        ),
+        pytest.param(
+            _CP_TARGET.replace(
+                '    PYTHONUNBUFFERED: "1"\n',
+                '    PYTHONUNBUFFERED: "1"\n    APP_ENV: development\n',
+                1,
+            ),
+            "x-api-base environment must not declare APP_ENV",
+            id="app_env_on_base",
+        ),
+        pytest.param(
+            _CP_TARGET.replace(
+                '    PYTHONUNBUFFERED: "1"\n',
+                '    PYTHONUNBUFFERED: "1"\n    SERVER_HOST: 0.0.0.0\n',
+                1,
+            ),
+            "x-api-base environment must not declare SERVER_HOST",
+            id="server_host_on_base",
+        ),
+    ],
+)
+def test_target_compose_structure_contracts(repo, compose, fragment):
+    repo.seed_cutover(complete=True)
+    repo.write_runtime(target=True, compose=compose)
+    assert any(fragment in error for error in validate(repo.root, stage="cutover"))
+
 
 @pytest.mark.parametrize(
     "compose,frag",

@@ -87,6 +87,9 @@ FORBIDDEN_API_BASE_KEYS = frozenset({
     "entrypoint", "image", "extends", "profiles", "deploy", "scale",
 })
 FORBIDDEN_API_LOCAL_KEYS = FORBIDDEN_API_BASE_KEYS | frozenset({"command", "build"})
+FORBIDDEN_API_USERTEST_LOCAL_KEYS = (
+    FORBIDDEN_API_BASE_KEYS - frozenset({"profiles"})
+) | frozenset({"command", "build"})
 FORBIDDEN_TEST_SERVICE_KEYS = frozenset({"entrypoint", "image", "extends"})
 SELECTED_DOCKER_STAGE = "development"
 REQUIRED_BUILD_VALUES = {
@@ -94,6 +97,23 @@ REQUIRED_BUILD_VALUES = {
     "dockerfile": "Dockerfile",
     "target": SELECTED_DOCKER_STAGE,
 }
+REQUIRED_JUNG_ENVIRONMENT = {
+    "JUNG_API_HOST": "0.0.0.0",
+    "JUNG_API_PORT": '"8000"',
+    "JUNG_API_ALLOW_REMOTE_BIND": '"true"',
+}
+FORBIDDEN_LEGACY_ENVIRONMENT_KEYS = frozenset(
+    {"SERVER_HOST", "SERVER_PORT", "APP_ENV"}
+)
+REQUIRED_HEALTHCHECK_ARGV = (
+    "CMD",
+    "wget",
+    "--no-verbose",
+    "--tries=1",
+    "-O",
+    "/dev/null",
+    "http://localhost:8000/api/v1/health",
+)
 YAML_SIMPLE_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 EVAL_RE = re.compile(r"\$\(\s*eval\b|\$\{\s*eval\b")
 EXPECTED_COMPLETED_WORKFLOW = (
@@ -712,6 +732,230 @@ def _child_entries(
         block[1:], parent_indent=indent, label=label, allow_merge=allow_merge
     )
 
+
+def _list_item_scalars(
+    block: tuple[str, ...], label: str
+) -> tuple[tuple[str, ...], str | None]:
+    indent = len(block[0]) - len(block[0].lstrip())
+    item_indent: int | None = None
+    values: list[str] = []
+    for line in block[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent <= indent:
+            break
+        if item_indent is None:
+            item_indent = line_indent
+        if line_indent != item_indent:
+            return (), f"{label} contains unsupported list syntax"
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            return (), f"{label} contains unsupported list syntax"
+        value = stripped[2:].strip()
+        if not value:
+            return (), f"{label} contains empty list item"
+        values.append(value)
+    if item_indent is None:
+        return (), f"{label} must contain a list item"
+    return tuple(values), None
+
+
+def _validate_environment_mapping(
+    entry: MappingEntry,
+    *,
+    label: str,
+    required_values: dict[str, str] | None = None,
+    require_merge: bool = False,
+    data_dir: str | None = None,
+) -> list[str]:
+    entries, error = _child_entries(entry.block, label, allow_merge=require_merge)
+    if error:
+        return [error]
+    errors: list[str] = []
+    for key in FORBIDDEN_LEGACY_ENVIRONMENT_KEYS:
+        if _named(entries, key):
+            errors.append(f"{label} must not declare {key}")
+    if required_values is not None:
+        for key, expected in required_values.items():
+            matches = _named(entries, key)
+            if len(matches) != 1:
+                errors.append(f"{label} must have exactly one {key}")
+            elif matches[0].value != expected:
+                errors.append(
+                    f"{label}.{key} must be {expected!r}, got {matches[0].value!r}"
+                )
+    if require_merge:
+        merges = _named(entries, "<<")
+        if len(merges) != 1 or merges[0].value != "*api-environment":
+            errors.append(f"{label} must have exactly one <<: *api-environment")
+        for key in REQUIRED_JUNG_ENVIRONMENT:
+            if _named(entries, key):
+                errors.append(f"{label} must not redeclare {key}")
+    if data_dir is not None:
+        matches = _named(entries, "JUNG_DATA_DIR")
+        if len(matches) != 1:
+            errors.append(f"{label} must have exactly one JUNG_DATA_DIR")
+        elif matches[0].value != data_dir:
+            errors.append(
+                f"{label}.JUNG_DATA_DIR must be {data_dir!r}, got {matches[0].value!r}"
+            )
+    return errors
+
+
+def _validate_list_value(
+    entries: tuple[MappingEntry, ...], *, key: str, expected: str, label: str
+) -> list[str]:
+    matches = _named(entries, key)
+    if len(matches) != 1:
+        return [f"{label} must have exactly one {key}"]
+    if matches[0].value:
+        try:
+            parsed = json.loads(matches[0].value)
+        except json.JSONDecodeError:
+            return [f"{label}.{key} must use a supported list syntax"]
+        if not isinstance(parsed, list) or not all(
+            isinstance(item, str) for item in parsed
+        ):
+            return [f"{label}.{key} must use a string list"]
+        values = tuple(f'"{item}"' for item in parsed)
+    else:
+        values, error = _list_item_scalars(matches[0].block, f"{label}.{key}")
+        if error:
+            return [error]
+    if expected not in values:
+        return [f"{label}.{key} must include {expected!r}"]
+    return []
+
+
+def _validate_target_compose_structure(
+    anchor_children: tuple[MappingEntry, ...],
+    service_children: tuple[MappingEntry, ...],
+) -> list[str]:
+    errors: list[str] = []
+    environment = _named(anchor_children, "environment")
+    if len(environment) != 1:
+        errors.append("x-api-base must have exactly one environment mapping")
+    else:
+        if environment[0].block[0].strip() != "environment: &api-environment":
+            errors.append("x-api-base environment must be anchored as &api-environment")
+        errors.extend(
+            _validate_environment_mapping(
+                environment[0],
+                label="x-api-base environment",
+                required_values=REQUIRED_JUNG_ENVIRONMENT,
+            )
+        )
+    healthchecks = _named(anchor_children, "healthcheck")
+    if len(healthchecks) != 1:
+        errors.append("x-api-base must have exactly one healthcheck")
+    else:
+        health_entries, health_error = _child_entries(
+            healthchecks[0].block, "x-api-base healthcheck"
+        )
+        if health_error:
+            errors.append(health_error)
+        else:
+            tests = _named(health_entries, "test")
+            if len(tests) != 1:
+                errors.append("x-api-base healthcheck must have exactly one test")
+            else:
+                try:
+                    parsed = json.loads(tests[0].value)
+                except json.JSONDecodeError:
+                    errors.append(
+                        "x-api-base healthcheck.test must be a JSON argv array"
+                    )
+                else:
+                    if tuple(parsed) != REQUIRED_HEALTHCHECK_ARGV:
+                        errors.append(
+                            "x-api-base healthcheck.test must be "
+                            f"{REQUIRED_HEALTHCHECK_ARGV!r}"
+                        )
+    for name, data_dir, env_file, forbidden_keys, expected_port in (
+        (
+            "api",
+            "/app/data/local",
+            "${ENV_FILE:-.env}",
+            FORBIDDEN_API_LOCAL_KEYS,
+            '"127.0.0.1:8000:8000"',
+        ),
+        (
+            "api-usertest",
+            "/app/data/usertest",
+            ".env.usertest",
+            FORBIDDEN_API_USERTEST_LOCAL_KEYS,
+            '"127.0.0.1:8001:8000"',
+        ),
+    ):
+        matches = _named(service_children, name)
+        if len(matches) != 1:
+            errors.append(
+                f"docker-compose.yml must have exactly one services.{name} block"
+            )
+            continue
+        entries, entry_error = _child_entries(
+            matches[0].block, f"services.{name}", allow_merge=True
+        )
+        if entry_error:
+            errors.append(entry_error)
+            continue
+        for entry in entries:
+            if entry.key in forbidden_keys:
+                errors.append(f"services.{name} must not declare local {entry.key!r}")
+        environments = _named(entries, "environment")
+        if len(environments) != 1:
+            errors.append(f"services.{name} must have exactly one environment mapping")
+        else:
+            errors.extend(
+                _validate_environment_mapping(
+                    environments[0],
+                    label=f"services.{name} environment",
+                    require_merge=True,
+                    data_dir=data_dir,
+                )
+            )
+        errors.extend(
+            _validate_list_value(
+                entries, key="env_file", expected=env_file, label=f"services.{name}"
+            )
+        )
+        errors.extend(
+            _validate_list_value(
+                entries, key="ports", expected=expected_port, label=f"services.{name}"
+            )
+        )
+        if name == "api-usertest":
+            errors.extend(
+                _validate_list_value(
+                    entries,
+                    key="profiles",
+                    expected='"usertest-console"',
+                    label="services.api-usertest",
+                )
+            )
+    db_viewers = _named(service_children, "db-viewer")
+    if len(db_viewers) != 1:
+        errors.append(
+            "docker-compose.yml must have exactly one services.db-viewer block"
+        )
+    else:
+        entries, entry_error = _child_entries(
+            db_viewers[0].block, "services.db-viewer"
+        )
+        if entry_error:
+            errors.append(entry_error)
+        else:
+            errors.extend(
+                _validate_list_value(
+                    entries,
+                    key="ports",
+                    expected='"127.0.0.1:8080:8080"',
+                    label="services.db-viewer",
+                )
+            )
+    return errors
+
 def _scalar_to_argv(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
     if not _plain_compose_scalar(raw):
         return None, "unsupported scalar syntax"
@@ -818,6 +1062,10 @@ def _validate_compose_runtime(
         if entry.key in FORBIDDEN_TEST_SERVICE_KEYS:
             errors.append(f"services.test must not declare {entry.key!r}")
     errors.extend(_validate_build_contract(test_children, label="services.test"))
+    if expected_argv == TARGET_RUNTIME_ARGV:
+        errors.extend(
+            _validate_target_compose_structure(anchor_children, service_children)
+        )
     return errors
 
 def _dockerfile_stage_cmd(

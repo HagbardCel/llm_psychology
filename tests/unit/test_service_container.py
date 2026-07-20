@@ -5,12 +5,12 @@ Unit tests for ServiceContainer dependency injection system.
 from unittest.mock import Mock, patch
 
 import pytest
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.exceptions import ConfigurationError
-from psychoanalyst_app.services.db.executor import TrioSQLiteExecutor
 
 
 class TestServiceContainer:

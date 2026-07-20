@@ -9,13 +9,13 @@ from datetime import datetime
 
 import pytest
 import trio
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 from psychoanalyst_app.agents.assessment import TrioAssessmentAgent
 from psychoanalyst_app.agents.memory import TrioMemoryAgent
 from psychoanalyst_app.agents.planning import TrioPlanningAgent
 from psychoanalyst_app.agents.reflection import TrioReflectionAgent
 from psychoanalyst_app.agents.therapist import TrioTherapistAgent
-from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.context.user_context import UserContext
 from psychoanalyst_app.models.domain import (
     Message,

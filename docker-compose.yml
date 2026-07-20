@@ -12,29 +12,29 @@ x-api-base: &api-base
     - ./pyproject.toml:/app/pyproject.toml:ro
     - ./data:/app/data
     - ./logs:/app/logs
-  environment:
-    - APP_ENV=development
-    - PYTHONUNBUFFERED=1
-    - SERVER_HOST=0.0.0.0
-    - SERVER_PORT=8000
-    - RUFF_CACHE_DIR=/tmp/ruff_cache
-    - BLACK_CACHE_DIR=/tmp/black_cache
-    - UV_CACHE_DIR=/tmp/uv_cache
-    - XDG_CACHE_HOME=/tmp/.cache
+  environment: &api-environment
+    PYTHONUNBUFFERED: "1"
+    JUNG_API_HOST: 0.0.0.0
+    JUNG_API_PORT: "8000"
+    JUNG_API_ALLOW_REMOTE_BIND: "true"
+    RUFF_CACHE_DIR: /tmp/ruff_cache
+    BLACK_CACHE_DIR: /tmp/black_cache
+    UV_CACHE_DIR: /tmp/uv_cache
+    XDG_CACHE_HOME: /tmp/.cache
   networks:
     - app-network
-  command: python -m psychoanalyst_app.server
+  command: jung-api
   logging:
     driver: "json-file"
     options:
       max-size: "10m"
       max-file: "3"
   healthcheck:
-    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-    start_period: 40s
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8000/api/v1/health"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+    start_period: 5s
 
 x-console-base: &console-base
   build:
@@ -58,8 +58,13 @@ services:
   api:
     <<: *api-base
     container_name: psychoanalyst_api
+    environment:
+      <<: *api-environment
+      JUNG_DATA_DIR: /app/data/local
     env_file:
       - ${ENV_FILE:-.env}
+    ports:
+      - "127.0.0.1:8000:8000"
 
   console-ui:
     <<: *console-base
@@ -83,10 +88,13 @@ services:
     <<: *api-base
     container_name: psychoanalyst_api_usertest
     profiles: ["usertest-console"]
+    environment:
+      <<: *api-environment
+      JUNG_DATA_DIR: /app/data/usertest
     env_file:
       - .env.usertest
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
 
   console-ui-usertest:
     <<: *console-base
@@ -145,10 +153,10 @@ services:
     volumes:
       - ./data:/data:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - app-network
-    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-psychoanalyst.db}"]
+    command: ["sqlite_web", "--host", "0.0.0.0", "--port", "8080", "/data/${DB_FILE:-local/jung.db}"]
 
   devcontainer:
     build:

@@ -1,14 +1,16 @@
 ---
 owner: engineering
-status: accepted
-last_reviewed: 2026-07-11
+status: active
+last_reviewed: 2026-07-20
 review_cycle_days: 30
-source_of_truth_for: Target /api/v1 external semantics
+source_of_truth_for: Supported /api/v1 external semantics
 ---
 
-# Target API v1 Contract
+# API v1 Contract
 
-> This is the cutover contract, not the legacy API. Until cutover, the current contracts in `docs/contracts/` and `docs/WEBSOCKET_PROTOCOL.md` govern runtime behavior.
+> This document governs the supported Phase 6C `/api/v1` runtime contract.
+> The legacy contracts in `docs/contracts/` and `docs/WEBSOCKET_PROTOCOL.md`
+> are supporting references only.
 
 All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no generic workflow mutation route.
 

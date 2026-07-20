@@ -32,7 +32,6 @@ dependencies = [
 ]
 
 [project.scripts]
-psychoanalyst-server = "psychoanalyst_app.server:cli"
 jung-api = "jung.api.app:cli"
 jung-console = "jung.client.terminal:cli"
 

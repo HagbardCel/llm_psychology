@@ -1,7 +1,7 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-07-16
+status: supporting
+last_reviewed: 2026-07-20
 review_cycle_days: 30
 source_of_truth_for: Phase 6 deletion manifest overview
 ---
@@ -10,7 +10,7 @@ source_of_truth_for: Phase 6 deletion manifest overview
 
 > **Authoritative source:** [`deletion-manifest.toml`](deletion-manifest.toml). This page is a human overview only; do not duplicate item lists here.
 
-Phase 5 exit evidence: `make validate-refactor-phase-5`. Phase 6 execution follows [architecture-refactor-roadmap.md § Phase 6](architecture-refactor-roadmap.md#phase-6--cutover-and-legacy-deletion).
+Phase 5 exit evidence: `make validate-refactor-phase-5`. Phase 6C cutover completes `owner_pr = "6C"` (runtime flip to `jung-api`, infrastructure deletion including the health-masking Compose override). Phase 6 execution follows [architecture-refactor-roadmap.md § Phase 6](architecture-refactor-roadmap.md#phase-6--cutover-and-legacy-deletion). See [phase-6c-implementation-plan.md](phase-6c-implementation-plan.md).
 
 ## Manifest lifecycle
 

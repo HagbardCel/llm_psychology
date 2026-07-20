@@ -1,12 +1,14 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-05-31
+status: supporting
+last_reviewed: 2026-07-20
 review_cycle_days: 90
 source_of_truth_for: Project-level architecture and implementation invariants
 ---
 
 # Design Principles (How This Codebase Wants You To Build)
+
+> Legacy supporting reference. This document does not describe the supported Phase 6C runtime. See the [target architecture](refactor/target-architecture.md), [API v1 contract](refactor/api-v1-contract.md), and [workflow specification](refactor/workflow-specification.md). It remains temporarily available pending the Phase 7 documentation rewrite.
 
 This document captures the *project-level design decisions* that shape how code is organized, how data flows, and how new features should be implemented. It is intended as an onboarding “mental model” so contributors (human and AI agents) can write code consistent with the existing architecture without reading the entire repository.
 

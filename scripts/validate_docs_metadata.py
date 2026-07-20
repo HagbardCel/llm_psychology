@@ -9,16 +9,10 @@ from pathlib import Path
 
 ACTIVE_DOCS = [
     "docs/README.md",
-    "docs/design-principles.md",
     "docs/ui-scope.md",
-    "docs/ARCHITECTURE.md",
-    "docs/user_journey.md",
-    "docs/session_lifecycle.md",
-    "docs/contracts/HTTP_API_CONTRACT.md",
-    "docs/WEBSOCKET_PROTOCOL.md",
-    "docs/TYPE_SYSTEM.md",
-    "docs/data-models.md",
-    "docs/agents/README.md",
+    "docs/refactor/target-architecture.md",
+    "docs/refactor/api-v1-contract.md",
+    "docs/refactor/workflow-specification.md",
 ]
 
 REQUIRED_KEYS = {
@@ -68,17 +62,17 @@ def _validate_active_readme_index(repo_root: Path, errors: list[str]) -> None:
     active_section = text.split(marker, 1)[1]
     active_section = re.split(r"\n##\s+", active_section, maxsplit=1)[0]
 
-    expected_links = []
-    for doc_path in ACTIVE_DOCS:
-        expected_links.append(doc_path.removeprefix("docs/"))
+    expected_links = [doc_path.removeprefix("docs/") for doc_path in ACTIVE_DOCS]
+    actual_links = [
+        target.split("#", maxsplit=1)[0].removeprefix("./")
+        for target in re.findall(r"\[[^]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)", active_section)
+    ]
 
-    for rel_target in expected_links:
-        token = f"({rel_target})"
-        if token not in active_section:
-            errors.append(
-                f"{readme_path}: missing active-doc link target '{rel_target}' "
-                f"in 'Active Docs (Canonical)' section"
-            )
+    if actual_links != expected_links:
+        errors.append(
+            f"{readme_path}: active-doc link targets must exactly match "
+            f"{expected_links!r} in order; found {actual_links!r}"
+        )
 
 
 def _validate_review_freshness(

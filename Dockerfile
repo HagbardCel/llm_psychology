@@ -54,4 +54,4 @@ ENV PYTHONUNBUFFERED=1 \
 VOLUME /app/data
 
 # Command to run the application
-CMD ["python", "-m", "psychoanalyst_app.server"]
+CMD ["jung-api"]

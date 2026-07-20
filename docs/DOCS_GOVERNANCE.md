@@ -34,16 +34,10 @@ It establishes a strict active-doc set and a predictable review process.
 The current active canonical set is:
 
 1. `docs/README.md`
-2. `docs/design-principles.md`
-3. `docs/ui-scope.md`
-4. `docs/ARCHITECTURE.md`
-5. `docs/user_journey.md`
-6. `docs/session_lifecycle.md`
-7. `docs/contracts/HTTP_API_CONTRACT.md`
-8. `docs/WEBSOCKET_PROTOCOL.md`
-9. `docs/TYPE_SYSTEM.md`
-10. `docs/data-models.md`
-11. `docs/agents/README.md`
+2. `docs/ui-scope.md`
+3. `docs/refactor/target-architecture.md`
+4. `docs/refactor/api-v1-contract.md`
+5. `docs/refactor/workflow-specification.md`
 
 ## Required Front Matter for Active Docs
 All active docs must include this metadata block at the top:
@@ -83,6 +77,8 @@ The validator enforces:
 1. Required front matter keys on all active docs.
 2. ISO date format for `last_reviewed`.
 3. `status: active` for active docs.
-4. Active docs are indexed in `docs/README.md` under `Active Docs (Canonical)`.
+4. Active docs are indexed in `docs/README.md` under `Active Docs (Canonical)`
+   with exactly the canonical links in the documented order: no missing,
+   unexpected, duplicate, or reordered links.
 5. Reviews are not overdue: a document remains valid through
    `last_reviewed + review_cycle_days` and fails validation the following day.

@@ -1,12 +1,14 @@
 ---
 owner: engineering
-status: active
-last_reviewed: 2026-05-31
+status: supporting
+last_reviewed: 2026-07-20
 review_cycle_days: 90
 source_of_truth_for: WebSocket message envelope, event semantics, and versioned protocol references
 ---
 
 # WebSocket Protocol Specification
+
+> Legacy supporting reference. This document does not describe the supported Phase 6C runtime. See the [target architecture](refactor/target-architecture.md), [API v1 contract](refactor/api-v1-contract.md), and [workflow specification](refactor/workflow-specification.md). It remains temporarily available pending the Phase 7 documentation rewrite.
 
 **Version**: 1.2.3
 **Date**: 2025-12-29

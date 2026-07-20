@@ -9,12 +9,12 @@ from datetime import datetime
 
 import pytest
 import trio
+from psychoanalyst_app.container.service_container import ServiceContainer
+from psychoanalyst_app.trio_server import TrioServer
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.models.domain import Message, Session, UserProfile, UserStatus
 from psychoanalyst_app.orchestration.models import WorkflowEvent, WorkflowState
-from psychoanalyst_app.trio_server import TrioServer
 
 
 class DummyWebSocket:

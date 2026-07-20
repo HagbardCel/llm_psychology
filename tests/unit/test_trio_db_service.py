@@ -27,8 +27,9 @@ from psychoanalyst_app.models.intake_record import (
 @pytest.fixture
 async def test_db_service(tmp_path):
     """Create a test database service with temporary database file."""
-    from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    from psychoanalyst_app.services.migration_service import MigrationService
 
     # Use temporary file for test database
     test_db_path = str(tmp_path / "test_db_service.db")
@@ -256,8 +257,9 @@ async def test_migration_adds_intake_record_columns_to_v1_sessions_table(tmp_pat
     """Existing v1 sessions tables gain nullable intake record columns on migrate."""
     import sqlite3
 
-    from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    from psychoanalyst_app.services.migration_service import MigrationService
 
     db_path = str(tmp_path / "v1_sessions_schema.db")
     now = datetime.now()
@@ -711,8 +713,9 @@ async def test_migration_rejects_legacy_schema_with_recreation_instruction(tmp_p
     """Legacy DBs fail closed because foundation rows are intentionally incompatible."""
     import sqlite3
 
-    from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    from psychoanalyst_app.services.migration_service import MigrationService
 
     db_path = str(tmp_path / "legacy_profile_schema.db")
     conn = sqlite3.connect(db_path)

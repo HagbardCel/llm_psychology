@@ -405,8 +405,9 @@ def app_config(tmp_path):
 @pytest.fixture
 async def trio_db_service(app_config):
     """Create a TrioDatabaseService with in-memory database for testing."""
-    from psychoanalyst_app.services.migration_service import MigrationService
     from psychoanalyst_app.services.trio_db_service import TrioDatabaseService
+
+    from psychoanalyst_app.services.migration_service import MigrationService
 
     # Use shared cache from config so tables persist across connections
     migration_service = MigrationService(app_config.DATABASE_PATH)
@@ -471,7 +472,6 @@ async def test_server_websocket(test_server_config, mock_llm_service, mock_rag_s
         - container: ServiceContainer instance
     """
     import trio
-
     from psychoanalyst_app.container.service_container import ServiceContainer
     from psychoanalyst_app.trio_server import TrioServer
 

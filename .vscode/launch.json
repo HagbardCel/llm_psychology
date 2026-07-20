@@ -2,36 +2,34 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: Trio Server",
+      "name": "Python: Jung API",
       "type": "debugpy",
       "request": "launch",
-      "module": "psychoanalyst_app.server",
+      "module": "jung.api.app",
       "console": "integratedTerminal",
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "development",
-        "SERVER_HOST": "0.0.0.0",
-        "SERVER_PORT": "8000",
-        "PYTHONPATH": "${workspaceFolder}/src"
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "JUNG_API_HOST": "127.0.0.1",
+        "JUNG_API_PORT": "8000",
+        "JUNG_DATA_DIR": "./data/local"
       },
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Python: Console Client",
+      "name": "Python: Jung Console",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/console-ui/main.py",
+      "module": "jung.client.terminal",
+      "args": ["--api-url", "http://127.0.0.1:8000"],
       "console": "integratedTerminal",
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
-        "BACKEND_URL": "http://localhost:8000",
-        "WEBSOCKET_URL": "http://localhost:8000",
-        "USER_ID": "debug_user",
-        "AUTH_TOKEN": "debug_token"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
-      "cwd": "${workspaceFolder}/console-ui"
+      "cwd": "${workspaceFolder}"
     },
     {
       "name": "Python: Current File",
@@ -59,17 +57,21 @@
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "testing"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Python: Pytest - All Tests",
+      "name": "Python: Pytest - Jung Unit",
       "type": "debugpy",
       "request": "launch",
       "module": "pytest",
       "args": [
-        "tests/",
+        "tests/unit/jung/",
+        "-o",
+        "trio_mode=false",
+        "-o",
+        "asyncio_mode=auto",
         "-v",
         "--tb=short"
       ],
@@ -77,18 +79,21 @@
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "testing"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Python: Pytest - Unit Tests Only",
+      "name": "Python: Pytest - Jung Integration",
       "type": "debugpy",
       "request": "launch",
       "module": "pytest",
       "args": [
-        "-m",
-        "unit",
+        "tests/integration/jung/",
+        "-o",
+        "trio_mode=false",
+        "-o",
+        "asyncio_mode=auto",
         "-v",
         "--tb=short"
       ],
@@ -96,45 +101,7 @@
       "justMyCode": false,
       "env": {
         "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "testing"
-      },
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Python: Pytest - Integration Tests Only",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "pytest",
-      "args": [
-        "-m",
-        "integration",
-        "-v",
-        "--tb=short"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "env": {
-        "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "testing"
-      },
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Python: Pytest - Trio Tests Only",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "pytest",
-      "args": [
-        "-m",
-        "trio",
-        "-v",
-        "--tb=short"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "env": {
-        "PYTHONUNBUFFERED": "1",
-        "APP_ENV": "testing"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "cwd": "${workspaceFolder}"
     }

@@ -4,9 +4,9 @@ from datetime import datetime
 
 import pytest
 import trio
+from psychoanalyst_app.trio_server import TrioServer
 
 from psychoanalyst_app.models.domain import UserProfile, UserStatus
-from psychoanalyst_app.trio_server import TrioServer
 
 
 @pytest.fixture

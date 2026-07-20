@@ -3,9 +3,9 @@ from __future__ import annotations
 import sys
 
 import pytest
+from psychoanalyst_app.container.service_container import ServiceContainer
 
 from psychoanalyst_app.config import Settings
-from psychoanalyst_app.container.service_container import ServiceContainer
 from psychoanalyst_app.services.rag import NoOpRAGService
 
 pytestmark = pytest.mark.unit
