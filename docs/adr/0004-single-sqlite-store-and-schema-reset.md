@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: accepted
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-20
 review_cycle_days: 30
 source_of_truth_for: Target SQLite ownership and reset policy
 ---
@@ -16,4 +16,4 @@ The schema has `app_state`, `profile`, `sessions`, normalized `messages`, immuta
 
 ## Consequences
 
-Application mutation locking is primary serialization; SQLite locking is a fallback. Multi-table completion methods own their whole transaction. Cutover backs up then recreates the database.
+Application mutation locking is primary serialization; SQLite locking is a fallback. Multi-table completion methods own their whole transaction. At cutover, optionally archive the existing database if its contents should be retained, then recreate the database from the target schema. No compatibility migration or application-level backup/restore tooling is maintained.

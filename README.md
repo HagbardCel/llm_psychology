@@ -34,9 +34,10 @@ maintenance guidance.
 
 ## Local Database
 
-Databases with incompatible development schemas must be deleted and recreated.
-Stop the application and remove the SQLite database together with any `-wal` and
-`-shm` sibling files, or use a fresh data directory.
+Databases with incompatible development schemas are recreated rather than
+migrated. Stop the application. If the contents should be retained, first
+archive the SQLite database together with any existing `-wal` and `-shm`
+sibling files; then delete the original files or use a fresh data directory.
 
 ## Optional Devcontainer
 

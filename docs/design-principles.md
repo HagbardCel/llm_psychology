@@ -206,9 +206,9 @@ Rationale:
 - Preserve the exact plan context used by each completed therapy session.
 
 Existing databases from before immutable plan revisions are intentionally
-incompatible. Databases with incompatible development schemas must be deleted
-and recreated. Stop the application and remove the SQLite database together with
-any `-wal` and `-shm` sibling files, or use a fresh data directory.
+incompatible and are recreated rather than migrated; see
+[ADR 0004](adr/0004-single-sqlite-store-and-schema-reset.md) for the archival
+and reset policy.
 
 ### Tier 2 enrichment is off the request path
 Tier 2 enrichment is intentionally run by a background worker so normal reads/writes remain fast and deterministic:
