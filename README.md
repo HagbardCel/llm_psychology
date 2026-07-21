@@ -4,6 +4,10 @@ Local-laptop therapy workflow research tool backed by an asyncio FastAPI
 `/api/v1` service (`jung-api`), SQLite persistence, and the maintained
 `jung-console` client.
 
+This is a research tool, not emergency support or a substitute for professional
+care. Review the [safety and data-handling guidance](docs/safety-and-data.md)
+before entering personal information.
+
 ## Quick Start
 
 1. Start an OpenAI-compatible local model server such as llama.cpp, LM Studio,
@@ -46,17 +50,16 @@ make probe-console
 ```
 
 See [docs/README.md](docs/README.md) for architecture, contracts, and local
-maintenance guidance. Start with the target architecture, API v1 contract, and
-workflow specification.
+maintenance guidance. Start with safety and data handling, the target
+architecture, API v1 contract, and workflow specification.
 
 ## Local Database
 
 The target runtime stores SQLite under `JUNG_DATA_DIR` as `jung.db`
 (Compose uses `data/local` and `data/usertest`). Databases with incompatible
-schemas are recreated rather than migrated. Stop the application. If the
-contents should be retained, first archive the SQLite database together with
-any existing `-wal` and `-shm` sibling files; then delete the original files or
-use a fresh data directory.
+schemas must be recreated manually rather than migrated. Stop the application,
+optionally archive `jung.db` together with any `-wal` and `-shm` sidecars, then
+remove those files or configure a fresh data directory.
 
 ## Naming
 
