@@ -14,8 +14,6 @@ from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
-from .scenarios import open_intake
-
 
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:
     state = store.get_app_state()
@@ -57,23 +55,6 @@ def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -
         conn.commit()
     with pytest.raises(PersistenceFailure):
         store.initialize()
-
-
-def test_reset_database_recreates_clean_schema(store_path: Path) -> None:
-    store = SQLiteStore(store_path)
-    store.initialize()
-    open_intake(store)
-
-    store.reset_database()
-
-    state = store.get_app_state()
-    with sqlite3.connect(store_path) as conn:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-
-    assert version == SCHEMA_VERSION
-    assert state.stage == Stage.SETUP
-    assert state.revision == 0
-    assert store.get_active_session() is None
 
 
 def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:

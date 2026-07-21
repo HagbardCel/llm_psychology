@@ -167,4 +167,4 @@ install-hooks:
 	@./scripts/install-hooks.sh
 
 clean:
-	@rm -rf __pycache__ .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info 2>/dev/null || true
+	@rm -rf __pycache__ .pytest_cache .ruff_cache build dist *.egg-info 2>/dev/null || true

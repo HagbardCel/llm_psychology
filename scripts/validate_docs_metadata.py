@@ -9,6 +9,7 @@ from pathlib import Path
 
 ACTIVE_DOCS = [
     "docs/README.md",
+    "docs/safety-and-data.md",
     "docs/ui-scope.md",
     "docs/refactor/target-architecture.md",
     "docs/refactor/api-v1-contract.md",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -164,7 +165,36 @@ def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> N
     assert captured["port"] == 8000
     assert captured["log_level"] == "info"
     assert captured["access_log"] is False
+    jung_logger = captured["log_config"]["loggers"]["jung"]
+    assert jung_logger == {
+        "handlers": ["default"],
+        "level": logging.INFO,
+        "propagate": False,
+    }
     assert type(captured["app"]).__name__ == "FastAPI"
+
+
+@pytest.mark.parametrize(
+    "log_level",
+    ["info", "debug", "trace"],
+)
+def test_uvicorn_log_config_configures_jung_logger(
+    log_level: str,
+) -> None:
+    from uvicorn.config import LOG_LEVELS, LOGGING_CONFIG
+
+    from jung.api.app import _uvicorn_log_config_with_jung
+
+    expected_level = LOG_LEVELS[log_level]
+
+    config = _uvicorn_log_config_with_jung(log_level)
+
+    assert config["loggers"]["jung"] == {
+        "handlers": ["default"],
+        "level": expected_level,
+        "propagate": False,
+    }
+    assert "jung" not in LOGGING_CONFIG["loggers"]
 
 
 def test_cli_rejects_remote_bind_before_uvicorn(

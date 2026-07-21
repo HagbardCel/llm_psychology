@@ -1,16 +1,14 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-20
+last_reviewed: 2026-07-21
 review_cycle_days: 30
 source_of_truth_for: Supported workflow, recovery, and concurrency semantics
 ---
 
 # Workflow Specification
 
-> This document governs the supported Jung workflow runtime. Legacy
-> `WorkflowState`, user status, jobs, events, and next actions are supporting
-> reference only. Wire DTO shapes live in [API v1 Contract](api-v1-contract.md).
+> This document governs the supported Jung workflow runtime. Wire DTO shapes live in the [API v1 Contract](api-v1-contract.md).
 
 ## Stages
 
@@ -100,43 +98,3 @@ On shutdown:
 - never mark an in-flight operation successful without validated completion.
 
 A connected client is only an observer: supervisor-owned generation continues after disconnect and notifications fan out to all observers.
-
-## Legacy mapping
-
-| Legacy concept | Current examples | Target treatment |
-|---|---|---|
-| User status | `UserStatus`, profile `status` column | merged into `Stage` |
-| Workflow state | `WorkflowState.*`, `*_IN_PROGRESS`, `*_COMPLETE` | `Stage` plus `Operation` status |
-| Next actions | `RequiredWorkflowAction`, `next_action` payloads | derived `available_commands` |
-| Job hierarchy | assessment/plan/reflection jobs | one `Operation` |
-| Reflection state | `REFLECTION_IN_PROGRESS`, reflection jobs | `POST_SESSION` operation |
-| State signature | reconnect helper signatures | `revision` plus authoritative snapshot |
-| WebSocket workflow events | legacy workflow/status events | `snapshot_changed` / `operation_changed` |
-| Child jobs / retry routes | `/api/workflow/retry_*`, job trees | `retry_operation` on current failed operation |
-
-## Legacy value inventory
-
-### `WorkflowState` (grouped)
-
-| Legacy values | Target |
-|---|---|
-| `NEW`, profile incomplete | `SETUP` |
-| `INTAKE_IN_PROGRESS`, `INTAKE_COMPLETE` | `INTAKE` |
-| `ASSESSMENT_IN_PROGRESS`, `ASSESSMENT_COMPLETE` | `ASSESSMENT` + `Operation` |
-| ready / plan-update-complete style states | `STYLE_SELECTION`, `READY` |
-| `THERAPY_IN_PROGRESS` | `THERAPY` |
-| `PLAN_UPDATE_IN_PROGRESS`, `PLAN_UPDATE_FAILED`, `PLAN_UPDATE_COMPLETE` | `POST_SESSION` + `Operation` |
-
-### `UserStatus` (grouped)
-
-Profile `status` strings map to `AppSnapshot.stage` and visible `OperationSummary.status`. No separate durable user-status field remains after cutover.
-
-### Job and route concepts (grouped)
-
-| Legacy | Target |
-|---|---|
-| assessment jobs | `Operation(kind=assessment)` |
-| reflection / plan-update jobs | `Operation(kind=post_session)` |
-| `/api/workflow/complete_profile` | `PUT /api/v1/profile` |
-| `/api/workflow/retry_plan_update` | `POST /api/v1/operations/current/retry` |
-| generic workflow mutation routes | removed; explicit commands only |

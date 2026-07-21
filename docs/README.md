@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-20
+last_reviewed: 2026-07-21
 review_cycle_days: 90
 source_of_truth_for: Documentation entrypoint and canonical navigation
 ---
@@ -12,15 +12,17 @@ source_of_truth_for: Documentation entrypoint and canonical navigation
 Use this order if you are new to the codebase:
 
 1. This index for canonical documentation navigation.
-2. `docs/ui-scope.md` for the supported frontend policy.
-3. `docs/refactor/target-architecture.md` for the supported runtime architecture.
-4. `docs/refactor/api-v1-contract.md` for the public client contract.
-5. `docs/refactor/workflow-specification.md` for workflow, recovery, and concurrency semantics.
+2. `docs/safety-and-data.md` for product safety and data-handling guidance.
+3. `docs/ui-scope.md` for the supported frontend policy.
+4. `docs/refactor/target-architecture.md` for the supported runtime architecture.
+5. `docs/refactor/api-v1-contract.md` for the public client contract.
+6. `docs/refactor/workflow-specification.md` for workflow, recovery, and concurrency semantics.
 
 ## Active Docs (Canonical)
 These docs are the only canonical, actively governed set.
 
 - [Documentation Index](README.md)
+- [Safety and Data Handling](safety-and-data.md)
 - [UI Scope](ui-scope.md)
 - [Target Architecture](refactor/target-architecture.md)
 - [API v1 Contract](refactor/api-v1-contract.md)

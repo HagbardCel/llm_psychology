@@ -46,11 +46,6 @@ TARGET_TABLES = frozenset(
     }
 )
 
-DANGEROUS_DB_PATHS = {
-    Path("data/psychoanalyst.db"),
-    Path("data/usertest/psychoanalyst.db"),
-}
-
 
 @contextmanager
 def connect(database_path: Path) -> Iterator[sqlite3.Connection]:
