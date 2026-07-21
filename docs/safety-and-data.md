@@ -57,9 +57,11 @@ application provides authentication when changing port mappings.
 `JUNG_ENABLE_LLM_TRACING=true` records operational metadata (task, model,
 mode, timing, role sequence, message counts, and character counts).
 
-`JUNG_LOG_PROMPT_PREVIEWS=true`, which requires tracing to be enabled,
-additionally logs prompt prefixes and can expose sensitive content. Treat logs
-as potentially sensitive when previews are enabled.
+`JUNG_LOG_PROMPT_PREVIEWS=true` additionally logs prompt prefixes and can
+expose sensitive content. Previews are emitted at DEBUG level, so they require
+`JUNG_ENABLE_LLM_TRACING=true` and `JUNG_API_LOG_LEVEL=debug` or `trace`; the
+default `info` level suppresses them. Treat logs as sensitive whenever
+previews are enabled.
 
 ## Erasing local data
 
@@ -81,6 +83,22 @@ sidecars.
 - **User-test Compose:** remove `./data/usertest/jung.db` and sidecars.
 - **Custom host data:** remove files under `${JUNG_HOST_DATA_DIR}`, not merely
   files inside a disposable container.
+
+Compose captures API stdout and stderr through Docker's `json-file` logging
+driver. These Docker-managed logs are not stored under `./logs`. To erase
+them, remove the relevant containers by running `docker compose down` from the
+repository root using the same Compose project name used to start them.
+Merely running `docker compose stop` is insufficient because it preserves the
+containers and their logs.
+
+```bash
+COMPOSE_PROJECT_NAME=jung-usertest docker compose down
+```
+
+Removing the containers does not erase bind-mounted host data. Delete the
+relevant database and sidecar files under `./data/local`, `./data/usertest`,
+or `${JUNG_HOST_DATA_DIR}`, together with backups, archives, workflow-probe
+artifacts, and other copies, separately.
 
 ### Logs, backups, and copies
 
