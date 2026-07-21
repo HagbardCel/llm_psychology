@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-20
+last_reviewed: 2026-07-21
 review_cycle_days: 30
 source_of_truth_for: Supported architecture for the single-user Jung runtime
 ---
@@ -13,7 +13,7 @@ source_of_truth_for: Supported architecture for the single-user Jung runtime
 
 ## Goals
 
-The refactor should produce a lean, local-first therapist application that:
+The supported runtime is a lean, local-first therapist application that:
 
 - runs on one laptop for one real user;
 - supports a disposable test profile through a separate database/data directory, not multi-user domain plumbing;
@@ -21,7 +21,6 @@ The refactor should produce a lean, local-first therapist application that:
 - keeps the backend as the only writer to SQLite;
 - preserves dedicated, independently testable therapeutic phase behavior;
 - minimizes framework-specific concepts and speculative abstractions;
-- may introduce breaking changes and reset the database;
 - retains deterministic workflow probes and useful LLM observability.
 
 ## Fixed architectural decisions
@@ -44,15 +43,15 @@ The refactor should produce a lean, local-first therapist application that:
 
 5. **One asyncio runtime**
    - Use asyncio consistently across API, WebSockets, LLM calls, console networking, background operations, and tests.
-   - Remove Trio-specific application and infrastructure layers during cutover.
+   - Trio is not part of the supported runtime.
 
 6. **One workflow model**
    - Persist one `Stage` and derive available commands from it.
    - Do not maintain overlapping user status, workflow state, next action, event, and agent transition systems.
 
 7. **No legacy compatibility layer**
-   - Reset/recreate the database.
-   - Do not support old and new schemas or old and new orchestration paths concurrently after cutover.
+   - Old database schemas and orchestration paths are not supported alongside the current runtime.
+   - Incompatible database schemas are rejected. No migrations are maintained; resetting requires stopping the application and manually removing `jung.db` together with any `jung.db-wal` and `jung.db-shm` sidecars.
 
 ## System shape
 
@@ -73,78 +72,10 @@ clients → API contracts → API adapter → application → store / LLM ports
 
 The application and phase packages must not import API or client packages.
 
-## Supported package structure
-
-```text
-src/jung/
-├── config.py
-├── application.py
-├── workflow.py
-├── domain/
-│   ├── models.py
-│   ├── commands.py
-│   └── results.py
-├── phases/
-│   ├── intake/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   ├── models.py
-│   │   └── policy.py
-│   ├── assessment/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   └── models.py
-│   ├── therapy/
-│   │   ├── processor.py
-│   │   ├── prompts.py
-│   │   ├── context.py
-│   │   ├── models.py
-│   │   └── styles/
-│   └── post_session/
-│       ├── processor.py
-│       ├── prompts.py
-│       ├── models.py
-│       ├── summarizer.py
-│       ├── profile_updater.py
-│       └── plan_updater.py
-├── llm/
-│   ├── gateway.py
-│   ├── openai_compatible.py
-│   ├── structured.py
-│   ├── tracing.py
-│   └── fake.py
-├── persistence/
-│   └── sqlite_store.py
-├── api/
-│   ├── app.py
-│   ├── contracts.py
-│   ├── routes.py
-│   ├── websocket.py
-│   └── errors.py
-└── client/
-    ├── api_client.py
-    ├── websocket_client.py
-    └── console.py
-```
-
-The supported runtime package is `jung`. The boundaries above are the
-important part. `config.py` holds environment-backed `ApplicationSettings`
-(database path, LLM settings, tracing/logging flags); the composition root
-constructs the application from these settings rather than reading the
-environment itself.
-
-The package tree is illustrative. Begin with the fewest modules that preserve dependency boundaries; split only when a file has independently testable logic or distinct dependencies. In particular, post-session summarization/patch helpers and client transport code may start consolidated:
-
-```text
-phases/post_session/
-  processor.py
-  prompts.py
-  models.py
-
-client/
-  api_client.py
-  console.py
-```
+The supported runtime package is `jung`. `config.py` defines environment-backed
+`ApplicationSettings`, and the composition root constructs the application from
+those settings rather than having runtime components read the environment
+directly.
 
 ## Application boundary
 
@@ -208,7 +139,7 @@ No generic service locator or runtime string-based dependency lookup remains.
 
 ## Therapeutic phase processors
 
-Dedicated behavior files remain, but agents become narrow phase processors rather than autonomous orchestration objects.
+Therapeutic behavior is implemented by narrow phase processors rather than autonomous orchestration objects.
 
 ### Retained top-level processors
 
@@ -218,19 +149,6 @@ Dedicated behavior files remain, but agents become narrow phase processors rathe
 - `PostSessionProcessor`
 
 Each processor owns its prompt strategy, phase-specific policy, and typed output. It does not own persistence, WebSocket messaging, global workflow transitions, or dependency construction.
-
-### Mapping from current agents
-
-| Current component | Target treatment |
-|---|---|
-| Intake agent | Retain as `phases/intake/processor.py` |
-| Assessment agent | Retain and simplify as `phases/assessment/processor.py` |
-| Therapist agent | Retain as the primary streaming `TherapyProcessor` |
-| Reflection agent | Evolve into `PostSessionProcessor` |
-| Note-taker agent | Split into intake/post-session helper functions or narrow services |
-| Planning agent | Fold initial planning into assessment and later changes into post-session processing |
-| Memory agent | Fold durable profile/plan patch generation into post-session processing |
-| Agent factory/registry | Delete; wire processors explicitly in the composition root |
 
 Processors should not call other workflow processors. A coordinator may call pure/stateless helpers such as `summarize_session()` or `propose_plan_patch()`.
 
@@ -434,15 +352,10 @@ Processors and stores raise domain/application exceptions. They do not construct
 
 Docker packages the system but does not define internal boundaries.
 
-Target Compose services:
-
-- `api` — single Jung API service definition
-- `web` when implemented
-
-Manual user testing reuses the single parameterized `api` service under an
-isolated Compose project and data directory (`make ui-console-test`: separate
-Compose project, host port `8001`, `.env.usertest`, `/app/data/usertest`). No
-duplicate Compose service is defined.
+The root [Docker Compose configuration](../../docker-compose.yml) defines a
+single `api` service. Manual user testing reuses that service through the
+`ui-console-test` Make target with an isolated Compose project, port,
+environment file, and data directory.
 
 Native development must remain supported:
 
@@ -468,7 +381,7 @@ Minimum useful records:
 
 ## Explicit non-goals
 
-Do not add during this refactor:
+The supported product explicitly excludes:
 
 - multi-user support;
 - authentication for localhost;

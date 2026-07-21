@@ -18,7 +18,14 @@ FORBIDDEN_IDENTIFIERS = (
     "psychoanalyst-hooks",
 )
 
-SHELL_SHEBANGS = ("#!/usr/bin/env bash", "#!/bin/bash", "#!/bin/sh")
+SCRIPT_SHEBANGS = (
+    "#!/usr/bin/env python",
+    "#!/usr/bin/python",
+    "#!/usr/bin/env bash",
+    "#!/usr/bin/env sh",
+    "#!/bin/bash",
+    "#!/bin/sh",
+)
 
 
 def _is_tracked_script(path: Path) -> bool:
@@ -30,7 +37,7 @@ def _is_tracked_script(path: Path) -> bool:
         first_line = path.read_text(encoding="utf-8").splitlines()[0]
     except (OSError, IndexError):
         return False
-    return first_line.startswith(SHELL_SHEBANGS)
+    return first_line.startswith(SCRIPT_SHEBANGS)
 
 
 def test_tracked_scripts_have_no_legacy_identifiers() -> None:

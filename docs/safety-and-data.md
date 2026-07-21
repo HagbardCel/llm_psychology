@@ -26,11 +26,16 @@ The local SQLite database may contain highly sensitive personal information,
 including profile details, session transcripts, and derived clinical-style
 notes. Protect database files, backups, and any copied exports accordingly.
 
+Treat `.env` and `.env.usertest` as sensitive because they may contain provider
+credentials or authorization headers.
+
 ## Remote model providers
 
 When configured to use a remote OpenAI-compatible endpoint, the application
-sends constructed prompt context (profile and conversation content) to that
-provider. Deleting local files does **not** erase data that a remote provider
+sends constructed prompt context to that provider. Depending on the task, this
+may include profile fields, intake or therapy transcripts, current plans,
+derived profile data, session briefings and summaries, and therapeutic style
+instructions. Deleting local files does **not** erase data that a remote provider
 may retain under its own policies.
 
 ## Network exposure
