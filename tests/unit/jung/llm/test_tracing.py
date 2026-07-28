@@ -97,6 +97,50 @@ async def test_tracing_gateway_does_not_log_prompt_previews_by_default(
     assert "secret prompt content" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("level", "preview_expected"),
+    [
+        (logging.INFO, False),
+        (logging.DEBUG, True),
+    ],
+)
+async def test_prompt_previews_respect_logger_level(
+    caplog: pytest.LogCaptureFixture,
+    level: int,
+    preview_expected: bool,
+) -> None:
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="local",
+        temperature=0.7,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+    preview_text = "secret preview text"
+    gateway = TracingLLMGateway(
+        FakeLLM(
+            [
+                StreamExpectation(
+                    task=LLMTask.THERAPY_RESPONSE,
+                    chunks=("hello",),
+                )
+            ]
+        ),
+        log_prompt_previews=True,
+        preview_chars=200,
+    )
+
+    with caplog.at_level(level, logger="jung.llm.tracing"):
+        async for _chunk in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content=preview_text)],
+            policy,
+        ):
+            pass
+
+    assert "llm call start" in caplog.text
+    assert (preview_text in caplog.text) is preview_expected
+
+
 async def test_tracing_gateway_logs_structured_completion(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

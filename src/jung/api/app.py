@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, Request
@@ -256,6 +257,25 @@ def create_app(
     return app
 
 
+def _uvicorn_log_config_with_jung(log_level: str) -> dict[str, Any]:
+    """Extend Uvicorn's default logging config with the `jung` logger.
+
+    Uvicorn's `log_level` only updates its own loggers (uvicorn.*), so we
+    explicitly configure `jung` at the same level.
+    """
+    from copy import deepcopy
+
+    from uvicorn.config import LOG_LEVELS, LOGGING_CONFIG
+
+    log_config = deepcopy(LOGGING_CONFIG)
+    log_config["loggers"]["jung"] = {
+        "handlers": ["default"],
+        "level": LOG_LEVELS[log_level],
+        "propagate": False,
+    }
+    return log_config
+
+
 def cli() -> None:
     import uvicorn
 
@@ -264,11 +284,13 @@ def cli() -> None:
     settings = load_api_settings()
     validate_bind_host(settings)
     app = create_app(settings)
+
     uvicorn.run(
         app,
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,
+        log_config=_uvicorn_log_config_with_jung(settings.log_level),
         access_log=False,
     )
 

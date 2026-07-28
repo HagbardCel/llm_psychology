@@ -1,9 +1,9 @@
 ---
 owner: engineering
 status: accepted
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-21
 review_cycle_days: 30
-source_of_truth_for: Target workflow, revision, operation, and chat-turn model
+source_of_truth_for: Workflow, revision, operation, and chat-turn model
 ---
 
 # ADR 0003: Stage, operations, and chat turns
@@ -20,4 +20,8 @@ Persist one `Stage`: `SETUP → INTAKE → ASSESSMENT → STYLE_SELECTION → RE
 
 ## Consequences
 
-Legacy user status, next actions, job trees, and `REFLECTION_IN_PROGRESS` are removed at cutover. Invalid commands return `invalid_command`; new stale commands return `state_conflict`.
+Invalid commands return `invalid_command`; stale commands return `state_conflict`.
+
+## Related canonical documentation
+
+- [Workflow Specification](../refactor/workflow-specification.md)

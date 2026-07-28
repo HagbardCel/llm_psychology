@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: supporting
-last_reviewed: 2026-05-31
+last_reviewed: 2026-07-21
 review_cycle_days: 90
 source_of_truth_for: Documentation governance policy and active-doc standards
 ---
@@ -34,10 +34,11 @@ It establishes a strict active-doc set and a predictable review process.
 The current active canonical set is:
 
 1. `docs/README.md`
-2. `docs/ui-scope.md`
-3. `docs/refactor/target-architecture.md`
-4. `docs/refactor/api-v1-contract.md`
-5. `docs/refactor/workflow-specification.md`
+2. `docs/safety-and-data.md`
+3. `docs/ui-scope.md`
+4. `docs/refactor/target-architecture.md`
+5. `docs/refactor/api-v1-contract.md`
+6. `docs/refactor/workflow-specification.md`
 
 ## Required Front Matter for Active Docs
 All active docs must include this metadata block at the top:
@@ -67,6 +68,8 @@ source_of_truth_for: <short scope statement>
    doc and delete the historical file. Do not create archive folders.
 
 ## Validation
+
+### Automated enforcement
 Use the docs metadata validator:
 
 ```bash
@@ -82,3 +85,12 @@ The validator enforces:
    unexpected, duplicate, or reordered links.
 5. Reviews are not overdue: a document remains valid through
    `last_reviewed + review_cycle_days` and fails validation the following day.
+6. Local-link validity across `README.md`, `AGENTS.md`, and all `docs/**/*.md`.
+
+### Review convention
+Supporting documents should link back to a relevant canonical document. This
+convention is not automated by the validator.
+
+## Related canonical documentation
+
+- [Documentation Index](README.md)

@@ -1,9 +1,6 @@
-# Git attributes for generated files
+# Git attributes
 
-# Mark generated schema files as generated
-schemas/*.json linguist-generated=true
-
-# Mark documentation files
+# Documentation
 *.md text
 
 # Line endings

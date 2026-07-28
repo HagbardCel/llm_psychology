@@ -5,7 +5,7 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 paths=$(git diff --cached --name-only)
-log_dir="${TMPDIR:-/tmp}/psychoanalyst-hooks"
+log_dir="${TMPDIR:-/tmp}/jung-hooks"
 mkdir -p "$log_dir"
 log="$log_dir/pre-commit-$(date +%s).log"
 

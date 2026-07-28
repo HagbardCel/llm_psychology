@@ -13,7 +13,7 @@ done
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-log_dir="${TMPDIR:-/tmp}/psychoanalyst-hooks"
+log_dir="${TMPDIR:-/tmp}/jung-hooks"
 mkdir -p "$log_dir"
 log="$log_dir/pre-push-$(date +%s).log"
 run() {

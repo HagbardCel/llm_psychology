@@ -8,6 +8,7 @@
 
 ## Documentation Map (Read First)
 - `docs/README.md`: Doc index and canonical navigation.
+- `docs/safety-and-data.md`: Product safety, data handling, and network exposure.
 - `docs/ui-scope.md`: Supported frontend policy (`jung-console`).
 - `docs/refactor/target-architecture.md`: Current runtime architecture.
 - `docs/refactor/api-v1-contract.md`: Supported external HTTP/WebSocket API.

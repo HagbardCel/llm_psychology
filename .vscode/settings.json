@@ -9,7 +9,7 @@
   ],
   // Python-specific editor settings
   "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
       "source.organizeImports": "explicit"
@@ -41,7 +41,6 @@
     "**/__pycache__": true,
     "**/*.pyc": true,
     "**/.pytest_cache": true,
-    "**/.mypy_cache": true,
     "**/.ruff_cache": true,
     "**/*.egg-info": true
   },

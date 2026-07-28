@@ -116,20 +116,6 @@ class SQLiteStore:
                     f"unsupported schema version {version}; reset the database"
                 )
 
-    def reset_database(self) -> None:
-        """Remove the database files and recreate a fresh schema."""
-        resolved = self._database_path.resolve()
-        for dangerous in sql.DANGEROUS_DB_PATHS:
-            if resolved == dangerous.resolve():
-                raise PersistenceFailure(
-                    f"refusing to reset production database at {resolved}"
-                )
-        for suffix in ("", "-wal", "-shm"):
-            path = Path(f"{self._database_path}{suffix}")
-            if path.exists():
-                path.unlink()
-        self.initialize()
-
     def get_app_state(self) -> AppState:
         with self._connect() as conn:
             row = conn.execute(
