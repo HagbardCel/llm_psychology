@@ -19,7 +19,7 @@ from jung.llm.gateway import (
 )
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
-from jung.llm.tracing import TracingLLMGateway
+from jung.llm.tracing import ObservedLLMGateway
 from jung.phases.assessment.models import AssessmentInput, IntakeRecord
 from jung.phases.assessment.processor import AssessmentProcessor
 from jung.phases.post_session.models import PostSessionInput
@@ -32,15 +32,12 @@ from tests.smoke.jung.smoke_env import (
     effective_completion_cap_labels,
     parse_completion_caps,
     parse_smoke_extra_body,
-    smoke_log_prompt_previews,
     smoke_path_budget_seconds,
     smoke_request_timeout_seconds,
     smoke_strict_acceptance,
 )
 from tests.smoke.jung.smoke_evidence import COLLECTOR
-from tests.smoke.jung.smoke_gateway import SmokeObservingGateway
 from tests.smoke.jung.smoke_path import SmokeOperationResult, run_smoke_path
-from tests.smoke.jung.smoke_recorder import SmokeAttemptRecorder
 
 
 def _required_smoke_env(name: str) -> str:
@@ -119,36 +116,28 @@ def configure_smoke_metadata(
 
 
 @pytest_asyncio.fixture
-async def gateway(smoke_extra_body: dict[str, object] | None):
+async def gateway(smoke_extra_body: dict[str, object] | None, diagnostic_run):
     _required_smoke_env("LOCAL_LLM_SMOKE_SERVER")
     _required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL")
     _required_smoke_env("LOCAL_LLM_SMOKE_MODEL")
-    attempt_recorder = SmokeAttemptRecorder(COLLECTOR)
     config = AdapterConfig(
         base_url=_required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
         extra_body=smoke_extra_body,
     )
-    raw = OpenAICompatibleLLM(
-        config,
-        on_provider_attempt=attempt_recorder.record,
-    )
-    traced = TracingLLMGateway(
+    raw = OpenAICompatibleLLM(config, recorder=diagnostic_run)
+    gateway = ObservedLLMGateway(
         raw,
-        log_prompt_previews=smoke_log_prompt_previews(),
-        preview_chars=300,
+        log_metadata=True,
+        recorder=diagnostic_run,
     )
-    observed = SmokeObservingGateway(
-        traced,
-        collector=COLLECTOR,
-    )
-    yield observed
+    yield gateway
     await raw.aclose()
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_therapy_stream(gateway: SmokeObservingGateway) -> None:
+async def test_smoke_therapy_stream(gateway: ObservedLLMGateway) -> None:
     policies = _policies()
     processor = TherapyProcessor(
         gateway,
@@ -188,7 +177,7 @@ async def test_smoke_therapy_stream(gateway: SmokeObservingGateway) -> None:
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_assessment_processor(gateway: SmokeObservingGateway) -> None:
+async def test_smoke_assessment_processor(gateway: ObservedLLMGateway) -> None:
     policies = _policies()
     processor = AssessmentProcessor(
         gateway,
@@ -217,7 +206,7 @@ async def test_smoke_assessment_processor(gateway: SmokeObservingGateway) -> Non
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_post_session_processor(gateway: SmokeObservingGateway) -> None:
+async def test_smoke_post_session_processor(gateway: ObservedLLMGateway) -> None:
     policies = _policies()
     processor = PostSessionProcessor(
         gateway,

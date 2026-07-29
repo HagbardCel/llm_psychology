@@ -75,16 +75,22 @@ class _Subscription:
             item = await self.queue.get()
             if item is _SUBSCRIPTION_CLOSED:
                 return
-            yield item
+            yield item  # type: ignore[misc]
 
 
 class EventStream:
     """Bounded local fan-out for currently connected observers."""
 
-    def __init__(self, *, max_queue_size: int = 64) -> None:
+    def __init__(
+        self,
+        *,
+        max_queue_size: int = 64,
+        recorder: object | None = None,
+    ) -> None:
         self._max_queue_size = max_queue_size
         self._subscribers: set[_Subscription] = set()
         self._lock = asyncio.Lock()
+        self._recorder = recorder
 
     @asynccontextmanager
     async def subscribe(self) -> AsyncIterator[AsyncIterator[ApplicationEvent]]:
@@ -103,6 +109,17 @@ class EventStream:
     async def publish(self, event: ApplicationEvent) -> None:
         # Keep membership checks, non-blocking delivery, and eviction atomic
         # across concurrent publishers.
+        if self._recorder is not None:
+            try:
+                self._recorder.record(  # type: ignore[attr-defined]
+                    "application.event",
+                    {
+                        "event_type": type(event).__name__,
+                        "event": event,
+                    },
+                )
+            except Exception:
+                pass
         async with self._lock:
             for subscriber in tuple(self._subscribers):
                 try:

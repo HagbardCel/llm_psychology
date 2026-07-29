@@ -217,7 +217,7 @@ def _test_policies() -> dict[LLMTask, ModelPolicy]:
 
 
 def _build_processors(
-    fake_llm: FakeLLM,
+    gateway: object,
 ) -> tuple[
     IntakeProcessor,
     AssessmentProcessor,
@@ -227,20 +227,20 @@ def _build_processors(
     policies = _test_policies()
     return (
         IntakeProcessor(
-            fake_llm,
+            gateway,  # type: ignore[arg-type]
             patch_policy=policies[LLMTask.INTAKE_PATCH],
             response_policy=policies[LLMTask.INTAKE_RESPONSE],
         ),
         AssessmentProcessor(
-            fake_llm,
+            gateway,  # type: ignore[arg-type]
             assessment_policy=policies[LLMTask.ASSESSMENT],
         ),
         TherapyProcessor(
-            fake_llm,
+            gateway,  # type: ignore[arg-type]
             response_policy=policies[LLMTask.THERAPY_RESPONSE],
         ),
         PostSessionProcessor(
-            fake_llm,
+            gateway,  # type: ignore[arg-type]
             analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
             update_policy=policies[LLMTask.POST_SESSION_UPDATE],
         ),
@@ -256,15 +256,25 @@ async def build_test_application(
     new_id: Callable[[], UUID] | None = None,
     recover: bool = True,
     supervisor: TaskSupervisor | None = None,
+    recorder: object | None = None,
 ) -> AsyncIterator[TestApplicationRuntime]:
     """Wire TherapyApplication with real store, processors, events, and supervisor."""
-    intake, assessment, therapy, post_session = _build_processors(fake_llm)
-    events = EventStream(max_queue_size=64)
+    from jung.llm.tracing import ObservedLLMGateway
+
+    gateway: object = fake_llm
+    if recorder is not None:
+        gateway = ObservedLLMGateway(
+            fake_llm,
+            log_metadata=False,
+            recorder=recorder,  # type: ignore[arg-type]
+        )
+    intake, assessment, therapy, post_session = _build_processors(gateway)  # type: ignore[arg-type]
+    events = EventStream(max_queue_size=64, recorder=recorder)
     styles: MappingProxyType[str, object] = load_styles()
     clock = now or (lambda: datetime.now(UTC))
     ids = new_id or uuid4
 
-    supervisor_instance = supervisor or TaskSupervisor()
+    supervisor_instance = supervisor or TaskSupervisor(recorder=recorder)  # type: ignore[arg-type]
     async with supervisor_instance as active_supervisor:
         application = TherapyApplication(
             store=store,
@@ -277,6 +287,7 @@ async def build_test_application(
             supervisor=active_supervisor,
             now=clock,
             new_id=ids,
+            recorder=recorder,
         )
         if recover:
             await application.recover_on_startup()

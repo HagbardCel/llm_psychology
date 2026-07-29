@@ -52,16 +52,34 @@ container (required for container networking) while the host port is published
 only on `127.0.0.1`. Do not broaden that host binding casually or assume the
 application provides authentication when changing port mappings.
 
-## Tracing and logs
+## Tracing, logs, and diagnostic capture
+
+Three separate switches:
+
+| Mechanism | Purpose |
+| --- | --- |
+| `JUNG_API_LOG_LEVEL` | Console log verbosity |
+| `JUNG_ENABLE_LLM_TRACING` | Safe LLM timing/count metadata in ordinary logs |
+| `JUNG_DEBUG_RUN_DIR` | Full sensitive diagnostic evidence in a local run directory |
 
 `JUNG_ENABLE_LLM_TRACING=true` records operational metadata (task, model,
-mode, timing, role sequence, message counts, and character counts).
+mode, timing, role sequence, message counts, and character counts). Prompt
+contents are not written to ordinary logs.
 
-`JUNG_LOG_PROMPT_PREVIEWS=true` additionally logs prompt prefixes and can
-expose sensitive content. Previews are emitted at DEBUG level, so they require
-`JUNG_ENABLE_LLM_TRACING=true` and `JUNG_API_LOG_LEVEL=debug` or `trace`; the
-default `info` level suppresses them. Treat logs as sensitive whenever
-previews are enabled.
+`JUNG_DEBUG_RUN_DIR` enables structured local evidence capture
+(`manifest.json`, `trace.jsonl`, and for the composed application also
+`database-start.sqlite` / `database-end.sqlite`). The directory must not
+already exist. Treat the entire run directory as highly sensitive: it may
+contain exact prompts, model responses, and database contents.
+
+Manifest `run_status` describes runtime lifecycle outcome only
+(`run_status_scope: runtime_lifecycle`), not whether every command or
+background operation succeeded. A manifest left in `"running"` after process
+exit is interrupted/unfinalized evidence.
+
+Avoid duplicate representations within the same boundary. Values may still
+appear at multiple architectural boundaries (provider → events → store →
+database snapshot) to prove correct handoff.
 
 ## Erasing local data
 
@@ -102,9 +120,9 @@ artifacts, and other copies, separately.
 
 ### Logs, backups, and copies
 
-Remove relevant files under `./logs`, manual archives, backups, workflow-probe
-artifacts that may contain user text, and any copied database exports
-separately.
+Remove relevant files under `./logs` (including `./logs/debug-runs/`), manual
+archives, backups, workflow-probe artifacts that may contain user text, and
+any copied database exports separately.
 
 ## Related canonical documentation
 

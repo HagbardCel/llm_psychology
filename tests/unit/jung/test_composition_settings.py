@@ -29,7 +29,7 @@ def test_load_application_settings_defaults() -> None:
     assert settings.shutdown_timeout_seconds == 30.0
     assert settings.event_queue_size == 64
     assert settings.enable_llm_tracing is False
-    assert settings.log_prompt_previews is False
+    assert settings.debug_run_dir is None
     assert settings.llm.extra_body is None
     assert settings.llm.task_extra_body is None
     assert settings.llm.default_headers is None
@@ -41,14 +41,15 @@ def test_load_application_settings_scalar_overrides() -> None:
             "JUNG_SHUTDOWN_TIMEOUT": "45",
             "JUNG_EVENT_QUEUE_SIZE": "128",
             "JUNG_ENABLE_LLM_TRACING": "true",
-            "JUNG_LOG_PROMPT_PREVIEWS": "true",
+            "JUNG_DEBUG_RUN_DIR": "  /tmp/jung-debug-run  ",
         },
         database_path="data/jung.db",
     )
     assert settings.shutdown_timeout_seconds == 45.0
     assert settings.event_queue_size == 128
     assert settings.enable_llm_tracing is True
-    assert settings.log_prompt_previews is True
+    assert settings.debug_run_dir is not None
+    assert str(settings.debug_run_dir) == "/tmp/jung-debug-run"
 
 
 @pytest.mark.parametrize(
@@ -413,14 +414,23 @@ def test_extra_body_rejects_non_finite_numbers(payload: str) -> None:
         )
 
 
-def test_log_prompt_previews_requires_tracing() -> None:
-    with pytest.raises(
-        ValueError, match="log_prompt_previews requires enable_llm_tracing"
-    ):
-        load_application_settings(
-            {"JUNG_LOG_PROMPT_PREVIEWS": "true"},
-            database_path="data/jung.db",
-        )
+def test_debug_run_dir_absent_or_blank_is_none() -> None:
+    settings = load_application_settings({}, database_path="data/jung.db")
+    assert settings.debug_run_dir is None
+    blank = load_application_settings(
+        {"JUNG_DEBUG_RUN_DIR": "   "},
+        database_path="data/jung.db",
+    )
+    assert blank.debug_run_dir is None
+
+
+def test_debug_run_dir_parses_relative_path() -> None:
+    settings = load_application_settings(
+        {"JUNG_DEBUG_RUN_DIR": "artifacts/debug-run"},
+        database_path="data/jung.db",
+    )
+    assert settings.debug_run_dir is not None
+    assert str(settings.debug_run_dir) == "artifacts/debug-run"
 
 
 @pytest.mark.parametrize(
@@ -449,18 +459,6 @@ def test_empty_task_extra_body_is_omitted() -> None:
         database_path="data/jung.db",
     )
     assert settings.llm.task_extra_body is None
-
-
-def test_settings_post_init_rejects_prompt_previews_without_tracing() -> None:
-    with pytest.raises(
-        ValueError, match="log_prompt_previews requires enable_llm_tracing"
-    ):
-        ApplicationSettings(
-            database_path="data/jung.db",
-            llm=_valid_llm(),
-            enable_llm_tracing=False,
-            log_prompt_previews=True,
-        )
 
 
 def test_settings_post_init_rejects_invalid_queue_size() -> None:

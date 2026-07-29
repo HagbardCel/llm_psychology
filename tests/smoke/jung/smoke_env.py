@@ -50,10 +50,6 @@ def _parse_positive_finite_float(name: str, raw: str) -> float:
     return value
 
 
-def smoke_log_prompt_previews() -> bool:
-    return parse_bool_env("LOCAL_LLM_SMOKE_LOG_PROMPT_PREVIEWS", default=False)
-
-
 def smoke_strict_acceptance() -> bool:
     return parse_bool_env("LOCAL_LLM_SMOKE_STRICT_ACCEPTANCE", default=True)
 

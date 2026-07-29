@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -49,6 +50,7 @@ def _client(
     *,
     config: AdapterConfig | None = None,
     on_provider_attempt: object | None = None,
+    recorder: object | None = None,
 ) -> OpenAICompatibleLLM:
     adapter_config = config or AdapterConfig(
         base_url="http://testserver/v1",
@@ -57,6 +59,8 @@ def _client(
     kwargs: dict[str, object] = {}
     if on_provider_attempt is not None:
         kwargs["on_provider_attempt"] = on_provider_attempt
+    if recorder is not None:
+        kwargs["recorder"] = recorder
     return OpenAICompatibleLLM(
         adapter_config,
         client=AsyncOpenAI(
@@ -946,3 +950,142 @@ async def test_validator_invalid_llm_output_records_semantic_correction_trigger(
     assert result.value == "ok"
     assert len(events) == 2
     assert events[1].correction_trigger == "semantic_validation"
+
+
+async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
+    tmp_path: Path,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    chunk = json.dumps(
+        {
+            "id": "1",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {"delta": {"content": "hello"}, "index": 0, "finish_reason": None}
+            ],
+        }
+    )
+    final = json.dumps(
+        {
+            "id": "1",
+            "object": "chat.completion.chunk",
+            "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
+        }
+    )
+    sse_body = f"data: {chunk}\n\ndata: {final}\n\ndata: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="test-model",
+        temperature=0.7,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+    events: list[ProviderAttemptEvent] = []
+    plain = _client(httpx.MockTransport(handler), on_provider_attempt=events.append)
+    chunks = [piece async for piece in plain.stream_text(
+        [ChatMessage(role=ChatRole.USER, content="hi")],
+        policy,
+    )]
+    assert "".join(chunks) == "hello"
+    assert len(events) == 1
+    assert events[0].response_chars is None
+
+    with DiagnosticRun(tmp_path / "llm-stream") as recorder:
+        observed = ObservedLLMGateway(
+            _client(httpx.MockTransport(handler), recorder=recorder),
+            recorder=recorder,
+        )
+        chunks = [
+            piece
+            async for piece in observed.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                policy,
+            )
+        ]
+        assert "".join(chunks) == "hello"
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "llm-stream" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    kinds = [entry["kind"] for entry in lines]
+    assert "llm.call.start" in kinds
+    assert "llm.provider.request" in kinds
+    assert "llm.provider.response" in kinds
+    assert "llm.call.complete" in kinds
+    response = next(entry for entry in lines if entry["kind"] == "llm.provider.response")
+    assert response["data"]["raw_response_text"] == "hello"
+    complete = next(entry for entry in lines if entry["kind"] == "llm.call.complete")
+    assert "raw_response_text" not in complete["data"]
+    assert complete["data"]["response_chars"] == 5
+
+
+async def test_structured_diagnostics_capture_request_and_validated_result(
+    tmp_path: Path,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": '{"value":"ok"}',
+                        },
+                        "finish_reason": "stop",
+                        "index": 0,
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    with DiagnosticRun(tmp_path / "llm-structured") as recorder:
+        gateway = ObservedLLMGateway(
+            _client(httpx.MockTransport(handler), recorder=recorder),
+            recorder=recorder,
+        )
+        result = await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+        assert result.value == "ok"
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "llm-structured" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    kinds = [entry["kind"] for entry in lines]
+    assert "llm.provider.request" in kinds
+    assert "llm.provider.response" in kinds
+    assert "llm.call.complete" in kinds
+    request = next(entry for entry in lines if entry["kind"] == "llm.provider.request")
+    assert request["data"]["messages"][0]["content"] == "give json"
+    assert "api_key" not in json.dumps(request)
+    response = next(entry for entry in lines if entry["kind"] == "llm.provider.response")
+    assert response["data"]["raw_response_text"] == '{"value":"ok"}'
+    complete = next(entry for entry in lines if entry["kind"] == "llm.call.complete")
+    assert complete["data"]["result"]["value"] == "ok"

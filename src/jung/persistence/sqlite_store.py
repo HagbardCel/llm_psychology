@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
@@ -43,6 +44,9 @@ from jung.persistence import _sqlite_support as sql
 
 SCHEMA_VERSION = sql.SCHEMA_VERSION
 
+_connection_counter = 0
+_connection_counter_lock = threading.Lock()
+
 
 def _build_plan(**values: object) -> Plan:
     try:
@@ -78,12 +82,39 @@ _SESSION_SELECT = """
 class SQLiteStore:
     """Synchronous use-case store with one connection per operation."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        recorder: Any | None = None,
+    ) -> None:
         self._database_path = Path(database_path)
+        self._recorder = recorder
 
     @property
     def database_path(self) -> Path:
         return self._database_path
+
+    def backup_to(self, destination: Path) -> None:
+        """Create an exclusive SQLite backup at destination (mode 0o600)."""
+        destination = Path(destination)
+        if destination.exists():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Open destination without attaching the diagnostic SQL callback.
+        dest = sqlite3.connect(destination)
+        try:
+            with sql.connect(self._database_path) as source:
+                source.backup(dest)
+            dest.commit()
+        finally:
+            dest.close()
+        try:
+            import os
+
+            os.chmod(destination, 0o600)
+        except OSError:
+            pass
 
     def initialize(self) -> None:
         """Create schema and seed singleton state when needed."""
@@ -1258,7 +1289,30 @@ class SQLiteStore:
 
     @contextmanager
     def _connect(self):
-        with sql.connect(self._database_path) as conn:
+        global _connection_counter
+        connection_id: str | None = None
+        trace_callback = None
+        if self._recorder is not None:
+            with _connection_counter_lock:
+                _connection_counter += 1
+                connection_id = f"conn-{_connection_counter}"
+
+            def trace_callback(statement: str) -> None:
+                try:
+                    self._recorder.record(
+                        "database.sql",
+                        {
+                            "connection_id": connection_id,
+                            "sql": statement,
+                        },
+                    )
+                except Exception:
+                    pass
+
+        with sql.connect(
+            self._database_path,
+            trace_callback=trace_callback,
+        ) as conn:
             yield conn
 
     def _ensure_operation_updated(

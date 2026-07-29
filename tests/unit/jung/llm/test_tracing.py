@@ -1,4 +1,4 @@
-"""Tests for tracing gateway wrapper."""
+"""Tests for ObservedLLMGateway metadata logging."""
 
 from __future__ import annotations
 
@@ -23,14 +23,14 @@ from jung.llm.gateway import (
     ModelPolicy,
     StructuredOutputMode,
 )
-from jung.llm.tracing import TracingLLMGateway
+from jung.llm.tracing import ObservedLLMGateway
 
 
 class _Answer(BaseModel):
     value: str
 
 
-async def test_tracing_gateway_passes_stream_through(
+async def test_observed_gateway_passes_stream_through(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = ModelPolicy(
@@ -40,7 +40,7 @@ async def test_tracing_gateway_passes_stream_through(
         timeout_seconds=30.0,
         structured_output_mode=StructuredOutputMode.PROMPT,
     )
-    gateway = TracingLLMGateway(
+    gateway = ObservedLLMGateway(
         FakeLLM(
             [
                 StreamExpectation(
@@ -48,7 +48,8 @@ async def test_tracing_gateway_passes_stream_through(
                     chunks=("hello", " world"),
                 )
             ]
-        )
+        ),
+        log_metadata=True,
     )
     with caplog.at_level(logging.INFO, logger="jung.llm.tracing"):
         chunks: list[str] = []
@@ -67,7 +68,7 @@ async def test_tracing_gateway_passes_stream_through(
     assert "status=success" in completion_records[0].getMessage()
 
 
-async def test_tracing_gateway_does_not_log_prompt_previews_by_default(
+async def test_observed_gateway_does_not_log_when_metadata_disabled(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = ModelPolicy(
@@ -77,47 +78,7 @@ async def test_tracing_gateway_does_not_log_prompt_previews_by_default(
         timeout_seconds=30.0,
         structured_output_mode=StructuredOutputMode.PROMPT,
     )
-    gateway = TracingLLMGateway(
-        FakeLLM(
-            [
-                StreamExpectation(
-                    task=LLMTask.THERAPY_RESPONSE,
-                    chunks=("secret prompt content",),
-                )
-            ]
-        ),
-        log_prompt_previews=False,
-    )
-    with caplog.at_level(logging.DEBUG, logger="jung.llm.tracing"):
-        async for _chunk in gateway.stream_text(
-            [ChatMessage(role=ChatRole.USER, content="secret prompt content")],
-            policy,
-        ):
-            pass
-    assert "secret prompt content" not in caplog.text
-
-
-@pytest.mark.parametrize(
-    ("level", "preview_expected"),
-    [
-        (logging.INFO, False),
-        (logging.DEBUG, True),
-    ],
-)
-async def test_prompt_previews_respect_logger_level(
-    caplog: pytest.LogCaptureFixture,
-    level: int,
-    preview_expected: bool,
-) -> None:
-    policy = ModelPolicy(
-        task=LLMTask.THERAPY_RESPONSE,
-        model="local",
-        temperature=0.7,
-        timeout_seconds=30.0,
-        structured_output_mode=StructuredOutputMode.PROMPT,
-    )
-    preview_text = "secret preview text"
-    gateway = TracingLLMGateway(
+    gateway = ObservedLLMGateway(
         FakeLLM(
             [
                 StreamExpectation(
@@ -126,22 +87,19 @@ async def test_prompt_previews_respect_logger_level(
                 )
             ]
         ),
-        log_prompt_previews=True,
-        preview_chars=200,
+        log_metadata=False,
     )
-
-    with caplog.at_level(level, logger="jung.llm.tracing"):
+    with caplog.at_level(logging.DEBUG, logger="jung.llm.tracing"):
         async for _chunk in gateway.stream_text(
-            [ChatMessage(role=ChatRole.USER, content=preview_text)],
+            [ChatMessage(role=ChatRole.USER, content="hi")],
             policy,
         ):
             pass
+    assert "llm call start" not in caplog.text
+    assert "llm stream complete" not in caplog.text
 
-    assert "llm call start" in caplog.text
-    assert (preview_text in caplog.text) is preview_expected
 
-
-async def test_tracing_gateway_logs_structured_completion(
+async def test_observed_gateway_logs_structured_completion(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = ModelPolicy(
@@ -151,7 +109,7 @@ async def test_tracing_gateway_logs_structured_completion(
         timeout_seconds=30.0,
         structured_output_mode=StructuredOutputMode.JSON_OBJECT,
     )
-    gateway = TracingLLMGateway(
+    gateway = ObservedLLMGateway(
         FakeLLM(
             [
                 StructuredExpectation(
@@ -161,6 +119,7 @@ async def test_tracing_gateway_logs_structured_completion(
                 )
             ]
         ),
+        log_metadata=True,
     )
     with caplog.at_level(logging.INFO, logger="jung.llm.tracing"):
         result = await gateway.generate_structured(
@@ -178,7 +137,7 @@ async def test_tracing_gateway_logs_structured_completion(
     assert "status=success" in completion_records[0].getMessage()
 
 
-async def test_tracing_gateway_logs_failure_metadata_without_traceback(
+async def test_observed_gateway_logs_failure_metadata_without_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = ModelPolicy(
@@ -189,7 +148,7 @@ async def test_tracing_gateway_logs_failure_metadata_without_traceback(
         structured_output_mode=StructuredOutputMode.PROMPT,
     )
     original_error = LLMTimeout("provider stalled")
-    gateway = TracingLLMGateway(
+    gateway = ObservedLLMGateway(
         FakeLLM(
             [
                 FailureExpectation(
@@ -197,7 +156,8 @@ async def test_tracing_gateway_logs_failure_metadata_without_traceback(
                     error=original_error,
                 )
             ]
-        )
+        ),
+        log_metadata=True,
     )
     with caplog.at_level(logging.ERROR, logger="jung.llm.tracing"):
         with pytest.raises(LLMTimeout) as exc_info:
@@ -213,7 +173,7 @@ async def test_tracing_gateway_logs_failure_metadata_without_traceback(
     assert "Traceback" not in caplog.text
 
 
-async def test_tracing_gateway_logs_structured_failure_metadata(
+async def test_observed_gateway_logs_structured_failure_metadata(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = ModelPolicy(
@@ -224,7 +184,7 @@ async def test_tracing_gateway_logs_structured_failure_metadata(
         structured_output_mode=StructuredOutputMode.JSON_OBJECT,
     )
     original_error = LLMTimeout("provider stalled")
-    gateway = TracingLLMGateway(
+    gateway = ObservedLLMGateway(
         FakeLLM(
             [
                 FailureExpectation(
@@ -233,6 +193,7 @@ async def test_tracing_gateway_logs_structured_failure_metadata(
                 )
             ]
         ),
+        log_metadata=True,
     )
     with caplog.at_level(logging.ERROR, logger="jung.llm.tracing"):
         with pytest.raises(LLMTimeout) as exc_info:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +16,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from jung import workflow
+from jung.diagnostics import diagnostic_context
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -117,6 +119,7 @@ class TherapyApplication:
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
+        recorder: Any | None = None,
     ) -> None:
         self._store = store
         self._intake = intake
@@ -128,6 +131,7 @@ class TherapyApplication:
         self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
+        self._recorder = recorder
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
@@ -144,7 +148,52 @@ class TherapyApplication:
     ) -> _T:
         # Bounded shutdown applies around LLM/background work; an already-running
         # local SQLite call is allowed to finish before the mutation lock releases.
-        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+        method_name = getattr(fn, "__name__", repr(fn))
+        recorder = self._recorder
+
+        def invoke() -> _T:
+            if recorder is None:
+                return fn(*args, **kwargs)
+            from jung.diagnostics import diagnostic_context
+
+            store_call_id = recorder.next_id("store")
+            with diagnostic_context(store_call_id=store_call_id):
+                recorder.record(
+                    "store.call.start",
+                    {
+                        "store_call_id": store_call_id,
+                        "method": method_name,
+                        "arguments": {"args": list(args), "kwargs": dict(kwargs)},
+                    },
+                )
+                started = time.perf_counter()
+                try:
+                    result = fn(*args, **kwargs)
+                except Exception as exc:
+                    recorder.record(
+                        "store.call.error",
+                        {
+                            "store_call_id": store_call_id,
+                            "method": method_name,
+                            "elapsed_seconds": time.perf_counter() - started,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
+                    raise
+                else:
+                    recorder.record(
+                        "store.call.complete",
+                        {
+                            "store_call_id": store_call_id,
+                            "method": method_name,
+                            "elapsed_seconds": time.perf_counter() - started,
+                            "result": result,
+                        },
+                    )
+                    return result
+
+        task = asyncio.create_task(asyncio.to_thread(invoke))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError as cancellation:
@@ -162,7 +211,7 @@ class TherapyApplication:
                 except Exception:
                     logger.exception(
                         "store call failed after caller cancellation function=%s",
-                        getattr(fn, "__name__", repr(fn)),
+                        method_name,
                     )
 
             raise cancellation
@@ -772,27 +821,41 @@ class TherapyApplication:
         session_id: UUID,
         request_id: UUID | None,
     ) -> None:
-        try:
-            session = await self._run_store(self._store.get_session, session_id)
-            if session is None:
-                raise NotFound(f"session {session_id}")
-            if session.kind is SessionKind.INTAKE:
-                await self._generate_intake_response(turn_id, session_id, request_id)
-            elif session.kind is SessionKind.THERAPY:
-                await self._generate_therapy_response(turn_id, session_id, request_id)
-            else:
-                raise InvariantViolation(f"unsupported session kind: {session.kind}")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "chat worker failed turn_id=%s session_id=%s",
-                turn_id,
-                session_id,
-            )
-            await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
-        finally:
-            self._release_generation_lock()
+        with diagnostic_context(
+            turn_id=str(turn_id),
+            session_id=str(session_id),
+            request_id=str(request_id) if request_id is not None else None,
+            task_name=f"chat:{turn_id}",
+        ):
+            try:
+                session = await self._run_store(self._store.get_session, session_id)
+                if session is None:
+                    raise NotFound(f"session {session_id}")
+                if session.kind is SessionKind.INTAKE:
+                    await self._generate_intake_response(
+                        turn_id,
+                        session_id,
+                        request_id,
+                    )
+                elif session.kind is SessionKind.THERAPY:
+                    await self._generate_therapy_response(
+                        turn_id, session_id, request_id
+                    )
+                else:
+                    raise InvariantViolation(
+                        f"unsupported session kind: {session.kind}"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "chat worker failed turn_id=%s session_id=%s",
+                    turn_id,
+                    session_id,
+                )
+                await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
+            finally:
+                self._release_generation_lock()
 
     async def _generate_intake_response(
         self,
@@ -975,6 +1038,13 @@ class TherapyApplication:
         await self._events.publish(SnapshotChanged(snapshot))
 
     async def _run_operation_worker(self, operation_id: UUID) -> None:
+        with diagnostic_context(
+            operation_id=str(operation_id),
+            task_name=f"operation:{operation_id}",
+        ):
+            await self._run_operation_worker_body(operation_id)
+
+    async def _run_operation_worker_body(self, operation_id: UUID) -> None:
         running_owned = False
         try:
             async with self._mutation_lock:

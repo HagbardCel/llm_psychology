@@ -37,6 +37,7 @@ from jung.api.settings import ApiSettings, validate_api_settings
 from jung.api.websocket import router as websocket_router
 from jung.composition import application_context
 from jung.config import ApplicationSettings
+from jung.diagnostics import diagnostic_context
 from jung.domain.errors import DomainError, RevisionConflict
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         else:
             request.state.request_id = request_id
             try:
-                response = await call_next(request)
+                with diagnostic_context(request_id=str(request_id)):
+                    response = await call_next(request)
             except Exception as exc:
                 _log_safe_exception(
                     "unhandled API error",
