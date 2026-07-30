@@ -460,45 +460,48 @@ class OpenAICompatibleLLM:
                 terminal_emitted = True
                 raise
         finally:
-            await self._close_sdk_stream(
-                sdk_stream,
-                provider_attempt_id=provider_attempt_id,
-                policy=policy,
-                status=status,
-            )
-            if recording and not terminal_emitted and status != "success":
-                status = "abandoned"
-                error_type = "GeneratorExit"
-                error_message = "stream closed before completion"
-                self._record_provider_failure(
+            try:
+                await self._close_sdk_stream(
+                    sdk_stream,
                     provider_attempt_id=provider_attempt_id,
                     policy=policy,
-                    attempt="initial",
                     status=status,
-                    started=started,
-                    error_type=error_type,
-                    error_message=error_message,
-                    partial_response_text="".join(assembled),
-                    finish_reason=finish_reason,
                 )
-            elapsed = time.perf_counter() - started
-            self._emit_provider_attempt(
-                ProviderAttemptEvent(
-                    task=policy.task.value,
-                    attempt="initial",
-                    status=status if status != "started" else "abandoned",
-                    latency_seconds=elapsed,
-                    prompt_chars=prompt_char_count,
-                    response_format_chars=None,
-                    response_chars=len("".join(assembled)) if recording else None,
-                    timeout_seconds=policy.timeout_seconds,
-                    max_completion_tokens=policy.max_completion_tokens,
-                    finish_reason=finish_reason,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    error_type=error_type,
+            finally:
+                if recording and not terminal_emitted and status != "success":
+                    status = "abandoned"
+                    error_type = "GeneratorExit"
+                    error_message = "stream closed before completion"
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                    terminal_emitted = True
+                elapsed = time.perf_counter() - started
+                self._emit_provider_attempt(
+                    ProviderAttemptEvent(
+                        task=policy.task.value,
+                        attempt="initial",
+                        status=status if status != "started" else "abandoned",
+                        latency_seconds=elapsed,
+                        prompt_chars=prompt_char_count,
+                        response_format_chars=None,
+                        response_chars=len("".join(assembled)) if recording else None,
+                        timeout_seconds=policy.timeout_seconds,
+                        max_completion_tokens=policy.max_completion_tokens,
+                        finish_reason=finish_reason,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        error_type=error_type,
+                    )
                 )
-            )
 
     async def _close_sdk_stream(
         self,

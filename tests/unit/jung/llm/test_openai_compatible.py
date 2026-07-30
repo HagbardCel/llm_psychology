@@ -1806,3 +1806,147 @@ async def test_provider_close_failure_without_recorder_logs_safe_warning(
     assert "close boom" not in message
     assert "user:pass" not in message
     assert "https://" not in message
+
+
+async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    class _Delta:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str) -> None:
+            self.delta = _Delta(content)
+            self.finish_reason = None
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [_Choice(content)]
+
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    close_finished = asyncio.Event()
+
+    class FakeSDKStream:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def __aiter__(self) -> FakeSDKStream:
+            return self
+
+        async def __anext__(self) -> _Chunk:
+            if self._sent:
+                raise StopAsyncIteration
+            self._sent = True
+            return _Chunk("hello")
+
+        async def aclose(self) -> None:
+            close_started.set()
+            try:
+                await close_release.wait()
+            finally:
+                close_finished.set()
+
+    sdk_stream = FakeSDKStream()
+
+    async def fake_create(**kwargs: object) -> FakeSDKStream:
+        return sdk_stream
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"unused")
+
+    attempts: list[ProviderAttemptEvent] = []
+
+    with DiagnosticRun(tmp_path / "early-aclose-cancel") as recorder:
+        gateway = _client(
+            httpx.MockTransport(handler),
+            on_provider_attempt=attempts.append,
+            recorder=recorder,
+        )
+        monkeypatch.setattr(
+            gateway._client.chat.completions,  # type: ignore[attr-defined]
+            "create",
+            fake_create,
+        )
+        observed = ObservedLLMGateway(gateway, recorder=recorder)
+
+        async def consume() -> None:
+            stream = observed.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                _policy(mode=StructuredOutputMode.PROMPT),
+            )
+            first = await stream.__anext__()
+            assert first == "hello"
+            await stream.aclose()
+
+        close_task = asyncio.create_task(consume())
+        await close_started.wait()
+        close_task.cancel()
+        await asyncio.sleep(0.01)
+        assert not close_task.done()
+        close_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+        assert close_finished.is_set() is True
+
+    trace_path = tmp_path / "early-aclose-cancel" / "trace.jsonl"
+    lines = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    def only(kind: str) -> dict[str, object]:
+        matches = [e for e in lines if e["kind"] == kind]
+        assert len(matches) == 1, f"expected exactly one {kind}"
+        return matches[0]
+
+    call_start = only("llm.call.start")
+    call_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.call.complete", "llm.call.error"}
+        and e["data"].get("call_id") == call_start["data"]["call_id"]
+    ]
+    assert len(call_terminals) == 1
+    assert call_terminals[0]["kind"] == "llm.call.error"
+    assert call_terminals[0]["data"]["status"] == "abandoned"
+
+    provider_start = only("llm.provider.request")
+    provider_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.provider.response", "llm.provider.error"}
+        and e["data"].get("provider_attempt_id")
+        == provider_start["data"]["provider_attempt_id"]
+    ]
+    assert len(provider_terminals) == 1
+    assert provider_terminals[0]["kind"] == "llm.provider.error"
+    assert provider_terminals[0]["data"]["status"] == "abandoned"
+
+    assert provider_start["data"]["llm_call_id"] == call_start["data"]["call_id"]
+
+    assert len(attempts) == 1
+    assert attempts[0].status == "abandoned"
+
+    state_after_exit = (
+        trace_path.stat().st_size,
+        trace_path.stat().st_mtime_ns,
+        len(lines),
+    )
+    await asyncio.sleep(0.05)
+    reparsed = [
+        line
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert (
+        trace_path.stat().st_size,
+        trace_path.stat().st_mtime_ns,
+        len(reparsed),
+    ) == state_after_exit

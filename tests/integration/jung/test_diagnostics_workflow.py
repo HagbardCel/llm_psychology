@@ -39,6 +39,14 @@ def _kinds(events: list[dict[str, object]]) -> list[str]:
     return [str(event["kind"]) for event in events]
 
 
+def _file_state(run_dir: Path) -> dict[str, tuple[int, int]]:
+    return {
+        path.name: (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in run_dir.iterdir()
+        if path.is_file()
+    }
+
+
 async def test_diagnostic_chat_turn_causal_chain(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
@@ -223,6 +231,11 @@ async def test_application_context_diagnostic_lifecycle_happy_path(
     events = _load_trace(run_dir)
     _assert_snapshot_terminal(events, phase="start", artifact="database-start.sqlite")
     _assert_snapshot_terminal(events, phase="end", artifact="database-end.sqlite")
+
+    # Manifest finalize is the last lifecycle step; nothing may mutate afterward.
+    state_after_exit = _file_state(run_dir)
+    await asyncio.sleep(0.05)
+    assert _file_state(run_dir) == state_after_exit
 
 
 async def test_application_context_start_snapshot_failure_still_attempts_end(
@@ -704,6 +717,123 @@ async def test_application_context_end_snapshot_cancel_drains_worker(
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "failed"
     assert manifest["evidence_complete"] is (not end_snapshot_raises)
+
+
+@pytest.mark.parametrize("end_snapshot_raises", [False, True])
+async def test_application_context_end_snapshot_repeated_cancel_drains_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    end_snapshot_raises: bool,
+) -> None:
+    """Cancellation during snapshot draining must not orphan the backup worker."""
+
+    class ClosingFakeLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
+
+    end_started = threading.Event()
+    end_release = threading.Event()
+    end_finished = threading.Event()
+
+    original_backup_to = SQLiteStore.backup_to
+
+    def blocking_backup_to(self: SQLiteStore, destination: Path) -> None:
+        if destination.name == "database-end.sqlite":
+            end_started.set()
+            try:
+                end_release.wait(timeout=5.0)
+                if end_snapshot_raises:
+                    raise RuntimeError("backup boom")
+                original_backup_to(self, destination)
+            finally:
+                end_finished.set()
+            return
+        original_backup_to(self, destination)
+
+    monkeypatch.setattr(SQLiteStore, "backup_to", blocking_backup_to)
+
+    import jung.composition as composition_module
+
+    drain_started = asyncio.Event()
+    original_drain = composition_module.drain_cancelled_task
+
+    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
+        drain_started.set()
+        return await original_drain(task)
+
+    monkeypatch.setattr(
+        composition_module,
+        "drain_cancelled_task",
+        observed_drain,
+    )
+
+    run_dir = tmp_path / (
+        "end-snapshot-repeat-cancel-fail"
+        if end_snapshot_raises
+        else "end-snapshot-repeat-cancel-ok"
+    )
+    settings = ApplicationSettings(
+        database_path=tmp_path / "end-snapshot-repeat-cancel.db",
+        llm=LLMSettings(
+            default_model="fake",
+            base_url="http://fake.test",
+            api_key="fake",
+        ),
+        debug_run_dir=run_dir,
+        shutdown_timeout_seconds=2.0,
+    )
+
+    async def runner() -> None:
+        async with application_context(settings):
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(runner())
+    await asyncio.to_thread(end_started.wait, 2.0)
+    assert end_started.is_set() is True
+
+    # First cancellation reaches the snapshot shield; drain must be entered before
+    # the second cancellation to prove cancellation during draining.
+    task.cancel("first-cancel")
+    await drain_started.wait()
+    task.cancel("second-cancel")
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    assert not end_finished.is_set()
+
+    end_release.set()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+
+    assert exc_info.value.args == ("first-cancel",)
+    assert end_finished.is_set() is True
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["evidence_complete"] is (not end_snapshot_raises)
+
+    events = _load_trace(run_dir)
+    snapshot_terminals = [
+        event
+        for event in events
+        if str(event["kind"])
+        in {"database.snapshot.complete", "database.snapshot.error"}
+        and event["data"]["phase"] == "end"
+    ]
+    assert len(snapshot_terminals) == 1
+    expected_kind = (
+        "database.snapshot.error"
+        if end_snapshot_raises
+        else "database.snapshot.complete"
+    )
+    assert snapshot_terminals[0]["kind"] == expected_kind
+
+    state_after_exit = _file_state(run_dir)
+    await asyncio.sleep(0.05)
+    assert _file_state(run_dir) == state_after_exit
 
 
 async def test_application_context_end_snapshot_failure_is_evidence_incomplete(

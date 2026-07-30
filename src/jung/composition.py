@@ -192,51 +192,8 @@ async def _capture_snapshot(
     recorder.record("database.snapshot.start", payload_base)
     started = time.perf_counter()
     destination = recorder.artifact_path(artifact)
-    try:
-        task = asyncio.create_task(asyncio.to_thread(store.backup_to, destination))
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as cancellation:
-            try:
-                await task
-            except Exception as exc:
-                recorder.capture_error(
-                    f"database-{phase} snapshot failed after cancellation",
-                    exc,
-                )
-                recorder.record(
-                    "database.snapshot.error",
-                    {
-                        **payload_base,
-                        "elapsed_seconds": time.perf_counter() - started,
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                    },
-                )
-                raise cancellation from exc
-            recorder.record(
-                "database.snapshot.complete",
-                {
-                    **payload_base,
-                    "elapsed_seconds": time.perf_counter() - started,
-                },
-            )
-            raise cancellation
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        recorder.capture_error(f"database-{phase} snapshot failed", exc)
-        recorder.record(
-            "database.snapshot.error",
-            {
-                **payload_base,
-                "elapsed_seconds": time.perf_counter() - started,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        raise
-    else:
+
+    def record_complete() -> None:
         recorder.record(
             "database.snapshot.complete",
             {
@@ -244,6 +201,41 @@ async def _capture_snapshot(
                 "elapsed_seconds": time.perf_counter() - started,
             },
         )
+
+    def record_error(exc: BaseException, *, after_cancellation: bool = False) -> None:
+        label = f"database-{phase} snapshot failed"
+        if after_cancellation:
+            label = f"database-{phase} snapshot failed after cancellation"
+        recorder.capture_error(label, exc)
+        recorder.record(
+            "database.snapshot.error",
+            {
+                **payload_base,
+                "elapsed_seconds": time.perf_counter() - started,
+                "error_type": type(exc).__name__,
+                "error_message": _safe_exception_message(exc),
+            },
+        )
+
+    try:
+        task = asyncio.create_task(asyncio.to_thread(store.backup_to, destination))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            failure = await drain_cancelled_task(task)
+            if failure is None:
+                record_complete()
+            else:
+                record_error(failure, after_cancellation=True)
+                raise cancellation from failure
+            raise cancellation
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        record_error(exc)
+        raise
+    else:
+        record_complete()
 
 
 async def _cleanup_application_runtime(
@@ -262,7 +254,11 @@ async def _cleanup_application_runtime(
         try:
             application.begin_shutdown()
         except BaseException as exc:
-            selected_as_cleanup_error = cleanup_error is None
+            selected_as_cleanup_error = _selected_cleanup_error(
+                exc,
+                primary=primary,
+                cleanup_error=cleanup_error,
+            )
             if selected_as_cleanup_error:
                 cleanup_error = (exc, exc.__traceback__)
             _record_cleanup_failure(

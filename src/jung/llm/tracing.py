@@ -135,51 +135,54 @@ class ObservedLLMGateway:
                     )
                     terminal_emitted = True
             finally:
-                close = getattr(inner_stream, "aclose", None)
-                if close is not None:
-                    terminal_status = (
-                        status
-                        if terminal_emitted or status == "success"
-                        else "abandoned"
-                    )
-
-                    def _record_close_failure(exc: BaseException) -> None:
-                        if self._recorder is None:
-                            logger.warning(
-                                "llm stream close failed task=%s close_method=%s "
-                                "error_type=%s",
-                                policy.task.value,
-                                "aclose",
-                                type(exc).__name__,
-                            )
-                            return
-                        self._recorder.record(
-                            "llm.stream.cleanup.error",
-                            {
-                                "call_id": call_id,
-                                "call_type": "stream_text",
-                                "task": policy.task.value,
-                                "outcome_status": terminal_status,
-                                "close_method": "aclose",
-                                "error_type": type(exc).__name__,
-                                "error_message": _safe_exception_message(exc),
-                            },
+                try:
+                    close = getattr(inner_stream, "aclose", None)
+                    if close is not None:
+                        terminal_status = (
+                            status
+                            if terminal_emitted or status == "success"
+                            else "abandoned"
                         )
 
-                    await close_awaitable_safely(
-                        close,
-                        record_failure=_record_close_failure,
-                        preserve_existing_cancellation=status == "cancelled",
-                    )
-                if not terminal_emitted and status != "success":
-                    self._fail_call(
-                        call_id=call_id,
-                        call_type="stream_text",
-                        policy=policy,
-                        status="abandoned",
-                        started=started,
-                        error_type="GeneratorExit",
-                    )
+                        def _record_close_failure(exc: BaseException) -> None:
+                            if self._recorder is None:
+                                logger.warning(
+                                    "llm stream close failed task=%s close_method=%s "
+                                    "error_type=%s",
+                                    policy.task.value,
+                                    "aclose",
+                                    type(exc).__name__,
+                                )
+                                return
+                            self._recorder.record(
+                                "llm.stream.cleanup.error",
+                                {
+                                    "call_id": call_id,
+                                    "call_type": "stream_text",
+                                    "task": policy.task.value,
+                                    "outcome_status": terminal_status,
+                                    "close_method": "aclose",
+                                    "error_type": type(exc).__name__,
+                                    "error_message": _safe_exception_message(exc),
+                                },
+                            )
+
+                        await close_awaitable_safely(
+                            close,
+                            record_failure=_record_close_failure,
+                            preserve_existing_cancellation=status == "cancelled",
+                        )
+                finally:
+                    if not terminal_emitted and status != "success":
+                        self._fail_call(
+                            call_id=call_id,
+                            call_type="stream_text",
+                            policy=policy,
+                            status="abandoned",
+                            started=started,
+                            error_type="GeneratorExit",
+                        )
+                        terminal_emitted = True
 
     async def generate_structured(
         self,
