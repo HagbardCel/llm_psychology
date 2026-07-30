@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import platform
-import re
 import sys
 import threading
 import time
@@ -31,9 +30,27 @@ from pydantic import BaseModel
 
 SCHEMA_VERSION: Final = 1
 _RESERVED_ARTIFACTS: Final = frozenset({"manifest.json", "trace.jsonl"})
-_SENSITIVE_KEY_RE: Final = re.compile(
-    r"(authorization|api[_-]?key|token|secret|password)",
-    re.IGNORECASE,
+_TOKEN_METRIC_KEYS: Final = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "max_completion_tokens",
+        "total_tokens",
+    }
+)
+_SENSITIVE_EXACT_KEYS: Final = frozenset(
+    {
+        "authorization",
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "client_secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "auth_token",
+    }
 )
 _MIN_SECRET_LEN: Final = 8
 _MAX_INSTRUMENTATION_ERRORS: Final = 64
@@ -111,16 +128,27 @@ class DiagnosticCaptureError(RuntimeError):
 def sanitize_url(url: str) -> str:
     try:
         parts = urlsplit(url)
+        hostname = parts.hostname or ""
+        port = parts.port
     except ValueError:
         return "[REDACTED_URL]"
-    netloc = parts.hostname or ""
-    if parts.port:
-        netloc = f"{netloc}:{parts.port}"
+    netloc = hostname
+    if port:
+        netloc = f"{netloc}:{port}"
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 def _is_sensitive_key(key: object) -> bool:
-    return isinstance(key, str) and bool(_SENSITIVE_KEY_RE.search(key))
+    if not isinstance(key, str):
+        return False
+    normalized = key.casefold().replace("-", "_")
+    if normalized in _TOKEN_METRIC_KEYS:
+        return False
+    if normalized in _SENSITIVE_EXACT_KEYS:
+        return True
+    return normalized.endswith(
+        ("_password", "_secret", "_api_key", "_token", "_tokens")
+    )
 
 
 def sanitize_value(
@@ -236,9 +264,11 @@ class _DiagnosticLogHandler(logging.Handler):
             if record.exc_info and record.exc_info[0] is not None:
                 data["exception_type"] = record.exc_info[0].__name__
                 data["exception_message"] = str(record.exc_info[1])
+                formatter = logging.Formatter()
+                data["traceback"] = formatter.formatException(record.exc_info)
             self._recorder.record("log.record", data)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._recorder.capture_error("diagnostic log capture failed", exc)
         finally:
             self._reentering.active = False
 
@@ -329,9 +359,7 @@ class DiagnosticRecorder:
             message = f"{label}: {type(exc).__name__}: {exc}"
         else:
             message = f"{label}: {exc}"
-        message = str(
-            sanitize_value(message, secret_values=self._secret_values)
-        )
+        message = str(sanitize_value(message, secret_values=self._secret_values))
         with self._lock:
             self._evidence_complete = False
             self._append_instrumentation_error_locked(message)

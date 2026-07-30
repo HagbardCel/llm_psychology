@@ -47,6 +47,41 @@ def test_sanitize_url_invalid_returns_placeholder() -> None:
     assert sanitize_url("http://[bad") == "[REDACTED_URL]"
 
 
+def test_sanitize_url_non_numeric_port_returns_placeholder() -> None:
+    assert sanitize_url("http://localhost:not-a-port/v1") == "[REDACTED_URL]"
+
+
+def test_sanitize_url_localhost() -> None:
+    assert sanitize_url("http://127.0.0.1:8080/v1") == "http://127.0.0.1:8080/v1"
+
+
+@pytest.mark.parametrize(
+    ("key", "expected_redacted"),
+    [
+        ("prompt_tokens", False),
+        ("completion_tokens", False),
+        ("max_completion_tokens", False),
+        ("total_tokens", False),
+        ("token", True),
+        ("access_token", True),
+        ("access_tokens", True),
+        ("refresh_tokens", True),
+        ("client_secret", True),
+        ("api-key", True),
+        ("Authorization", True),
+    ],
+)
+def test_sanitize_value_token_metric_allowlist(
+    key: str,
+    expected_redacted: bool,
+) -> None:
+    sanitized = sanitize_value({key: 42 if not expected_redacted else "secret"})
+    if expected_redacted:
+        assert sanitized[key] == "[REDACTED]"
+    else:
+        assert sanitized[key] == 42
+
+
 def test_sanitize_value_redacts_sensitive_keys_and_secret_values() -> None:
     secret = "super-secret-value"
     payload = {
@@ -188,10 +223,40 @@ def test_log_handler_does_not_recurse(tmp_path: Path) -> None:
         lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         assert any('"kind":"log.record"' in line for line in lines)
         payload = next(
-            json.loads(line) for line in lines if json.loads(line)["kind"] == "log.record"
+            json.loads(line)
+            for line in lines
+            if json.loads(line)["kind"] == "log.record"
         )
         assert payload["data"]["message"] == "hello from app logger"
         assert payload["data"]["extra"]["api_key"] == "[REDACTED]"
+    finally:
+        recorder.close(run_status="success")
+
+
+def test_log_handler_captures_traceback_and_redacts_secrets(tmp_path: Path) -> None:
+    run_dir = tmp_path / "logs-tb"
+    secret = "super-secret-traceback-value"
+    recorder = DiagnosticRecorder(run_dir, secret_values=[secret])
+    try:
+        logger = logging.getLogger("jung.test.diagnostics.tb")
+        logger.setLevel(logging.ERROR)
+        try:
+            raise RuntimeError(f"boom with {secret}")
+        except RuntimeError:
+            logger.exception("failed in worker")
+        payload = next(
+            json.loads(line)
+            for line in (run_dir / "trace.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if json.loads(line)["kind"] == "log.record"
+        )
+        assert payload["data"]["exception_type"] == "RuntimeError"
+        assert secret not in payload["data"]["exception_message"]
+        assert "traceback" in payload["data"]
+        assert "test_log_handler_captures_traceback" in payload["data"]["traceback"]
+        assert secret not in payload["data"]["traceback"]
+        assert "[REDACTED]" in payload["data"]["traceback"]
     finally:
         recorder.close(run_status="success")
 

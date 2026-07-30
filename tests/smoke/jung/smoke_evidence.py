@@ -24,7 +24,7 @@ class SmokeEvidenceCollector:
     base_url: str | None = None
     model: str | None = None
     structured_mode: str | None = None
-    request_extras: dict[str, Any] = field(default_factory=dict)
+    request_extras_configured: bool = False
     strict_acceptance: bool | None = None
     path_budgets_seconds: dict[str, float] = field(default_factory=dict)
     request_timeout_seconds: float | None = None
@@ -38,7 +38,7 @@ class SmokeEvidenceCollector:
             "server": self.server,
             "model": self.model,
             "structured_mode": self.structured_mode,
-            "request_extras": self.request_extras,
+            "request_extras_configured": self.request_extras_configured,
             "strict_acceptance": self.strict_acceptance,
             "path_budgets_seconds": self.path_budgets_seconds,
             "request_timeout_seconds": self.request_timeout_seconds,

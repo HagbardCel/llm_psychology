@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -86,6 +86,9 @@ from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
 from jung.supervisor import SupervisorClosed, TaskSupervisor
 
+if TYPE_CHECKING:
+    from jung.diagnostics import DiagnosticRecorder
+
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
@@ -119,7 +122,7 @@ class TherapyApplication:
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
-        recorder: Any | None = None,
+        recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._store = store
         self._intake = intake
@@ -154,7 +157,6 @@ class TherapyApplication:
         def invoke() -> _T:
             if recorder is None:
                 return fn(*args, **kwargs)
-            from jung.diagnostics import diagnostic_context
 
             store_call_id = recorder.next_id("store")
             with diagnostic_context(store_call_id=store_call_id):
@@ -1061,76 +1063,85 @@ class TherapyApplication:
                 )
                 running_owned = True
                 snapshot = await self._assemble_snapshot_locked()
-            try:
-                await self._events.publish(OperationChanged(operation, snapshot))
-            except Exception:
-                logger.exception(
-                    "failed to publish operation running event operation_id=%s",
-                    operation_id,
-                )
+            with diagnostic_context(
+                operation_id=str(operation_id),
+                session_id=str(operation.source_session_id),
+                task_name=f"operation:{operation.kind.value}:{operation_id}",
+            ):
+                try:
+                    await self._events.publish(OperationChanged(operation, snapshot))
+                except Exception:
+                    logger.exception(
+                        "failed to publish operation running event operation_id=%s",
+                        operation_id,
+                    )
 
-            if operation.kind is OperationKind.ASSESSMENT:
-                assessment_input = await self._build_assessment_input(operation)
-                result = await self._assessment.assess(assessment_input)
-                async with self._mutation_lock:
-                    await self._run_store(
-                        self._store.complete_assessment,
+                if operation.kind is OperationKind.ASSESSMENT:
+                    assessment_input = await self._build_assessment_input(operation)
+                    result = await self._assessment.assess(assessment_input)
+                    async with self._mutation_lock:
+                        await self._run_store(
+                            self._store.complete_assessment,
+                            operation_id,
+                            result=result.model_dump(mode="json"),
+                            now=self._now(),
+                        )
+                        snapshot = await self._assemble_snapshot_locked()
+                    completed = await self._run_store(
+                        self._store.get_operation,
                         operation_id,
-                        result=result.model_dump(mode="json"),
-                        now=self._now(),
                     )
-                    snapshot = await self._assemble_snapshot_locked()
-                completed = await self._run_store(
-                    self._store.get_operation,
-                    operation_id,
-                )
-                assert completed is not None
-                await self._events.publish(OperationChanged(completed, snapshot))
-            elif operation.kind is OperationKind.POST_SESSION:
-                post_input = await self._build_post_session_input(operation)
-                result = await self._post_session.process(post_input)
-                stored = await self._run_store(self._store.get_profile)
-                session = await self._run_store(
-                    self._store.get_session,
-                    operation.source_session_id,
-                )
-                assert session is not None and session.plan_id is not None
-                plan_for_session = await self._load_plan_for_session(
-                    operation.source_session_id,
-                    session.plan_id,
-                )
-                merged_profile = merge_derived_profile(
-                    stored.derived_profile if stored else None,
-                    result.derived_profile_patch,
-                )
-                merged_plan = merge_plan_content(plan_for_session, result.plan_patch)
-                new_plan = (
-                    NewPlanRevision(
-                        plan_id=self._new_id(),
-                        content=merged_plan,
+                    assert completed is not None
+                    await self._events.publish(OperationChanged(completed, snapshot))
+                elif operation.kind is OperationKind.POST_SESSION:
+                    post_input = await self._build_post_session_input(operation)
+                    result = await self._post_session.process(post_input)
+                    stored = await self._run_store(self._store.get_profile)
+                    session = await self._run_store(
+                        self._store.get_session,
+                        operation.source_session_id,
                     )
-                    if merged_plan is not None
-                    else None
-                )
-                async with self._mutation_lock:
-                    await self._run_store(
-                        self._store.complete_post_session,
+                    assert session is not None and session.plan_id is not None
+                    plan_for_session = await self._load_plan_for_session(
+                        operation.source_session_id,
+                        session.plan_id,
+                    )
+                    merged_profile = merge_derived_profile(
+                        stored.derived_profile if stored else None,
+                        result.derived_profile_patch,
+                    )
+                    merged_plan = merge_plan_content(
+                        plan_for_session, result.plan_patch
+                    )
+                    new_plan = (
+                        NewPlanRevision(
+                            plan_id=self._new_id(),
+                            content=merged_plan,
+                        )
+                        if merged_plan is not None
+                        else None
+                    )
+                    async with self._mutation_lock:
+                        await self._run_store(
+                            self._store.complete_post_session,
+                            operation_id,
+                            summary=result.session_summary,
+                            briefing=result.session_briefing.model_dump(mode="json"),
+                            derived_profile=merged_profile,
+                            new_plan=new_plan,
+                            now=self._now(),
+                        )
+                        snapshot = await self._assemble_snapshot_locked()
+                    completed = await self._run_store(
+                        self._store.get_operation,
                         operation_id,
-                        summary=result.session_summary,
-                        briefing=result.session_briefing.model_dump(mode="json"),
-                        derived_profile=merged_profile,
-                        new_plan=new_plan,
-                        now=self._now(),
                     )
-                    snapshot = await self._assemble_snapshot_locked()
-                completed = await self._run_store(
-                    self._store.get_operation,
-                    operation_id,
-                )
-                assert completed is not None
-                await self._events.publish(OperationChanged(completed, snapshot))
-            else:
-                raise InvariantViolation(f"unknown operation kind: {operation.kind}")
+                    assert completed is not None
+                    await self._events.publish(OperationChanged(completed, snapshot))
+                else:
+                    raise InvariantViolation(
+                        f"unknown operation kind: {operation.kind}"
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

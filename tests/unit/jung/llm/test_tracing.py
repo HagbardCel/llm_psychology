@@ -168,7 +168,7 @@ async def test_observed_gateway_logs_failure_metadata_without_traceback(
                 pass
     assert exc_info.value is original_error
     assert "llm stream failed" in caplog.text
-    assert "status=error" in caplog.text
+    assert "status=timeout" in caplog.text
     assert "error_type=LLMTimeout" in caplog.text
     assert "Traceback" not in caplog.text
 
@@ -210,6 +210,6 @@ async def test_observed_gateway_logs_structured_failure_metadata(
     ]
     assert len(failure_records) == 1
     message = failure_records[0].getMessage()
-    assert "status=error" in message
+    assert "status=timeout" in message
     assert "error_type=LLMTimeout" in message
     assert "Traceback" not in caplog.text

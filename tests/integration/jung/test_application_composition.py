@@ -151,13 +151,10 @@ async def test_application_context_closes_llm_when_recover_on_startup_fails(
         ),
         shutdown_timeout_seconds=2.0,
     )
-    with pytest.raises(ExceptionGroup) as exc_info:
+    with pytest.raises(RuntimeError, match="recover failed"):
         async with application_context(settings):
             pass
     assert closed is True
-    assert len(exc_info.value.exceptions) == 1
-    assert isinstance(exc_info.value.exceptions[0], RuntimeError)
-    assert str(exc_info.value.exceptions[0]) == "recover failed"
 
 
 async def test_application_context_wires_loaded_llm_configuration(
@@ -225,6 +222,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     assert observed_calls[0][0] is raw_llm
     assert observed_calls[0][1] is True
     assert observed_calls[0][2] is None
+
 
 async def test_application_context_rejects_forbidden_extra_body_before_readiness(
     tmp_path: Path,

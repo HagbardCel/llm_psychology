@@ -6,9 +6,13 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from jung.domain.models import AppSnapshot, ChatTurn, Message, Operation
+
+if TYPE_CHECKING:
+    from jung.diagnostics import DiagnosticRecorder
 
 _SUBSCRIPTION_CLOSED = object()
 
@@ -85,7 +89,7 @@ class EventStream:
         self,
         *,
         max_queue_size: int = 64,
-        recorder: object | None = None,
+        recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._max_queue_size = max_queue_size
         self._subscribers: set[_Subscription] = set()
@@ -111,7 +115,7 @@ class EventStream:
         # across concurrent publishers.
         if self._recorder is not None:
             try:
-                self._recorder.record(  # type: ignore[attr-defined]
+                self._recorder.record(
                     "application.event",
                     {
                         "event_type": type(event).__name__,

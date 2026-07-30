@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -10,6 +11,7 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from jung.diagnostics import DiagnosticRecorder, diagnostic_context
+from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
 
 T = TypeVar("T", bound=BaseModel)
@@ -36,85 +38,113 @@ class ObservedLLMGateway:
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
     ) -> AsyncIterator[str]:
-        call_id = self._begin_call(policy, "stream_text", messages)
+        call_id = self._recorder.next_id("llm") if self._recorder is not None else None
         started = time.perf_counter()
         first_chunk_at: float | None = None
         chunk_count = 0
         char_count = 0
-        provider_attempt_ids: list[str] = []
-        status = "error"
-        error_type: str | None = None
+        terminal_emitted = False
+        status = "started"
+
         with diagnostic_context(llm_call_id=call_id):
+            self._begin_call(call_id, policy, "stream_text", messages)
+            inner_stream = self._inner.stream_text(messages, policy)
             try:
-                async for chunk in self._inner.stream_text(messages, policy):
-                    if first_chunk_at is None:
-                        first_chunk_at = time.perf_counter()
-                    chunk_count += 1
-                    char_count += len(chunk)
-                    yield chunk
-            except Exception as exc:
-                error_type = type(exc).__name__
-                if self._log_metadata:
-                    logger.error(
-                        "llm stream failed task=%s model=%s status=error "
-                        "elapsed=%.3fs error_type=%s",
-                        policy.task.value,
-                        policy.model,
-                        time.perf_counter() - started,
-                        error_type,
+                try:
+                    async for chunk in inner_stream:
+                        if first_chunk_at is None:
+                            first_chunk_at = time.perf_counter()
+                        chunk_count += 1
+                        char_count += len(chunk)
+                        yield chunk
+                except asyncio.CancelledError as exc:
+                    status = "cancelled"
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="stream_text",
+                        policy=policy,
+                        status=status,
+                        started=started,
+                        error_type=type(exc).__name__,
                     )
-                self._record_call(
-                    "llm.call.error",
-                    {
-                        "call_id": call_id,
-                        "call_type": "stream_text",
-                        "task": policy.task.value,
-                        "model": policy.model,
-                        "status": "error",
-                        "elapsed_seconds": time.perf_counter() - started,
-                        "error_type": error_type,
-                        "provider_attempt_ids": provider_attempt_ids,
-                        "messages": [
-                            {"role": m.role.value, "content": m.content}
-                            for m in messages
-                        ],
-                    },
-                )
-                raise
-            else:
-                status = "success"
-                elapsed = time.perf_counter() - started
-                ttfc = (
-                    (first_chunk_at - started)
-                    if first_chunk_at is not None
-                    else None
-                )
-                if self._log_metadata:
-                    logger.info(
-                        "llm stream complete task=%s model=%s status=success "
-                        "elapsed=%.3fs ttfc=%s chunks=%s chars=%s",
-                        policy.task.value,
-                        policy.model,
-                        elapsed,
-                        f"{ttfc:.3f}s" if ttfc is not None else "n/a",
-                        chunk_count,
-                        char_count,
+                    terminal_emitted = True
+                    if self._log_metadata:
+                        logger.error(
+                            "llm stream failed task=%s model=%s status=cancelled "
+                            "elapsed=%.3fs error_type=%s",
+                            policy.task.value,
+                            policy.model,
+                            time.perf_counter() - started,
+                            type(exc).__name__,
+                        )
+                    raise
+                except Exception as exc:
+                    status = "timeout" if isinstance(exc, LLMTimeout) else "error"
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="stream_text",
+                        policy=policy,
+                        status=status,
+                        started=started,
+                        error_type=type(exc).__name__,
                     )
-                self._record_call(
-                    "llm.call.complete",
-                    {
-                        "call_id": call_id,
-                        "call_type": "stream_text",
-                        "task": policy.task.value,
-                        "model": policy.model,
-                        "status": status,
-                        "elapsed_seconds": elapsed,
-                        "response_chars": char_count,
-                        "chunk_count": chunk_count,
-                        "ttfc_seconds": ttfc,
-                        "provider_attempt_ids": provider_attempt_ids,
-                    },
-                )
+                    terminal_emitted = True
+                    if self._log_metadata:
+                        logger.error(
+                            "llm stream failed task=%s model=%s status=%s "
+                            "elapsed=%.3fs error_type=%s",
+                            policy.task.value,
+                            policy.model,
+                            status,
+                            time.perf_counter() - started,
+                            type(exc).__name__,
+                        )
+                    raise
+                else:
+                    status = "success"
+                    elapsed = time.perf_counter() - started
+                    ttfc = (
+                        (first_chunk_at - started)
+                        if first_chunk_at is not None
+                        else None
+                    )
+                    if self._log_metadata:
+                        logger.info(
+                            "llm stream complete task=%s model=%s status=success "
+                            "elapsed=%.3fs ttfc=%s chunks=%s chars=%s",
+                            policy.task.value,
+                            policy.model,
+                            elapsed,
+                            f"{ttfc:.3f}s" if ttfc is not None else "n/a",
+                            chunk_count,
+                            char_count,
+                        )
+                    self._complete_call(
+                        call_id=call_id,
+                        call_type="stream_text",
+                        policy=policy,
+                        elapsed=elapsed,
+                        response_chars=char_count,
+                        chunk_count=chunk_count,
+                        ttfc_seconds=ttfc,
+                    )
+                    terminal_emitted = True
+            finally:
+                close = getattr(inner_stream, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except Exception:
+                        pass
+                if not terminal_emitted and status != "success":
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="stream_text",
+                        policy=policy,
+                        status="abandoned",
+                        started=started,
+                        error_type="GeneratorExit",
+                    )
 
     async def generate_structured(
         self,
@@ -123,86 +153,117 @@ class ObservedLLMGateway:
         policy: ModelPolicy,
         validate_result: Callable[[T], T] | None = None,
     ) -> T:
-        call_id = self._begin_call(
-            policy,
-            "generate_structured",
-            messages,
-            output_type.__name__,
-        )
+        call_id = self._recorder.next_id("llm") if self._recorder is not None else None
         started = time.perf_counter()
+        terminal_emitted = False
+        status = "started"
+
         with diagnostic_context(llm_call_id=call_id):
+            self._begin_call(
+                call_id,
+                policy,
+                "generate_structured",
+                messages,
+                output_type.__name__,
+            )
             try:
-                result = await self._inner.generate_structured(
-                    messages,
-                    output_type,
-                    policy,
-                    validate_result=validate_result,
-                )
-            except Exception as exc:
-                if self._log_metadata:
-                    logger.error(
-                        "llm structured failed task=%s model=%s output=%s "
-                        "status=error elapsed=%.3fs error_type=%s",
-                        policy.task.value,
-                        policy.model,
-                        output_type.__name__,
-                        time.perf_counter() - started,
-                        type(exc).__name__,
+                try:
+                    result = await self._inner.generate_structured(
+                        messages,
+                        output_type,
+                        policy,
+                        validate_result=validate_result,
                     )
-                self._record_call(
-                    "llm.call.error",
-                    {
-                        "call_id": call_id,
-                        "call_type": "generate_structured",
-                        "task": policy.task.value,
-                        "model": policy.model,
-                        "output_type": output_type.__name__,
-                        "status": "error",
-                        "elapsed_seconds": time.perf_counter() - started,
-                        "error_type": type(exc).__name__,
-                        "messages": [
-                            {"role": m.role.value, "content": m.content}
-                            for m in messages
-                        ],
-                    },
-                )
-                raise
-            else:
-                elapsed = time.perf_counter() - started
-                if self._log_metadata:
-                    logger.info(
-                        "llm structured complete task=%s model=%s output=%s "
-                        "status=success elapsed=%.3fs",
-                        policy.task.value,
-                        policy.model,
-                        output_type.__name__,
-                        elapsed,
+                except asyncio.CancelledError as exc:
+                    status = "cancelled"
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="generate_structured",
+                        policy=policy,
+                        status=status,
+                        started=started,
+                        error_type=type(exc).__name__,
+                        output_type=output_type.__name__,
                     )
-                self._record_call(
-                    "llm.call.complete",
-                    {
-                        "call_id": call_id,
-                        "call_type": "generate_structured",
-                        "task": policy.task.value,
-                        "model": policy.model,
-                        "output_type": output_type.__name__,
-                        "status": "success",
-                        "elapsed_seconds": elapsed,
-                        "result": result,
-                    },
-                )
-                return result
+                    terminal_emitted = True
+                    if self._log_metadata:
+                        logger.error(
+                            "llm structured failed task=%s model=%s output=%s "
+                            "status=cancelled elapsed=%.3fs error_type=%s",
+                            policy.task.value,
+                            policy.model,
+                            output_type.__name__,
+                            time.perf_counter() - started,
+                            type(exc).__name__,
+                        )
+                    raise
+                except Exception as exc:
+                    status = "timeout" if isinstance(exc, LLMTimeout) else "error"
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="generate_structured",
+                        policy=policy,
+                        status=status,
+                        started=started,
+                        error_type=type(exc).__name__,
+                        output_type=output_type.__name__,
+                    )
+                    terminal_emitted = True
+                    if self._log_metadata:
+                        logger.error(
+                            "llm structured failed task=%s model=%s output=%s "
+                            "status=%s elapsed=%.3fs error_type=%s",
+                            policy.task.value,
+                            policy.model,
+                            output_type.__name__,
+                            status,
+                            time.perf_counter() - started,
+                            type(exc).__name__,
+                        )
+                    raise
+                else:
+                    status = "success"
+                    elapsed = time.perf_counter() - started
+                    if self._log_metadata:
+                        logger.info(
+                            "llm structured complete task=%s model=%s output=%s "
+                            "status=success elapsed=%.3fs",
+                            policy.task.value,
+                            policy.model,
+                            output_type.__name__,
+                            elapsed,
+                        )
+                    self._complete_call(
+                        call_id=call_id,
+                        call_type="generate_structured",
+                        policy=policy,
+                        elapsed=elapsed,
+                        output_type=output_type.__name__,
+                        result=result,
+                    )
+                    terminal_emitted = True
+                    return result
+            finally:
+                if not terminal_emitted and status != "success":
+                    self._fail_call(
+                        call_id=call_id,
+                        call_type="generate_structured",
+                        policy=policy,
+                        status="abandoned",
+                        started=started,
+                        error_type="Abandoned",
+                        output_type=output_type.__name__,
+                    )
 
     def _begin_call(
         self,
+        call_id: str | None,
         policy: ModelPolicy,
         call_type: str,
         messages: Sequence[ChatMessage],
         output_type: str | None = None,
-    ) -> str | None:
-        call_id: str | None = None
-        if self._recorder is not None:
-            call_id = self._recorder.next_id("llm")
+    ) -> None:
+        if self._recorder is not None and call_id is not None:
             role_sequence = ",".join(message.role.value for message in messages)
             self._recorder.record(
                 "llm.call.start",
@@ -236,13 +297,65 @@ class ObservedLLMGateway:
                 char_counts,
                 output_type or "-",
             )
-        return call_id
+
+    def _complete_call(
+        self,
+        *,
+        call_id: str | None,
+        call_type: str,
+        policy: ModelPolicy,
+        elapsed: float,
+        response_chars: int | None = None,
+        chunk_count: int | None = None,
+        ttfc_seconds: float | None = None,
+        output_type: str | None = None,
+        result: BaseModel | None = None,
+    ) -> None:
+        data: dict[str, object] = {
+            "call_id": call_id,
+            "call_type": call_type,
+            "task": policy.task.value,
+            "model": policy.model,
+            "status": "success",
+            "elapsed_seconds": elapsed,
+        }
+        if response_chars is not None:
+            data["response_chars"] = response_chars
+        if chunk_count is not None:
+            data["chunk_count"] = chunk_count
+        if ttfc_seconds is not None:
+            data["ttfc_seconds"] = ttfc_seconds
+        if output_type is not None:
+            data["output_type"] = output_type
+        if result is not None:
+            data["result"] = result
+        self._record_call("llm.call.complete", data)
+
+    def _fail_call(
+        self,
+        *,
+        call_id: str | None,
+        call_type: str,
+        policy: ModelPolicy,
+        status: str,
+        started: float,
+        error_type: str,
+        output_type: str | None = None,
+    ) -> None:
+        data: dict[str, object] = {
+            "call_id": call_id,
+            "call_type": call_type,
+            "task": policy.task.value,
+            "model": policy.model,
+            "status": status,
+            "elapsed_seconds": time.perf_counter() - started,
+            "error_type": error_type,
+        }
+        if output_type is not None:
+            data["output_type"] = output_type
+        self._record_call("llm.call.error", data)
 
     def _record_call(self, kind: str, data: dict[str, object]) -> None:
         if self._recorder is None:
             return
         self._recorder.record(kind, data)
-
-
-# Backward-compatible alias during migration of imports.
-TracingLLMGateway = ObservedLLMGateway

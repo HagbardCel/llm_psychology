@@ -140,6 +140,8 @@ def test_evidence_serialization_includes_path_results() -> None:
     )
     payload = collector.to_payload()
     assert payload["server"] == "llama.cpp"
+    assert payload["request_extras_configured"] is False
+    assert "request_extras" not in payload
     assert payload["effective_completion_caps"]["post_session_update"] == 1800
     assert payload["post_session"]["acceptance_passed"] is False
     assert "calls" not in payload

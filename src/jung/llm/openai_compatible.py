@@ -179,6 +179,91 @@ class OpenAICompatibleLLM:
             return
         self._recorder.record(kind, data)
 
+    def _record_provider_request(
+        self,
+        *,
+        messages: Sequence[ChatMessage],
+        policy: ModelPolicy,
+        attempt: Literal["initial", "correction"],
+        provider_attempt_id: str | None,
+        response_format: dict[str, object] | None,
+        stream: bool,
+        correction_trigger: str | None = None,
+    ) -> None:
+        self._record_provider(
+            "llm.provider.request",
+            self._request_evidence(
+                messages=messages,
+                policy=policy,
+                attempt=attempt,
+                provider_attempt_id=provider_attempt_id,
+                response_format=response_format,
+                stream=stream,
+                correction_trigger=correction_trigger,
+            ),
+        )
+
+    def _record_provider_success(
+        self,
+        *,
+        provider_attempt_id: str | None,
+        policy: ModelPolicy,
+        attempt: Literal["initial", "correction"],
+        started: float,
+        raw_response_text: str | None,
+        finish_reason: str | None,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+    ) -> None:
+        text = raw_response_text or ""
+        self._record_provider(
+            "llm.provider.response",
+            {
+                "provider_attempt_id": provider_attempt_id,
+                "llm_call_id": current_diagnostic_context().llm_call_id,
+                "task": policy.task.value,
+                "attempt": attempt,
+                "status": "success",
+                "latency_seconds": time.perf_counter() - started,
+                "raw_response_text": raw_response_text,
+                "finish_reason": finish_reason,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "response_chars": len(text),
+            },
+        )
+
+    def _record_provider_failure(
+        self,
+        *,
+        provider_attempt_id: str | None,
+        policy: ModelPolicy,
+        attempt: Literal["initial", "correction"],
+        status: str,
+        started: float,
+        error_type: str,
+        error_message: str,
+        partial_response_text: str | None = None,
+        raw_response_text: str | None = None,
+        finish_reason: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "provider_attempt_id": provider_attempt_id,
+            "llm_call_id": current_diagnostic_context().llm_call_id,
+            "task": policy.task.value,
+            "attempt": attempt,
+            "status": status,
+            "latency_seconds": time.perf_counter() - started,
+            "error_type": error_type,
+            "error_message": error_message,
+            "finish_reason": finish_reason,
+        }
+        if partial_response_text is not None:
+            payload["partial_response_text"] = partial_response_text
+        if raw_response_text is not None:
+            payload["raw_response_text"] = raw_response_text
+        self._record_provider("llm.provider.error", payload)
+
     def _request_evidence(
         self,
         *,
@@ -228,150 +313,170 @@ class OpenAICompatibleLLM:
         provider_attempt_id = self._provider_attempt_id()
         recording = self._recorder is not None
         started = time.perf_counter()
-        status = "error"
+        status = "started"
         error_type: str | None = None
+        error_message: str | None = None
         finish_reason: str | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
         assembled: list[str] = []
+        terminal_emitted = False
 
-        self._record_provider(
-            "llm.provider.request",
-            self._request_evidence(
-                messages=messages,
-                policy=policy,
-                attempt="initial",
-                provider_attempt_id=provider_attempt_id,
-                response_format=None,
-                stream=True,
-            ),
+        self._record_provider_request(
+            messages=messages,
+            policy=policy,
+            attempt="initial",
+            provider_attempt_id=provider_attempt_id,
+            response_format=None,
+            stream=True,
         )
 
         try:
-            stream = await self._client.chat.completions.create(**request)
-            async for chunk in stream:
-                if getattr(chunk, "usage", None) is not None:
-                    usage = chunk.usage
-                    prompt_tokens = getattr(usage, "prompt_tokens", None)
-                    completion_tokens = getattr(usage, "completion_tokens", None)
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                reason = getattr(choice, "finish_reason", None)
-                if reason:
-                    finish_reason = reason
-                text = choice.delta.content if choice.delta is not None else None
-                if text:
-                    if recording:
-                        assembled.append(text)
-                    yield text
-            status = "success"
-            raw_text = "".join(assembled) if recording else None
-            if recording:
-                self._record_provider(
-                    "llm.provider.response",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": "initial",
-                        "status": status,
-                        "latency_seconds": time.perf_counter() - started,
-                        "raw_response_text": raw_text,
-                        "finish_reason": finish_reason,
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "response_chars": len(raw_text or ""),
-                    },
-                )
-        except asyncio.CancelledError as exc:
-            status = "cancelled"
-            error_type = type(exc).__name__
-            if recording:
-                self._record_provider(
-                    "llm.provider.error",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": "initial",
-                        "status": status,
-                        "latency_seconds": time.perf_counter() - started,
-                        "error_type": error_type,
-                        "error_message": str(exc),
-                        "partial_response_text": "".join(assembled),
-                        "finish_reason": finish_reason,
-                    },
-                )
-            raise
-        except APITimeoutError as exc:
-            status = "timeout"
-            error_type = "LLMTimeout"
-            if recording:
-                self._record_provider(
-                    "llm.provider.error",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": "initial",
-                        "status": status,
-                        "latency_seconds": time.perf_counter() - started,
-                        "error_type": error_type,
-                        "error_message": str(exc),
-                        "partial_response_text": "".join(assembled),
-                        "finish_reason": finish_reason,
-                    },
-                )
-            raise LLMTimeout(str(exc)) from exc
-        except APIConnectionError as exc:
-            status = "error"
-            error_type = "LLMUnavailable"
-            if recording:
-                self._record_provider(
-                    "llm.provider.error",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": "initial",
-                        "status": status,
-                        "latency_seconds": time.perf_counter() - started,
-                        "error_type": error_type,
-                        "error_message": str(exc),
-                        "partial_response_text": "".join(assembled),
-                        "finish_reason": finish_reason,
-                    },
-                )
-            raise LLMUnavailable(str(exc)) from exc
-        except APIStatusError as exc:
-            classified = _classify_status_error(exc)
-            status = "timeout" if isinstance(classified, LLMTimeout) else "error"
-            error_type = type(classified).__name__
-            if recording:
-                self._record_provider(
-                    "llm.provider.error",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": "initial",
-                        "status": status,
-                        "latency_seconds": time.perf_counter() - started,
-                        "error_type": error_type,
-                        "error_message": str(exc),
-                        "partial_response_text": "".join(assembled),
-                        "finish_reason": finish_reason,
-                    },
-                )
-            raise classified from exc
+            try:
+                stream = await self._client.chat.completions.create(**request)
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None) is not None:
+                        usage = chunk.usage
+                        prompt_tokens = getattr(usage, "prompt_tokens", None)
+                        completion_tokens = getattr(usage, "completion_tokens", None)
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    reason = getattr(choice, "finish_reason", None)
+                    if reason:
+                        finish_reason = reason
+                    text = choice.delta.content if choice.delta is not None else None
+                    if text:
+                        if recording:
+                            assembled.append(text)
+                        yield text
+                status = "success"
+                raw_text = "".join(assembled) if recording else None
+                if recording:
+                    self._record_provider_success(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        started=started,
+                        raw_response_text=raw_text,
+                        finish_reason=finish_reason,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                terminal_emitted = True
+            except asyncio.CancelledError as exc:
+                status = "cancelled"
+                error_type = type(exc).__name__
+                error_message = str(exc)
+                if recording:
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                terminal_emitted = True
+                raise
+            except APITimeoutError as exc:
+                status = "timeout"
+                error_type = "LLMTimeout"
+                error_message = str(exc)
+                if recording:
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                terminal_emitted = True
+                raise LLMTimeout(str(exc)) from exc
+            except APIConnectionError as exc:
+                status = "error"
+                error_type = "LLMUnavailable"
+                error_message = str(exc)
+                if recording:
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                terminal_emitted = True
+                raise LLMUnavailable(str(exc)) from exc
+            except APIStatusError as exc:
+                classified = _classify_status_error(exc)
+                status = "timeout" if isinstance(classified, LLMTimeout) else "error"
+                error_type = type(classified).__name__
+                error_message = str(exc)
+                if recording:
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                terminal_emitted = True
+                raise classified from exc
+            except Exception as exc:
+                status = "error"
+                error_type = type(exc).__name__
+                error_message = str(exc)
+                if recording:
+                    self._record_provider_failure(
+                        provider_attempt_id=provider_attempt_id,
+                        policy=policy,
+                        attempt="initial",
+                        status=status,
+                        started=started,
+                        error_type=error_type,
+                        error_message=error_message,
+                        partial_response_text="".join(assembled),
+                        finish_reason=finish_reason,
+                    )
+                terminal_emitted = True
+                raise
         finally:
+            if recording and not terminal_emitted and status != "success":
+                status = "abandoned"
+                error_type = "GeneratorExit"
+                error_message = "stream closed before completion"
+                self._record_provider_failure(
+                    provider_attempt_id=provider_attempt_id,
+                    policy=policy,
+                    attempt="initial",
+                    status=status,
+                    started=started,
+                    error_type=error_type,
+                    error_message=error_message,
+                    partial_response_text="".join(assembled),
+                    finish_reason=finish_reason,
+                )
             elapsed = time.perf_counter() - started
             self._emit_provider_attempt(
                 ProviderAttemptEvent(
                     task=policy.task.value,
                     attempt="initial",
-                    status=status,
+                    status=status if status != "started" else "abandoned",
                     latency_seconds=elapsed,
                     prompt_chars=prompt_char_count,
                     response_format_chars=None,
@@ -526,13 +631,15 @@ class OpenAICompatibleLLM:
         format_char_count = _response_format_chars(response_format)
         provider_attempt_id = self._provider_attempt_id()
         started = time.perf_counter()
-        status = "error"
+        status = "started"
         error_type: str | None = None
+        error_message: str | None = None
         response_chars: int | None = None
         finish_reason: str | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
         raw_text: str | None = None
+        terminal_emitted = False
 
         logger.info(
             "llm provider request start task=%s attempt=%s mode=%s "
@@ -545,17 +652,14 @@ class OpenAICompatibleLLM:
             policy.max_completion_tokens,
         )
 
-        self._record_provider(
-            "llm.provider.request",
-            self._request_evidence(
-                messages=messages,
-                policy=policy,
-                attempt=attempt,
-                provider_attempt_id=provider_attempt_id,
-                response_format=response_format,
-                stream=False,
-                correction_trigger=correction_trigger,
-            ),
+        self._record_provider_request(
+            messages=messages,
+            policy=policy,
+            attempt=attempt,
+            provider_attempt_id=provider_attempt_id,
+            response_format=response_format,
+            stream=False,
+            correction_trigger=correction_trigger,
         )
 
         try:
@@ -586,47 +690,52 @@ class OpenAICompatibleLLM:
                 prompt_tokens,
                 completion_tokens,
             )
-            self._record_provider(
-                "llm.provider.response",
-                {
-                    "provider_attempt_id": provider_attempt_id,
-                    "llm_call_id": current_diagnostic_context().llm_call_id,
-                    "task": policy.task.value,
-                    "attempt": attempt,
-                    "status": status,
-                    "latency_seconds": time.perf_counter() - started,
-                    "raw_response_text": raw_text,
-                    "finish_reason": finish_reason,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "response_chars": response_chars,
-                },
+            self._record_provider_success(
+                provider_attempt_id=provider_attempt_id,
+                policy=policy,
+                attempt=attempt,
+                started=started,
+                raw_response_text=raw_text,
+                finish_reason=finish_reason,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
+            terminal_emitted = True
             return text
         except asyncio.CancelledError as exc:
             status = "cancelled"
             error_type = type(exc).__name__
+            error_message = str(exc)
             raise
-        except InvalidLLMOutput:
+        except InvalidLLMOutput as exc:
             status = "error"
             error_type = "InvalidLLMOutput"
+            error_message = str(exc)
             raise
         except APITimeoutError as exc:
             status = "timeout"
             error_type = "LLMTimeout"
+            error_message = str(exc)
             raise LLMTimeout(str(exc)) from exc
         except APIConnectionError as exc:
             status = "error"
             error_type = "LLMUnavailable"
+            error_message = str(exc)
             raise LLMUnavailable(str(exc)) from exc
         except APIStatusError as exc:
             classified = _classify_status_error(exc)
             status = "timeout" if isinstance(classified, LLMTimeout) else "error"
             error_type = type(classified).__name__
+            error_message = str(exc)
             raise classified from exc
+        except Exception as exc:
+            status = "error"
+            error_type = type(exc).__name__
+            error_message = str(exc)
+            raise
         finally:
             elapsed = time.perf_counter() - started
-            if status != "success" and error_type is not None:
+            if status != "success" and error_type is not None and not terminal_emitted:
                 logger.error(
                     "llm provider request failed task=%s attempt=%s "
                     "elapsed=%.3fs error_type=%s",
@@ -635,26 +744,22 @@ class OpenAICompatibleLLM:
                     elapsed,
                     error_type,
                 )
-                self._record_provider(
-                    "llm.provider.error",
-                    {
-                        "provider_attempt_id": provider_attempt_id,
-                        "llm_call_id": current_diagnostic_context().llm_call_id,
-                        "task": policy.task.value,
-                        "attempt": attempt,
-                        "status": status,
-                        "latency_seconds": elapsed,
-                        "error_type": error_type,
-                        "error_message": error_type,
-                        "raw_response_text": raw_text,
-                        "finish_reason": finish_reason,
-                    },
+                self._record_provider_failure(
+                    provider_attempt_id=provider_attempt_id,
+                    policy=policy,
+                    attempt=attempt,
+                    status=status,
+                    started=started,
+                    error_type=error_type,
+                    error_message=error_message or error_type,
+                    raw_response_text=raw_text,
+                    finish_reason=finish_reason,
                 )
             self._emit_provider_attempt(
                 ProviderAttemptEvent(
                     task=policy.task.value,
                     attempt=attempt,
-                    status=status,
+                    status=status if status != "started" else "error",
                     latency_seconds=elapsed,
                     prompt_chars=prompt_char_count,
                     response_format_chars=format_char_count,

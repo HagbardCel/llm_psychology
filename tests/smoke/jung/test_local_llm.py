@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
+from jung.diagnostics import sanitize_url
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import (
     AdapterConfig,
@@ -100,13 +101,13 @@ def configure_smoke_metadata(
     if not os.environ.get("LOCAL_LLM_SMOKE_BASE_URL"):
         return
     COLLECTOR.server = _required_smoke_env("LOCAL_LLM_SMOKE_SERVER")
-    COLLECTOR.base_url = _required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL")
+    COLLECTOR.base_url = sanitize_url(_required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL"))
     COLLECTOR.model = _required_smoke_env("LOCAL_LLM_SMOKE_MODEL")
     COLLECTOR.structured_mode = os.environ.get(
         "LOCAL_LLM_SMOKE_STRUCTURED_MODE",
         "json_schema",
     )
-    COLLECTOR.request_extras = smoke_extra_body or {}
+    COLLECTOR.request_extras_configured = bool(smoke_extra_body)
     COLLECTOR.strict_acceptance = smoke_strict_acceptance()
     COLLECTOR.path_budgets_seconds = {
         "therapy": smoke_path_budget_seconds("therapy"),
