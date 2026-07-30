@@ -225,6 +225,18 @@ async def test_smoke_post_session_processor(gateway: ObservedLLMGateway) -> None
                         role="user",
                         content="I slept badly.",
                     ),
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=2,
+                        role="assistant",
+                        content="What feels unclear about your sleep?",
+                    ),
+                    TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=3,
+                        role="user",
+                        content="I kept waking up around 3 a.m.",
+                    ),
                 ),
                 current_plan=_plan(),
                 profile=Profile(name="Alex", primary_language="English"),

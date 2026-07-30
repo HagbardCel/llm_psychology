@@ -33,7 +33,10 @@ from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
 from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.intake.processor import IntakeProcessor
-from jung.phases.post_session.models import PostSessionResult, SessionAnalysisResult
+from jung.phases.post_session.models import (
+    PostSessionUpdateResult,
+    SessionAnalysisResult,
+)
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
@@ -96,7 +99,7 @@ _SCHEMA_OUTPUT_TYPES = {
     LLMTask.INTAKE_PATCH: IntakeRecordPatch,
     LLMTask.ASSESSMENT: AssessmentResult,
     LLMTask.POST_SESSION_ANALYSIS: SessionAnalysisResult,
-    LLMTask.POST_SESSION_UPDATE: PostSessionResult,
+    LLMTask.POST_SESSION_UPDATE: PostSessionUpdateResult,
 }
 
 

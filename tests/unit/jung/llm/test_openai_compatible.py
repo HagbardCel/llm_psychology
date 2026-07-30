@@ -389,6 +389,44 @@ async def test_semantic_validator_failure_triggers_single_correction() -> None:
     assert calls["count"] == 2
 
 
+async def test_semantic_validator_failure_on_correction_raises_without_third_request() -> (
+    None
+):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": '{"value":"bad"}',
+                        },
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    def validator(result: _Answer) -> _Answer:
+        raise ValueError("semantic mismatch")
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(InvalidLLMOutput):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+            validate_result=validator,
+        )
+    assert calls["count"] == 2
+
+
 async def test_stream_cancellation_propagates() -> None:
     import asyncio
 

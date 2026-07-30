@@ -98,3 +98,60 @@ On shutdown:
 - never mark an in-flight operation successful without validated completion.
 
 A connected client is only an observer: supervisor-owned generation continues after disconnect and notifications fan out to all observers.
+
+## Post-session grounding
+
+Persist durable factual evidence only when the backend can objectively ground it. Model-generated interpretations may remain in session-scoped summaries, briefings, intervention descriptions, and treatment-plan recommendations, but must never be promoted to durable profile facts or model-controlled evidence status.
+
+### Ownership
+
+| Information | Owner |
+|---|---|
+| Session summary | Analysis call |
+| Intervention evidence citations | Analysis call |
+| Patient-statement citations | Analysis call |
+| Next-session narrative and continuity | Update call |
+| Plan patch | Update call |
+| Durable profile patch | Processor, composed from validated citations + message IDs |
+
+### Input validation
+
+`PostSessionInput` rejects transcripts whose sequences are not unique and strictly increasing, or whose message IDs are not unique, before any LLM call. Those defects never enter the structured-output correction loop.
+
+### Non-conversational sessions
+
+Transcripts that lack both a user turn and an assistant turn take a deterministic zero-call path:
+
+- empty transcript
+- user-only transcript
+- assistant-only transcript
+
+Each variant produces a speculation-free summary/briefing, empty intervention evidence, an empty profile patch, and an empty plan patch.
+
+### Evidence layers
+
+| Layer | Representation |
+|---|---|
+| Model output | Sequence plus verbatim quote (citation) |
+| Validator | Verifies exact transcript turn and chronology; canonicalizes quotes |
+| Durable profile | `grounded_patient_statements` with source message ID, sequence, and normalized quote |
+| LLM-facing profile context | Normalized quotes only (no internal message IDs) |
+| Interpretive reasoning | Session analysis and briefing only |
+
+Intervention citations use exact therapist/patient sequences. Status is derived as `delivered` or `responded` and is never model-generated. `intervention_description` remains a model-generated interpretation made auditable by its grounded citation.
+
+Patient-statement citations are unique by patient sequence. Durable statements are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. Legacy keys `hypotheses`, `observations`, and `patient_stated_facts` are excluded from LLM prompt context.
+
+### Failure behavior
+
+After an unrecoverable validation or LLM failure, the operation transitions to `FAILED`, but no session summary, briefing, derived-profile update, or plan revision is persisted.
+
+### Local database reset
+
+This change is a breaking representation for durable derived profiles. Recreate local development databases externally after checking out the branch:
+
+```bash
+rm -f data/local/jung.db data/usertest/jung.db
+```
+
+Do not add automatic deletion, startup reset behavior, migration logic, or committed SQLite files.

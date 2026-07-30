@@ -16,6 +16,37 @@ def bounded_text(text: str, limit: int) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def bounded_lines(text: str, limit: int) -> str:
+    """Return the longest complete prefix of lines fitting within limit.
+
+    Never appends an ellipsis and never emits a partial line. Returns the
+    original text unchanged when it fits, or ``""`` when no complete non-empty
+    line fits.
+    """
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    lines = text.splitlines()
+    selected: list[str] = []
+    for line in lines:
+        if not line.strip():
+            if not selected:
+                continue
+            candidate = "\n".join([*selected, line])
+            if len(candidate) > limit:
+                break
+            selected.append(line)
+            continue
+        candidate = "\n".join([*selected, line]) if selected else line
+        if len(candidate) > limit:
+            break
+        selected.append(line)
+    if not any(line.strip() for line in selected):
+        return ""
+    return "\n".join(selected)
+
+
 def newest_lines_within_budget(
     lines: Sequence[str],
     budget: int,

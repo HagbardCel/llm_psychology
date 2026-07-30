@@ -27,7 +27,6 @@ from .application_fixtures import (
     ScriptedTaskSupervisor,
     build_test_application,
     intake_message_expectations,
-    post_session_expectations,
     wait_for_chat_turn,
 )
 from .scenarios import advance_to_ready
@@ -329,12 +328,12 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
     store: SQLiteStore,
 ) -> None:
     advance_to_ready(store)
+    # Failed chat leaves a user-only transcript, so post-session is deterministic.
     fake = FakeLLM(
         [
             FailureExpectation(
                 task=LLMTask.THERAPY_RESPONSE, error=LLMTimeout("timeout")
             ),
-            *post_session_expectations(),
         ]
     )
     async with build_test_application(store, fake) as runtime:

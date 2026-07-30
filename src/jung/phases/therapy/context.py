@@ -6,7 +6,11 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from jung.phases.context_bounds import bounded_text, newest_lines_within_budget
+from jung.phases.context_bounds import (
+    bounded_lines,
+    bounded_text,
+    newest_lines_within_budget,
+)
 from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.transcript import normalize_transcript_content
 
@@ -86,7 +90,7 @@ def _render_core_sections(input: TherapyTurnInput) -> tuple[list[str], int]:
         core_body_budget - style_body_budget,
     )
 
-    style_body = bounded_text(
+    style_body = bounded_lines(
         input.selected_style.therapist_instructions,
         style_body_budget,
     )

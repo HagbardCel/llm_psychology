@@ -8,14 +8,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from jung.domain.models import Plan
-from jung.phases.context_bounds import bounded_text, newest_lines_within_budget
+from jung.phases.context_bounds import (
+    bounded_lines,
+    bounded_text,
+    newest_lines_within_budget,
+)
 from jung.phases.post_session.models import PostSessionInput, SessionAnalysisResult
 
 _UPDATE_CONTEXT_LIMIT = 8_000
 _ANALYSIS_RESERVED_CHARS = 2_500
 _PLAN_RESERVED_CHARS = 1_500
 _PROFILE_RESERVED_CHARS = 1_200
-_STYLE_RESERVED_CHARS = 800
+_STYLE_RESERVED_CHARS = 2_000
 
 _PLAN_LIST_FIELDS = (
     "themes",
@@ -24,6 +28,13 @@ _PLAN_LIST_FIELDS = (
     "revision_recommendations",
 )
 _REQUIRED_PLAN_LIST_FIELDS = frozenset({"goals", "planned_interventions"})
+_LEGACY_PROFILE_KEYS = frozenset(
+    {
+        "hypotheses",
+        "observations",
+        "patient_stated_facts",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,18 +48,29 @@ class PostSessionUpdateContext:
     patient_insights: tuple[str, ...]
     progress_indicators: tuple[str, ...]
     unresolved_topics: tuple[str, ...]
-    interventions: tuple[dict[str, str | None], ...]
+    intervention_evidence: tuple[dict[str, object], ...]
+    patient_statements: tuple[dict[str, object], ...]
     safety_or_boundary_notes: tuple[str, ...]
 
     @classmethod
     def from_analysis(cls, analysis: SessionAnalysisResult) -> PostSessionUpdateContext:
-        interventions = tuple(
+        intervention_evidence = tuple(
             {
-                "intervention": item.intervention,
+                "intervention_description": item.intervention_description,
                 "status": item.status,
+                "therapist_sequence": item.therapist_sequence,
+                "therapist_quote": item.therapist_quote,
+                "patient_sequence": item.patient_sequence,
                 "patient_quote": item.patient_quote,
             }
-            for item in analysis.interventions_and_responses
+            for item in analysis.intervention_evidence
+        )
+        patient_statements = tuple(
+            {
+                "patient_sequence": item.patient_sequence,
+                "patient_quote": item.patient_quote,
+            }
+            for item in analysis.patient_statements
         )
         return cls(
             summary=analysis.summary,
@@ -58,7 +80,8 @@ class PostSessionUpdateContext:
             patient_insights=analysis.patient_insights,
             progress_indicators=analysis.progress_indicators,
             unresolved_topics=analysis.unresolved_topics,
-            interventions=interventions,
+            intervention_evidence=intervention_evidence,
+            patient_statements=patient_statements,
             safety_or_boundary_notes=analysis.safety_or_boundary_notes,
         )
 
@@ -71,7 +94,8 @@ class PostSessionUpdateContext:
             "patient_insights": list(self.patient_insights),
             "progress_indicators": list(self.progress_indicators),
             "unresolved_topics": list(self.unresolved_topics),
-            "interventions_and_responses": list(self.interventions),
+            "intervention_evidence": list(self.intervention_evidence),
+            "patient_statements": list(self.patient_statements),
             "safety_or_boundary_notes": list(self.safety_or_boundary_notes),
         }
 
@@ -143,29 +167,16 @@ def _compact_plan_document(plan: Plan, limit: int) -> str:
 def _compact_profile_document(profile: Mapping[str, Any], limit: int) -> str:
     if not profile:
         return "{}"
-    priority_keys = ("observations", "hypotheses", "patient_stated_facts")
-    ordered_keys = [key for key in priority_keys if key in profile]
-    ordered_keys.extend(key for key in profile if key not in priority_keys)
-    working: dict[str, Any] = dict(profile)
-    for key in list(working):
-        if (
-            key not in ordered_keys[:1]
-            and len(json.dumps(working, ensure_ascii=True, separators=(",", ":")))
-            > limit
-        ):
-            working.pop(key, None)
+    stored_statements = profile.get("grounded_patient_statements")
+    if not isinstance(stored_statements, list):
+        stored_statements = []
     for max_items in range(20, 0, -1):
-        candidate: dict[str, Any] = {}
-        for key in ordered_keys:
-            value = working.get(key)
-            if isinstance(value, list):
-                candidate[key] = [
-                    bounded_text(str(item), 200)
-                    for item in value[:max_items]
-                    if str(item).strip()
-                ]
-            elif value is not None:
-                candidate[key] = value
+        statements = [
+            {"quote": bounded_text(str(item.get("quote", "")), 300)}
+            for item in stored_statements[-max_items:]
+            if isinstance(item, Mapping) and str(item.get("quote", "")).strip()
+        ]
+        candidate = {"grounded_patient_statements": statements}
         rendered = json.dumps(candidate, ensure_ascii=True, separators=(",", ":"))
         if len(rendered) <= limit:
             return rendered
@@ -196,24 +207,40 @@ def _compact_analysis_document(
                     max_item_chars=max_item_chars,
                     keep_at_least_one=False,
                 )
-            interventions = list(analysis.interventions[:max_items])
-            compacted_interventions: list[dict[str, str | None]] = []
+            interventions = list(analysis.intervention_evidence[:max_items])
+            compacted_interventions: list[dict[str, object]] = []
             for item in interventions:
-                compacted_interventions.append(
-                    {
-                        "intervention": bounded_text(
-                            str(item["intervention"]),
-                            max_item_chars,
-                        ),
-                        "status": str(item["status"]),
-                        "patient_quote": (
-                            bounded_text(str(item["patient_quote"]), max_item_chars)
-                            if item.get("patient_quote")
-                            else None
-                        ),
-                    }
-                )
-            candidate["interventions_and_responses"] = compacted_interventions
+                compacted: dict[str, object] = {
+                    "intervention_description": bounded_text(
+                        str(item["intervention_description"]),
+                        max_item_chars,
+                    ),
+                    "status": str(item["status"]),
+                    "therapist_sequence": item["therapist_sequence"],
+                    "therapist_quote": bounded_text(
+                        str(item["therapist_quote"]),
+                        max_item_chars,
+                    ),
+                    "patient_sequence": item.get("patient_sequence"),
+                    "patient_quote": (
+                        bounded_text(str(item["patient_quote"]), max_item_chars)
+                        if item.get("patient_quote")
+                        else None
+                    ),
+                }
+                compacted_interventions.append(compacted)
+            candidate["intervention_evidence"] = compacted_interventions
+            statements = list(analysis.patient_statements[:max_items])
+            candidate["patient_statements"] = [
+                {
+                    "patient_sequence": item["patient_sequence"],
+                    "patient_quote": bounded_text(
+                        str(item["patient_quote"]),
+                        max_item_chars,
+                    ),
+                }
+                for item in statements
+            ]
             rendered = json.dumps(candidate, ensure_ascii=True, separators=(",", ":"))
             if len(rendered) <= limit:
                 return rendered
@@ -285,8 +312,14 @@ def build_update_context_sections(
         remaining,
     )
     if profile_budget > 0:
+        # Legacy speculative keys must never re-enter LLM context.
+        filtered_profile = {
+            key: value
+            for key, value in (input.derived_profile or {}).items()
+            if key not in _LEGACY_PROFILE_KEYS
+        }
         profile_body = _compact_profile_document(
-            input.derived_profile or {},
+            filtered_profile,
             profile_budget,
         )
         section = _render_section("Derived profile", profile_body)
@@ -300,7 +333,7 @@ def build_update_context_sections(
     )
     style_text = input.selected_style.post_session_instructions or ""
     if style_text.strip() and style_budget > 0:
-        style_body = bounded_text(style_text, style_budget)
+        style_body = bounded_lines(style_text, style_budget)
         if style_body:
             section = _render_section("Style reflection instructions", style_body)
             sections.append(section)

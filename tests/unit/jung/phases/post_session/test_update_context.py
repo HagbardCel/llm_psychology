@@ -84,7 +84,7 @@ def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
             recent_session_summaries=tuple(
                 f"summary-{index}" * 200 for index in range(20)
             ),
-            derived_profile={"observations": ["p" * 5000]},
+            derived_profile={"grounded_patient_statements": [{"quote": "p" * 5000}]},
         ),
         SessionAnalysisResult(
             summary="x" * 5000,
@@ -102,7 +102,7 @@ def test_optional_sections_drop_before_plan_categories() -> None:
             selected_style=style,
             prior_session_briefing={"summary": "OPTIONAL_BRIEFING_MARKER" * 2000},
             recent_session_summaries=("old " * 2000, "new " * 2000),
-            derived_profile={"observations": ["p" * 5000]},
+            derived_profile={"grounded_patient_statements": [{"quote": "p" * 5000}]},
         ),
         SessionAnalysisResult(
             summary="x" * 10000,
@@ -126,6 +126,34 @@ def test_optional_sections_drop_before_plan_categories() -> None:
         "planned_interventions",
         "revision_recommendations",
     }
+
+
+def test_profile_context_projects_quotes_without_message_ids() -> None:
+    message_id = str(uuid4())
+    sections = build_update_context_sections(
+        _input(
+            derived_profile={
+                "grounded_patient_statements": [
+                    {
+                        "source_message_id": message_id,
+                        "source_sequence": 1,
+                        "quote": "I slept badly.",
+                    }
+                ],
+                "hypotheses": ["legacy hypothesis"],
+                "observations": ["legacy observation"],
+                "patient_stated_facts": ["legacy fact"],
+            }
+        ),
+        _analysis(),
+    )
+    profile_section = next(
+        section for section in sections if section.startswith("Derived profile:")
+    )
+    document = json.loads(profile_section.split(":\n", 1)[1])
+    assert document == {"grounded_patient_statements": [{"quote": "I slept badly."}]}
+    assert message_id not in profile_section
+    assert "legacy" not in profile_section
 
 
 def test_plan_section_retains_all_semantic_field_names() -> None:

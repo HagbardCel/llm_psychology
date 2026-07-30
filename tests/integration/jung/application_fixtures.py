@@ -36,11 +36,10 @@ from jung.phases.intake.models import (
 )
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
-    DerivedProfilePatch,
     PlanPatch,
-    PostSessionResult,
+    PostSessionUpdateResult,
     SessionAnalysisResult,
-    SessionBriefing,
+    SessionBriefingDraft,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
@@ -57,6 +56,11 @@ def assessment_result() -> AssessmentResult:
 
 
 def post_session_expectations() -> list[StreamExpectation | StructuredExpectation]:
+    """Expectations for a conversational therapy transcript (user + assistant).
+
+    Non-conversational sessions (empty, user-only, or assistant-only) take the
+    deterministic zero-call path and must use ``FakeLLM([])`` instead.
+    """
     return [
         StructuredExpectation(
             task=LLMTask.POST_SESSION_ANALYSIS,
@@ -68,15 +72,11 @@ def post_session_expectations() -> list[StreamExpectation | StructuredExpectatio
         ),
         StructuredExpectation(
             task=LLMTask.POST_SESSION_UPDATE,
-            output_type=PostSessionResult,
-            response=PostSessionResult(
-                session_summary="Sleep remained difficult.",
-                session_briefing=SessionBriefing(
+            output_type=PostSessionUpdateResult,
+            response=PostSessionUpdateResult(
+                session_briefing=SessionBriefingDraft(
                     narrative_handoff="Session focused on sleep.",
                     recommended_opening_focus="sleep routine",
-                ),
-                derived_profile_patch=DerivedProfilePatch(
-                    observations=("reports poor sleep",)
                 ),
                 plan_patch=PlanPatch(current_progress="some progress"),
             ),

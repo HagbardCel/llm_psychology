@@ -11,6 +11,7 @@ from jung.domain.commands import (
     EndSession,
     RetryOperation,
     SendMessage,
+    StartSession,
     UpdateProfile,
 )
 from jung.domain.models import (
@@ -37,7 +38,6 @@ from .application_fixtures import (
     assessment_result,
     build_test_application,
     completing_intake_patch,
-    post_session_expectations,
     wait_for_chat_turn,
     wait_for_operation_status,
     wait_for_stage,
@@ -113,11 +113,81 @@ async def test_pending_assessment_operation_completes(store: SQLiteStore) -> Non
 
 async def test_post_session_operation_completes_to_ready(store: SQLiteStore) -> None:
     advance_to_post_session(store)
-    fake = FakeLLM(post_session_expectations())
+    # Empty therapy transcript takes the deterministic zero-call path.
+    fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
         await wait_for_stage(runtime.application, Stage.READY)
         snapshot = await runtime.application.get_snapshot()
     assert snapshot.stage is Stage.READY
+    fake.assert_exhausted()
+
+
+async def test_post_session_processing_failure_leaves_session_artifacts_unchanged(
+    store: SQLiteStore,
+) -> None:
+    advance_to_ready(store)
+    fake = FakeLLM(
+        [
+            StreamExpectation(
+                task=LLMTask.THERAPY_RESPONSE,
+                chunks=("Let's explore that.",),
+            ),
+            FailureExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                error=InvalidLLMOutput("analysis failed"),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        revision = (await runtime.application.get_snapshot()).revision
+        started = await runtime.application.start_session(
+            StartSession(expected_revision=revision)
+        )
+        session_id = started.session.id
+        plan_before = runtime.store.get_current_plan()
+        profile_before = runtime.store.get_profile()
+        assert plan_before is not None
+        assert profile_before is not None
+
+        turn = await runtime.application.submit_message(
+            SendMessage(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+                client_message_id=uuid4(),
+                content="I slept badly.",
+            )
+        )
+        await wait_for_chat_turn(
+            runtime.application,
+            turn.id,
+            ChatTurnStatus.COMPLETE,
+        )
+        await runtime.application.end_session(
+            EndSession(
+                expected_revision=(await runtime.application.get_snapshot()).revision,
+                session_id=session_id,
+            )
+        )
+        operation = (await runtime.application.get_snapshot()).current_operation
+        assert operation is not None
+        await wait_for_operation_status(
+            runtime.application,
+            operation.id,
+            OperationStatus.FAILED,
+        )
+
+        session_after = runtime.store.get_session(session_id)
+        assert session_after is not None
+        assert session_after.summary is None
+        assert session_after.briefing is None
+        plan_after = runtime.store.get_current_plan()
+        profile_after = runtime.store.get_profile()
+        assert plan_after is not None
+        assert profile_after is not None
+        assert plan_after.id == plan_before.id
+        assert plan_after.version == plan_before.version
+        assert profile_after.derived_profile == profile_before.derived_profile
+        assert profile_after.current_plan_id == profile_before.current_plan_id
     fake.assert_exhausted()
 
 
@@ -310,7 +380,7 @@ async def test_end_session_schedules_operation_when_publish_cancelled(
         session_id=therapy_id,
         now=ready.now,
     )
-    fake = FakeLLM(post_session_expectations())
+    fake = FakeLLM([])
     publish_gate = asyncio.Event()
     release_publish = asyncio.Event()
 
@@ -415,7 +485,7 @@ async def test_end_session_schedules_when_assemble_cancelled(
         session_id=therapy_id,
         now=ready.now,
     )
-    fake = FakeLLM(post_session_expectations())
+    fake = FakeLLM([])
     assemble_entered = asyncio.Event()
     release_assemble = asyncio.Event()
     gate_next_assemble = False

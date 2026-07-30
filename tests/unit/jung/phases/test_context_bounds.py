@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from jung.phases.context_bounds import (
+    bounded_lines,
     bounded_text,
     newest_lines_within_budget,
 )
+from jung.phases.therapy.models import TherapyContextLimits
+from jung.styles import load_styles
 
 
 def test_bounded_text_zero_limit_returns_empty() -> None:
@@ -18,6 +21,22 @@ def test_bounded_text_negative_limit_returns_empty() -> None:
 
 def test_bounded_text_short_text_unchanged() -> None:
     assert bounded_text("hello", 10) == "hello"
+
+
+def test_bounded_lines_returns_complete_prefix_without_ellipsis() -> None:
+    text = "line one\nline two\nline three"
+    result = bounded_lines(text, len("line one\nline two"))
+    assert result == "line one\nline two"
+    assert "..." not in result
+
+
+def test_bounded_lines_unchanged_when_fit() -> None:
+    text = "line one\nline two"
+    assert bounded_lines(text, 100) == text
+
+
+def test_bounded_lines_empty_when_no_complete_line_fits() -> None:
+    assert bounded_lines("a very long single line", 5) == ""
 
 
 def test_newest_lines_within_budget_zero_returns_empty() -> None:
@@ -51,3 +70,22 @@ def test_newest_lines_within_budget_bounds_oversized_newest_line() -> None:
     selected = newest_lines_within_budget([oversized], 20)
     assert selected == [bounded_text(oversized, 20)]
     assert len(selected[0]) <= 20
+
+
+def test_all_post_session_style_instructions_fit_reserved_budget() -> None:
+    for style in load_styles().values():
+        instructions = style.post_session_instructions or ""
+        assert len(instructions) <= 2000
+        rendered = bounded_lines(instructions, 2000)
+        assert rendered in {instructions, instructions.rstrip("\n")}
+
+
+def test_all_therapy_style_instructions_fit_minimum_production_budget() -> None:
+    limits = TherapyContextLimits()
+    # Style and plan share the core body budget; style gets half.
+    min_style_budget = min(limits.max_section_chars, limits.max_total_chars // 2)
+    for style in load_styles().values():
+        instructions = style.therapist_instructions
+        assert len(instructions) <= min_style_budget
+        rendered = bounded_lines(instructions, min_style_budget)
+        assert rendered in {instructions, instructions.rstrip("\n")}
