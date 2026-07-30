@@ -15,7 +15,7 @@ import platform
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -38,6 +38,9 @@ _TOKEN_METRIC_KEYS: Final = frozenset(
         "total_tokens",
     }
 )
+_COLLAPSED_TOKEN_METRIC_KEYS: Final = frozenset(
+    key.replace("_", "") for key in _TOKEN_METRIC_KEYS
+)
 _SENSITIVE_EXACT_KEYS: Final = frozenset(
     {
         "authorization",
@@ -51,6 +54,9 @@ _SENSITIVE_EXACT_KEYS: Final = frozenset(
         "refresh_token",
         "auth_token",
     }
+)
+_SENSITIVE_COLLAPSED_EXACT_KEYS: Final = frozenset(
+    key.replace("_", "") for key in _SENSITIVE_EXACT_KEYS
 )
 _MIN_SECRET_LEN: Final = 8
 _MAX_INSTRUMENTATION_ERRORS: Final = 64
@@ -142,13 +148,50 @@ def _is_sensitive_key(key: object) -> bool:
     if not isinstance(key, str):
         return False
     normalized = key.casefold().replace("-", "_")
-    if normalized in _TOKEN_METRIC_KEYS:
+    collapsed = normalized.replace("_", "")
+    if normalized in _TOKEN_METRIC_KEYS or collapsed in _COLLAPSED_TOKEN_METRIC_KEYS:
         return False
-    if normalized in _SENSITIVE_EXACT_KEYS:
+    if (
+        normalized in _SENSITIVE_EXACT_KEYS
+        or collapsed in _SENSITIVE_COLLAPSED_EXACT_KEYS
+    ):
         return True
-    return normalized.endswith(
-        ("_password", "_secret", "_api_key", "_token", "_tokens")
+    if normalized.endswith(("_password", "_secret", "_api_key", "_token", "_tokens")):
+        return True
+    if collapsed.endswith(("password", "secret", "apikey", "token", "tokens")):
+        return True
+    return False
+
+
+def _is_token_metric_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    collapsed = normalized.replace("_", "")
+    return (
+        normalized in _TOKEN_METRIC_KEYS
+        or collapsed in _COLLAPSED_TOKEN_METRIC_KEYS
     )
+
+
+def _is_token_metric_value(value: object) -> bool:
+    # bool is a subclass of int; treat it as non-numeric for credential safety.
+    return value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    )
+
+
+def _sanitize_mapping_item(
+    key_str: str,
+    item: Any,
+    *,
+    convert: Callable[[Any], Any],
+) -> Any:
+    if _is_token_metric_key(key_str):
+        if _is_token_metric_value(item):
+            return item
+        return "[REDACTED]"
+    if _is_sensitive_key(key_str):
+        return "[REDACTED]"
+    return convert(item)
 
 
 def sanitize_value(
@@ -192,14 +235,14 @@ def sanitize_value(
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             return convert(dataclasses.asdict(obj), depth=depth + 1)
         if isinstance(obj, Mapping):
-            out: dict[str, Any] = {}
-            for key, item in obj.items():
-                key_str = str(key)
-                if _is_sensitive_key(key_str):
-                    out[key_str] = "[REDACTED]"
-                else:
-                    out[key_str] = convert(item, depth=depth + 1)
-            return out
+            return {
+                str(key): _sanitize_mapping_item(
+                    str(key),
+                    item,
+                    convert=lambda nested: convert(nested, depth=depth + 1),
+                )
+                for key, item in obj.items()
+            }
         if isinstance(obj, (list, tuple, set, frozenset)):
             return [convert(item, depth=depth + 1) for item in obj]
         if isinstance(obj, bytes):

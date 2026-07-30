@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 from pydantic import BaseModel
 
+from jung.diagnostics import DiagnosticRun
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import (
     FailureExpectation,
@@ -213,3 +217,125 @@ async def test_observed_gateway_logs_structured_failure_metadata(
     assert "status=timeout" in message
     assert "error_type=LLMTimeout" in message
     assert "Traceback" not in caplog.text
+
+
+async def test_observed_gateway_swallow_close_method_cancellederror_and_records_cleanup(
+    tmp_path: Path,
+) -> None:
+    class CloseCancelledStream:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __aiter__(self) -> CloseCancelledStream:
+            return self
+
+        async def __anext__(self) -> str:
+            if self._done:
+                raise StopAsyncIteration
+            self._done = True
+            return "hello"
+
+        async def aclose(self) -> None:
+            raise asyncio.CancelledError()
+
+    class Inner:
+        def stream_text(self, messages, policy):  # type: ignore[no-untyped-def]
+            return CloseCancelledStream()
+
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="local",
+        temperature=0.0,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+
+    run_dir = tmp_path / "gateway-close-cancel"
+    with DiagnosticRun(run_dir) as recorder:
+        gateway = ObservedLLMGateway(Inner(), recorder=recorder)
+        chunks: list[str] = []
+        async for chunk in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hi")],
+            policy,
+        ):
+            chunks.append(chunk)
+
+        assert chunks == ["hello"]
+
+    lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines if line.strip()]  # type: ignore[name-defined]
+    complete = [e for e in events if e["kind"] == "llm.call.complete"]
+    assert len(complete) == 1
+    cleanup = [e for e in events if e["kind"] == "llm.stream.cleanup.error"]
+    assert len(cleanup) == 1
+    assert cleanup[0]["data"]["error_type"] == "CancelledError"
+    assert cleanup[0]["data"]["close_method"] == "aclose"
+    call_errors = [e for e in events if e["kind"] == "llm.call.error"]
+    assert not call_errors
+
+
+async def test_observed_gateway_ambient_cancel_during_close_drains_then_propagates(
+    tmp_path: Path,
+) -> None:
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+
+    class CloseBlockedStream:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __aiter__(self) -> CloseBlockedStream:
+            return self
+
+        async def __anext__(self) -> str:
+            if self._done:
+                raise StopAsyncIteration
+            self._done = True
+            return "hello"
+
+        async def aclose(self) -> None:
+            close_started.set()
+            await close_release.wait()
+
+    class Inner:
+        def stream_text(self, messages, policy):  # type: ignore[no-untyped-def]
+            return CloseBlockedStream()
+
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="local",
+        temperature=0.0,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+
+    run_dir = tmp_path / "gateway-close-ambient-cancel"
+    with DiagnosticRun(run_dir) as recorder:
+        gateway = ObservedLLMGateway(Inner(), recorder=recorder)
+
+        async def consume() -> None:
+            async for _chunk in gateway.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                policy,
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await close_started.wait()
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        close_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Terminal was already determined before close was awaited.
+        trace_path = run_dir / "trace.jsonl"
+        assert trace_path.exists()
+
+    lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines if line.strip()]  # type: ignore[name-defined]
+    complete = [e for e in events if e["kind"] == "llm.call.complete"]
+    assert len(complete) == 1
+    cleanup = [e for e in events if e["kind"] == "llm.stream.cleanup.error"]
+    assert not cleanup

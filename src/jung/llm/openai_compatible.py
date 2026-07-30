@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -44,6 +45,58 @@ from jung.llm.structured import (
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_exception_message(exc: BaseException) -> str:
+    try:
+        return str(exc)
+    except Exception:
+        return "<exception message unavailable>"
+
+
+async def _close_stream_safely(
+    close: Callable[[], object],
+    *,
+    record_failure: Callable[[BaseException], None],
+) -> None:
+    """Close-stream helper that preserves ambient cancellations.
+
+    Close-method `CancelledError` is treated as a secondary cleanup failure
+    and swallowed. Ambient task cancellation is drained and re-raised.
+    """
+    try:
+        result = close()
+    except asyncio.CancelledError as exc:
+        record_failure(exc)
+        return
+    except Exception as exc:
+        record_failure(exc)
+        return
+
+    if not inspect.isawaitable(result):
+        return
+
+    close_task = asyncio.create_task(result)
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError as exc:
+        current = asyncio.current_task()
+        # Distinguish close-method CancelledError (close raises) from ambient
+        # cancellation (caller task has cancellation requested).
+        if current is not None and current.cancelling() > 0:
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError as close_exc:
+                record_failure(close_exc)
+            except Exception as close_exc:
+                record_failure(close_exc)
+            raise
+
+        record_failure(exc)
+        return
+    except Exception as exc:
+        record_failure(exc)
+        return
 
 _FORBIDDEN_EXTRA_BODY_KEYS = frozenset(
     {
@@ -321,6 +374,7 @@ class OpenAICompatibleLLM:
         completion_tokens: int | None = None
         assembled: list[str] = []
         terminal_emitted = False
+        sdk_stream = None
 
         self._record_provider_request(
             messages=messages,
@@ -333,8 +387,8 @@ class OpenAICompatibleLLM:
 
         try:
             try:
-                stream = await self._client.chat.completions.create(**request)
-                async for chunk in stream:
+                sdk_stream = await self._client.chat.completions.create(**request)
+                async for chunk in sdk_stream:
                     if getattr(chunk, "usage", None) is not None:
                         usage = chunk.usage
                         prompt_tokens = getattr(usage, "prompt_tokens", None)
@@ -456,6 +510,12 @@ class OpenAICompatibleLLM:
                 terminal_emitted = True
                 raise
         finally:
+            await self._close_sdk_stream(
+                sdk_stream,
+                provider_attempt_id=provider_attempt_id,
+                policy=policy,
+                status=status,
+            )
             if recording and not terminal_emitted and status != "success":
                 status = "abandoned"
                 error_type = "GeneratorExit"
@@ -489,6 +549,46 @@ class OpenAICompatibleLLM:
                     error_type=error_type,
                 )
             )
+
+    async def _close_sdk_stream(
+        self,
+        sdk_stream: object | None,
+        *,
+        provider_attempt_id: str | None,
+        policy: ModelPolicy,
+        status: str,
+    ) -> None:
+        if sdk_stream is None:
+            return
+        close_method = getattr(sdk_stream, "aclose", None)
+        close_method_name = "aclose"
+        if close_method is None:
+            close_method = getattr(sdk_stream, "close", None)
+            close_method_name = "close"
+        if close_method is None:
+            return
+
+        terminal_outcome = status if status != "started" else "abandoned"
+
+        def _record_close_failure(exc: BaseException) -> None:
+            self._record_provider(
+                "llm.provider.cleanup.error",
+                {
+                    "provider_attempt_id": provider_attempt_id,
+                    "llm_call_id": current_diagnostic_context().llm_call_id,
+                    "task": policy.task.value,
+                    "attempt": "initial",
+                    "outcome_status": terminal_outcome,
+                    "close_method": close_method_name,
+                    "error_type": type(exc).__name__,
+                    "error_message": _safe_exception_message(exc),
+                },
+            )
+
+        await _close_stream_safely(
+            close_method,
+            record_failure=_record_close_failure,
+        )
 
     async def generate_structured(
         self,

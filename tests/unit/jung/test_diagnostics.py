@@ -82,6 +82,39 @@ def test_sanitize_value_token_metric_allowlist(
         assert sanitized[key] == 42
 
 
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [
+        ("promptTokens", 12, 12),
+        ("maxCompletionTokens", None, None),
+        ("promptTokens", True, "[REDACTED]"),
+        ("promptTokens", "secret", "[REDACTED]"),
+    ],
+)
+def test_sanitize_value_token_metric_numeric_only(
+    key: str,
+    value: object,
+    expected: object,
+) -> None:
+    sanitized = sanitize_value({key: value})
+    assert sanitized[key] == expected
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "accessToken",
+        "secondaryAccessToken",
+        "providerRefreshToken",
+        "serviceClientSecret",
+        "bearerTokens",
+    ],
+)
+def test_sanitize_value_camelcase_credentials_redacted(key: str) -> None:
+    sanitized = sanitize_value({key: "credential"})
+    assert sanitized[key] == "[REDACTED]"
+
+
 def test_sanitize_value_redacts_sensitive_keys_and_secret_values() -> None:
     secret = "super-secret-value"
     payload = {
@@ -259,6 +292,43 @@ def test_log_handler_captures_traceback_and_redacts_secrets(tmp_path: Path) -> N
         assert "[REDACTED]" in payload["data"]["traceback"]
     finally:
         recorder.close(run_status="success")
+
+
+def test_diagnostic_log_handler_handles_formatting_failure(
+    tmp_path: Path,
+) -> None:
+    class BrokenString:
+        def __str__(self) -> str:
+            raise RuntimeError("format failed")
+
+    run_dir = tmp_path / "format-failure"
+    recorder = DiagnosticRecorder(run_dir)
+    try:
+        assert recorder._log_handler is not None  # type: ignore[attr-defined]
+        record = logging.LogRecord(
+            name="jung.test.diagnostics.formatting",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="value=%s",
+            args=(BrokenString(),),
+            exc_info=None,
+        )
+        recorder._log_handler.emit(record)  # type: ignore[union-attr]
+
+        with pytest.raises(DiagnosticCaptureError):
+            recorder.close(run_status="success")
+    finally:
+        # If close() already raised, it may have removed the handler; ensure trace artifacts exist.
+        if (run_dir / "manifest.json").exists():
+            manifest = json.loads(
+                (run_dir / "manifest.json").read_text(encoding="utf-8"),
+            )
+            assert manifest["evidence_complete"] is False
+            errors = manifest.get("instrumentation_errors") or []
+            assert any(
+                "diagnostic log capture failed" in str(err) for err in errors
+            )
 
 
 @pytest.mark.parametrize(

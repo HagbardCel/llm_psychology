@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -17,6 +18,59 @@ from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_exception_message(exc: BaseException) -> str:
+    try:
+        return str(exc)
+    except Exception:
+        return "<exception message unavailable>"
+
+
+async def _close_stream_safely(
+    close: Callable[[], object],
+    *,
+    record_failure: Callable[[BaseException], None],
+) -> None:
+    """Close-stream helper that preserves ambient cancellations.
+
+    - Close-method `CancelledError` is recorded as a cleanup error and swallowed.
+    - If the *caller task* is externally cancelled while awaiting close,
+      we drain/finish the close attempt and then re-raise the outer cancellation.
+    """
+    try:
+        result = close()
+    except asyncio.CancelledError as exc:
+        record_failure(exc)
+        return
+    except Exception as exc:
+        record_failure(exc)
+        return
+
+    if not inspect.isawaitable(result):
+        return
+
+    close_task = asyncio.create_task(result)
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError as exc:
+        current = asyncio.current_task()
+        # Distinguish close-method CancelledError (close raises) from ambient
+        # cancellation (caller task has cancellation requested).
+        if current is not None and current.cancelling() > 0:
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError as close_exc:
+                record_failure(close_exc)
+            except Exception as close_exc:
+                record_failure(close_exc)
+            raise
+
+        record_failure(exc)
+        return
+    except Exception as exc:
+        record_failure(exc)
+        return
 
 
 class ObservedLLMGateway:
@@ -132,10 +186,32 @@ class ObservedLLMGateway:
             finally:
                 close = getattr(inner_stream, "aclose", None)
                 if close is not None:
-                    try:
-                        await close()
-                    except Exception:
-                        pass
+                    terminal_status = (
+                        status
+                        if terminal_emitted or status == "success"
+                        else "abandoned"
+                    )
+
+                    def _record_close_failure(exc: BaseException) -> None:
+                        if self._recorder is None:
+                            return
+                        self._recorder.record(
+                            "llm.stream.cleanup.error",
+                            {
+                                "call_id": call_id,
+                                "call_type": "stream_text",
+                                "task": policy.task.value,
+                                "outcome_status": terminal_status,
+                                "close_method": "aclose",
+                                "error_type": type(exc).__name__,
+                                "error_message": _safe_exception_message(exc),
+                            },
+                        )
+
+                    await _close_stream_safely(
+                        close,
+                        record_failure=_record_close_failure,
+                    )
                 if not terminal_emitted and status != "success":
                     self._fail_call(
                         call_id=call_id,
