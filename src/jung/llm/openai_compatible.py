@@ -109,11 +109,12 @@ def _merge_extra_body(
 
 def _classify_status_error(exc: APIStatusError) -> Exception:
     status = exc.status_code
+    message = _safe_exception_message(exc)
     if status == 408:
-        return LLMTimeout(str(exc))
+        return LLMTimeout(message)
     if status == 429 or status >= 500:
-        return LLMUnavailable(str(exc))
-    return LLMProtocolError(str(exc))
+        return LLMUnavailable(message)
+    return LLMProtocolError(message)
 
 
 def _prompt_chars(messages: Sequence[ChatMessage]) -> int:
@@ -371,7 +372,7 @@ class OpenAICompatibleLLM:
             except asyncio.CancelledError as exc:
                 status = "cancelled"
                 error_type = type(exc).__name__
-                error_message = str(exc)
+                error_message = _safe_exception_message(exc)
                 if recording:
                     self._record_provider_failure(
                         provider_attempt_id=provider_attempt_id,
@@ -389,7 +390,8 @@ class OpenAICompatibleLLM:
             except APITimeoutError as exc:
                 status = "timeout"
                 error_type = "LLMTimeout"
-                error_message = str(exc)
+                message = _safe_exception_message(exc)
+                error_message = message
                 if recording:
                     self._record_provider_failure(
                         provider_attempt_id=provider_attempt_id,
@@ -403,11 +405,12 @@ class OpenAICompatibleLLM:
                         finish_reason=finish_reason,
                     )
                 terminal_emitted = True
-                raise LLMTimeout(str(exc)) from exc
+                raise LLMTimeout(message) from exc
             except APIConnectionError as exc:
                 status = "error"
                 error_type = "LLMUnavailable"
-                error_message = str(exc)
+                message = _safe_exception_message(exc)
+                error_message = message
                 if recording:
                     self._record_provider_failure(
                         provider_attempt_id=provider_attempt_id,
@@ -421,12 +424,12 @@ class OpenAICompatibleLLM:
                         finish_reason=finish_reason,
                     )
                 terminal_emitted = True
-                raise LLMUnavailable(str(exc)) from exc
+                raise LLMUnavailable(message) from exc
             except APIStatusError as exc:
                 classified = _classify_status_error(exc)
                 status = "timeout" if isinstance(classified, LLMTimeout) else "error"
                 error_type = type(classified).__name__
-                error_message = str(exc)
+                error_message = _safe_exception_message(exc)
                 if recording:
                     self._record_provider_failure(
                         provider_attempt_id=provider_attempt_id,
@@ -444,7 +447,7 @@ class OpenAICompatibleLLM:
             except Exception as exc:
                 status = "error"
                 error_type = type(exc).__name__
-                error_message = str(exc)
+                error_message = _safe_exception_message(exc)
                 if recording:
                     self._record_provider_failure(
                         provider_attempt_id=provider_attempt_id,
@@ -768,33 +771,35 @@ class OpenAICompatibleLLM:
         except asyncio.CancelledError as exc:
             status = "cancelled"
             error_type = type(exc).__name__
-            error_message = str(exc)
+            error_message = _safe_exception_message(exc)
             raise
         except InvalidLLMOutput as exc:
             status = "error"
             error_type = "InvalidLLMOutput"
-            error_message = str(exc)
+            error_message = _safe_exception_message(exc)
             raise
         except APITimeoutError as exc:
             status = "timeout"
             error_type = "LLMTimeout"
-            error_message = str(exc)
-            raise LLMTimeout(str(exc)) from exc
+            message = _safe_exception_message(exc)
+            error_message = message
+            raise LLMTimeout(message) from exc
         except APIConnectionError as exc:
             status = "error"
             error_type = "LLMUnavailable"
-            error_message = str(exc)
-            raise LLMUnavailable(str(exc)) from exc
+            message = _safe_exception_message(exc)
+            error_message = message
+            raise LLMUnavailable(message) from exc
         except APIStatusError as exc:
             classified = _classify_status_error(exc)
             status = "timeout" if isinstance(classified, LLMTimeout) else "error"
             error_type = type(classified).__name__
-            error_message = str(exc)
+            error_message = _safe_exception_message(exc)
             raise classified from exc
         except Exception as exc:
             status = "error"
             error_type = type(exc).__name__
-            error_message = str(exc)
+            error_message = _safe_exception_message(exc)
             raise
         finally:
             elapsed = time.perf_counter() - started

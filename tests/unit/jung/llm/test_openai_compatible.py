@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
 
 from jung.llm.errors import (
@@ -846,6 +846,44 @@ class _UnexpectedProviderBug(RuntimeError):
     pass
 
 
+class _HostileStrError(RuntimeError):
+    def __str__(self) -> str:
+        raise RuntimeError("broken exception message")
+
+
+class _HostileAPIStatusError(APIStatusError):
+    def __str__(self) -> str:
+        raise RuntimeError("broken exception message")
+
+
+def _hostile_api_status_error(status_code: int) -> APIStatusError:
+    response = httpx.Response(
+        status_code,
+        request=httpx.Request("POST", "http://testserver/v1/chat/completions"),
+    )
+    return _HostileAPIStatusError("status failed", response=response, body=None)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_type"),
+    [
+        (408, LLMTimeout),
+        (429, LLMUnavailable),
+        (500, LLMUnavailable),
+        (400, LLMProtocolError),
+    ],
+)
+async def test_classify_status_error_uses_safe_exception_message(
+    status_code: int,
+    expected_type: type[Exception],
+) -> None:
+    from jung.llm.openai_compatible import _classify_status_error
+
+    classified = _classify_status_error(_hostile_api_status_error(status_code))
+    assert isinstance(classified, expected_type)
+    assert str(classified) == "<exception message unavailable>"
+
+
 async def test_unexpected_provider_error_propagates_unchanged_structured() -> None:
     gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
 
@@ -1177,6 +1215,102 @@ async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
     assert "sdk defect" in error["data"]["error_message"]
     call_error = next(entry for entry in lines if entry["kind"] == "llm.call.error")
     assert call_error["data"]["status"] == "error"
+
+
+async def test_hostile_str_provider_error_records_safe_message_structured(
+    tmp_path: Path,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    with DiagnosticRun(tmp_path / "hostile-structured") as recorder:
+        inner = _client(
+            httpx.MockTransport(lambda request: httpx.Response(500)),
+            recorder=recorder,
+        )
+
+        async def boom(**_kwargs: object) -> object:
+            raise _HostileStrError()
+
+        inner._client.chat.completions.create = boom  # type: ignore[method-assign]
+        gateway = ObservedLLMGateway(inner, recorder=recorder)
+        with pytest.raises(_HostileStrError):
+            await gateway.generate_structured(
+                [ChatMessage(role=ChatRole.USER, content="give json")],
+                _Answer,
+                _policy(),
+            )
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "hostile-structured" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    _assert_one_terminal(
+        lines,
+        start_kind="llm.call.start",
+        terminal_kinds={"llm.call.complete", "llm.call.error"},
+        id_field="call_id",
+    )
+    _assert_one_terminal(
+        lines,
+        start_kind="llm.provider.request",
+        terminal_kinds={"llm.provider.response", "llm.provider.error"},
+        id_field="provider_attempt_id",
+    )
+    error = next(entry for entry in lines if entry["kind"] == "llm.provider.error")
+    assert error["data"]["error_type"] == "_HostileStrError"
+    assert error["data"]["error_message"] == "<exception message unavailable>"
+
+
+async def test_hostile_str_provider_error_records_safe_message_stream(
+    tmp_path: Path,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    with DiagnosticRun(tmp_path / "hostile-stream") as recorder:
+        inner = _client(
+            httpx.MockTransport(lambda request: httpx.Response(500)),
+            recorder=recorder,
+        )
+
+        async def boom(**_kwargs: object) -> object:
+            raise _HostileStrError()
+
+        inner._client.chat.completions.create = boom  # type: ignore[method-assign]
+        gateway = ObservedLLMGateway(inner, recorder=recorder)
+        with pytest.raises(_HostileStrError):
+            async for _ in gateway.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hello")],
+                _policy(mode=StructuredOutputMode.PROMPT),
+            ):
+                pass
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "hostile-stream" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    _assert_one_terminal(
+        lines,
+        start_kind="llm.call.start",
+        terminal_kinds={"llm.call.complete", "llm.call.error"},
+        id_field="call_id",
+    )
+    _assert_one_terminal(
+        lines,
+        start_kind="llm.provider.request",
+        terminal_kinds={"llm.provider.response", "llm.provider.error"},
+        id_field="provider_attempt_id",
+    )
+    error = next(entry for entry in lines if entry["kind"] == "llm.provider.error")
+    assert error["data"]["error_type"] == "_HostileStrError"
+    assert error["data"]["error_message"] == "<exception message unavailable>"
 
 
 async def test_stream_early_aclose_emits_abandoned_terminals(tmp_path: Path) -> None:
