@@ -543,10 +543,14 @@ class DiagnosticRecorder:
         }
         if finished_at is not None:
             payload["finished_at"] = finished_at.isoformat()
-        for key, value in self._metadata.items():
-            if key in payload:
-                continue
-            payload[key] = sanitize_value(value, secret_values=self._secret_values)
+        safe_metadata = sanitize_value(
+            self._metadata,
+            secret_values=self._secret_values,
+        )
+        if isinstance(safe_metadata, dict):
+            for key, value in safe_metadata.items():
+                if key not in payload:
+                    payload[key] = value
 
         path = self._run_dir / "manifest.json"
         tmp = self._run_dir / "manifest.json.tmp"

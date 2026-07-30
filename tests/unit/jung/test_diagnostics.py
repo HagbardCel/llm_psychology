@@ -171,6 +171,28 @@ def test_recorder_rejects_existing_run_dir(tmp_path: Path) -> None:
         DiagnosticRecorder(run_dir)
 
 
+def test_manifest_redacts_sensitive_metadata_keys(tmp_path: Path) -> None:
+    run_dir = tmp_path / "metadata-keys"
+    with DiagnosticRun(
+        run_dir,
+        metadata={
+            "authorization": "abc",
+            "apiKey": "def",
+            "clientSecret": "ghi",
+            "accessToken": "jkl",
+            "safe_field": "visible",
+        },
+    ):
+        pass
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["authorization"] == "[REDACTED]"
+    assert manifest["apiKey"] == "[REDACTED]"
+    assert manifest["clientSecret"] == "[REDACTED]"
+    assert manifest["accessToken"] == "[REDACTED]"
+    assert manifest["safe_field"] == "visible"
+
+
 def test_artifact_path_rejects_invalid_names(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     recorder = DiagnosticRecorder(run_dir)
