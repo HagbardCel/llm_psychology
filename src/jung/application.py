@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from jung import workflow
+from jung._async_cleanup import drain_cancelled_task
+from jung.diagnostics import _safe_exception_message, diagnostic_context
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -84,6 +87,9 @@ from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
 from jung.supervisor import SupervisorClosed, TaskSupervisor
 
+if TYPE_CHECKING:
+    from jung.diagnostics import DiagnosticRecorder
+
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
@@ -117,6 +123,7 @@ class TherapyApplication:
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
+        recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._store = store
         self._intake = intake
@@ -128,6 +135,7 @@ class TherapyApplication:
         self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
+        self._recorder = recorder
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
@@ -144,26 +152,63 @@ class TherapyApplication:
     ) -> _T:
         # Bounded shutdown applies around LLM/background work; an already-running
         # local SQLite call is allowed to finish before the mutation lock releases.
-        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+        method_name = getattr(fn, "__name__", None) or type(fn).__name__
+        recorder = self._recorder
+
+        def invoke() -> _T:
+            if recorder is None:
+                return fn(*args, **kwargs)
+
+            store_call_id = recorder.next_id("store")
+            with diagnostic_context(store_call_id=store_call_id):
+                recorder.record(
+                    "store.call.start",
+                    {
+                        "store_call_id": store_call_id,
+                        "method": method_name,
+                        "arguments": {"args": list(args), "kwargs": dict(kwargs)},
+                    },
+                )
+                started = time.perf_counter()
+                try:
+                    result = fn(*args, **kwargs)
+                except Exception as exc:
+                    recorder.record(
+                        "store.call.error",
+                        {
+                            "store_call_id": store_call_id,
+                            "method": method_name,
+                            "elapsed_seconds": time.perf_counter() - started,
+                            "error_type": type(exc).__name__,
+                            "error_message": _safe_exception_message(exc),
+                        },
+                    )
+                    raise
+                else:
+                    recorder.record(
+                        "store.call.complete",
+                        {
+                            "store_call_id": store_call_id,
+                            "method": method_name,
+                            "elapsed_seconds": time.perf_counter() - started,
+                            "result": result,
+                        },
+                    )
+                    return result
+
+        task = asyncio.create_task(asyncio.to_thread(invoke))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError as cancellation:
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-
-            if not task.cancelled():
-                try:
-                    task.result()
-                except Exception:
-                    logger.exception(
-                        "store call failed after caller cancellation function=%s",
-                        getattr(fn, "__name__", repr(fn)),
-                    )
+            failure = await drain_cancelled_task(task)
+            if failure is not None:
+                logger.error(
+                    "store call failed after caller cancellation "
+                    "function=%s error_type=%s",
+                    method_name,
+                    type(failure).__name__,
+                    exc_info=failure,
+                )
 
             raise cancellation
 
@@ -772,27 +817,41 @@ class TherapyApplication:
         session_id: UUID,
         request_id: UUID | None,
     ) -> None:
-        try:
-            session = await self._run_store(self._store.get_session, session_id)
-            if session is None:
-                raise NotFound(f"session {session_id}")
-            if session.kind is SessionKind.INTAKE:
-                await self._generate_intake_response(turn_id, session_id, request_id)
-            elif session.kind is SessionKind.THERAPY:
-                await self._generate_therapy_response(turn_id, session_id, request_id)
-            else:
-                raise InvariantViolation(f"unsupported session kind: {session.kind}")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "chat worker failed turn_id=%s session_id=%s",
-                turn_id,
-                session_id,
-            )
-            await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
-        finally:
-            self._release_generation_lock()
+        with diagnostic_context(
+            turn_id=str(turn_id),
+            session_id=str(session_id),
+            request_id=str(request_id) if request_id is not None else None,
+            task_name=f"chat:{turn_id}",
+        ):
+            try:
+                session = await self._run_store(self._store.get_session, session_id)
+                if session is None:
+                    raise NotFound(f"session {session_id}")
+                if session.kind is SessionKind.INTAKE:
+                    await self._generate_intake_response(
+                        turn_id,
+                        session_id,
+                        request_id,
+                    )
+                elif session.kind is SessionKind.THERAPY:
+                    await self._generate_therapy_response(
+                        turn_id, session_id, request_id
+                    )
+                else:
+                    raise InvariantViolation(
+                        f"unsupported session kind: {session.kind}"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "chat worker failed turn_id=%s session_id=%s",
+                    turn_id,
+                    session_id,
+                )
+                await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
+            finally:
+                self._release_generation_lock()
 
     async def _generate_intake_response(
         self,
@@ -975,6 +1034,13 @@ class TherapyApplication:
         await self._events.publish(SnapshotChanged(snapshot))
 
     async def _run_operation_worker(self, operation_id: UUID) -> None:
+        with diagnostic_context(
+            operation_id=str(operation_id),
+            task_name=f"operation:{operation_id}",
+        ):
+            await self._run_operation_worker_body(operation_id)
+
+    async def _run_operation_worker_body(self, operation_id: UUID) -> None:
         running_owned = False
         try:
             async with self._mutation_lock:
@@ -991,76 +1057,85 @@ class TherapyApplication:
                 )
                 running_owned = True
                 snapshot = await self._assemble_snapshot_locked()
-            try:
-                await self._events.publish(OperationChanged(operation, snapshot))
-            except Exception:
-                logger.exception(
-                    "failed to publish operation running event operation_id=%s",
-                    operation_id,
-                )
+            with diagnostic_context(
+                operation_id=str(operation_id),
+                session_id=str(operation.source_session_id),
+                task_name=f"operation:{operation.kind.value}:{operation_id}",
+            ):
+                try:
+                    await self._events.publish(OperationChanged(operation, snapshot))
+                except Exception:
+                    logger.exception(
+                        "failed to publish operation running event operation_id=%s",
+                        operation_id,
+                    )
 
-            if operation.kind is OperationKind.ASSESSMENT:
-                assessment_input = await self._build_assessment_input(operation)
-                result = await self._assessment.assess(assessment_input)
-                async with self._mutation_lock:
-                    await self._run_store(
-                        self._store.complete_assessment,
+                if operation.kind is OperationKind.ASSESSMENT:
+                    assessment_input = await self._build_assessment_input(operation)
+                    result = await self._assessment.assess(assessment_input)
+                    async with self._mutation_lock:
+                        await self._run_store(
+                            self._store.complete_assessment,
+                            operation_id,
+                            result=result.model_dump(mode="json"),
+                            now=self._now(),
+                        )
+                        snapshot = await self._assemble_snapshot_locked()
+                    completed = await self._run_store(
+                        self._store.get_operation,
                         operation_id,
-                        result=result.model_dump(mode="json"),
-                        now=self._now(),
                     )
-                    snapshot = await self._assemble_snapshot_locked()
-                completed = await self._run_store(
-                    self._store.get_operation,
-                    operation_id,
-                )
-                assert completed is not None
-                await self._events.publish(OperationChanged(completed, snapshot))
-            elif operation.kind is OperationKind.POST_SESSION:
-                post_input = await self._build_post_session_input(operation)
-                result = await self._post_session.process(post_input)
-                stored = await self._run_store(self._store.get_profile)
-                session = await self._run_store(
-                    self._store.get_session,
-                    operation.source_session_id,
-                )
-                assert session is not None and session.plan_id is not None
-                plan_for_session = await self._load_plan_for_session(
-                    operation.source_session_id,
-                    session.plan_id,
-                )
-                merged_profile = merge_derived_profile(
-                    stored.derived_profile if stored else None,
-                    result.derived_profile_patch,
-                )
-                merged_plan = merge_plan_content(plan_for_session, result.plan_patch)
-                new_plan = (
-                    NewPlanRevision(
-                        plan_id=self._new_id(),
-                        content=merged_plan,
+                    assert completed is not None
+                    await self._events.publish(OperationChanged(completed, snapshot))
+                elif operation.kind is OperationKind.POST_SESSION:
+                    post_input = await self._build_post_session_input(operation)
+                    result = await self._post_session.process(post_input)
+                    stored = await self._run_store(self._store.get_profile)
+                    session = await self._run_store(
+                        self._store.get_session,
+                        operation.source_session_id,
                     )
-                    if merged_plan is not None
-                    else None
-                )
-                async with self._mutation_lock:
-                    await self._run_store(
-                        self._store.complete_post_session,
+                    assert session is not None and session.plan_id is not None
+                    plan_for_session = await self._load_plan_for_session(
+                        operation.source_session_id,
+                        session.plan_id,
+                    )
+                    merged_profile = merge_derived_profile(
+                        stored.derived_profile if stored else None,
+                        result.derived_profile_patch,
+                    )
+                    merged_plan = merge_plan_content(
+                        plan_for_session, result.plan_patch
+                    )
+                    new_plan = (
+                        NewPlanRevision(
+                            plan_id=self._new_id(),
+                            content=merged_plan,
+                        )
+                        if merged_plan is not None
+                        else None
+                    )
+                    async with self._mutation_lock:
+                        await self._run_store(
+                            self._store.complete_post_session,
+                            operation_id,
+                            summary=result.session_summary,
+                            briefing=result.session_briefing.model_dump(mode="json"),
+                            derived_profile=merged_profile,
+                            new_plan=new_plan,
+                            now=self._now(),
+                        )
+                        snapshot = await self._assemble_snapshot_locked()
+                    completed = await self._run_store(
+                        self._store.get_operation,
                         operation_id,
-                        summary=result.session_summary,
-                        briefing=result.session_briefing.model_dump(mode="json"),
-                        derived_profile=merged_profile,
-                        new_plan=new_plan,
-                        now=self._now(),
                     )
-                    snapshot = await self._assemble_snapshot_locked()
-                completed = await self._run_store(
-                    self._store.get_operation,
-                    operation_id,
-                )
-                assert completed is not None
-                await self._events.publish(OperationChanged(completed, snapshot))
-            else:
-                raise InvariantViolation(f"unknown operation kind: {operation.kind}")
+                    assert completed is not None
+                    await self._events.publish(OperationChanged(completed, snapshot))
+                else:
+                    raise InvariantViolation(
+                        f"unknown operation kind: {operation.kind}"
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

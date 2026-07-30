@@ -620,16 +620,39 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
 ) -> None:
     import threading
 
+    import jung.application as application_module
+    from jung._async_cleanup import drain_cancelled_task as real_drain
+
     gate = threading.Event()
     release = threading.Event()
+    worker_finished = threading.Event()
     original_accept = store.accept_chat_message
 
     def gated_accept(*args, **kwargs):
         gate.set()
-        release.wait()
-        return original_accept(*args, **kwargs)
+        try:
+            release.wait()
+            return original_accept(*args, **kwargs)
+        finally:
+            worker_finished.set()
 
     monkeypatch.setattr(store, "accept_chat_message", gated_accept)
+
+    drain_entered = asyncio.Event()
+    owned_task: asyncio.Future[object] | None = None
+
+    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
+        nonlocal owned_task
+        owned_task = task
+        drain_entered.set()
+        return await real_drain(task)
+
+    monkeypatch.setattr(
+        application_module,
+        "drain_cancelled_task",
+        observed_drain,
+    )
+
     fake = FakeLLM(intake_message_expectations("Welcome."))
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
@@ -655,17 +678,24 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
                 )
             )
             assert await asyncio.to_thread(gate.wait, 2.0)
-            submit_task.cancel()
-            await asyncio.sleep(0)
-            assert not submit_task.done()
+            submit_task.cancel("first-cancel")
+            await asyncio.wait_for(drain_entered.wait(), timeout=2.0)
 
-            submit_task.cancel()
+            submit_task.cancel("second-cancel")
             await asyncio.sleep(0)
+
             assert not submit_task.done()
+            assert not worker_finished.is_set()
 
             release.set()
-            with pytest.raises(asyncio.CancelledError):
+
+            with pytest.raises(asyncio.CancelledError) as exc_info:
                 await submit_task
+
+            assert exc_info.value.args == ("first-cancel",)
+            assert worker_finished.is_set()
+            assert owned_task is not None
+            assert owned_task.done()
             assert not runtime.application._generation_lock.locked()
             active_turn = runtime.store.get_active_chat_turn()
             assert active_turn is not None

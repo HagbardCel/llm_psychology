@@ -45,7 +45,7 @@ class ApplicationSettings:
     llm: LLMSettings
     shutdown_timeout_seconds: float = 30.0
     enable_llm_tracing: bool = False
-    log_prompt_previews: bool = False
+    debug_run_dir: Path | None = None
     event_queue_size: int = 64
 
     def __post_init__(self) -> None:
@@ -70,9 +70,6 @@ class ApplicationSettings:
             or queue_size <= 0
         ):
             raise ValueError("event_queue_size must be a positive integer")
-
-        if self.log_prompt_previews and not self.enable_llm_tracing:
-            raise ValueError("log_prompt_previews requires enable_llm_tracing")
 
 
 def _parse_default_headers(
@@ -270,11 +267,11 @@ def load_application_settings(
         environ.get("JUNG_ENABLE_LLM_TRACING"),
         default=False,
     )
-    log_prompt_previews = parse_bool(
-        "JUNG_LOG_PROMPT_PREVIEWS",
-        environ.get("JUNG_LOG_PROMPT_PREVIEWS"),
-        default=False,
-    )
+    debug_run_raw = environ.get("JUNG_DEBUG_RUN_DIR")
+    if debug_run_raw is None or not debug_run_raw.strip():
+        debug_run_dir: Path | None = None
+    else:
+        debug_run_dir = Path(debug_run_raw.strip())
 
     extra_body = parse_optional_json_object(
         "JUNG_LLM_EXTRA_BODY_JSON",
@@ -318,7 +315,7 @@ def load_application_settings(
         ),
         shutdown_timeout_seconds=shutdown_timeout,
         enable_llm_tracing=enable_llm_tracing,
-        log_prompt_previews=log_prompt_previews,
+        debug_run_dir=debug_run_dir,
         event_queue_size=event_queue_size,
     )
 

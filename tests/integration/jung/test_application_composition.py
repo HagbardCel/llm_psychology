@@ -151,13 +151,10 @@ async def test_application_context_closes_llm_when_recover_on_startup_fails(
         ),
         shutdown_timeout_seconds=2.0,
     )
-    with pytest.raises(ExceptionGroup) as exc_info:
+    with pytest.raises(RuntimeError, match="recover failed"):
         async with application_context(settings):
             pass
     assert closed is True
-    assert len(exc_info.value.exceptions) == 1
-    assert isinstance(exc_info.value.exceptions[0], RuntimeError)
-    assert str(exc_info.value.exceptions[0]) == "recover failed"
 
 
 async def test_application_context_wires_loaded_llm_configuration(
@@ -165,11 +162,17 @@ async def test_application_context_wires_loaded_llm_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_config: list[AdapterConfig] = []
-    tracing_calls: list[tuple[object, bool]] = []
+    observed_calls: list[tuple[object, bool, object | None]] = []
 
-    class RecordingTracingGateway:
-        def __init__(self, llm: object, *, log_prompt_previews: bool) -> None:
-            tracing_calls.append((llm, log_prompt_previews))
+    class RecordingObservedGateway:
+        def __init__(
+            self,
+            llm: object,
+            *,
+            log_metadata: bool = False,
+            recorder: object | None = None,
+        ) -> None:
+            observed_calls.append((llm, log_metadata, recorder))
             self._llm = llm
 
         def __getattr__(self, name: str) -> object:
@@ -184,12 +187,11 @@ async def test_application_context_wires_loaded_llm_configuration(
             return None
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CapturingLLM)
-    monkeypatch.setattr("jung.composition.TracingLLMGateway", RecordingTracingGateway)
+    monkeypatch.setattr("jung.composition.ObservedLLMGateway", RecordingObservedGateway)
 
     settings = load_application_settings(
         {
             "JUNG_ENABLE_LLM_TRACING": "true",
-            "JUNG_LOG_PROMPT_PREVIEWS": "true",
             "JUNG_LLM_DEFAULT_HEADERS_JSON": json.dumps(
                 {"X-Test-Header": "value"},
             ),
@@ -209,15 +211,17 @@ async def test_application_context_wires_loaded_llm_configuration(
         raw_llm = runtime.llm
         snapshot = await runtime.application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
+        assert runtime.recorder is None
 
     assert len(captured_config) == 1
     config = captured_config[0]
     assert config.default_headers == {"X-Test-Header": "value"}
     assert config.extra_body == {"global_flag": True}
     assert config.task_extra_body == {LLMTask.THERAPY_RESPONSE: {"task_flag": False}}
-    assert len(tracing_calls) == 1
-    assert tracing_calls[0][0] is raw_llm
-    assert tracing_calls[0][1] is True
+    assert len(observed_calls) == 1
+    assert observed_calls[0][0] is raw_llm
+    assert observed_calls[0][1] is True
+    assert observed_calls[0][2] is None
 
 
 async def test_application_context_rejects_forbidden_extra_body_before_readiness(

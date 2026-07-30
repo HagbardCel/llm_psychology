@@ -5,18 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic import BaseModel
 
-from jung.llm.errors import LLMTimeout
-from jung.llm.gateway import (
-    ChatMessage,
-    ChatRole,
-    LLMTask,
-    ModelPolicy,
-    StructuredOutputMode,
-)
-from jung.llm.openai_compatible import ProviderAttemptEvent
-from tests.smoke.jung.smoke_context import current_smoke_call_id
+from jung.llm.gateway import LLMTask
 from tests.smoke.jung.smoke_env import (
     parse_bool_env,
     parse_completion_caps,
@@ -26,68 +16,9 @@ from tests.smoke.jung.smoke_env import (
 from tests.smoke.jung.smoke_evidence import (
     SmokeEvidenceCollector,
     SmokePathResult,
-    SmokeProviderAttemptResult,
-    SmokeStructuredCallResult,
     render_smoke_evidence,
 )
-from tests.smoke.jung.smoke_gateway import SmokeObservingGateway
 from tests.smoke.jung.smoke_path import SmokeOperationResult, run_smoke_path
-from tests.smoke.jung.smoke_recorder import SmokeAttemptRecorder
-
-
-class _Answer(BaseModel):
-    value: str
-
-
-class _AttemptEmittingGateway:
-    def __init__(self, recorder: SmokeAttemptRecorder) -> None:
-        self._recorder = recorder
-
-    async def generate_structured(
-        self,
-        messages,
-        output_type,
-        policy,
-        validate_result=None,
-    ):
-        self._recorder.record(
-            ProviderAttemptEvent(
-                task=policy.task.value,
-                attempt="initial",
-                status="success",
-                latency_seconds=0.1,
-                prompt_chars=10,
-                response_format_chars=20,
-                response_chars=15,
-                timeout_seconds=policy.timeout_seconds,
-                max_completion_tokens=policy.max_completion_tokens,
-            )
-        )
-        return output_type(value="ok")
-
-
-class _TimeoutRaisingGateway:
-    def __init__(self, error: LLMTimeout) -> None:
-        self._error = error
-
-    async def generate_structured(
-        self,
-        messages,
-        output_type,
-        policy,
-        validate_result=None,
-    ):
-        raise self._error
-
-
-def _assessment_policy() -> ModelPolicy:
-    return ModelPolicy(
-        task=LLMTask.ASSESSMENT,
-        model="test-model",
-        temperature=0.0,
-        timeout_seconds=30.0,
-        structured_output_mode=StructuredOutputMode.JSON_OBJECT,
-    )
 
 
 @pytest.mark.parametrize(
@@ -189,7 +120,7 @@ def test_parse_smoke_extra_body_accepts_object() -> None:
     assert parse_smoke_extra_body('{"thinking": true}') == {"thinking": True}
 
 
-def test_evidence_serialization_includes_calls_and_attempts() -> None:
+def test_evidence_serialization_includes_path_results() -> None:
     collector = SmokeEvidenceCollector(
         server="llama.cpp",
         base_url="http://localhost/v1",
@@ -199,34 +130,6 @@ def test_evidence_serialization_includes_calls_and_attempts() -> None:
         path_budgets_seconds={"post_session": 300},
         request_timeout_seconds=360,
         effective_completion_caps={"post_session_update": 1800},
-        instrumentation_errors=[],
-        structured_calls=[
-            SmokeStructuredCallResult(
-                call_id="post_session_analysis-1",
-                task="post_session_analysis",
-                output_type="SessionAnalysisResult",
-                status="success",
-                latency_seconds=82.7,
-                input_chars=2800,
-                input_message_chars=(1200, 1600),
-                output_schema_chars=2940,
-                result_chars=1320,
-            )
-        ],
-        provider_attempts=[
-            SmokeProviderAttemptResult(
-                call_id="post_session_analysis-1",
-                attempt="initial",
-                status="success",
-                latency_seconds=82.6,
-                prompt_chars=3118,
-                response_format_chars=3100,
-                response_chars=1480,
-                timeout_seconds=360.0,
-                max_completion_tokens=None,
-                finish_reason="stop",
-            )
-        ],
         post_session=SmokePathResult(
             success=True,
             status="success",
@@ -236,11 +139,14 @@ def test_evidence_serialization_includes_calls_and_attempts() -> None:
         ),
     )
     payload = collector.to_payload()
-    assert payload["calls"][0]["output_schema_chars"] == 2940
-    assert payload["provider_attempts"][0]["finish_reason"] == "stop"
+    assert payload["server"] == "llama.cpp"
+    assert payload["request_extras_configured"] is False
+    assert "request_extras" not in payload
+    assert payload["effective_completion_caps"]["post_session_update"] == 1800
     assert payload["post_session"]["acceptance_passed"] is False
-    assert "prompt_tokens" not in payload["provider_attempts"][0]
-    assert "call_attempt_summary" not in payload
+    assert "calls" not in payload
+    assert "provider_attempts" not in payload
+    assert "instrumentation_errors" not in payload
 
 
 def test_render_smoke_evidence_suppresses_synthetic_path_without_metadata() -> None:
@@ -261,179 +167,6 @@ def test_render_smoke_evidence_emits_one_line_for_real_metadata() -> None:
     assert line is not None
     assert line.startswith("LOCAL_LLM_SMOKE_EVIDENCE=")
     assert '"server":"llama.cpp"' in line
-
-
-def test_attempt_recorder_records_missing_call_id_as_instrumentation_error() -> None:
-    collector = SmokeEvidenceCollector()
-    recorder = SmokeAttemptRecorder(collector)
-    recorder.record(
-        ProviderAttemptEvent(
-            task="post_session_update",
-            attempt="initial",
-            status="success",
-            latency_seconds=1.0,
-            prompt_chars=100,
-            response_format_chars=200,
-            response_chars=50,
-            timeout_seconds=300.0,
-            max_completion_tokens=None,
-        )
-    )
-    assert collector.instrumentation_errors == [
-        "provider attempt emitted without smoke call_id"
-    ]
-    assert collector.provider_attempts == []
-
-
-def test_attempt_recorder_swallows_internal_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    collector = SmokeEvidenceCollector()
-    recorder = SmokeAttemptRecorder(collector)
-
-    def boom(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(
-        "tests.smoke.jung.smoke_recorder.SmokeProviderAttemptResult",
-        boom,
-    )
-    token = current_smoke_call_id.set("post_session_update-1")
-    try:
-        recorder.record(
-            ProviderAttemptEvent(
-                task="post_session_update",
-                attempt="initial",
-                status="success",
-                latency_seconds=1.0,
-                prompt_chars=100,
-                response_format_chars=200,
-                response_chars=50,
-                timeout_seconds=300.0,
-                max_completion_tokens=None,
-            )
-        )
-    finally:
-        current_smoke_call_id.reset(token)
-    assert collector.instrumentation_errors == ["attempt recorder failed: RuntimeError"]
-
-
-def test_smoke_observer_correlates_attempt_and_restores_context() -> None:
-    async def exercise() -> None:
-        collector = SmokeEvidenceCollector()
-        recorder = SmokeAttemptRecorder(collector)
-        gateway = SmokeObservingGateway(
-            _AttemptEmittingGateway(recorder),
-            collector=collector,
-        )
-        policy = _assessment_policy()
-        messages = [ChatMessage(role=ChatRole.USER, content="hi")]
-
-        outer_token = current_smoke_call_id.set("outer-call")
-        try:
-            result = await gateway.generate_structured(
-                messages,
-                _Answer,
-                policy,
-            )
-            assert result.value == "ok"
-            assert len(collector.provider_attempts) == 1
-            assert len(collector.structured_calls) == 1
-            attempt_call_id = collector.provider_attempts[0].call_id
-            assert attempt_call_id is not None
-            assert collector.structured_calls[0].call_id == attempt_call_id
-            assert collector.instrumentation_errors == []
-            assert current_smoke_call_id.get() == "outer-call"
-        finally:
-            current_smoke_call_id.reset(outer_token)
-
-    asyncio.run(exercise())
-
-
-def test_smoke_observer_recording_failure_preserves_llm_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    original_error = LLMTimeout("provider stalled")
-
-    def boom(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(
-        "tests.smoke.jung.smoke_gateway.SmokeStructuredCallResult",
-        boom,
-    )
-
-    async def exercise() -> None:
-        collector = SmokeEvidenceCollector()
-        gateway = SmokeObservingGateway(
-            _TimeoutRaisingGateway(original_error),
-            collector=collector,
-        )
-        policy = _assessment_policy()
-        messages = [ChatMessage(role=ChatRole.USER, content="hi")]
-
-        outer_token = current_smoke_call_id.set("outer-call")
-        try:
-            with pytest.raises(LLMTimeout) as exc_info:
-                await gateway.generate_structured(
-                    messages,
-                    _Answer,
-                    policy,
-                )
-            assert exc_info.value is original_error
-            assert collector.structured_calls == []
-            assert collector.instrumentation_errors == [
-                "structured call recorder failed: RuntimeError"
-            ]
-            assert current_smoke_call_id.get() == "outer-call"
-        finally:
-            current_smoke_call_id.reset(outer_token)
-
-    asyncio.run(exercise())
-
-
-def test_smoke_observer_result_measurement_failure_preserves_result(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def raise_on_dump(self, *args, **kwargs) -> str:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(_Answer, "model_dump_json", raise_on_dump)
-
-    async def exercise() -> None:
-        collector = SmokeEvidenceCollector()
-        recorder = SmokeAttemptRecorder(collector)
-        gateway = SmokeObservingGateway(
-            _AttemptEmittingGateway(recorder),
-            collector=collector,
-        )
-        policy = _assessment_policy()
-        messages = [ChatMessage(role=ChatRole.USER, content="hi")]
-
-        outer_token = current_smoke_call_id.set("outer-call")
-        try:
-            result = await gateway.generate_structured(
-                messages,
-                _Answer,
-                policy,
-            )
-            assert len(collector.structured_calls) == 1
-            assert len(collector.provider_attempts) == 1
-
-            assert result.value == "ok"
-
-            call = collector.structured_calls[0]
-            assert call.status == "success"
-            assert call.result_chars is None
-
-            assert collector.instrumentation_errors == [
-                "structured result measurement failed: RuntimeError"
-            ]
-            assert current_smoke_call_id.get() == "outer-call"
-        finally:
-            current_smoke_call_id.reset(outer_token)
-
-    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize(

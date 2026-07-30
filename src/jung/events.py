@@ -6,9 +6,13 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from jung.domain.models import AppSnapshot, ChatTurn, Message, Operation
+
+if TYPE_CHECKING:
+    from jung.diagnostics import DiagnosticRecorder
 
 _SUBSCRIPTION_CLOSED = object()
 
@@ -75,16 +79,22 @@ class _Subscription:
             item = await self.queue.get()
             if item is _SUBSCRIPTION_CLOSED:
                 return
-            yield item
+            yield item  # type: ignore[misc]
 
 
 class EventStream:
     """Bounded local fan-out for currently connected observers."""
 
-    def __init__(self, *, max_queue_size: int = 64) -> None:
+    def __init__(
+        self,
+        *,
+        max_queue_size: int = 64,
+        recorder: DiagnosticRecorder | None = None,
+    ) -> None:
         self._max_queue_size = max_queue_size
         self._subscribers: set[_Subscription] = set()
         self._lock = asyncio.Lock()
+        self._recorder = recorder
 
     @asynccontextmanager
     async def subscribe(self) -> AsyncIterator[AsyncIterator[ApplicationEvent]]:
@@ -103,6 +113,14 @@ class EventStream:
     async def publish(self, event: ApplicationEvent) -> None:
         # Keep membership checks, non-blocking delivery, and eviction atomic
         # across concurrent publishers.
+        if self._recorder is not None:
+            self._recorder.record(
+                "application.event",
+                {
+                    "event_type": type(event).__name__,
+                    "event": event,
+                },
+            )
         async with self._lock:
             for subscriber in tuple(self._subscribers):
                 try:

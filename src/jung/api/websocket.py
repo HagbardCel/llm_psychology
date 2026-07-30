@@ -26,6 +26,7 @@ from jung.api.contracts import (
 from jung.api.deps import ApiNotReady, WebSocketRuntime, get_websocket_runtime
 from jung.api.errors import new_request_id, to_error_envelope
 from jung.api.settings import ApiSettings
+from jung.diagnostics import diagnostic_context
 from jung.domain.commands import SendMessage
 from jung.domain.errors import DomainError, RevisionConflict, StoredWorkFailure
 from jung.events import (
@@ -195,6 +196,27 @@ def _parse_command(text: str) -> tuple[SendMessageCommand | None, UUID]:
 
 
 async def _submit_chat_command(
+    *,
+    runtime: WebSocketRuntime,
+    command: SendMessageCommand,
+    connection_id: str,
+    send_event,
+) -> None:
+    with diagnostic_context(
+        request_id=str(command.request_id),
+        connection_id=connection_id,
+        session_id=str(command.session_id),
+        client_message_id=str(command.client_message_id),
+    ):
+        await _submit_chat_command_body(
+            runtime=runtime,
+            command=command,
+            connection_id=connection_id,
+            send_event=send_event,
+        )
+
+
+async def _submit_chat_command_body(
     *,
     runtime: WebSocketRuntime,
     command: SendMessageCommand,

@@ -25,7 +25,7 @@ from jung.llm.gateway import (
 )
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
-from jung.llm.tracing import TracingLLMGateway
+from jung.llm.tracing import ObservedLLMGateway
 
 __all__ = [
     "AdapterConfig",
@@ -42,10 +42,10 @@ __all__ = [
     "LLMTimeout",
     "LLMUnavailable",
     "ModelPolicy",
+    "ObservedLLMGateway",
     "OpenAICompatibleLLM",
     "StreamExpectation",
     "StructuredExpectation",
     "StructuredOutputMode",
-    "TracingLLMGateway",
     "build_model_policies",
 ]

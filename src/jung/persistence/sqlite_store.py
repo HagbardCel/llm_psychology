@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
@@ -40,6 +41,9 @@ from jung.domain.models import (
     is_profile_complete,
 )
 from jung.persistence import _sqlite_support as sql
+
+if TYPE_CHECKING:
+    from jung.diagnostics import DiagnosticRecorder
 
 SCHEMA_VERSION = sql.SCHEMA_VERSION
 
@@ -78,12 +82,61 @@ _SESSION_SELECT = """
 class SQLiteStore:
     """Synchronous use-case store with one connection per operation."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        recorder: DiagnosticRecorder | None = None,
+    ) -> None:
         self._database_path = Path(database_path)
+        self._recorder = recorder
 
     @property
     def database_path(self) -> Path:
         return self._database_path
+
+    def backup_to(self, destination: Path) -> None:
+        """Create an exclusive SQLite backup at destination (mode 0o600).
+
+        Rejects a pre-existing destination under the single-owner run-directory
+        contract, then publishes via a unique sibling temporary path and
+        ``os.replace``.
+        """
+        destination = Path(destination)
+        if destination.exists():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp = destination.parent / (f".{destination.name}.{uuid4().hex}.tmp")
+        dest: sqlite3.Connection | None = None
+        try:
+            dest = sqlite3.connect(temp)
+            with sql.connect(self._database_path) as source:
+                source.backup(dest)
+            dest.commit()
+            dest.close()
+            dest = None
+            with sqlite3.connect(temp) as check:
+                user_version = int(check.execute("PRAGMA user_version").fetchone()[0])
+            if user_version != SCHEMA_VERSION:
+                raise PersistenceFailure(
+                    f"backup schema version {user_version} != {SCHEMA_VERSION}"
+                )
+            try:
+                os.chmod(temp, 0o600)
+            except OSError:
+                pass
+            os.replace(temp, destination)
+        except Exception:
+            if dest is not None:
+                try:
+                    dest.close()
+                except Exception:
+                    pass
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def initialize(self) -> None:
         """Create schema and seed singleton state when needed."""
@@ -1258,7 +1311,24 @@ class SQLiteStore:
 
     @contextmanager
     def _connect(self):
-        with sql.connect(self._database_path) as conn:
+        connection_id: str | None = None
+        trace_callback = None
+        if self._recorder is not None:
+            connection_id = self._recorder.next_id("conn")
+
+            def trace_callback(statement: str) -> None:
+                self._recorder.record(
+                    "database.sql",
+                    {
+                        "connection_id": connection_id,
+                        "sql": statement,
+                    },
+                )
+
+        with sql.connect(
+            self._database_path,
+            trace_callback=trace_callback,
+        ) as conn:
             yield conn
 
     def _ensure_operation_updated(
