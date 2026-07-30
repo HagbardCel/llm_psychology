@@ -403,7 +403,7 @@ class DiagnosticRecorder:
 
     def capture_error(self, label: str, exc: BaseException | str) -> None:
         if isinstance(exc, BaseException):
-            message = f"{label}: {type(exc).__name__}: {exc}"
+            message = f"{label}: {type(exc).__name__}: {_safe_exception_message(exc)}"
         else:
             message = f"{label}: {exc}"
         message = str(sanitize_value(message, secret_values=self._secret_values))

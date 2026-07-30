@@ -368,6 +368,30 @@ def test_diagnostic_run_finalization_matrix(
     assert manifest["evidence_complete"] is (not mark_incomplete)
 
 
+def test_capture_error_handles_exception_with_broken_str(
+    tmp_path: Path,
+) -> None:
+    class BrokenMessageError(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("broken exception message")
+
+    run_dir = tmp_path / "broken-exception-message"
+
+    with pytest.raises(DiagnosticCaptureError):
+        with DiagnosticRun(run_dir) as recorder:
+            recorder.capture_error(
+                "instrumentation failed",
+                BrokenMessageError(),
+            )
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["evidence_complete"] is False
+    assert any(
+        "<exception message unavailable>" in message
+        for message in manifest["instrumentation_errors"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_application_context_without_debug_run_dir_has_no_recorder(
     tmp_path: Path,

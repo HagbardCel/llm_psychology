@@ -16,7 +16,8 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from jung import workflow
-from jung.diagnostics import diagnostic_context
+from jung._async_cleanup import drain_cancelled_task
+from jung.diagnostics import _safe_exception_message, diagnostic_context
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -179,7 +180,7 @@ class TherapyApplication:
                             "method": method_name,
                             "elapsed_seconds": time.perf_counter() - started,
                             "error_type": type(exc).__name__,
-                            "error_message": str(exc),
+                            "error_message": _safe_exception_message(exc),
                         },
                     )
                     raise
@@ -199,22 +200,15 @@ class TherapyApplication:
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError as cancellation:
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-
-            if not task.cancelled():
-                try:
-                    task.result()
-                except Exception:
-                    logger.exception(
-                        "store call failed after caller cancellation function=%s",
-                        method_name,
-                    )
+            failure = await drain_cancelled_task(task)
+            if failure is not None:
+                logger.error(
+                    "store call failed after caller cancellation "
+                    "function=%s error_type=%s",
+                    method_name,
+                    type(failure).__name__,
+                    exc_info=failure,
+                )
 
             raise cancellation
 

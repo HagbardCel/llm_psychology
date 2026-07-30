@@ -7,6 +7,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
+from jung.diagnostics import _safe_exception_message
+
 if TYPE_CHECKING:
     from jung.diagnostics import DiagnosticRecorder
 
@@ -96,7 +98,7 @@ class TaskSupervisor:
                 {
                     "name": name,
                     "error_type": type(exc).__name__,
-                    "error_message": str(exc),
+                    "error_message": _safe_exception_message(exc),
                 },
             )
             logger.exception("supervised task failed: %s", name)
