@@ -5,21 +5,25 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
+from jung.domain.grounding import GroundedPatientTurn, parse_grounded_patient_turns
 from jung.domain.models import Plan
 from jung.phases.context_bounds import (
-    bounded_lines,
     bounded_text,
     newest_lines_within_budget,
+    pack_complete_json_items,
 )
-from jung.phases.post_session.models import PostSessionInput, SessionAnalysisResult
+from jung.phases.post_session.models import (
+    InterventionEvidence,
+    PostSessionInput,
+    ResolvedSessionAnalysis,
+)
 
 _UPDATE_CONTEXT_LIMIT = 8_000
 _ANALYSIS_RESERVED_CHARS = 2_500
 _PLAN_RESERVED_CHARS = 1_500
 _PROFILE_RESERVED_CHARS = 1_200
-_STYLE_RESERVED_CHARS = 2_000
 
 _PLAN_LIST_FIELDS = (
     "themes",
@@ -28,18 +32,18 @@ _PLAN_LIST_FIELDS = (
     "revision_recommendations",
 )
 _REQUIRED_PLAN_LIST_FIELDS = frozenset({"goals", "planned_interventions"})
-_LEGACY_PROFILE_KEYS = frozenset(
-    {
-        "hypotheses",
-        "observations",
-        "patient_stated_facts",
-    }
-)
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisEvidenceAtom:
+    kind: Literal["intervention", "patient_turn"]
+    sequence: int
+    payload: InterventionEvidence | GroundedPatientTurn
 
 
 @dataclass(frozen=True, slots=True)
 class PostSessionUpdateContext:
-    """Pure projection of analysis for the update call — not an LLM contract."""
+    """Pure projection of resolved analysis for the update call."""
 
     summary: str
     key_themes: tuple[str, ...]
@@ -48,30 +52,15 @@ class PostSessionUpdateContext:
     patient_insights: tuple[str, ...]
     progress_indicators: tuple[str, ...]
     unresolved_topics: tuple[str, ...]
-    intervention_evidence: tuple[dict[str, object], ...]
-    patient_statements: tuple[dict[str, object], ...]
+    intervention_evidence: tuple[InterventionEvidence, ...]
+    patient_turns: tuple[GroundedPatientTurn, ...]
     safety_or_boundary_notes: tuple[str, ...]
 
     @classmethod
-    def from_analysis(cls, analysis: SessionAnalysisResult) -> PostSessionUpdateContext:
-        intervention_evidence = tuple(
-            {
-                "intervention_description": item.intervention_description,
-                "status": item.status,
-                "therapist_sequence": item.therapist_sequence,
-                "therapist_quote": item.therapist_quote,
-                "patient_sequence": item.patient_sequence,
-                "patient_quote": item.patient_quote,
-            }
-            for item in analysis.intervention_evidence
-        )
-        patient_statements = tuple(
-            {
-                "patient_sequence": item.patient_sequence,
-                "patient_quote": item.patient_quote,
-            }
-            for item in analysis.patient_statements
-        )
+    def from_resolved(
+        cls, resolved: ResolvedSessionAnalysis
+    ) -> PostSessionUpdateContext:
+        analysis = resolved.analysis
         return cls(
             summary=analysis.summary,
             key_themes=analysis.key_themes,
@@ -80,24 +69,10 @@ class PostSessionUpdateContext:
             patient_insights=analysis.patient_insights,
             progress_indicators=analysis.progress_indicators,
             unresolved_topics=analysis.unresolved_topics,
-            intervention_evidence=intervention_evidence,
-            patient_statements=patient_statements,
+            intervention_evidence=resolved.intervention_evidence,
+            patient_turns=resolved.grounded_patient_turns,
             safety_or_boundary_notes=analysis.safety_or_boundary_notes,
         )
-
-    def to_document(self) -> dict[str, object]:
-        return {
-            "summary": self.summary,
-            "key_themes": list(self.key_themes),
-            "dominant_affects": list(self.dominant_affects),
-            "important_moments": list(self.important_moments),
-            "patient_insights": list(self.patient_insights),
-            "progress_indicators": list(self.progress_indicators),
-            "unresolved_topics": list(self.unresolved_topics),
-            "intervention_evidence": list(self.intervention_evidence),
-            "patient_statements": list(self.patient_statements),
-            "safety_or_boundary_notes": list(self.safety_or_boundary_notes),
-        }
 
 
 def _compact_string_list(
@@ -164,91 +139,154 @@ def _compact_plan_document(plan: Plan, limit: int) -> str:
     return json.dumps(minimal, ensure_ascii=True, separators=(",", ":"))
 
 
+def _intervention_payload(item: InterventionEvidence) -> dict[str, object]:
+    return {
+        "intervention_description": item.intervention_description,
+        "status": item.status,
+        "therapist_sequence": item.therapist_sequence,
+        "therapist_content": item.therapist_content,
+        "patient_sequence": item.patient_sequence,
+        "patient_content": item.patient_content,
+    }
+
+
+def _patient_turn_payload(item: GroundedPatientTurn) -> dict[str, object]:
+    return {
+        "source_sequence": item.source_sequence,
+        "content": item.content,
+    }
+
+
 def _compact_profile_document(profile: Mapping[str, Any], limit: int) -> str:
     if not profile:
-        return "{}"
-    stored_statements = profile.get("grounded_patient_statements")
-    if not isinstance(stored_statements, list):
-        stored_statements = []
-    for max_items in range(20, 0, -1):
-        statements = [
-            {"quote": bounded_text(str(item.get("quote", "")), 300)}
-            for item in stored_statements[-max_items:]
-            if isinstance(item, Mapping) and str(item.get("quote", "")).strip()
-        ]
-        candidate = {"grounded_patient_statements": statements}
-        rendered = json.dumps(candidate, ensure_ascii=True, separators=(",", ":"))
-        if len(rendered) <= limit:
-            return rendered
-    return "{}"
+        return json.dumps(
+            {"grounded_patient_turns": [], "grounded_patient_turns_omitted": 0},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+    turns = parse_grounded_patient_turns(profile)
+
+    def render(selected: Sequence[GroundedPatientTurn], omitted: int) -> str:
+        document = {
+            "grounded_patient_turns": [
+                _patient_turn_payload(item) for item in selected
+            ],
+            "grounded_patient_turns_omitted": omitted,
+        }
+        return json.dumps(document, ensure_ascii=True, separators=(",", ":"))
+
+    packed = pack_complete_json_items(turns, limit=limit, render_document=render)
+    if packed is None:
+        return ""
+    return render(packed.items, packed.omitted)
+
+
+def _build_evidence_atoms(
+    context: PostSessionUpdateContext,
+) -> tuple[AnalysisEvidenceAtom, ...]:
+    atoms = [
+        *(
+            AnalysisEvidenceAtom(
+                kind="intervention",
+                sequence=item.therapist_sequence,
+                payload=item,
+            )
+            for item in context.intervention_evidence
+        ),
+        *(
+            AnalysisEvidenceAtom(
+                kind="patient_turn",
+                sequence=item.source_sequence,
+                payload=item,
+            )
+            for item in context.patient_turns
+        ),
+    ]
+    return tuple(
+        sorted(
+            atoms,
+            key=lambda item: (
+                item.sequence,
+                0 if item.kind == "intervention" else 1,
+            ),
+        )
+    )
 
 
 def _compact_analysis_document(
     analysis: PostSessionUpdateContext,
     limit: int,
 ) -> str:
-    document = analysis.to_document()
+    total_interventions = len(analysis.intervention_evidence)
+    total_turns = len(analysis.patient_turns)
+    atoms = _build_evidence_atoms(analysis)
+
+    def render_interpretive(max_items: int, max_item_chars: int) -> dict[str, object]:
+        candidate: dict[str, object] = {
+            "summary": bounded_text(analysis.summary, max_item_chars),
+        }
+        for field in (
+            "key_themes",
+            "dominant_affects",
+            "important_moments",
+            "patient_insights",
+            "progress_indicators",
+            "unresolved_topics",
+            "safety_or_boundary_notes",
+        ):
+            candidate[field] = _compact_string_list(
+                getattr(analysis, field),
+                max_items=max_items,
+                max_item_chars=max_item_chars,
+                keep_at_least_one=False,
+            )
+        return candidate
+
     for max_items in range(20, 0, -1):
         for max_item_chars in range(400, 20, -20):
-            candidate = dict(document)
-            candidate["summary"] = bounded_text(analysis.summary, max_item_chars)
-            for field in (
-                "key_themes",
-                "dominant_affects",
-                "important_moments",
-                "patient_insights",
-                "progress_indicators",
-                "unresolved_topics",
-                "safety_or_boundary_notes",
-            ):
-                candidate[field] = _compact_string_list(
-                    tuple(candidate.get(field, [])),
-                    max_items=max_items,
-                    max_item_chars=max_item_chars,
-                    keep_at_least_one=False,
-                )
-            interventions = list(analysis.intervention_evidence[:max_items])
-            compacted_interventions: list[dict[str, object]] = []
-            for item in interventions:
-                compacted: dict[str, object] = {
-                    "intervention_description": bounded_text(
-                        str(item["intervention_description"]),
-                        max_item_chars,
+            interpretive = render_interpretive(max_items, max_item_chars)
+
+            def render_document(
+                selected: Sequence[AnalysisEvidenceAtom],
+                _: int,
+                interpretive_fields: dict[str, object] = interpretive,
+            ) -> str:
+                selected_interventions = [
+                    item.payload for item in selected if item.kind == "intervention"
+                ]
+                selected_turns = [
+                    item.payload for item in selected if item.kind == "patient_turn"
+                ]
+                document = {
+                    **interpretive_fields,
+                    "intervention_evidence": [
+                        _intervention_payload(item)  # type: ignore[arg-type]
+                        for item in selected_interventions
+                    ],
+                    "intervention_evidence_omitted": (
+                        total_interventions - len(selected_interventions)
                     ),
-                    "status": str(item["status"]),
-                    "therapist_sequence": item["therapist_sequence"],
-                    "therapist_quote": bounded_text(
-                        str(item["therapist_quote"]),
-                        max_item_chars,
-                    ),
-                    "patient_sequence": item.get("patient_sequence"),
-                    "patient_quote": (
-                        bounded_text(str(item["patient_quote"]), max_item_chars)
-                        if item.get("patient_quote")
-                        else None
-                    ),
+                    "patient_turns": [
+                        _patient_turn_payload(item)  # type: ignore[arg-type]
+                        for item in selected_turns
+                    ],
+                    "patient_turns_omitted": total_turns - len(selected_turns),
                 }
-                compacted_interventions.append(compacted)
-            candidate["intervention_evidence"] = compacted_interventions
-            statements = list(analysis.patient_statements[:max_items])
-            candidate["patient_statements"] = [
-                {
-                    "patient_sequence": item["patient_sequence"],
-                    "patient_quote": bounded_text(
-                        str(item["patient_quote"]),
-                        max_item_chars,
-                    ),
-                }
-                for item in statements
-            ]
-            rendered = json.dumps(candidate, ensure_ascii=True, separators=(",", ":"))
-            if len(rendered) <= limit:
-                return rendered
-    return json.dumps(
-        {"summary": bounded_text(analysis.summary, 200)},
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
+                return json.dumps(document, ensure_ascii=True, separators=(",", ":"))
+
+            packed = pack_complete_json_items(
+                atoms,
+                limit=limit,
+                render_document=render_document,
+            )
+            if packed is not None:
+                return render_document(packed.items, packed.omitted)
+
+    fallback = {"summary": bounded_text(analysis.summary, 200)}
+    rendered = json.dumps(fallback, ensure_ascii=True, separators=(",", ":"))
+    if len(rendered) > limit:
+        return ""
+    return rendered
 
 
 def _render_section(heading: str, body: str) -> str:
@@ -273,11 +311,57 @@ def _section_payload_budget(heading: str, cap: int, remaining: int) -> int:
     return max(0, min(cap, remaining) - len(prefix))
 
 
+def build_update_context_document(
+    input: PostSessionInput,
+    resolved: ResolvedSessionAnalysis,
+) -> dict[str, object]:
+    """Build the untrusted JSON context document for the update call."""
+    analysis_projection = PostSessionUpdateContext.from_resolved(resolved)
+    document: dict[str, object] = {}
+
+    analysis_body = _compact_analysis_document(
+        analysis_projection,
+        _ANALYSIS_RESERVED_CHARS,
+    )
+    if analysis_body:
+        document["session_analysis"] = json.loads(analysis_body)
+
+    plan_body = _compact_plan_document(input.current_plan, _PLAN_RESERVED_CHARS)
+    document["current_plan"] = json.loads(plan_body)
+
+    profile_body = _compact_profile_document(
+        input.derived_profile or {},
+        _PROFILE_RESERVED_CHARS,
+    )
+    if profile_body:
+        document["derived_profile"] = json.loads(profile_body)
+
+    if input.prior_session_briefing:
+        briefing = _briefing_prose(
+            input.prior_session_briefing,
+            _UPDATE_CONTEXT_LIMIT // 4,
+        )
+        if briefing:
+            document["prior_session_briefing"] = briefing
+
+    if input.recent_session_summaries:
+        summaries = newest_lines_within_budget(
+            input.recent_session_summaries,
+            _UPDATE_CONTEXT_LIMIT // 4,
+            separator="\n",
+        )
+        if summaries:
+            document["recent_session_summaries"] = list(summaries)
+
+    return document
+
+
 def build_update_context_sections(
     input: PostSessionInput,
-    analysis: SessionAnalysisResult,
+    resolved: ResolvedSessionAnalysis,
 ) -> list[str]:
-    analysis_projection = PostSessionUpdateContext.from_analysis(analysis)
+    """Legacy section list used by tests that inspect section headings."""
+    analysis_projection = PostSessionUpdateContext.from_resolved(resolved)
     sections: list[str] = []
     remaining = _UPDATE_CONTEXT_LIMIT
 
@@ -291,9 +375,10 @@ def build_update_context_sections(
             analysis_projection,
             analysis_budget,
         )
-        section = _render_section("Session analysis", analysis_body)
-        sections.append(section)
-        remaining = max(0, remaining - len(section) - 2)
+        if analysis_body:
+            section = _render_section("Session analysis", analysis_body)
+            sections.append(section)
+            remaining = max(0, remaining - len(section) - 2)
 
     plan_budget = _section_payload_budget(
         "Current plan",
@@ -312,30 +397,12 @@ def build_update_context_sections(
         remaining,
     )
     if profile_budget > 0:
-        # Legacy speculative keys must never re-enter LLM context.
-        filtered_profile = {
-            key: value
-            for key, value in (input.derived_profile or {}).items()
-            if key not in _LEGACY_PROFILE_KEYS
-        }
         profile_body = _compact_profile_document(
-            filtered_profile,
+            input.derived_profile or {},
             profile_budget,
         )
-        section = _render_section("Derived profile", profile_body)
-        sections.append(section)
-        remaining = max(0, remaining - len(section) - 2)
-
-    style_budget = _section_payload_budget(
-        "Style reflection instructions",
-        _STYLE_RESERVED_CHARS,
-        remaining,
-    )
-    style_text = input.selected_style.post_session_instructions or ""
-    if style_text.strip() and style_budget > 0:
-        style_body = bounded_lines(style_text, style_budget)
-        if style_body:
-            section = _render_section("Style reflection instructions", style_body)
+        if profile_body:
+            section = _render_section("Derived profile", profile_body)
             sections.append(section)
             remaining = max(0, remaining - len(section) - 2)
 
@@ -371,7 +438,6 @@ def build_update_context_sections(
                 section = _render_section("Recent session summaries", body)
             if section.strip():
                 sections.append(section)
-                remaining = max(0, remaining - len(section) - 2)
 
     rendered = "\n\n".join(sections)
     if len(rendered) > _UPDATE_CONTEXT_LIMIT:

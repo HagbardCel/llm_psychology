@@ -129,11 +129,11 @@ Policy decisions:
 - Observable `intervention_evidence` item fields (when present inside a briefing document):
   - `intervention_description` (string): model-generated interpretive label
   - `therapist_sequence` (int): transcript sequence of the cited therapist turn
-  - `therapist_quote` (string): normalized verbatim excerpt from that therapist turn
+  - `therapist_content` (string): server-resolved full whitespace-normalized content of that assistant turn
   - `patient_sequence` (int \| null): later patient turn when a response is cited
-  - `patient_quote` (string \| null): normalized verbatim excerpt from that patient turn
-  - `status` (`"delivered"` \| `"responded"`): derived by the server from whether a patient response citation is present; never model-controlled
-- Removed legacy intervention status values such as `"proposed"`, `"accepted"`, and `"completed"` are not emitted.
+  - `patient_content` (string \| null): server-resolved full whitespace-normalized content of that user turn
+  - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response.
+- Removed legacy intervention status values such as `"proposed"`, `"accepted"`, `"completed"`, and `"responded"` are not emitted.
 - Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1.
 - API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.

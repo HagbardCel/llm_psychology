@@ -1,48 +1,21 @@
-"""Transcript-grounded semantic validation for session analysis."""
+"""Transcript-grounded semantic validation and resolution for session analysis."""
 
 from __future__ import annotations
 
+from jung.domain.grounding import GroundedPatientTurn
+from jung.domain.text import normalize_content
 from jung.phases.post_session.models import (
+    InterventionCitation,
     InterventionEvidence,
-    PatientStatementCitation,
+    PatientTurnCitation,
+    ResolvedSessionAnalysis,
     SessionAnalysisResult,
 )
-from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
+from jung.phases.transcript import TranscriptTurn
 
 
-def _contains_quote(turn: TranscriptTurn, quote: str) -> bool:
-    return normalize_transcript_content(quote) in normalize_transcript_content(
-        turn.content
-    )
-
-
-def _canonicalize_intervention(
-    item: InterventionEvidence,
-) -> InterventionEvidence:
-    return InterventionEvidence(
-        intervention_description=item.intervention_description,
-        therapist_sequence=item.therapist_sequence,
-        therapist_quote=normalize_transcript_content(item.therapist_quote),
-        patient_sequence=item.patient_sequence,
-        patient_quote=(
-            None
-            if item.patient_quote is None
-            else normalize_transcript_content(item.patient_quote)
-        ),
-    )
-
-
-def _canonicalize_patient_statement(
-    item: PatientStatementCitation,
-) -> PatientStatementCitation:
-    return PatientStatementCitation(
-        patient_sequence=item.patient_sequence,
-        patient_quote=normalize_transcript_content(item.patient_quote),
-    )
-
-
-def _validate_intervention(
-    item: InterventionEvidence,
+def _validate_intervention_citation(
+    item: InterventionCitation,
     turns_by_sequence: dict[int, TranscriptTurn],
 ) -> None:
     therapist = turns_by_sequence.get(item.therapist_sequence)
@@ -54,10 +27,6 @@ def _validate_intervention(
         raise ValueError(
             f"therapist_sequence {item.therapist_sequence} "
             "must identify an assistant turn"
-        )
-    if not _contains_quote(therapist, item.therapist_quote):
-        raise ValueError(
-            f"therapist_quote not found in assistant turn {item.therapist_sequence}"
         )
 
     if item.patient_sequence is None:
@@ -73,18 +42,11 @@ def _validate_intervention(
             f"patient_sequence {item.patient_sequence} must identify a user turn"
         )
     if item.patient_sequence <= item.therapist_sequence:
-        raise ValueError(
-            "responded intervention requires patient_quote from a later user turn"
-        )
-    assert item.patient_quote is not None
-    if not _contains_quote(patient, item.patient_quote):
-        raise ValueError(
-            f"patient_quote not found in user turn {item.patient_sequence}"
-        )
+        raise ValueError("response-cited intervention requires a later user turn")
 
 
-def _validate_patient_statement(
-    item: PatientStatementCitation,
+def _validate_patient_turn_citation(
+    item: PatientTurnCitation,
     turns_by_sequence: dict[int, TranscriptTurn],
 ) -> None:
     turn = turns_by_sequence.get(item.patient_sequence)
@@ -96,17 +58,13 @@ def _validate_patient_statement(
         raise ValueError(
             f"patient_sequence {item.patient_sequence} must identify a user turn"
         )
-    if not _contains_quote(turn, item.patient_quote):
-        raise ValueError(
-            f"patient_quote not found in user turn {item.patient_sequence}"
-        )
 
 
 def validate_session_analysis(
     result: SessionAnalysisResult,
     transcript: tuple[TranscriptTurn, ...],
 ) -> SessionAnalysisResult:
-    """Validate and canonicalize transcript-grounded analysis evidence.
+    """Validate sequence-only analysis citations.
 
     Raises ``ValueError`` for model-correctable semantic failures. Transcript
     structural defects are rejected by ``PostSessionInput`` before this runs.
@@ -114,42 +72,80 @@ def validate_session_analysis(
     turns_by_sequence = {turn.sequence: turn for turn in transcript}
     has_assistant = any(turn.role == "assistant" for turn in transcript)
 
-    if not has_assistant and result.intervention_evidence:
+    if not has_assistant and result.intervention_citations:
         raise ValueError(
-            "intervention_evidence must be empty when the transcript "
+            "intervention_citations must be empty when the transcript "
             "has no assistant turn"
         )
 
-    seen_interventions: set[tuple[int, str, int | None, str]] = set()
-    canonical_interventions: list[InterventionEvidence] = []
-    for item in result.intervention_evidence:
-        _validate_intervention(item, turns_by_sequence)
-        canonical = _canonicalize_intervention(item)
-        key = (
-            canonical.therapist_sequence,
-            canonical.therapist_quote,
-            canonical.patient_sequence,
-            canonical.patient_quote or "",
-        )
-        if key in seen_interventions:
-            raise ValueError("duplicate intervention evidence citations")
-        seen_interventions.add(key)
-        canonical_interventions.append(canonical)
+    seen_therapist_sequences: set[int] = set()
+    for item in result.intervention_citations:
+        _validate_intervention_citation(item, turns_by_sequence)
+        if item.therapist_sequence in seen_therapist_sequences:
+            raise ValueError(
+                "intervention citations must cite each therapist turn at most once"
+            )
+        seen_therapist_sequences.add(item.therapist_sequence)
 
     seen_patient_sequences: set[int] = set()
-    canonical_statements: list[PatientStatementCitation] = []
-    for item in result.patient_statements:
-        _validate_patient_statement(item, turns_by_sequence)
+    for item in result.patient_turn_citations:
+        _validate_patient_turn_citation(item, turns_by_sequence)
         if item.patient_sequence in seen_patient_sequences:
             raise ValueError(
-                "patient statements must cite each patient turn at most once"
+                "patient turn citations must cite each patient turn at most once"
             )
         seen_patient_sequences.add(item.patient_sequence)
-        canonical_statements.append(_canonicalize_patient_statement(item))
 
-    return result.model_copy(
-        update={
-            "intervention_evidence": tuple(canonical_interventions),
-            "patient_statements": tuple(canonical_statements),
-        }
+    return result
+
+
+def resolve_session_analysis(
+    result: SessionAnalysisResult,
+    transcript: tuple[TranscriptTurn, ...],
+) -> ResolvedSessionAnalysis:
+    """Resolve validated citations to authoritative full-turn evidence."""
+    turns_by_sequence = {turn.sequence: turn for turn in transcript}
+
+    interventions: list[InterventionEvidence] = []
+    for citation in result.intervention_citations:
+        therapist = turns_by_sequence[citation.therapist_sequence]
+        patient_content: str | None = None
+        if citation.patient_sequence is not None:
+            patient = turns_by_sequence[citation.patient_sequence]
+            patient_content = normalize_content(patient.content)
+        interventions.append(
+            InterventionEvidence(
+                intervention_description=citation.intervention_description,
+                therapist_sequence=citation.therapist_sequence,
+                therapist_content=normalize_content(therapist.content),
+                patient_sequence=citation.patient_sequence,
+                patient_content=patient_content,
+            )
+        )
+
+    grounded: list[GroundedPatientTurn] = []
+    for citation in result.patient_turn_citations:
+        turn = turns_by_sequence[citation.patient_sequence]
+        grounded.append(
+            GroundedPatientTurn(
+                source_message_id=turn.message_id,
+                source_sequence=turn.sequence,
+                content=normalize_content(turn.content),
+            )
+        )
+
+    interventions_sorted = tuple(
+        sorted(
+            interventions,
+            key=lambda item: (
+                item.therapist_sequence,
+                item.patient_sequence or 0,
+            ),
+        )
+    )
+    grounded_sorted = tuple(sorted(grounded, key=lambda item: item.source_sequence))
+    return ResolvedSessionAnalysis(
+        analysis=result,
+        intervention_evidence=interventions_sorted,
+        grounded_patient_turns=grounded_sorted,
     )

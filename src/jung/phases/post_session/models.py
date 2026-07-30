@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any, Literal
-from uuid import UUID
+from typing import Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -15,11 +15,13 @@ from pydantic import (
     model_validator,
 )
 
+from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
-from jung.phases.transcript import TranscriptTurn
+from jung.domain.text import normalize_content
+from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
 from jung.styles import StyleDefinition
 
-InterventionStatus = Literal["delivered", "responded"]
+InterventionStatus = Literal["delivered", "response_cited"]
 
 _MAX_EVIDENCE_ITEMS = 20
 
@@ -31,84 +33,95 @@ def _non_empty_required_text(value: str) -> str:
     return value
 
 
-def _non_empty_optional_text(value: str | None) -> str | None:
+def _normalize_non_empty_content(value: str) -> str:
+    value = normalize_content(value)
+    if not value:
+        raise ValueError("must be non-empty")
+    return value
+
+
+def _normalize_optional_content(value: str | None) -> str | None:
     if value is None:
         return None
-    value = value.strip()
+    value = normalize_content(value)
     if not value:
         raise ValueError("must be non-empty when provided")
     return value
 
 
-class InterventionEvidence(BaseModel):
-    """Transcript-grounded intervention citation.
+class InterventionCitation(BaseModel):
+    """Model-facing sequence citation for an intervention.
 
     ``intervention_description`` is a model-generated interpretation. The
-    backend validates the cited turn sequences and verbatim quotes; it does not
-    verify that the description is a canonical clinical category.
+    backend resolves cited turn sequences to authoritative full-turn content.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     intervention_description: str = Field(max_length=500)
     therapist_sequence: int = Field(ge=1)
-    therapist_quote: str = Field(max_length=500)
     patient_sequence: int | None = Field(default=None, ge=1)
-    patient_quote: str | None = Field(default=None, max_length=500)
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def status(self) -> InterventionStatus:
-        return "responded" if self.patient_sequence is not None else "delivered"
-
-    @field_validator("intervention_description", "therapist_quote")
+    @field_validator("intervention_description")
     @classmethod
-    def non_empty_required_text(cls, value: str) -> str:
+    def non_empty_description(cls, value: str) -> str:
         return _non_empty_required_text(value)
 
-    @field_validator("patient_quote")
-    @classmethod
-    def non_empty_optional_text(cls, value: str | None) -> str | None:
-        return _non_empty_optional_text(value)
 
-    @model_validator(mode="after")
-    def validate_patient_fields_together(self) -> InterventionEvidence:
-        has_sequence = self.patient_sequence is not None
-        has_quote = self.patient_quote is not None
-        if has_sequence != has_quote:
-            raise ValueError(
-                "patient_sequence and patient_quote must both be present or both absent"
-            )
-        return self
-
-
-class PatientStatementCitation(BaseModel):
-    """Model-facing citation of a patient utterance."""
+class PatientTurnCitation(BaseModel):
+    """Model-facing citation of a patient turn by sequence only."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     patient_sequence: int = Field(ge=1)
-    patient_quote: str = Field(max_length=500)
-
-    @field_validator("patient_quote")
-    @classmethod
-    def non_empty_quote(cls, value: str) -> str:
-        return _non_empty_required_text(value)
 
 
-class GroundedPatientStatement(BaseModel):
-    """Durable grounded patient utterance with authoritative message identity."""
+class InterventionEvidence(BaseModel):
+    """Backend-resolved intervention evidence with full authoritative turns."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_message_id: UUID
-    source_sequence: int = Field(ge=1)
-    quote: str = Field(max_length=500)
+    intervention_description: str = Field(max_length=500)
+    therapist_sequence: int = Field(ge=1)
+    therapist_content: str
+    patient_sequence: int | None = Field(default=None, ge=1)
+    patient_content: str | None = None
 
-    @field_validator("quote")
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> InterventionStatus:
+        return "response_cited" if self.patient_sequence is not None else "delivered"
+
+    @field_validator("intervention_description")
     @classmethod
-    def non_empty_quote(cls, value: str) -> str:
+    def non_empty_description(cls, value: str) -> str:
         return _non_empty_required_text(value)
+
+    @field_validator("therapist_content")
+    @classmethod
+    def normalize_therapist_content(cls, value: str) -> str:
+        return _normalize_non_empty_content(value)
+
+    @field_validator("patient_content")
+    @classmethod
+    def normalize_patient_content(cls, value: str | None) -> str | None:
+        return _normalize_optional_content(value)
+
+    @model_validator(mode="after")
+    def validate_response_reference(self) -> Self:
+        sequence_present = self.patient_sequence is not None
+        content_present = self.patient_content is not None
+        if sequence_present != content_present:
+            raise ValueError(
+                "patient_sequence and patient_content must both be "
+                "present or both absent"
+            )
+        if (
+            self.patient_sequence is not None
+            and self.patient_sequence <= self.therapist_sequence
+        ):
+            raise ValueError("patient_sequence must follow therapist_sequence")
+        return self
 
 
 class SessionAnalysisResult(BaseModel):
@@ -121,11 +134,11 @@ class SessionAnalysisResult(BaseModel):
     patient_insights: tuple[str, ...] = ()
     progress_indicators: tuple[str, ...] = ()
     unresolved_topics: tuple[str, ...] = ()
-    intervention_evidence: tuple[InterventionEvidence, ...] = Field(
+    intervention_citations: tuple[InterventionCitation, ...] = Field(
         default=(),
         max_length=_MAX_EVIDENCE_ITEMS,
     )
-    patient_statements: tuple[PatientStatementCitation, ...] = Field(
+    patient_turn_citations: tuple[PatientTurnCitation, ...] = Field(
         default=(),
         max_length=_MAX_EVIDENCE_ITEMS,
     )
@@ -135,6 +148,15 @@ class SessionAnalysisResult(BaseModel):
     @classmethod
     def non_empty_summary(cls, value: str) -> str:
         return _non_empty_required_text(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSessionAnalysis:
+    """Internal orchestration value after citation resolution."""
+
+    analysis: SessionAnalysisResult
+    intervention_evidence: tuple[InterventionEvidence, ...]
+    grounded_patient_turns: tuple[GroundedPatientTurn, ...]
 
 
 class SessionBriefingDraft(BaseModel):
@@ -162,12 +184,12 @@ class SessionBriefing(SessionBriefingDraft):
 class DerivedProfilePatch(BaseModel):
     """Processor-composed durable profile patch.
 
-    Contains grounded patient utterances only — not verified facts.
+    Contains grounded patient turns only — not verified facts.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    grounded_patient_statements: tuple[GroundedPatientStatement, ...] = ()
+    grounded_patient_turns: tuple[GroundedPatientTurn, ...] = ()
 
 
 class PlanPatch(BaseModel):
@@ -222,7 +244,7 @@ class PostSessionInput(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_transcript_identity(self) -> PostSessionInput:
+    def validate_transcript(self) -> PostSessionInput:
         sequences = [turn.sequence for turn in self.transcript]
         if any(current >= following for current, following in pairwise(sequences)):
             raise ValueError(
@@ -231,4 +253,8 @@ class PostSessionInput(BaseModel):
         message_ids = [turn.message_id for turn in self.transcript]
         if len(message_ids) != len(set(message_ids)):
             raise ValueError("transcript message IDs must be unique")
+        if any(
+            not normalize_transcript_content(turn.content) for turn in self.transcript
+        ):
+            raise ValueError("transcript turn content must be non-empty")
         return self

@@ -108,43 +108,53 @@ Persist durable factual evidence only when the backend can objectively ground it
 | Information | Owner |
 |---|---|
 | Session summary | Analysis call |
-| Intervention evidence citations | Analysis call |
-| Patient-statement citations | Analysis call |
+| Intervention / patient-turn sequence citations | Analysis call |
 | Next-session narrative and continuity | Update call |
 | Plan patch | Update call |
-| Durable profile patch | Processor, composed from validated citations + message IDs |
+| Durable profile patch | Processor, composed from resolved citations + message IDs |
 
 ### Input validation
 
-`PostSessionInput` rejects transcripts whose sequences are not unique and strictly increasing, or whose message IDs are not unique, before any LLM call. Those defects never enter the structured-output correction loop.
+`PostSessionInput` rejects transcripts whose sequences are not unique and strictly increasing, whose message IDs are not unique, or whose turn content is empty after whitespace normalization, before any LLM call. Those defects never enter the structured-output correction loop.
 
 ### Non-conversational sessions
 
-Transcripts that lack both a user turn and an assistant turn take a deterministic zero-call path:
+Transcripts that lack either a user turn or an assistant turn take a deterministic zero-call path:
 
 - empty transcript
 - user-only transcript
 - assistant-only transcript
 
-Each variant produces a speculation-free summary/briefing, empty intervention evidence, an empty profile patch, and an empty plan patch.
+Each variant produces a speculation-free summary/briefing, empty intervention evidence, an empty profile patch, and an empty plan patch. User-only summaries do not embed patient message text; the source session history remains authoritative.
 
 ### Evidence layers
 
 | Layer | Representation |
 |---|---|
-| Model output | Sequence plus verbatim quote (citation) |
-| Validator | Verifies exact transcript turn and chronology; canonicalizes quotes |
-| Durable profile | `grounded_patient_statements` with source message ID, sequence, and normalized quote |
-| LLM-facing profile context | Normalized quotes only (no internal message IDs) |
+| Model output | Sequence-only citations (`intervention_citations`, `patient_turn_citations`) |
+| Validator | Verifies turn identity, role, and chronology; one intervention per therapist turn |
+| Resolver | Attaches full whitespace-normalized authoritative turn content + message IDs |
+| Durable profile | `grounded_patient_turns` with source message ID, sequence, and full normalized content |
+| LLM-facing profile context | Normalized turn content only (no internal message IDs); whole items or omit |
 | Interpretive reasoning | Session analysis and briefing only |
 
-Intervention citations use exact therapist/patient sequences. Status is derived as `delivered` or `responded` and is never model-generated. `intervention_description` remains a model-generated interpretation made auditable by its grounded citation.
+**Normalized** means whitespace-collapsed (`" ".join(text.split())`), not byte-for-byte identical source text.
 
-Patient-statement citations are unique by patient sequence. Durable statements are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. Legacy keys `hypotheses`, `observations`, and `patient_stated_facts` are excluded from LLM prompt context.
+Provider models cite sequences only. The backend resolves complete authoritative turns. Model-selected substrings are never persisted.
+
+Intervention status is derived as `delivered` or `response_cited` from whether a later user turn was cited. `response_cited` means a chronologically later user turn was selected — not that the turn semantically responded to the intervention. `intervention_description` remains a model-generated interpretation made auditable by its grounded citation.
+
+Patient-turn citations are unique by patient sequence. Durable turns are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. LLM profile projection is an allowlist of `grounded_patient_turns` only; legacy speculative keys never re-enter prompts.
+
+The same patient turn may intentionally appear both as intervention `patient_content` and as a durable patient-turn selection. Context packing treats them as separate atoms under one shared budget.
+
+Malformed stored `grounded_patient_turns` (including explicit `null`) fail fast as an internal application error during post-session merge or therapy context assembly. They are not LLM-correctable and are not silently omitted.
+
+Lifetime lifetime accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
 
 ### Failure behavior
 
-After an unrecoverable validation or LLM failure, the operation transitions to `FAILED`, but no session summary, briefing, derived-profile update, or plan revision is persisted.
+After an unrecoverable validation, LLM, or derived-profile storage failure, the operation transitions to `FAILED`, but no session summary, briefing, derived-profile update, or plan revision is persisted.
 
 ### Local database reset
 

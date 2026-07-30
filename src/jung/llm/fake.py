@@ -119,9 +119,7 @@ class FakeLLM:
                 f"got {output_type.__name__}"
             )
         self._check_fragments(messages, expectation.message_fragments)
-        parsed = output_type.model_validate(
-            expectation.response.model_dump(exclude_computed_fields=True)
-        )
+        parsed = output_type.model_validate(expectation.response.model_dump())
         if validate_result is None:
             return parsed
         try:

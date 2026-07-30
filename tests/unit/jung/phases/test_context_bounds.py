@@ -2,13 +2,62 @@
 
 from __future__ import annotations
 
+import json
+
 from jung.phases.context_bounds import (
     bounded_lines,
     bounded_text,
     newest_lines_within_budget,
+    pack_complete_json_items,
 )
 from jung.phases.therapy.models import TherapyContextLimits
 from jung.styles import load_styles
+
+
+def _render_items(items: list[str] | tuple[str, ...], omitted: int) -> str:
+    return json.dumps(
+        {"items": list(items), "omitted": omitted},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def test_pack_complete_json_items_returns_none_when_minimal_cannot_fit() -> None:
+    packed = pack_complete_json_items(
+        ["a", "b"],
+        limit=5,
+        render_document=_render_items,
+    )
+    assert packed is None
+
+
+def test_pack_complete_json_items_oversized_newest_does_not_block_older() -> None:
+    items = ("tiny", "x" * 200, "also-tiny")
+    packed = pack_complete_json_items(
+        items,
+        limit=80,
+        render_document=_render_items,
+    )
+    assert packed is not None
+    assert packed.items == ("tiny", "also-tiny")
+    assert packed.omitted == 1
+    assert len(_render_items(packed.items, packed.omitted)) <= 80
+
+
+def test_pack_complete_json_items_omitted_count_is_exact() -> None:
+    items = ("one", "two", "three", "four")
+    packed = pack_complete_json_items(
+        items,
+        limit=len(_render_items(("three", "four"), 2)),
+        render_document=_render_items,
+    )
+    assert packed is not None
+    assert packed.items == ("three", "four")
+    assert packed.omitted == len(items) - len(packed.items)
+    assert packed.omitted == 2
+    assert len(_render_items(packed.items, packed.omitted)) <= len(
+        _render_items(("three", "four"), 2)
+    )
 
 
 def test_bounded_text_zero_limit_returns_empty() -> None:

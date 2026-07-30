@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from jung.domain.models import Message, MessageRole
+from jung.domain.text import normalize_content
 
 
 class TranscriptTurn(BaseModel):
@@ -20,7 +21,8 @@ class TranscriptTurn(BaseModel):
 
 
 def normalize_transcript_content(text: str) -> str:
-    return " ".join(text.split())
+    """Compatibility alias for :func:`jung.domain.text.normalize_content`."""
+    return normalize_content(text)
 
 
 def messages_to_transcript(messages: list[Message]) -> tuple[TranscriptTurn, ...]:

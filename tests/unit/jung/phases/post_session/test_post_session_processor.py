@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from jung.domain.models import Plan, Profile
 from jung.llm.errors import InvalidLLMOutput
@@ -13,8 +14,8 @@ from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.post_session.merge import merge_plan_content, plan_patch_is_noop
 from jung.phases.post_session.models import (
-    InterventionEvidence,
-    PatientStatementCitation,
+    InterventionCitation,
+    PatientTurnCitation,
     PlanPatch,
     PostSessionInput,
     PostSessionUpdateResult,
@@ -113,12 +114,13 @@ async def test_empty_transcript_makes_zero_llm_calls() -> None:
     result = await processor.process(_input(()))
     assert "without conversational content" in result.session_summary
     assert result.session_briefing.intervention_evidence == ()
-    assert result.derived_profile_patch.grounded_patient_statements == ()
+    assert result.session_briefing.continuity_points == ()
+    assert result.derived_profile_patch.grounded_patient_turns == ()
     assert result.plan_patch == PlanPatch()
     gateway.assert_exhausted()
 
 
-async def test_user_only_transcript_selects_latest_message() -> None:
+async def test_user_only_transcript_uses_generic_summary_without_message_text() -> None:
     gateway = FakeLLM([])
     analysis_policy, update_policy = _policies()
     processor = PostSessionProcessor(
@@ -126,6 +128,7 @@ async def test_user_only_transcript_selects_latest_message() -> None:
         analysis_policy=analysis_policy,
         update_policy=update_policy,
     )
+    latest = "Latest concern about sleep."
     result = await processor.process(
         _input(
             (
@@ -139,15 +142,20 @@ async def test_user_only_transcript_selects_latest_message() -> None:
                     message_id=uuid4(),
                     sequence=2,
                     role="user",
-                    content="Latest concern about sleep.",
+                    content=latest,
                 ),
             )
         )
     )
-    assert "Latest concern about sleep." in result.session_summary
-    assert result.session_briefing.continuity_points == ("Latest concern about sleep.",)
+    assert "before a therapist response occurred" in result.session_summary
+    assert latest not in result.session_summary
     assert "Earlier concern." not in result.session_summary
-    assert result.derived_profile_patch.grounded_patient_statements == ()
+    assert result.session_briefing.continuity_points == ()
+    assert result.session_briefing.narrative_handoff == result.session_summary
+    assert "Revisit the patient's final message" in (
+        result.session_briefing.recommended_opening_focus
+    )
+    assert result.derived_profile_patch.grounded_patient_turns == ()
     gateway.assert_exhausted()
 
 
@@ -172,12 +180,48 @@ async def test_assistant_only_transcript_makes_zero_llm_calls() -> None:
         )
     )
     assert "no patient response occurred" in result.session_summary
+    assert result.session_briefing.continuity_points == ()
     assert result.plan_patch == PlanPatch()
     gateway.assert_exhausted()
 
 
+async def test_whitespace_only_transcript_rejected_before_fakellm() -> None:
+    gateway = FakeLLM(
+        [
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysisResult,
+                response=SessionAnalysisResult(
+                    summary="should not be used",
+                    key_themes=("sleep",),
+                ),
+            ),
+        ]
+    )
+    with pytest.raises(ValidationError, match="non-empty"):
+        _input(
+            (
+                TranscriptTurn(
+                    message_id=uuid4(),
+                    sequence=1,
+                    role="user",
+                    content="   ",
+                ),
+                TranscriptTurn(
+                    message_id=uuid4(),
+                    sequence=2,
+                    role="assistant",
+                    content="ok",
+                ),
+            )
+        )
+    assert len(gateway._expectations) == 1  # noqa: SLF001
+
+
 async def test_post_session_processor_makes_two_structured_calls() -> None:
     user_message_id = uuid4()
+    therapist_content = "What feels unclear about your sleep?"
+    patient_content = "I kept waking up."
     transcript = (
         TranscriptTurn(
             message_id=user_message_id,
@@ -189,13 +233,13 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
             message_id=uuid4(),
             sequence=2,
             role="assistant",
-            content="What feels unclear about your sleep?",
+            content=therapist_content,
         ),
         TranscriptTurn(
             message_id=uuid4(),
             sequence=3,
             role="user",
-            content="I kept waking up.",
+            content=patient_content,
         ),
     )
     gateway = FakeLLM(
@@ -206,21 +250,14 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
                 response=SessionAnalysisResult(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
-                    intervention_evidence=(
-                        InterventionEvidence(
+                    intervention_citations=(
+                        InterventionCitation(
                             intervention_description="Exploratory questioning",
                             therapist_sequence=2,
-                            therapist_quote="What feels unclear about your sleep?",
                             patient_sequence=3,
-                            patient_quote="I kept waking up.",
                         ),
                     ),
-                    patient_statements=(
-                        PatientStatementCitation(
-                            patient_sequence=1,
-                            patient_quote="I slept badly.",
-                        ),
-                    ),
+                    patient_turn_citations=(PatientTurnCitation(patient_sequence=1),),
                 ),
             ),
             StructuredExpectation(
@@ -229,6 +266,10 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
                 response=PostSessionUpdateResult(
                     session_briefing=_briefing_draft(),
                     plan_patch=PlanPatch(current_progress="some progress"),
+                ),
+                message_fragments=(
+                    therapist_content,
+                    "I slept badly.",
                 ),
             ),
         ]
@@ -242,11 +283,14 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
     result = await processor.process(_input(transcript))
     assert result.session_summary == "Patient explored sleep difficulties."
     assert len(result.session_briefing.intervention_evidence) == 1
-    assert result.session_briefing.intervention_evidence[0].status == "responded"
-    assert len(result.derived_profile_patch.grounded_patient_statements) == 1
-    grounded = result.derived_profile_patch.grounded_patient_statements[0]
+    evidence = result.session_briefing.intervention_evidence[0]
+    assert evidence.status == "response_cited"
+    assert evidence.therapist_content == therapist_content
+    assert evidence.patient_content == patient_content
+    assert len(result.derived_profile_patch.grounded_patient_turns) == 1
+    grounded = result.derived_profile_patch.grounded_patient_turns[0]
     assert grounded.source_message_id == user_message_id
-    assert grounded.quote == "I slept badly."
+    assert grounded.content == "I slept badly."
     assert result.plan_patch.current_progress == "some progress"
     gateway.assert_exhausted()
 
@@ -317,7 +361,7 @@ async def test_post_session_processor_skips_update_when_analysis_fails() -> None
     gateway.assert_exhausted()
 
 
-async def test_invalid_analysis_evidence_raises_without_update_call() -> None:
+async def test_invalid_analysis_citations_raise_without_update_call() -> None:
     gateway = FakeLLM(
         [
             StructuredExpectation(
@@ -326,11 +370,10 @@ async def test_invalid_analysis_evidence_raises_without_update_call() -> None:
                 response=SessionAnalysisResult(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
-                    intervention_evidence=(
-                        InterventionEvidence(
+                    intervention_citations=(
+                        InterventionCitation(
                             intervention_description="Fabricated",
                             therapist_sequence=99,
-                            therapist_quote="not in transcript",
                         ),
                     ),
                 ),

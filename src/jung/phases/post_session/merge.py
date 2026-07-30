@@ -4,44 +4,36 @@ from __future__ import annotations
 
 from typing import Any
 
+from jung.domain.grounding import parse_grounded_patient_turns
 from jung.domain.models import Plan, PlanContent
 from jung.phases.post_session.models import (
     DerivedProfilePatch,
-    GroundedPatientStatement,
     PlanPatch,
     PostSessionUpdateResult,
 )
 
 
-def _load_grounded_patient_statements(
-    value: object,
-) -> tuple[GroundedPatientStatement, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ValueError("grounded_patient_statements must be a list")
-    return tuple(GroundedPatientStatement.model_validate(item) for item in value)
-
-
 def derived_profile_patch_is_empty(patch: DerivedProfilePatch) -> bool:
-    return not patch.grounded_patient_statements
+    return not patch.grounded_patient_turns
 
 
 def merge_derived_profile(
     current: dict[str, Any] | None,
     patch: DerivedProfilePatch,
 ) -> dict[str, Any] | None:
-    if not patch.grounded_patient_statements:
+    if current is not None:
+        existing = parse_grounded_patient_turns(current)
+    else:
+        existing = ()
+
+    if not patch.grounded_patient_turns:
         return current
 
     merged: dict[str, Any] = dict(current or {})
-    existing = _load_grounded_patient_statements(
-        merged.get("grounded_patient_statements")
-    )
     by_message_id = {item.source_message_id: item for item in existing}
-    for item in patch.grounded_patient_statements:
+    for item in patch.grounded_patient_turns:
         by_message_id.setdefault(item.source_message_id, item)
-    merged["grounded_patient_statements"] = [
+    merged["grounded_patient_turns"] = [
         item.model_dump(mode="json") for item in by_message_id.values()
     ]
     return merged

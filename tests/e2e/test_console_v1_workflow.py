@@ -206,7 +206,7 @@ async def _assert_therapy_ready_api(
         assert therapy_session.ended_at is not None
 
         history = await client.get_session(therapy_session.id)
-        assert history.session.summary == "Sleep remained difficult."
+        assert history.session.summary == "Patient explored sleep difficulties."
         assert history.session.briefing is not None
         assert (
             history.session.briefing.get("narrative_handoff")
