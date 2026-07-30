@@ -152,7 +152,7 @@ class TherapyApplication:
     ) -> _T:
         # Bounded shutdown applies around LLM/background work; an already-running
         # local SQLite call is allowed to finish before the mutation lock releases.
-        method_name = getattr(fn, "__name__", repr(fn))
+        method_name = getattr(fn, "__name__", None) or type(fn).__name__
         recorder = self._recorder
 
         def invoke() -> _T:

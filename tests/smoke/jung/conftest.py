@@ -13,9 +13,9 @@ from tests.smoke.jung.smoke_evidence import COLLECTOR, render_smoke_evidence
 _session_failed = False
 
 
-def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]) -> None:
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     global _session_failed
-    if call.excinfo is not None:
+    if report.failed:
         _session_failed = True
 
 
