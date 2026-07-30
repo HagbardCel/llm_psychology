@@ -326,9 +326,7 @@ def test_diagnostic_log_handler_handles_formatting_failure(
             )
             assert manifest["evidence_complete"] is False
             errors = manifest.get("instrumentation_errors") or []
-            assert any(
-                "diagnostic log capture failed" in str(err) for err in errors
-            )
+            assert any("diagnostic log capture failed" in str(err) for err in errors)
 
 
 @pytest.mark.parametrize(

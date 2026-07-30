@@ -114,16 +114,13 @@ class EventStream:
         # Keep membership checks, non-blocking delivery, and eviction atomic
         # across concurrent publishers.
         if self._recorder is not None:
-            try:
-                self._recorder.record(
-                    "application.event",
-                    {
-                        "event_type": type(event).__name__,
-                        "event": event,
-                    },
-                )
-            except Exception:
-                pass
+            self._recorder.record(
+                "application.event",
+                {
+                    "event_type": type(event).__name__,
+                    "event": event,
+                },
+            )
         async with self._lock:
             for subscriber in tuple(self._subscribers):
                 try:

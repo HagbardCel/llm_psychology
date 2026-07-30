@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import httpx
@@ -1400,9 +1401,7 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
         if line.strip()
     ]
     cleanup = next(
-        entry
-        for entry in lines
-        if entry["kind"] == "llm.provider.cleanup.error"
+        entry for entry in lines if entry["kind"] == "llm.provider.cleanup.error"
     )
     assert cleanup["data"]["error_type"] == "CancelledError"
     assert cleanup["data"]["close_method"] == "aclose"
@@ -1491,7 +1490,9 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
     ]
 
     call_errors = [
-        e for e in lines if e["kind"] == "llm.call.error" and e["data"]["status"] == "cancelled"
+        e
+        for e in lines
+        if e["kind"] == "llm.call.error" and e["data"]["status"] == "cancelled"
     ]
     provider_errors = [
         e
@@ -1500,4 +1501,308 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
     ]
     assert len(call_errors) == 1
     assert len(provider_errors) == 1
-    assert provider_errors[0]["data"]["llm_call_id"] == call_errors[0]["data"]["call_id"]
+    assert (
+        provider_errors[0]["data"]["llm_call_id"] == call_errors[0]["data"]["call_id"]
+    )
+
+
+async def test_stream_preserves_stream_cancel_message_over_close_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    class _Delta:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str) -> None:
+            self.delta = _Delta(content)
+            self.finish_reason = None
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [_Choice(content)]
+
+    first_yielded = asyncio.Event()
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    close_finished = asyncio.Event()
+
+    class FakeSDKStream:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def __aiter__(self) -> FakeSDKStream:
+            return self
+
+        async def __anext__(self) -> _Chunk:
+            if not self._sent:
+                self._sent = True
+                first_yielded.set()
+                return _Chunk("hello")
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def aclose(self) -> None:
+            close_started.set()
+            try:
+                await close_release.wait()
+            finally:
+                close_finished.set()
+
+    sdk_stream = FakeSDKStream()
+
+    async def fake_create(**kwargs: object) -> FakeSDKStream:
+        return sdk_stream
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"unused")
+
+    with DiagnosticRun(tmp_path / "preserve-stream-cancel") as recorder:
+        gateway = _client(httpx.MockTransport(handler), recorder=recorder)
+        monkeypatch.setattr(
+            gateway._client.chat.completions,  # type: ignore[attr-defined]
+            "create",
+            fake_create,
+        )
+        observed = ObservedLLMGateway(gateway, recorder=recorder)
+
+        async def consume() -> None:
+            async for _chunk in observed.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                _policy(mode=StructuredOutputMode.PROMPT),
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await first_yielded.wait()
+        task.cancel("stream-cancel")
+        await close_started.wait()
+        task.cancel("close-cancel")
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        close_release.set()
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await task
+        assert exc_info.value.args == ("stream-cancel",)
+        assert close_finished.is_set() is True
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "preserve-stream-cancel" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    starts = [e for e in lines if e["kind"] == "llm.call.start"]
+    assert len(starts) == 1
+    call_id = starts[0]["data"]["call_id"]
+    call_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.call.complete", "llm.call.error"}
+        and e["data"].get("call_id") == call_id
+    ]
+    assert len(call_terminals) == 1
+    assert call_terminals[0]["data"]["status"] == "cancelled"
+
+    provider_requests = [e for e in lines if e["kind"] == "llm.provider.request"]
+    assert len(provider_requests) == 1
+    provider_attempt_id = provider_requests[0]["data"]["provider_attempt_id"]
+    provider_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.provider.response", "llm.provider.error"}
+        and e["data"].get("provider_attempt_id") == provider_attempt_id
+    ]
+    assert len(provider_terminals) == 1
+    assert provider_terminals[0]["data"]["status"] == "cancelled"
+    assert provider_terminals[0]["data"]["llm_call_id"] == call_id
+
+    cleanup = [e for e in lines if e["kind"] == "llm.provider.cleanup.error"]
+    assert not cleanup
+    assert not any(e["kind"] == "llm.stream.cleanup.error" for e in lines)
+
+
+async def test_stream_cancel_with_close_cancellederror_keeps_single_terminals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    class _Delta:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str) -> None:
+            self.delta = _Delta(content)
+            self.finish_reason = None
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [_Choice(content)]
+
+    first_yielded = asyncio.Event()
+
+    class FakeSDKStream:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def __aiter__(self) -> FakeSDKStream:
+            return self
+
+        async def __anext__(self) -> _Chunk:
+            if not self._sent:
+                self._sent = True
+                first_yielded.set()
+                return _Chunk("hello")
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def aclose(self) -> None:
+            raise asyncio.CancelledError("close-own-cancel")
+
+    sdk_stream = FakeSDKStream()
+
+    async def fake_create(**kwargs: object) -> FakeSDKStream:
+        return sdk_stream
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"unused")
+
+    with DiagnosticRun(tmp_path / "cancel-plus-close-cancel") as recorder:
+        gateway = _client(httpx.MockTransport(handler), recorder=recorder)
+        monkeypatch.setattr(
+            gateway._client.chat.completions,  # type: ignore[attr-defined]
+            "create",
+            fake_create,
+        )
+        observed = ObservedLLMGateway(gateway, recorder=recorder)
+
+        async def consume() -> None:
+            async for _chunk in observed.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                _policy(mode=StructuredOutputMode.PROMPT),
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await first_yielded.wait()
+        task.cancel("stream-cancel")
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await task
+        assert exc_info.value.args == ("stream-cancel",)
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "cancel-plus-close-cancel" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    starts = [e for e in lines if e["kind"] == "llm.call.start"]
+    assert len(starts) == 1
+    call_id = starts[0]["data"]["call_id"]
+    call_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.call.complete", "llm.call.error"}
+        and e["data"].get("call_id") == call_id
+    ]
+    assert len(call_terminals) == 1
+    assert call_terminals[0]["data"]["status"] == "cancelled"
+
+    provider_requests = [e for e in lines if e["kind"] == "llm.provider.request"]
+    assert len(provider_requests) == 1
+    provider_attempt_id = provider_requests[0]["data"]["provider_attempt_id"]
+    provider_terminals = [
+        e
+        for e in lines
+        if e["kind"] in {"llm.provider.response", "llm.provider.error"}
+        and e["data"].get("provider_attempt_id") == provider_attempt_id
+    ]
+    assert len(provider_terminals) == 1
+    assert provider_terminals[0]["data"]["status"] == "cancelled"
+
+    cleanup = [e for e in lines if e["kind"] == "llm.provider.cleanup.error"]
+    assert len(cleanup) == 1
+    assert cleanup[0]["data"]["error_type"] == "CancelledError"
+
+
+async def test_provider_close_failure_without_recorder_logs_safe_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Delta:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str) -> None:
+            self.delta = _Delta(content)
+            self.finish_reason = None
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [_Choice(content)]
+
+    class FakeSDKStream:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def __aiter__(self) -> FakeSDKStream:
+            return self
+
+        async def __anext__(self) -> _Chunk:
+            if self._sent:
+                raise StopAsyncIteration
+            self._sent = True
+            return _Chunk("hello")
+
+        async def aclose(self) -> None:
+            raise RuntimeError(
+                "close boom secret=sk-provider-leak url=https://user:pass@host/path"
+            )
+
+    sdk_stream = FakeSDKStream()
+
+    async def fake_create(**kwargs: object) -> FakeSDKStream:
+        return sdk_stream
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"unused")
+
+    gateway = _client(httpx.MockTransport(handler), recorder=None)
+    monkeypatch.setattr(
+        gateway._client.chat.completions,  # type: ignore[attr-defined]
+        "create",
+        fake_create,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="jung.llm.openai_compatible"):
+        chunks: list[str] = []
+        async for chunk in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hi")],
+            _policy(mode=StructuredOutputMode.PROMPT),
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["hello"]
+    warnings = [
+        record
+        for record in caplog.records
+        if "llm provider stream close failed" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "error_type=RuntimeError" in message
+    assert "close_method=aclose" in message
+    assert "sk-provider-leak" not in message
+    assert "close boom" not in message
+    assert "user:pass" not in message
+    assert "https://" not in message

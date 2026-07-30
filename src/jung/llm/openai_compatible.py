@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import time
@@ -14,8 +13,10 @@ from typing import Literal, TypeVar
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
+from jung._async_cleanup import close_awaitable_safely
 from jung.diagnostics import (
     DiagnosticRecorder,
+    _safe_exception_message,
     current_diagnostic_context,
     sanitize_url,
 )
@@ -46,57 +47,6 @@ T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
-
-def _safe_exception_message(exc: BaseException) -> str:
-    try:
-        return str(exc)
-    except Exception:
-        return "<exception message unavailable>"
-
-
-async def _close_stream_safely(
-    close: Callable[[], object],
-    *,
-    record_failure: Callable[[BaseException], None],
-) -> None:
-    """Close-stream helper that preserves ambient cancellations.
-
-    Close-method `CancelledError` is treated as a secondary cleanup failure
-    and swallowed. Ambient task cancellation is drained and re-raised.
-    """
-    try:
-        result = close()
-    except asyncio.CancelledError as exc:
-        record_failure(exc)
-        return
-    except Exception as exc:
-        record_failure(exc)
-        return
-
-    if not inspect.isawaitable(result):
-        return
-
-    close_task = asyncio.create_task(result)
-    try:
-        await asyncio.shield(close_task)
-    except asyncio.CancelledError as exc:
-        current = asyncio.current_task()
-        # Distinguish close-method CancelledError (close raises) from ambient
-        # cancellation (caller task has cancellation requested).
-        if current is not None and current.cancelling() > 0:
-            try:
-                await asyncio.shield(close_task)
-            except asyncio.CancelledError as close_exc:
-                record_failure(close_exc)
-            except Exception as close_exc:
-                record_failure(close_exc)
-            raise
-
-        record_failure(exc)
-        return
-    except Exception as exc:
-        record_failure(exc)
-        return
 
 _FORBIDDEN_EXTRA_BODY_KEYS = frozenset(
     {
@@ -571,7 +521,16 @@ class OpenAICompatibleLLM:
         terminal_outcome = status if status != "started" else "abandoned"
 
         def _record_close_failure(exc: BaseException) -> None:
-            self._record_provider(
+            if self._recorder is None:
+                logger.warning(
+                    "llm provider stream close failed task=%s close_method=%s "
+                    "error_type=%s",
+                    policy.task.value,
+                    close_method_name,
+                    type(exc).__name__,
+                )
+                return
+            self._recorder.record(
                 "llm.provider.cleanup.error",
                 {
                     "provider_attempt_id": provider_attempt_id,
@@ -585,9 +544,10 @@ class OpenAICompatibleLLM:
                 },
             )
 
-        await _close_stream_safely(
+        await close_awaitable_safely(
             close_method,
             record_failure=_record_close_failure,
+            preserve_existing_cancellation=status == "cancelled",
         )
 
     async def generate_structured(

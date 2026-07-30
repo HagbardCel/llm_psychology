@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -11,66 +10,18 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from jung.diagnostics import DiagnosticRecorder, diagnostic_context
+from jung._async_cleanup import close_awaitable_safely
+from jung.diagnostics import (
+    DiagnosticRecorder,
+    _safe_exception_message,
+    diagnostic_context,
+)
 from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
 
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_exception_message(exc: BaseException) -> str:
-    try:
-        return str(exc)
-    except Exception:
-        return "<exception message unavailable>"
-
-
-async def _close_stream_safely(
-    close: Callable[[], object],
-    *,
-    record_failure: Callable[[BaseException], None],
-) -> None:
-    """Close-stream helper that preserves ambient cancellations.
-
-    - Close-method `CancelledError` is recorded as a cleanup error and swallowed.
-    - If the *caller task* is externally cancelled while awaiting close,
-      we drain/finish the close attempt and then re-raise the outer cancellation.
-    """
-    try:
-        result = close()
-    except asyncio.CancelledError as exc:
-        record_failure(exc)
-        return
-    except Exception as exc:
-        record_failure(exc)
-        return
-
-    if not inspect.isawaitable(result):
-        return
-
-    close_task = asyncio.create_task(result)
-    try:
-        await asyncio.shield(close_task)
-    except asyncio.CancelledError as exc:
-        current = asyncio.current_task()
-        # Distinguish close-method CancelledError (close raises) from ambient
-        # cancellation (caller task has cancellation requested).
-        if current is not None and current.cancelling() > 0:
-            try:
-                await asyncio.shield(close_task)
-            except asyncio.CancelledError as close_exc:
-                record_failure(close_exc)
-            except Exception as close_exc:
-                record_failure(close_exc)
-            raise
-
-        record_failure(exc)
-        return
-    except Exception as exc:
-        record_failure(exc)
-        return
 
 
 class ObservedLLMGateway:
@@ -194,6 +145,13 @@ class ObservedLLMGateway:
 
                     def _record_close_failure(exc: BaseException) -> None:
                         if self._recorder is None:
+                            logger.warning(
+                                "llm stream close failed task=%s close_method=%s "
+                                "error_type=%s",
+                                policy.task.value,
+                                "aclose",
+                                type(exc).__name__,
+                            )
                             return
                         self._recorder.record(
                             "llm.stream.cleanup.error",
@@ -208,9 +166,10 @@ class ObservedLLMGateway:
                             },
                         )
 
-                    await _close_stream_safely(
+                    await close_awaitable_safely(
                         close,
                         record_failure=_record_close_failure,
+                        preserve_existing_cancellation=status == "cancelled",
                     )
                 if not terminal_emitted and status != "success":
                     self._fail_call(

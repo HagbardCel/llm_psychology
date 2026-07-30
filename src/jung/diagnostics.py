@@ -144,6 +144,13 @@ def sanitize_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+def _safe_exception_message(exc: BaseException) -> str:
+    try:
+        return str(exc)
+    except Exception:
+        return "<exception message unavailable>"
+
+
 def _is_sensitive_key(key: object) -> bool:
     if not isinstance(key, str):
         return False
@@ -166,10 +173,7 @@ def _is_sensitive_key(key: object) -> bool:
 def _is_token_metric_key(key: str) -> bool:
     normalized = key.casefold().replace("-", "_")
     collapsed = normalized.replace("_", "")
-    return (
-        normalized in _TOKEN_METRIC_KEYS
-        or collapsed in _COLLAPSED_TOKEN_METRIC_KEYS
-    )
+    return normalized in _TOKEN_METRIC_KEYS or collapsed in _COLLAPSED_TOKEN_METRIC_KEYS
 
 
 def _is_token_metric_value(value: object) -> bool:
@@ -408,6 +412,7 @@ class DiagnosticRecorder:
             self._append_instrumentation_error_locked(message)
 
     def record(self, kind: str, data: Mapping[str, Any] | None = None) -> None:
+        """Record an event without propagating instrumentation failures."""
         if self._closed:
             return
         try:

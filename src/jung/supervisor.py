@@ -109,7 +109,4 @@ class TaskSupervisor:
     def _record(self, kind: str, data: dict[str, object]) -> None:
         if self._recorder is None:
             return
-        try:
-            self._recorder.record(kind, data)
-        except Exception:
-            pass
+        self._recorder.record(kind, data)

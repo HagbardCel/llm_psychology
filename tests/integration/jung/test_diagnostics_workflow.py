@@ -328,9 +328,7 @@ async def test_application_context_records_cleanup_errors_first_and_later(
 
     events = _load_trace(run_dir)
     cleanup_events = [
-        event
-        for event in events
-        if str(event["kind"]) == "runtime.cleanup.error"
+        event for event in events if str(event["kind"]) == "runtime.cleanup.error"
     ]
     assert any(
         ev["data"]["step"] == "supervisor.shutdown"
@@ -342,6 +340,209 @@ async def test_application_context_records_cleanup_errors_first_and_later(
         and ev["data"]["selected_as_cleanup_error"] is False
         for ev in cleanup_events
     )
+
+
+async def test_application_context_ambient_cancel_drains_aclose_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ambient cancel during aclose records drained failure then cancellation."""
+
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    close_finished = asyncio.Event()
+    aclose_exc = RuntimeError("aclose failed after cancel")
+
+    class BlockingCloseLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            close_started.set()
+            try:
+                await close_release.wait()
+                raise aclose_exc
+            finally:
+                close_finished.set()
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", BlockingCloseLLM)
+
+    run_dir = tmp_path / "aclose-drain"
+    settings = ApplicationSettings(
+        database_path=tmp_path / "aclose-drain.db",
+        llm=LLMSettings(
+            default_model="fake",
+            base_url="http://fake.test",
+            api_key="fake",
+        ),
+        debug_run_dir=run_dir,
+        shutdown_timeout_seconds=2.0,
+    )
+
+    async def runner() -> None:
+        async with application_context(settings):
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(runner())
+    await close_started.wait()
+    task.cancel()
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    assert not close_finished.is_set()
+
+    close_release.set()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+
+    assert isinstance(exc_info.value, asyncio.CancelledError)
+    assert close_finished.is_set() is True
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "failed"
+    assert manifest["evidence_complete"] is True
+
+    events = _load_trace(run_dir)
+    aclose_events = [
+        event
+        for event in events
+        if str(event["kind"]) == "runtime.cleanup.error"
+        and event["data"]["step"] == "llm.aclose"
+    ]
+    assert len(aclose_events) == 2
+    drained, selected = aclose_events
+    assert drained["data"]["error_type"] == "RuntimeError"
+    assert drained["data"]["discovered_while_draining"] is True
+    assert drained["data"]["selected_as_cleanup_error"] is False
+    assert selected["data"]["error_type"] == "CancelledError"
+    assert selected["data"]["discovered_while_draining"] is False
+    assert selected["data"]["selected_as_cleanup_error"] is True
+
+    mtime_before = (run_dir / "manifest.json").stat().st_mtime_ns
+    await asyncio.sleep(0.05)
+    assert (run_dir / "manifest.json").stat().st_mtime_ns == mtime_before
+
+
+async def test_application_context_ambient_cancel_drains_aclose_with_runtime_primary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime primary stays primary; drained aclose failures stay secondary."""
+
+    body_exc = RuntimeError("body failed")
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    aclose_exc = RuntimeError("aclose failed after cancel")
+
+    class BlockingCloseLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            close_started.set()
+            await close_release.wait()
+            raise aclose_exc
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", BlockingCloseLLM)
+
+    run_dir = tmp_path / "aclose-drain-primary"
+    settings = ApplicationSettings(
+        database_path=tmp_path / "aclose-drain-primary.db",
+        llm=LLMSettings(
+            default_model="fake",
+            base_url="http://fake.test",
+            api_key="fake",
+        ),
+        debug_run_dir=run_dir,
+        shutdown_timeout_seconds=2.0,
+    )
+
+    async def runner() -> None:
+        async with application_context(settings):
+            raise body_exc
+
+    task = asyncio.create_task(runner())
+    await close_started.wait()
+    task.cancel()
+    await asyncio.sleep(0.01)
+    close_release.set()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await task
+    assert exc_info.value is body_exc
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["evidence_complete"] is True
+
+    events = _load_trace(run_dir)
+    aclose_events = [
+        event
+        for event in events
+        if str(event["kind"]) == "runtime.cleanup.error"
+        and event["data"]["step"] == "llm.aclose"
+    ]
+    assert len(aclose_events) == 2
+    assert all(ev["data"]["selected_as_cleanup_error"] is False for ev in aclose_events)
+    assert any(
+        ev["data"]["discovered_while_draining"] is True
+        and ev["data"]["error_type"] == "RuntimeError"
+        for ev in aclose_events
+    )
+    assert any(
+        ev["data"]["discovered_while_draining"] is False
+        and ev["data"]["error_type"] == "CancelledError"
+        for ev in aclose_events
+    )
+
+
+async def test_application_context_direct_aclose_cancellederror_not_duplicated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owned aclose CancelledError is recorded once, not as a drained duplicate."""
+
+    cancel_exc = asyncio.CancelledError("aclose-own-cancel")
+
+    class CancelCloseLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            raise cancel_exc
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CancelCloseLLM)
+
+    run_dir = tmp_path / "aclose-direct-cancel"
+    settings = ApplicationSettings(
+        database_path=tmp_path / "aclose-direct-cancel.db",
+        llm=LLMSettings(
+            default_model="fake",
+            base_url="http://fake.test",
+            api_key="fake",
+        ),
+        debug_run_dir=run_dir,
+        shutdown_timeout_seconds=2.0,
+    )
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        async with application_context(settings):
+            pass
+
+    assert exc_info.value is cancel_exc
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["evidence_complete"] is True
+
+    events = _load_trace(run_dir)
+    aclose_events = [
+        event
+        for event in events
+        if str(event["kind"]) == "runtime.cleanup.error"
+        and event["data"]["step"] == "llm.aclose"
+    ]
+    assert len(aclose_events) == 1
+    assert aclose_events[0]["data"]["selected_as_cleanup_error"] is True
+    assert aclose_events[0]["data"]["discovered_while_draining"] is False
+    assert aclose_events[0]["data"]["error_type"] == "CancelledError"
 
 
 async def test_application_context_end_snapshot_cancel_does_not_mask_shutdown_failure(
@@ -385,9 +586,7 @@ async def test_application_context_end_snapshot_cancel_does_not_mask_shutdown_fa
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
     monkeypatch.setattr("jung.composition.TaskSupervisor.shutdown", failing_shutdown)
-    monkeypatch.setattr(
-        "jung.composition._capture_snapshot", cancel_on_end_snapshot
-    )
+    monkeypatch.setattr("jung.composition._capture_snapshot", cancel_on_end_snapshot)
 
     run_dir = tmp_path / "shutdown-end-cancel"
     settings = ApplicationSettings(
@@ -413,9 +612,7 @@ async def test_application_context_end_snapshot_cancel_does_not_mask_shutdown_fa
 
     events = _load_trace(run_dir)
     cleanup_events = [
-        event
-        for event in events
-        if str(event["kind"]) == "runtime.cleanup.error"
+        event for event in events if str(event["kind"]) == "runtime.cleanup.error"
     ]
     assert any(
         ev["data"]["step"] == "supervisor.shutdown"
@@ -469,7 +666,9 @@ async def test_application_context_end_snapshot_cancel_drains_worker(
     monkeypatch.setattr(SQLiteStore, "backup_to", blocking_backup_to)
 
     run_dir = tmp_path / (
-        "end-snapshot-cancel-drains-fail" if end_snapshot_raises else "end-snapshot-cancel-drains-ok"
+        "end-snapshot-cancel-drains-fail"
+        if end_snapshot_raises
+        else "end-snapshot-cancel-drains-ok"
     )
     settings = ApplicationSettings(
         database_path=tmp_path / "end-snapshot-cancel-drains.db",
@@ -555,11 +754,8 @@ async def test_application_context_end_snapshot_failure_is_evidence_incomplete(
 
     events = _load_trace(run_dir)
     runtime_cleanup_events = [
-        e
-        for e in events
-        if str(e["kind"]) == "runtime.cleanup.error"
+        e for e in events if str(e["kind"]) == "runtime.cleanup.error"
     ]
     assert not any(
-        e["data"]["step"] == "database.end_snapshot"
-        for e in runtime_cleanup_events
+        e["data"]["step"] == "database.end_snapshot" for e in runtime_cleanup_events
     )

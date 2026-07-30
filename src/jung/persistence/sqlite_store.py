@@ -1317,16 +1317,13 @@ class SQLiteStore:
             connection_id = self._recorder.next_id("conn")
 
             def trace_callback(statement: str) -> None:
-                try:
-                    self._recorder.record(
-                        "database.sql",
-                        {
-                            "connection_id": connection_id,
-                            "sql": statement,
-                        },
-                    )
-                except Exception:
-                    pass
+                self._recorder.record(
+                    "database.sql",
+                    {
+                        "connection_id": connection_id,
+                        "sql": statement,
+                    },
+                )
 
         with sql.connect(
             self._database_path,
