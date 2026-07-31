@@ -4,24 +4,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any, Literal, Self
+from typing import Any
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    computed_field,
     field_validator,
     model_validator,
 )
 
 from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
-from jung.domain.text import normalize_content
+from jung.domain.session_artifacts import (
+    InterventionEvidence,
+    InterventionStatus,
+    SessionBriefing,
+)
 from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
 from jung.styles import StyleDefinition
 
-InterventionStatus = Literal["delivered", "response_cited"]
+__all__ = [
+    "DerivedProfilePatch",
+    "InterventionCitation",
+    "InterventionEvidence",
+    "InterventionStatus",
+    "PatientTurnCitation",
+    "PlanPatch",
+    "PostSessionInput",
+    "PostSessionResult",
+    "PostSessionUpdateResult",
+    "ResolvedSessionAnalysis",
+    "SessionAnalysisResult",
+    "SessionBriefing",
+    "SessionBriefingDraft",
+]
 
 _MAX_EVIDENCE_ITEMS = 20
 
@@ -30,22 +47,6 @@ def _non_empty_required_text(value: str) -> str:
     value = value.strip()
     if not value:
         raise ValueError("must be non-empty")
-    return value
-
-
-def _normalize_non_empty_content(value: str) -> str:
-    value = normalize_content(value)
-    if not value:
-        raise ValueError("must be non-empty")
-    return value
-
-
-def _normalize_optional_content(value: str | None) -> str | None:
-    if value is None:
-        return None
-    value = normalize_content(value)
-    if not value:
-        raise ValueError("must be non-empty when provided")
     return value
 
 
@@ -74,54 +75,6 @@ class PatientTurnCitation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     patient_sequence: int = Field(ge=1)
-
-
-class InterventionEvidence(BaseModel):
-    """Backend-resolved intervention evidence with full authoritative turns."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    intervention_description: str = Field(max_length=500)
-    therapist_sequence: int = Field(ge=1)
-    therapist_content: str
-    patient_sequence: int | None = Field(default=None, ge=1)
-    patient_content: str | None = None
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def status(self) -> InterventionStatus:
-        return "response_cited" if self.patient_sequence is not None else "delivered"
-
-    @field_validator("intervention_description")
-    @classmethod
-    def non_empty_description(cls, value: str) -> str:
-        return _non_empty_required_text(value)
-
-    @field_validator("therapist_content")
-    @classmethod
-    def normalize_therapist_content(cls, value: str) -> str:
-        return _normalize_non_empty_content(value)
-
-    @field_validator("patient_content")
-    @classmethod
-    def normalize_patient_content(cls, value: str | None) -> str | None:
-        return _normalize_optional_content(value)
-
-    @model_validator(mode="after")
-    def validate_response_reference(self) -> Self:
-        sequence_present = self.patient_sequence is not None
-        content_present = self.patient_content is not None
-        if sequence_present != content_present:
-            raise ValueError(
-                "patient_sequence and patient_content must both be "
-                "present or both absent"
-            )
-        if (
-            self.patient_sequence is not None
-            and self.patient_sequence <= self.therapist_sequence
-        ):
-            raise ValueError("patient_sequence must follow therapist_sequence")
-        return self
 
 
 class SessionAnalysisResult(BaseModel):
@@ -175,10 +128,6 @@ class SessionBriefingDraft(BaseModel):
     @classmethod
     def non_empty_text(cls, value: str) -> str:
         return _non_empty_required_text(value)
-
-
-class SessionBriefing(SessionBriefingDraft):
-    intervention_evidence: tuple[InterventionEvidence, ...] = ()
 
 
 class DerivedProfilePatch(BaseModel):

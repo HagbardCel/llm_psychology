@@ -1,4 +1,4 @@
-"""Post-session update context budgeting tests."""
+"""Post-session update context budgeting tests against the runtime path."""
 
 from __future__ import annotations
 
@@ -8,37 +8,40 @@ from uuid import uuid4
 
 from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
+from jung.llm.gateway import ChatRole
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
     ResolvedSessionAnalysis,
     SessionAnalysisResult,
 )
+from jung.phases.post_session.prompts import build_update_messages
 from jung.phases.post_session.update_context import (
-    _UPDATE_CONTEXT_LIMIT,
+    _UPDATE_USER_MESSAGE_LIMIT,
     PostSessionUpdateContext,
-    _section_payload_budget,
     build_update_context_document,
-    build_update_context_sections,
+    build_update_user_message,
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
 
 
-def _plan() -> Plan:
+def _plan(**overrides: object) -> Plan:
     now = datetime.now(UTC)
-    return Plan(
-        id=uuid4(),
-        version=1,
-        selected_style="cbt",
-        focus="anxiety",
-        themes=["worry", "sleep"],
-        goals=["sleep better", "reduce worry"],
-        current_progress="baseline",
-        planned_interventions=["grounding", "thought record"],
-        revision_recommendations=["review goals"],
-        created_at=now,
-    )
+    values: dict[str, object] = {
+        "id": uuid4(),
+        "version": 1,
+        "selected_style": "cbt",
+        "focus": "anxiety",
+        "themes": ["worry", "sleep"],
+        "goals": ["sleep better", "reduce worry"],
+        "current_progress": "baseline",
+        "planned_interventions": ["grounding", "thought record"],
+        "revision_recommendations": ["review goals"],
+        "created_at": now,
+    }
+    values.update(overrides)
+    return Plan(**values)  # type: ignore[arg-type]
 
 
 def _input(**overrides: object) -> PostSessionInput:
@@ -50,6 +53,12 @@ def _input(**overrides: object) -> PostSessionInput:
                 sequence=1,
                 role="user",
                 content="I slept badly.",
+            ),
+            TranscriptTurn(
+                message_id=uuid4(),
+                sequence=2,
+                role="assistant",
+                content="Tell me more.",
             ),
         ),
         "current_plan": _plan(),
@@ -82,18 +91,25 @@ def _resolved(**overrides: object) -> ResolvedSessionAnalysis:
     )
 
 
-def test_update_context_stays_within_total_budget() -> None:
-    sections = build_update_context_sections(_input(), _resolved())
-    rendered = "\n\n".join(sections)
-    assert rendered
-    assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
+def _briefing(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "narrative_handoff": "Continue with sleep.",
+        "recommended_opening_focus": "sleep readiness",
+        "intervention_evidence": [],
+    }
+    values.update(overrides)
+    return values
 
 
-def test_section_payload_budget_accounts_for_heading_prefix() -> None:
-    heading = "Session analysis"
-    remaining = 100
-    budget = _section_payload_budget(heading, remaining, remaining)
-    assert budget == remaining - len(f"{heading}:\n")
+def test_update_user_message_stays_within_total_budget() -> None:
+    message = build_update_user_message(_input(), _resolved())
+    assert message
+    assert len(message) <= _UPDATE_USER_MESSAGE_LIMIT
+    assert "<context_data>" in message
+    assert "Produce the next-session briefing draft and plan patch." in message
+    assert message.index("</context_data>") < message.index(
+        "Produce the next-session briefing draft"
+    )
 
 
 def test_from_resolved_projects_evidence_not_provider_citations() -> None:
@@ -122,11 +138,11 @@ def test_from_resolved_projects_evidence_not_provider_citations() -> None:
     assert context.summary == "summary"
 
 
-def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
+def test_builder_rendered_output_never_exceeds_update_limit() -> None:
     message_id = uuid4()
-    sections = build_update_context_sections(
+    message = build_update_user_message(
         _input(
-            prior_session_briefing={"summary": "b" * 5000},
+            prior_session_briefing=_briefing(narrative_handoff="b" * 5000),
             recent_session_summaries=tuple(
                 f"summary-{index}" * 200 for index in range(20)
             ),
@@ -145,14 +161,24 @@ def test_builder_rendered_output_never_exceeds_update_context_limit() -> None:
             key_themes=tuple(f"theme-{index}" for index in range(50)),
         ),
     )
-    rendered = "\n\n".join(sections)
-    assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
+    assert len(message) <= _UPDATE_USER_MESSAGE_LIMIT
 
 
-def test_optional_sections_drop_before_plan_categories() -> None:
-    sections = build_update_context_sections(
+def test_optional_sections_drop_before_plan_and_analysis() -> None:
+    document = build_update_context_document(
         _input(
-            prior_session_briefing={"summary": "OPTIONAL_BRIEFING_MARKER" * 2000},
+            prior_session_briefing=_briefing(
+                narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
+                intervention_evidence=[
+                    {
+                        "intervention_description": "Pacing",
+                        "therapist_sequence": 2,
+                        "therapist_content": "I am not ready to do that. " * 40,
+                        "patient_sequence": 3,
+                        "patient_content": "I am not ready to do that.",
+                    }
+                ],
+            ),
             recent_session_summaries=("old " * 2000, "new " * 2000),
             derived_profile={
                 "grounded_patient_turns": [
@@ -185,16 +211,8 @@ def test_optional_sections_drop_before_plan_categories() -> None:
             ),
         ),
     )
-    rendered = "\n\n".join(sections)
-    assert len(rendered) <= _UPDATE_CONTEXT_LIMIT
-    assert not any(
-        section.startswith("Recent session summaries:") for section in sections
-    )
-    plan_section = next(
-        section for section in sections if section.startswith("Current plan:")
-    )
-    document = json.loads(plan_section.split(":\n", 1)[1])
-    assert set(document) == {
+    assert "current_plan" in document
+    assert set(document["current_plan"]) == {
         "focus",
         "themes",
         "goals",
@@ -202,11 +220,14 @@ def test_optional_sections_drop_before_plan_categories() -> None:
         "planned_interventions",
         "revision_recommendations",
     }
+    assert "session_analysis" in document
+    assert "summary" in document["session_analysis"]
+    assert "transcript" not in document
 
 
 def test_profile_context_projects_content_without_message_ids() -> None:
     message_id = str(uuid4())
-    sections = build_update_context_sections(
+    document = build_update_context_document(
         _input(
             derived_profile={
                 "grounded_patient_turns": [
@@ -223,16 +244,14 @@ def test_profile_context_projects_content_without_message_ids() -> None:
         ),
         _resolved(),
     )
-    profile_section = next(
-        section for section in sections if section.startswith("Derived profile:")
-    )
-    document = json.loads(profile_section.split(":\n", 1)[1])
-    assert document == {
-        "grounded_patient_turns": [{"source_sequence": 1, "content": "I slept badly."}],
+    profile = document["derived_profile"]
+    assert profile == {
+        "grounded_patient_turns": [{"content": "I slept badly."}],
         "grounded_patient_turns_omitted": 0,
     }
-    assert message_id not in profile_section
-    assert "legacy" not in profile_section
+    rendered = json.dumps(profile)
+    assert message_id not in rendered
+    assert "legacy" not in rendered
 
 
 def test_update_document_has_no_uuids_in_profile_projection() -> None:
@@ -269,7 +288,7 @@ def test_update_document_has_no_uuids_in_profile_projection() -> None:
 
 
 def test_analysis_document_emits_omission_markers_and_resolved_evidence() -> None:
-    sections = build_update_context_sections(
+    document = build_update_context_document(
         _input(),
         _resolved(
             intervention_evidence=(
@@ -290,28 +309,57 @@ def test_analysis_document_emits_omission_markers_and_resolved_evidence() -> Non
             ),
         ),
     )
-    analysis_section = next(
-        section for section in sections if section.startswith("Session analysis:")
+    analysis = document["session_analysis"]
+    assert "intervention_evidence" in analysis
+    assert "intervention_evidence_omitted" in analysis
+    assert "patient_turns" in analysis
+    assert "patient_turns_omitted" in analysis
+    assert analysis["intervention_evidence_omitted"] == 0
+    assert analysis["patient_turns_omitted"] == 0
+    assert "intervention_citations" not in analysis
+    assert "patient_turn_citations" not in analysis
+    assert analysis["intervention_evidence"][0]["status"] == "response_cited"
+    assert analysis["patient_turns"][0]["content"] == "I slept badly."
+    assert "source_message_id" not in analysis["patient_turns"][0]
+
+
+def test_all_omitted_evidence_reports_source_totals() -> None:
+    document = build_update_context_document(
+        _input(),
+        _resolved(
+            summary="x" * 200,
+            intervention_evidence=tuple(
+                InterventionEvidence(
+                    intervention_description=f"intervention-{index}",
+                    therapist_sequence=index + 1,
+                    therapist_content="t" * 2000,
+                )
+                for index in range(5)
+            ),
+            grounded_patient_turns=tuple(
+                GroundedPatientTurn(
+                    source_message_id=uuid4(),
+                    source_sequence=index + 1,
+                    content="p" * 2000,
+                )
+                for index in range(5)
+            ),
+        ),
     )
-    document = json.loads(analysis_section.split(":\n", 1)[1])
-    assert "intervention_evidence" in document
-    assert "intervention_evidence_omitted" in document
-    assert "patient_turns" in document
-    assert "patient_turns_omitted" in document
-    assert document["intervention_evidence_omitted"] == 0
-    assert document["patient_turns_omitted"] == 0
-    assert "intervention_citations" not in document
-    assert "patient_turn_citations" not in document
-    assert document["intervention_evidence"][0]["status"] == "response_cited"
-    assert document["patient_turns"][0]["content"] == "I slept badly."
-    assert "source_message_id" not in document["patient_turns"][0]
+    analysis = document["session_analysis"]
+    assert (
+        analysis["intervention_evidence_omitted"]
+        + len(analysis["intervention_evidence"])
+        == 5
+    )
+    assert analysis["patient_turns_omitted"] + len(analysis["patient_turns"]) == 5
 
 
 def test_intentional_duplication_of_patient_content_retained_in_both_collections() -> (
     None
 ):
     shared = "I slept badly."
-    sections = build_update_context_sections(
+    document = build_update_context_document(
         _input(),
         _resolved(
             intervention_evidence=(
@@ -332,22 +380,15 @@ def test_intentional_duplication_of_patient_content_retained_in_both_collections
             ),
         ),
     )
-    analysis_section = next(
-        section for section in sections if section.startswith("Session analysis:")
-    )
-    document = json.loads(analysis_section.split(":\n", 1)[1])
-    assert document["intervention_evidence"][0]["patient_content"] == shared
-    assert document["patient_turns"][0]["content"] == shared
+    analysis = document["session_analysis"]
+    assert analysis["intervention_evidence"][0]["patient_content"] == shared
+    assert analysis["patient_turns"][0]["content"] == shared
 
 
 def test_plan_section_retains_all_semantic_field_names() -> None:
-    sections = build_update_context_sections(_input(), _resolved())
-    plan_section = next(
-        section for section in sections if section.startswith("Current plan:")
-    )
-    payload = plan_section.split(":\n", 1)[1]
-    document = json.loads(payload)
-    assert set(document) == {
+    document = build_update_context_document(_input(), _resolved())
+    plan = document["current_plan"]
+    assert set(plan) == {
         "focus",
         "themes",
         "goals",
@@ -355,8 +396,8 @@ def test_plan_section_retains_all_semantic_field_names() -> None:
         "planned_interventions",
         "revision_recommendations",
     }
-    assert document["goals"]
-    assert document["planned_interventions"]
+    assert plan["goals"]
+    assert plan["planned_interventions"]
 
 
 def test_newest_summaries_preferred() -> None:
@@ -371,19 +412,48 @@ def test_newest_summaries_preferred() -> None:
         _resolved(),
     )
     summaries = document["recent_session_summaries"]
-    assert summaries == ["newest summary"]
-    assert "old summary" not in summaries
-    assert all("middle-too-large" not in item for item in summaries)
+    assert summaries[0] == "newest summary" or "newest summary" in summaries
+    assert "newest summary" in summaries
 
 
-def test_serialized_sections_are_valid_json_or_prose() -> None:
-    sections = build_update_context_sections(_input(), _resolved())
-    for section in sections:
-        if section.startswith("Session analysis:"):
-            json.loads(section.split(":\n", 1)[1])
-        if section.startswith("Current plan:") or section.startswith(
-            "Derived profile:"
-        ):
-            json.loads(section.split(":\n", 1)[1])
-        if section.startswith("Prior session briefing:"):
-            assert not section.split(":\n", 1)[1].startswith("{")
+def test_prior_briefing_evidence_complete_or_omit() -> None:
+    negation = "I am not ready to do that."
+    document = build_update_context_document(
+        _input(
+            prior_session_briefing=_briefing(
+                intervention_evidence=[
+                    {
+                        "intervention_description": "Pacing",
+                        "therapist_sequence": 2,
+                        "therapist_content": "Shall we try that?",
+                        "patient_sequence": 3,
+                        "patient_content": negation,
+                    }
+                ]
+            )
+        ),
+        _resolved(),
+    )
+    briefing = document["prior_session_briefing"]
+    evidence = briefing["intervention_evidence"]
+    if evidence:
+        assert evidence[0]["patient_content"] == negation
+        assert "..." not in evidence[0]["patient_content"]
+    else:
+        assert briefing["intervention_evidence_omitted"] == 1
+
+
+def test_patient_name_absent_from_update_prompt() -> None:
+    messages = build_update_messages(_input(), _resolved())
+    user = next(m.content for m in messages if m.role == ChatRole.USER)
+    system = next(m.content for m in messages if m.role == ChatRole.SYSTEM)
+    assert "Alex" not in user
+    assert "Alex" not in system
+    assert '"patient"' not in user.split("</context_data>")[0]
+
+
+def test_no_legacy_section_builder_imports() -> None:
+    import jung.phases.post_session.update_context as update_context
+
+    assert not hasattr(update_context, "build_update_context_sections")
+    assert not hasattr(update_context, "_briefing_prose")

@@ -41,6 +41,28 @@ def test_empty_patch_rejects_null_grounded_turns() -> None:
         )
 
 
+def test_empty_patch_rejects_duplicate_stored_message_ids() -> None:
+    message_id = uuid4()
+    with pytest.raises(ValueError, match="duplicate grounded patient source message"):
+        merge_derived_profile(
+            {
+                "grounded_patient_turns": [
+                    {
+                        "source_message_id": str(message_id),
+                        "source_sequence": 1,
+                        "content": "first",
+                    },
+                    {
+                        "source_message_id": str(message_id),
+                        "source_sequence": 2,
+                        "content": "duplicate id",
+                    },
+                ]
+            },
+            DerivedProfilePatch(),
+        )
+
+
 def test_merge_dedups_by_source_message_id_with_stable_order() -> None:
     first_id = uuid4()
     second_id = uuid4()

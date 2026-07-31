@@ -63,11 +63,16 @@ def _validate_patient_turn_citation(
 def validate_session_analysis(
     result: SessionAnalysisResult,
     transcript: tuple[TranscriptTurn, ...],
+    *,
+    allowed_sequences: frozenset[int] | None = None,
 ) -> SessionAnalysisResult:
     """Validate sequence-only analysis citations.
 
     Raises ``ValueError`` for model-correctable semantic failures. Transcript
     structural defects are rejected by ``PostSessionInput`` before this runs.
+
+    When ``allowed_sequences`` is provided, citations must refer only to turns
+    that were visible in the analysis prompt projection.
     """
     turns_by_sequence = {turn.sequence: turn for turn in transcript}
     has_assistant = any(turn.role == "assistant" for turn in transcript)
@@ -78,8 +83,17 @@ def validate_session_analysis(
             "has no assistant turn"
         )
 
+    def _assert_visible(sequence: int, *, label: str) -> None:
+        if allowed_sequences is not None and sequence not in allowed_sequences:
+            raise ValueError(
+                f"{label} {sequence} was not visible in the analysis prompt"
+            )
+
     seen_therapist_sequences: set[int] = set()
     for item in result.intervention_citations:
+        _assert_visible(item.therapist_sequence, label="therapist_sequence")
+        if item.patient_sequence is not None:
+            _assert_visible(item.patient_sequence, label="patient_sequence")
         _validate_intervention_citation(item, turns_by_sequence)
         if item.therapist_sequence in seen_therapist_sequences:
             raise ValueError(
@@ -89,6 +103,7 @@ def validate_session_analysis(
 
     seen_patient_sequences: set[int] = set()
     for item in result.patient_turn_citations:
+        _assert_visible(item.patient_sequence, label="patient_sequence")
         _validate_patient_turn_citation(item, turns_by_sequence)
         if item.patient_sequence in seen_patient_sequences:
             raise ValueError(

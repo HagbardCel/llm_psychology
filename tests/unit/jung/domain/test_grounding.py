@@ -74,3 +74,45 @@ def test_grounded_patient_turn_rejects_empty() -> None:
 def test_parse_malformed_item_raises() -> None:
     with pytest.raises(ValidationError):
         parse_grounded_patient_turns({"grounded_patient_turns": ["not-an-object"]})
+
+
+def test_parse_rejects_duplicate_source_message_ids() -> None:
+    message_id = uuid4()
+    with pytest.raises(ValueError, match="duplicate grounded patient source message"):
+        parse_grounded_patient_turns(
+            {
+                "grounded_patient_turns": [
+                    {
+                        "source_message_id": str(message_id),
+                        "source_sequence": 1,
+                        "content": "first",
+                    },
+                    {
+                        "source_message_id": str(message_id),
+                        "source_sequence": 2,
+                        "content": "second",
+                    },
+                ]
+            }
+        )
+
+
+def test_parse_allows_repeated_session_local_sequences() -> None:
+    turns = parse_grounded_patient_turns(
+        {
+            "grounded_patient_turns": [
+                {
+                    "source_message_id": str(uuid4()),
+                    "source_sequence": 2,
+                    "content": "from session one",
+                },
+                {
+                    "source_message_id": str(uuid4()),
+                    "source_sequence": 2,
+                    "content": "from session two",
+                },
+            ]
+        }
+    )
+    assert len(turns) == 2
+    assert turns[0].source_sequence == turns[1].source_sequence

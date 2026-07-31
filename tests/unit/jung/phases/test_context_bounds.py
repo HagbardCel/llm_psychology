@@ -132,7 +132,9 @@ def test_all_post_session_style_instructions_fit_reserved_budget() -> None:
 def test_all_therapy_style_instructions_fit_minimum_production_budget() -> None:
     limits = TherapyContextLimits()
     # Style and plan share the core body budget; style gets half.
-    min_style_budget = min(limits.max_section_chars, limits.max_total_chars // 2)
+    min_style_budget = min(
+        limits.max_section_chars, limits.max_historical_context_chars // 2
+    )
     for style in load_styles().values():
         instructions = style.therapist_instructions
         assert len(instructions) <= min_style_budget

@@ -182,13 +182,13 @@ def test_provider_citation_schema_has_no_content_quote_or_status() -> None:
     assert "quote" not in patient_properties
 
 
-def test_computed_status_absent_from_intervention_evidence_validation_schema() -> None:
+def test_status_present_in_intervention_evidence_validation_schema() -> None:
     schema = InterventionEvidence.model_json_schema(mode="validation")
     properties = schema.get("properties", {})
-    assert "status" not in properties
+    assert "status" in properties
 
 
-def test_computed_status_is_response_cited_not_responded() -> None:
+def test_status_is_response_cited_not_responded() -> None:
     evidence = InterventionEvidence(
         intervention_description="Exploratory questioning",
         therapist_sequence=2,

@@ -37,11 +37,20 @@ def parse_grounded_patient_turns(
     """Strictly parse stored grounded patient turns from a profile mapping.
 
     Missing key yields an empty tuple. A present key that is not a list
-    (including explicit ``null``) raises ``ValueError``.
+    (including explicit ``null``) raises ``ValueError``. Duplicate
+    ``source_message_id`` values are rejected.
     """
     if _GROUNDED_TURNS_KEY not in profile:
         return ()
     value = profile[_GROUNDED_TURNS_KEY]
     if not isinstance(value, list):
         raise ValueError("grounded_patient_turns must be a list")
-    return tuple(GroundedPatientTurn.model_validate(item) for item in value)
+    turns = tuple(GroundedPatientTurn.model_validate(item) for item in value)
+    seen: set[UUID] = set()
+    for turn in turns:
+        if turn.source_message_id in seen:
+            raise ValueError(
+                f"duplicate grounded patient source message: {turn.source_message_id}"
+            )
+        seen.add(turn.source_message_id)
+    return turns

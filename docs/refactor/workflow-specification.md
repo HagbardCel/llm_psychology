@@ -150,7 +150,7 @@ The same patient turn may intentionally appear both as intervention `patient_con
 
 Malformed stored `grounded_patient_turns` (including explicit `null`) fail fast as an internal application error during post-session merge or therapy context assembly. They are not LLM-correctable and are not silently omitted.
 
-Lifetime lifetime accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
+Lifetime accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
 
 ### Failure behavior
 
