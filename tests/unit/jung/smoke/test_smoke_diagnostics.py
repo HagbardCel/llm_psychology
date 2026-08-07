@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from jung.llm.gateway import LLMTask
+from jung.llm.openai_compatible import ProviderAttemptEvent
 from tests.smoke.jung.smoke_env import (
     parse_bool_env,
     parse_completion_caps,
@@ -14,8 +15,11 @@ from tests.smoke.jung.smoke_env import (
     parse_smoke_extra_body,
 )
 from tests.smoke.jung.smoke_evidence import (
+    ProviderAttemptCollector,
+    ProviderAttemptSnapshot,
     SmokeEvidenceCollector,
     SmokePathResult,
+    aggregate_provider_attempts,
     render_smoke_evidence,
 )
 from tests.smoke.jung.smoke_path import SmokeOperationResult, run_smoke_path
@@ -145,7 +149,7 @@ def test_evidence_serialization_includes_path_results() -> None:
     assert payload["effective_completion_caps"]["post_session_update"] == 1800
     assert payload["post_session"]["acceptance_passed"] is False
     assert "calls" not in payload
-    assert "provider_attempts" not in payload
+    assert payload["provider_attempts_by_task"] == {}
     assert "instrumentation_errors" not in payload
 
 
@@ -202,6 +206,7 @@ def test_run_smoke_path_strict_vs_diagnostic_acceptance(
                     name="post_session",
                     budget_seconds=budget,
                     operation=operation,
+                    provider_attempts_snapshot=lambda: {},
                 )
         else:
             result = await run_smoke_path(
@@ -209,6 +214,7 @@ def test_run_smoke_path_strict_vs_diagnostic_acceptance(
                 name="post_session",
                 budget_seconds=budget,
                 operation=operation,
+                provider_attempts_snapshot=lambda: {},
             )
             assert result == "ok"
 
@@ -237,6 +243,7 @@ def test_run_smoke_path_inner_timeout_error_is_not_path_timeout(
                 name="post_session",
                 budget_seconds=5.0,
                 operation=operation,
+                provider_attempts_snapshot=lambda: {},
             )
 
         assert collector.post_session is not None
@@ -244,3 +251,130 @@ def test_run_smoke_path_inner_timeout_error_is_not_path_timeout(
         assert collector.post_session.error_type == "TimeoutError"
 
     asyncio.run(_run())
+
+
+def _attempt(
+    *,
+    task: str,
+    attempt: str = "initial",
+    correction_trigger: str | None = None,
+) -> ProviderAttemptEvent:
+    return ProviderAttemptEvent(
+        task=task,
+        attempt=attempt,  # type: ignore[arg-type]
+        status="ok",
+        latency_seconds=0.1,
+        prompt_chars=10,
+        response_format_chars=None,
+        response_chars=20,
+        timeout_seconds=30.0,
+        max_completion_tokens=None,
+        correction_trigger=correction_trigger,
+    )
+
+
+def test_provider_attempt_snapshots_survive_failure_and_mutation() -> None:
+    async def _run() -> None:
+        collector = SmokeEvidenceCollector(
+            server="llama.cpp",
+            base_url="http://localhost/v1",
+            model="test-model",
+        )
+        attempts = ProviderAttemptCollector()
+        attempts.observe(_attempt(task="therapy_response"))
+
+        async def operation() -> SmokeOperationResult[str]:
+            attempts.observe(
+                _attempt(
+                    task="therapy_response",
+                    attempt="correction",
+                    correction_trigger="schema",
+                )
+            )
+            raise RuntimeError("provider failed")
+
+        with pytest.raises(RuntimeError, match="provider failed"):
+            await run_smoke_path(
+                collector=collector,
+                name="therapy",
+                budget_seconds=5.0,
+                operation=operation,
+                provider_attempts_snapshot=attempts.snapshot,
+            )
+
+        path = collector.therapy
+        assert path is not None
+        snap = path.provider_attempts_by_task["therapy_response"]
+        assert snap.provider_attempt_count == 2
+        assert snap.correction_count == 1
+        assert snap.correction_triggers == ("schema",)
+
+        attempts.observe(
+            _attempt(
+                task="therapy_response",
+                attempt="correction",
+                correction_trigger="later",
+            )
+        )
+        assert (
+            path.provider_attempts_by_task["therapy_response"].provider_attempt_count
+            == 2
+        )
+        assert path.provider_attempts_by_task[
+            "therapy_response"
+        ].correction_triggers == ("schema",)
+
+    asyncio.run(_run())
+
+
+def test_aggregate_provider_attempts_sums_all_four_tasks() -> None:
+    therapy = SmokePathResult(
+        success=True,
+        status="success",
+        provider_attempts_by_task={
+            "therapy_response": ProviderAttemptSnapshot(1, 0, ()),
+        },
+    )
+    assessment = SmokePathResult(
+        success=True,
+        status="success",
+        provider_attempts_by_task={
+            "assessment": ProviderAttemptSnapshot(2, 1, ("schema",)),
+        },
+    )
+    post_session = SmokePathResult(
+        success=True,
+        status="success",
+        provider_attempts_by_task={
+            "post_session_analysis": ProviderAttemptSnapshot(3, 0, ()),
+            "post_session_update": ProviderAttemptSnapshot(4, 2, ("a", "b")),
+            "assessment": ProviderAttemptSnapshot(1, 0, ()),
+        },
+    )
+    aggregated = aggregate_provider_attempts((therapy, assessment, post_session))
+    assert set(aggregated) == {
+        "therapy_response",
+        "assessment",
+        "post_session_analysis",
+        "post_session_update",
+    }
+    assert aggregated["assessment"].provider_attempt_count == 3
+    assert aggregated["assessment"].correction_count == 1
+    assert aggregated["assessment"].correction_triggers == ("schema",)
+    assert aggregated["post_session_update"].correction_triggers == ("a", "b")
+
+    collector = SmokeEvidenceCollector(
+        server="llama.cpp",
+        base_url="http://localhost/v1",
+        model="test-model",
+        therapy=therapy,
+        assessment=assessment,
+        post_session=post_session,
+    )
+    payload = collector.to_payload()
+    assert set(payload["provider_attempts_by_task"]) == {
+        "therapy_response",
+        "assessment",
+        "post_session_analysis",
+        "post_session_update",
+    }

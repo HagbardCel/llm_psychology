@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+
 from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import ChatRole
@@ -19,11 +21,31 @@ from jung.phases.post_session.prompts import build_update_messages
 from jung.phases.post_session.update_context import (
     _UPDATE_USER_MESSAGE_LIMIT,
     PostSessionUpdateContext,
-    build_update_context_document,
     build_update_user_message,
+    enrich_analysis_without_evicting_evidence,
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
+
+
+def _parse_update_context_document(message: str) -> dict[str, object]:
+    import re
+
+    match = re.search(
+        r"<context_data>\n(.*)\n</context_data>",
+        message,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise ValueError("update user message missing context_data block")
+    return json.loads(match.group(1))
+
+
+def build_update_context_document(
+    input: PostSessionInput,
+    resolved: ResolvedSessionAnalysis,
+) -> dict[str, object]:
+    return _parse_update_context_document(build_update_user_message(input, resolved))
 
 
 def _plan(**overrides: object) -> Plan:
@@ -457,3 +479,117 @@ def test_no_legacy_section_builder_imports() -> None:
 
     assert not hasattr(update_context, "build_update_context_sections")
     assert not hasattr(update_context, "_briefing_prose")
+
+
+def test_enrich_analysis_rejects_reserved_keys() -> None:
+    baseline = {
+        "summary": "stable summary",
+        "intervention_evidence": [{"therapist_sequence": 1}],
+        "intervention_evidence_omitted": 0,
+        "patient_turns": [{"source_sequence": 2}],
+        "patient_turns_omitted": 0,
+    }
+    with pytest.raises(ValueError, match="reserved fields"):
+        enrich_analysis_without_evicting_evidence(
+            baseline,
+            interpretive_candidates=(
+                {
+                    "key_themes": ["sleep"],
+                    "intervention_evidence": [],
+                },
+            ),
+            fits=lambda _doc: True,
+        )
+
+
+def test_enrich_analysis_does_not_evict_evidence_for_rich_interpretation() -> None:
+    baseline = {
+        "summary": "stable summary",
+        "intervention_evidence": [{"id": "a"}, {"id": "b"}],
+        "intervention_evidence_omitted": 0,
+        "patient_turns": [{"id": "p1"}, {"id": "p2"}],
+        "patient_turns_omitted": 0,
+    }
+    rich = {
+        "key_themes": ["a", "b", "c"],
+        "dominant_affects": ["worry"],
+    }
+
+    def fits(document: dict[str, object]) -> bool:
+        evidence = document["intervention_evidence"]
+        themes = document.get("key_themes", [])
+        assert isinstance(evidence, list)
+        assert isinstance(themes, list)
+        # Rich interpretation (3+ themes) cannot coexist with both evidence atoms.
+        if len(themes) >= 3 and len(evidence) >= 2:
+            return False
+        return True
+
+    result = enrich_analysis_without_evicting_evidence(
+        baseline,
+        interpretive_candidates=(rich, {"key_themes": ["a"]}),
+        fits=fits,
+    )
+    assert result["intervention_evidence"] == baseline["intervention_evidence"]
+    assert result["patient_turns"] == baseline["patient_turns"]
+    assert result["intervention_evidence_omitted"] == 0
+    assert result["patient_turns_omitted"] == 0
+    assert result["summary"] == "stable summary"
+    assert result["key_themes"] == ["a"]
+
+
+def test_rich_plan_does_not_starve_evidence() -> None:
+    from jung.phases.context_projection import (
+        enrich_plan_projection,
+        minimal_plan_projection,
+    )
+
+    plan = _plan(
+        focus="x" * 200,
+        themes=tuple(f"theme-{i}" for i in range(10)),
+        goals=tuple(f"goal-{i}" for i in range(10)),
+        planned_interventions=tuple(f"iv-{i}" for i in range(10)),
+        revision_recommendations=tuple(f"rev-{i}" for i in range(10)),
+        current_progress="y" * 200,
+    )
+    minimal = minimal_plan_projection(plan)
+    evidence = {
+        "summary": "summary",
+        "intervention_evidence": [{"id": "a"}, {"id": "b"}],
+        "intervention_evidence_omitted": 0,
+        "patient_turns": [],
+        "patient_turns_omitted": 0,
+    }
+
+    def fits(plan_doc: dict[str, object]) -> bool:
+        themes = plan_doc.get("themes", [])
+        assert isinstance(themes, list)
+        # Rich plan (any themes retained) cannot coexist with two evidence atoms.
+        if themes and len(evidence["intervention_evidence"]) >= 2:
+            return False
+        return True
+
+    enriched_plan = enrich_plan_projection(plan, baseline=minimal, fits=fits)
+    assert enriched_plan["themes"] == []
+    assert set(enriched_plan) == {
+        "focus",
+        "themes",
+        "goals",
+        "current_progress",
+        "planned_interventions",
+        "revision_recommendations",
+    }
+
+
+def test_update_builder_stays_within_limit_and_keeps_plan_keys() -> None:
+    document = build_update_context_document(_input(), _resolved())
+    message = build_update_user_message(_input(), _resolved())
+    assert len(message) <= _UPDATE_USER_MESSAGE_LIMIT
+    assert set(document["current_plan"]) == {
+        "focus",
+        "themes",
+        "goals",
+        "current_progress",
+        "planned_interventions",
+        "revision_recommendations",
+    }

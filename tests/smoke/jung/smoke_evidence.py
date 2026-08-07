@@ -3,14 +3,50 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from jung.llm.openai_compatible import ProviderAttemptEvent
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptSnapshot:
+    provider_attempt_count: int
+    correction_count: int
+    correction_triggers: tuple[str, ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "provider_attempt_count": self.provider_attempt_count,
+            "correction_count": self.correction_count,
+            "correction_triggers": list(self.correction_triggers),
+        }
+
+
+class ProviderAttemptCollector:
+    """Mutable per-path attempt observer with immutable snapshots."""
+
+    def __init__(self) -> None:
+        self._summaries: dict[str, _MutableSummary] = {}
+
+    def observe(self, event: ProviderAttemptEvent) -> None:
+        summary = self._summaries.setdefault(event.task, _MutableSummary())
+        summary.observe(event)
+
+    def snapshot(self) -> dict[str, ProviderAttemptSnapshot]:
+        return {
+            task: ProviderAttemptSnapshot(
+                provider_attempt_count=value.provider_attempt_count,
+                correction_count=value.correction_count,
+                correction_triggers=tuple(value.correction_triggers),
+            )
+            for task, value in self._summaries.items()
+        }
+
+
 @dataclass
-class ProviderAttemptSummary:
+class _MutableSummary:
     provider_attempt_count: int = 0
     correction_count: int = 0
     correction_triggers: list[str] = field(default_factory=list)
@@ -22,13 +58,6 @@ class ProviderAttemptSummary:
             if event.correction_trigger is not None:
                 self.correction_triggers.append(event.correction_trigger)
 
-    def to_payload(self) -> dict[str, Any]:
-        return {
-            "provider_attempt_count": self.provider_attempt_count,
-            "correction_count": self.correction_count,
-            "correction_triggers": list(self.correction_triggers),
-        }
-
 
 @dataclass
 class SmokePathResult:
@@ -39,12 +68,35 @@ class SmokePathResult:
     acceptance_passed: bool | None = None
     acceptance_max_seconds: float | None = None
     error_type: str | None = None
-    provider_attempts: ProviderAttemptSummary | None = None
+    provider_attempts_by_task: Mapping[str, ProviderAttemptSnapshot] = field(
+        default_factory=dict
+    )
     result_shape_valid: bool | None = None
     evidence_complete: bool | None = None
     negation_turn_selected: bool | None = None
     negation_invariant_evaluated: bool | None = None
     negation_invariant_passed: bool | None = None
+
+
+def aggregate_provider_attempts(
+    path_results: Sequence[SmokePathResult],
+) -> dict[str, ProviderAttemptSnapshot]:
+    counts: dict[str, int] = {}
+    corrections: dict[str, int] = {}
+    triggers: dict[str, list[str]] = {}
+    for path in path_results:
+        for task, snapshot in path.provider_attempts_by_task.items():
+            counts[task] = counts.get(task, 0) + snapshot.provider_attempt_count
+            corrections[task] = corrections.get(task, 0) + snapshot.correction_count
+            triggers.setdefault(task, []).extend(snapshot.correction_triggers)
+    return {
+        task: ProviderAttemptSnapshot(
+            provider_attempt_count=counts[task],
+            correction_count=corrections[task],
+            correction_triggers=tuple(triggers[task]),
+        )
+        for task in counts
+    }
 
 
 @dataclass
@@ -62,20 +114,13 @@ class SmokeEvidenceCollector:
     therapy: SmokePathResult | None = None
     assessment: SmokePathResult | None = None
     post_session: SmokePathResult | None = None
-    provider_attempts_by_task: dict[str, ProviderAttemptSummary] = field(
-        default_factory=dict
-    )
-
-    def reset_provider_attempts(self) -> None:
-        self.provider_attempts_by_task = {}
-
-    def observe_provider_attempt(self, event: ProviderAttemptEvent) -> None:
-        summary = self.provider_attempts_by_task.setdefault(
-            event.task, ProviderAttemptSummary()
-        )
-        summary.observe(event)
 
     def to_payload(self) -> dict[str, Any]:
+        path_results = [
+            result
+            for result in (self.therapy, self.assessment, self.post_session)
+            if result is not None
+        ]
         payload: dict[str, Any] = {
             "server": self.server,
             "server_version": self.server_version,
@@ -87,8 +132,8 @@ class SmokeEvidenceCollector:
             "request_timeout_seconds": self.request_timeout_seconds,
             "effective_completion_caps": self.effective_completion_caps,
             "provider_attempts_by_task": {
-                task: summary.to_payload()
-                for task, summary in self.provider_attempts_by_task.items()
+                task: snapshot.to_payload()
+                for task, snapshot in aggregate_provider_attempts(path_results).items()
             },
         }
         if self.base_url is not None:
@@ -115,8 +160,11 @@ class SmokeEvidenceCollector:
             entry["acceptance_max_seconds"] = result.acceptance_max_seconds
         if result.error_type is not None:
             entry["error_type"] = result.error_type
-        if result.provider_attempts is not None:
-            entry.update(result.provider_attempts.to_payload())
+        if result.provider_attempts_by_task:
+            entry["provider_attempts_by_task"] = {
+                task: snapshot.to_payload()
+                for task, snapshot in result.provider_attempts_by_task.items()
+            }
         if result.result_shape_valid is not None:
             entry["result_shape_valid"] = result.result_shape_valid
         if result.evidence_complete is not None:

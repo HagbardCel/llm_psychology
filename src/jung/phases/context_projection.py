@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan
 from jung.domain.session_artifacts import InterventionEvidence, SessionBriefing
 from jung.domain.text import normalize_content
-from jung.llm.prompt_context import serialize_context_json
 from jung.phases.context_bounds import bounded_text
 from jung.phases.transcript import TranscriptTurn
 
 _PRIMARY_LANGUAGE_PROJECTION_LIMIT = 80
 _SUMMARY_BASELINE_CHARS = 400
+_MIN_PLAN_TEXT_CHARS = 80
+_MIN_PLAN_ITEM_CHARS = 80
 
 _PLAN_LIST_FIELDS = (
     "themes",
@@ -24,6 +26,20 @@ _PLAN_LIST_FIELDS = (
     "revision_recommendations",
 )
 _REQUIRED_PLAN_LIST_FIELDS = frozenset({"goals", "planned_interventions"})
+_PLAN_KEYS = frozenset(
+    {
+        "focus",
+        "themes",
+        "goals",
+        "current_progress",
+        "planned_interventions",
+        "revision_recommendations",
+    }
+)
+
+
+class ProjectionBudgetError(ValueError):
+    """Raised when a projection cannot fit a caller-owned budget predicate."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,28 +79,46 @@ def _compact_string_list(
     return compacted
 
 
-def compact_plan_document(plan: Plan, *, limit: int) -> dict[str, object]:
-    """Return a structured plan projection that fits within ``limit`` chars.
+def minimal_plan_projection(plan: Plan) -> dict[str, object]:
+    """Return the canonical smallest semantic projection.
 
-    Retains all semantic keys and at least one goal and planned intervention.
-    Raises ``ValueError`` when even the minimal projection exceeds ``limit``.
+    Preserves all plan keys; optional collections may be empty.
     """
-    base = {
-        "focus": plan.focus,
-        "themes": list(plan.themes),
-        "goals": list(plan.goals),
-        "current_progress": plan.current_progress,
-        "planned_interventions": list(plan.planned_interventions),
-        "revision_recommendations": list(plan.revision_recommendations),
+    return {
+        "focus": bounded_text(plan.focus, _MIN_PLAN_TEXT_CHARS),
+        "themes": [],
+        "goals": _compact_string_list(
+            plan.goals,
+            max_items=1,
+            max_item_chars=_MIN_PLAN_ITEM_CHARS,
+            keep_at_least_one=True,
+        ),
+        "current_progress": bounded_text(
+            plan.current_progress,
+            _MIN_PLAN_TEXT_CHARS,
+        ),
+        "planned_interventions": _compact_string_list(
+            plan.planned_interventions,
+            max_items=1,
+            max_item_chars=_MIN_PLAN_ITEM_CHARS,
+            keep_at_least_one=True,
+        ),
+        "revision_recommendations": [],
     }
+
+
+def _iter_rich_plan_candidates(plan: Plan) -> list[dict[str, object]]:
+    """Yield progressively richer plan projections, richest first."""
+    candidates: list[dict[str, object]] = []
     for max_items in range(20, 0, -1):
         for max_item_chars in range(500, 20, -20):
-            candidate = dict(base)
-            candidate["focus"] = bounded_text(plan.focus, max_item_chars)
-            candidate["current_progress"] = bounded_text(
-                plan.current_progress,
-                max_item_chars,
-            )
+            candidate: dict[str, object] = {
+                "focus": bounded_text(plan.focus, max_item_chars),
+                "current_progress": bounded_text(
+                    plan.current_progress,
+                    max_item_chars,
+                ),
+            }
             for field in _PLAN_LIST_FIELDS:
                 candidate[field] = _compact_string_list(
                     getattr(plan, field),
@@ -92,32 +126,35 @@ def compact_plan_document(plan: Plan, *, limit: int) -> dict[str, object]:
                     max_item_chars=max_item_chars,
                     keep_at_least_one=field in _REQUIRED_PLAN_LIST_FIELDS,
                 )
-            if len(serialize_context_json(candidate)) <= limit:
-                return candidate
-    minimal: dict[str, object] = {
-        "focus": bounded_text(plan.focus, 80),
-        "themes": [],
-        "goals": _compact_string_list(
-            plan.goals,
-            max_items=1,
-            max_item_chars=80,
-            keep_at_least_one=True,
-        ),
-        "current_progress": bounded_text(plan.current_progress, 80),
-        "planned_interventions": _compact_string_list(
-            plan.planned_interventions,
-            max_items=1,
-            max_item_chars=80,
-            keep_at_least_one=True,
-        ),
-        "revision_recommendations": [],
-    }
-    rendered = serialize_context_json(minimal)
-    if len(rendered) > limit:
+            candidates.append(candidate)
+    return candidates
+
+
+def enrich_plan_projection(
+    plan: Plan,
+    *,
+    baseline: Mapping[str, object],
+    fits: Callable[[dict[str, object]], bool],
+) -> dict[str, object]:
+    """Return the richest candidate fitting the caller's complete context.
+
+    Precondition: ``fits(dict(baseline))`` is true.
+    Returns ``baseline`` when no richer candidate fits.
+    """
+    baseline_doc = dict(baseline)
+    if set(baseline_doc) != _PLAN_KEYS:
         raise ValueError(
-            f"minimal plan projection exceeds budget: {len(rendered)} > {limit}"
+            "plan enrichment baseline must expose canonical plan keys: "
+            f"{sorted(_PLAN_KEYS)}"
         )
-    return minimal
+    if not fits(baseline_doc):
+        raise ValueError("plan enrichment baseline must already fit")
+
+    best = baseline_doc
+    for candidate in _iter_rich_plan_candidates(plan):
+        if fits(candidate):
+            return candidate
+    return best
 
 
 def intervention_payload(item: InterventionEvidence) -> dict[str, object]:
@@ -298,7 +335,7 @@ def pack_evidence_atoms(
 
     baseline = build_document(())
     if not fits(baseline):
-        raise ValueError("minimal analysis evidence projection does not fit budget")
+        raise ProjectionBudgetError("minimal analysis evidence projection does not fit")
 
     selected_reverse: list[AnalysisEvidenceAtom] = []
     for atom in reversed(atoms):
@@ -310,66 +347,80 @@ def pack_evidence_atoms(
     return build_document(selected)
 
 
+def _validate_transcript_sequences(source: Sequence[TranscriptTurn]) -> None:
+    sequences = [turn.sequence for turn in source]
+    if any(current >= following for current, following in pairwise(sequences)):
+        raise ValueError(
+            "transcript projection input must have unique, "
+            "strictly increasing sequences"
+        )
+
+
 def pack_transcript_turns(
     turns: Sequence[TranscriptTurn],
     *,
     fits: Callable[[dict[str, object]], bool],
     require_two_roles: bool = False,
+    omitted_base: int = 0,
 ) -> PackedProjection:
     """Pack complete transcript turns newest-first.
 
-    When ``require_two_roles`` is true, ensure at least one user and one
-    assistant turn remain, attempting to recover a missing role if needed.
+    When ``require_two_roles`` is true, seed with the newest fitting
+    user/assistant pair, then add remaining turns newest-first.
     """
+    if omitted_base < 0:
+        raise ValueError("omitted_base must be non-negative")
+
     source = tuple(turns)
-    total = len(source)
+    _validate_transcript_sequences(source)
 
     def build_document(
         selected: Sequence[TranscriptTurn],
     ) -> dict[str, object]:
         return {
             "transcript": [transcript_turn_payload(turn) for turn in selected],
-            "transcript_turns_omitted": total - len(selected),
+            "transcript_turns_omitted": (omitted_base + len(source) - len(selected)),
         }
 
     empty = build_document(())
     if not fits(empty):
-        raise ValueError(
-            "analysis context budget cannot fit an empty transcript projection"
-        )
-
-    selected_reverse: list[TranscriptTurn] = []
-    for turn in reversed(source):
-        candidate = tuple(reversed([*selected_reverse, turn]))
-        if fits(build_document(candidate)):
-            selected_reverse.append(turn)
-
-    selected = list(reversed(selected_reverse))
-    selected_sequences = {turn.sequence for turn in selected}
+        raise ProjectionBudgetError("empty transcript projection does not fit")
 
     if require_two_roles:
-        roles = {turn.role for turn in selected}
-        for needed_role in ("user", "assistant"):
-            if needed_role in roles:
-                continue
-            for turn in reversed(source):
-                if turn.role != needed_role or turn.sequence in selected_sequences:
+        nucleus: tuple[TranscriptTurn, TranscriptTurn] | None = None
+        for newer_index in range(len(source) - 1, -1, -1):
+            newer = source[newer_index]
+            for older_index in range(newer_index - 1, -1, -1):
+                older = source[older_index]
+                if newer.role == older.role:
                     continue
-                candidate = sorted(
-                    [*selected, turn],
-                    key=lambda item: item.sequence,
-                )
+                candidate = (older, newer)
                 if fits(build_document(candidate)):
-                    selected = candidate
-                    selected_sequences.add(turn.sequence)
-                    roles.add(needed_role)
+                    nucleus = candidate
                     break
-        if "user" not in roles or "assistant" not in roles:
-            raise ValueError(
-                "analysis context budget cannot fit a complete conversational exchange"
-            )
+            if nucleus is not None:
+                break
+        if nucleus is None:
+            raise ProjectionBudgetError("no two-role transcript projection fits")
 
-    selected_tuple = tuple(sorted(selected, key=lambda item: item.sequence))
+        selected_sequences = {turn.sequence for turn in nucleus}
+        selected_reverse: list[TranscriptTurn] = list(reversed(nucleus))
+        for turn in reversed(source):
+            if turn.sequence in selected_sequences:
+                continue
+            candidate = tuple(reversed([*selected_reverse, turn]))
+            if fits(build_document(candidate)):
+                selected_reverse.append(turn)
+                selected_sequences.add(turn.sequence)
+        selected_tuple = tuple(sorted(selected_reverse, key=lambda item: item.sequence))
+    else:
+        selected_reverse = []
+        for turn in reversed(source):
+            candidate = tuple(reversed([*selected_reverse, turn]))
+            if fits(build_document(candidate)):
+                selected_reverse.append(turn)
+        selected_tuple = tuple(reversed(selected_reverse))
+
     document = build_document(selected_tuple)
     return PackedProjection(
         document=document,

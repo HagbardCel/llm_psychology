@@ -53,7 +53,7 @@ def _input(**overrides: object) -> TherapyTurnInput:
         "selected_style": load_styles()["cbt"],
         "context_limits": TherapyContextLimits(
             max_transcript_turns=6,
-            max_section_chars=200,
+            max_plan_context_chars=200,
             max_historical_context_chars=1000,
         ),
     }
@@ -109,7 +109,7 @@ def test_message_exceeding_historical_budget_still_present() -> None:
             transcript=(_turn(1, "user", message),),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=200,
+                max_plan_context_chars=200,
                 max_historical_context_chars=1000,
             ),
             session_briefing=_briefing(narrative_handoff="x" * 5000),
@@ -147,7 +147,7 @@ def test_transcript_dedupe_keeps_earlier_identical_user_turn() -> None:
             ),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=2000,
+                max_plan_context_chars=2000,
                 max_historical_context_chars=8000,
             ),
         ),
@@ -171,7 +171,7 @@ def test_opening_historical_context_respects_budget() -> None:
             recent_session_summaries=("s" * 5000,),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=2500,
+                max_plan_context_chars=2500,
                 max_historical_context_chars=1000,
             ),
         ),
@@ -222,7 +222,7 @@ def test_briefing_evidence_not_truncated_in_final_context() -> None:
             ),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=5000,
+                max_plan_context_chars=5000,
                 max_historical_context_chars=8000,
             ),
         ),
@@ -253,7 +253,7 @@ def test_grounded_profile_allowlist_excludes_legacy_keys_and_sequences() -> None
             },
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=5000,
+                max_plan_context_chars=5000,
                 max_historical_context_chars=8000,
             ),
         ),
@@ -285,7 +285,7 @@ def test_malformed_grounded_profile_raises_even_at_zero_budget() -> None:
                 ),
                 context_limits=TherapyContextLimits(
                     max_transcript_turns=6,
-                    max_section_chars=200,
+                    max_plan_context_chars=200,
                     max_historical_context_chars=1000,
                 ),
             ),
@@ -307,7 +307,7 @@ def test_malformed_briefing_raises_even_at_zero_budget() -> None:
                 ),
                 context_limits=TherapyContextLimits(
                     max_transcript_turns=6,
-                    max_section_chars=200,
+                    max_plan_context_chars=200,
                     max_historical_context_chars=1000,
                 ),
             ),
@@ -322,7 +322,7 @@ def test_opening_context_includes_session_briefing() -> None:
             session_briefing=_briefing(narrative_handoff="prior sleep focus"),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=2000,
+                max_plan_context_chars=2000,
                 max_historical_context_chars=8000,
             ),
         ),
@@ -345,7 +345,7 @@ def test_oversized_transcript_omits_complete_turns() -> None:
             ),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
-                max_section_chars=200,
+                max_plan_context_chars=200,
                 max_historical_context_chars=1000,
             ),
         ),
@@ -449,3 +449,88 @@ def test_no_legacy_section_builder_imports() -> None:
         "format_plan_section",
     ):
         assert not hasattr(therapy_context, name)
+
+
+def test_pre_cap_omissions_included_in_transcript_omitted_count() -> None:
+    turns = tuple(
+        _turn(index, "user" if index % 2 else "assistant", f"turn-{index}")
+        for index in range(1, 21)
+    )
+    document = build_untrusted_therapy_document(
+        _input(
+            latest_user_message="brand new",
+            transcript=(*turns, _turn(21, "user", "brand new")),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_plan_context_chars=2000,
+                max_historical_context_chars=12000,
+            ),
+        ),
+        include_current_message=True,
+    )
+    historical = document["historical_context"]
+    # 21 turns, dedupe removes current message → 20 historical; cap keeps 6.
+    assert historical["active_session_transcript_turns_omitted"] == 14
+    assert len(historical["active_session_transcript"]) == 6
+
+
+def test_no_transcript_marker_when_dedupe_leaves_empty_history() -> None:
+    document = build_untrusted_therapy_document(
+        _input(
+            latest_user_message="only message",
+            transcript=(_turn(1, "user", "only message"),),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_plan_context_chars=2000,
+                max_historical_context_chars=8000,
+            ),
+        ),
+        include_current_message=True,
+    )
+    historical = document["historical_context"]
+    assert "active_session_transcript" not in historical
+    assert "active_session_transcript_turns_omitted" not in historical
+
+
+def test_plan_enrichment_may_omit_all_transcript_turns_while_keeping_marker() -> None:
+    """Plan detail outranks historical transcript content (documented policy)."""
+    document = build_untrusted_therapy_document(
+        _input(
+            latest_user_message="brand new answer",
+            transcript=(
+                _turn(1, "user", "old " * 500),
+                _turn(2, "assistant", "middle " * 500),
+                _turn(3, "user", "brand new answer"),
+            ),
+            current_plan=_plan(
+                focus="focus " * 40,
+                themes=tuple(f"theme-{i} " * 20 for i in range(8)),
+                goals=tuple(f"goal-{i} " * 20 for i in range(8)),
+                planned_interventions=tuple(f"iv-{i} " * 20 for i in range(8)),
+                revision_recommendations=tuple(f"rev-{i} " * 20 for i in range(8)),
+                current_progress="progress " * 40,
+            ),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_plan_context_chars=2000,
+                max_historical_context_chars=1200,
+            ),
+        ),
+        include_current_message=True,
+    )
+    historical = document["historical_context"]
+    assert "current_plan" in historical
+    assert set(historical["current_plan"]) == {
+        "focus",
+        "themes",
+        "goals",
+        "current_progress",
+        "planned_interventions",
+        "revision_recommendations",
+    }
+    assert historical["active_session_transcript_turns_omitted"] >= 1
+    assert historical.get("active_session_transcript") == [] or isinstance(
+        historical.get("active_session_transcript"), list
+    )
+    assert document["current_patient_message"] == "brand new answer"
+    assert len(serialize_context_json(historical)) <= 1200

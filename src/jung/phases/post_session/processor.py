@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from jung.llm.gateway import ChatMessage, ChatRole, LLMGateway, ModelPolicy
-from jung.llm.prompt_context import UNTRUSTED_CONTEXT_RULE
+from jung.llm.gateway import LLMGateway, ModelPolicy
 from jung.phases.post_session.evidence_validation import (
     resolve_session_analysis,
     validate_session_analysis,
@@ -20,8 +19,7 @@ from jung.phases.post_session.models import (
     SessionBriefing,
 )
 from jung.phases.post_session.prompts import (
-    BASE_ANALYSIS_INSTRUCTIONS,
-    build_analysis_user_message,
+    build_analysis_request,
     build_update_messages,
 )
 
@@ -87,17 +85,6 @@ def _compose_result(
     )
 
 
-def _analysis_system_message(input: PostSessionInput) -> ChatMessage:
-    style_instructions = input.selected_style.post_session_instructions or ""
-    system_parts = [BASE_ANALYSIS_INSTRUCTIONS]
-    if style_instructions.strip():
-        system_parts.append(
-            f"Style reflection instructions:\n{style_instructions.strip()}"
-        )
-    system_parts.append(UNTRUSTED_CONTEXT_RULE)
-    return ChatMessage(role=ChatRole.SYSTEM, content="\n\n".join(system_parts))
-
-
 class PostSessionProcessor:
     def __init__(
         self,
@@ -114,18 +101,15 @@ class PostSessionProcessor:
         if not _has_conversational_content(input):
             return _minimal_session_result(input)
 
-        prompt = build_analysis_user_message(input)
+        request = build_analysis_request(input)
         analysis = await self._gateway.generate_structured(
-            [
-                _analysis_system_message(input),
-                ChatMessage(role=ChatRole.USER, content=prompt.user_message),
-            ],
+            list(request.messages),
             SessionAnalysisResult,
             self._analysis_policy,
             validate_result=lambda result: validate_session_analysis(
                 result,
                 input.transcript,
-                allowed_sequences=prompt.visible_sequences,
+                allowed_sequences=request.visible_sequences,
             ),
         )
         resolved = resolve_session_analysis(analysis, input.transcript)

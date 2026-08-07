@@ -3,45 +3,68 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from jung.domain.grounding import GroundedPatientTurn, parse_grounded_patient_turns
 from jung.domain.session_artifacts import SessionBriefing, parse_session_briefing
 from jung.llm.prompt_context import serialize_context_json
 from jung.phases.context_bounds import bounded_text
 from jung.phases.context_projection import (
-    compact_plan_document,
+    ProjectionBudgetError,
     compact_session_briefing,
+    enrich_plan_projection,
+    minimal_plan_projection,
     pack_grounded_profile_turns,
     pack_transcript_turns,
     project_primary_language,
-    transcript_turn_payload,
 )
 from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
 
 
-def _historical_transcript_source(
+@dataclass(frozen=True, slots=True)
+class HistoricalTranscriptSource:
+    """Deduplicated, optionally capped transcript candidates for packing."""
+
+    candidates: tuple[TranscriptTurn, ...]
+    total_after_deduplication: int
+    pre_omitted: int
+
+
+def prepare_historical_transcript(
     input: TherapyTurnInput,
     *,
     include_current_message: bool,
-) -> tuple[TranscriptTurn, ...]:
-    """Transcript after intentional current-message deduplication."""
-    turns = list(input.transcript[-input.context_limits.max_transcript_turns :])
+) -> HistoricalTranscriptSource:
+    """Prepare historical transcript candidates with pre-cap omission math.
+
+    Order: full transcript → remove separately represented current message →
+    establish source total → retain newest max_transcript_turns candidates.
+    """
+    turns = list(input.transcript)
     latest = input.latest_user_message if include_current_message else None
     if turns and latest and turns[-1].role == "user":
         final_content = normalize_transcript_content(turns[-1].content)
         if final_content == normalize_transcript_content(latest):
             turns = turns[:-1]
-    return tuple(turns)
+    total_after_deduplication = len(turns)
+    cap = input.context_limits.max_transcript_turns
+    candidates = tuple(turns[-cap:])
+    pre_omitted = total_after_deduplication - len(candidates)
+    return HistoricalTranscriptSource(
+        candidates=candidates,
+        total_after_deduplication=total_after_deduplication,
+        pre_omitted=pre_omitted,
+    )
 
 
 def _pack_historical_transcript(
     historical: dict[str, object],
-    source_turns: Sequence[TranscriptTurn],
+    source: HistoricalTranscriptSource,
     *,
     historical_limit: int,
 ) -> None:
-    if not source_turns:
+    if source.total_after_deduplication == 0:
         return
 
     def transcript_fits(transcript_doc: dict[str, object]) -> bool:
@@ -54,12 +77,16 @@ def _pack_historical_transcript(
 
     try:
         packed = pack_transcript_turns(
-            source_turns,
+            source.candidates,
             fits=transcript_fits,
             require_two_roles=False,
+            omitted_base=source.pre_omitted,
         )
-    except ValueError:
-        return
+    except ProjectionBudgetError as exc:
+        raise ValueError(
+            "therapy transcript omission projection exceeds the "
+            f"{historical_limit}-character historical context limit"
+        ) from exc
     historical["active_session_transcript"] = packed.document["transcript"]
     historical["active_session_transcript_turns_omitted"] = packed.document[
         "transcript_turns_omitted"
@@ -133,6 +160,11 @@ def build_untrusted_therapy_document(
     The historical_context subtree is bounded by
     ``max_historical_context_chars``. Patient metadata, the current patient
     message, and the static task (rendered outside this document) are exempt.
+
+    Historical packing priority (intentional product policy):
+    mandatory transcript omission marker → richest fitting plan →
+    actual transcript content. Plan detail may omit every historical turn
+    while the omission marker remains; the current patient message stays exempt.
     """
     limits = input.context_limits
     historical_limit = limits.max_historical_context_chars
@@ -144,24 +176,45 @@ def build_untrusted_therapy_document(
     if input.session_briefing is not None:
         briefing = parse_session_briefing(input.session_briefing)
 
-    plan = compact_plan_document(
-        input.current_plan,
-        limit=min(limits.max_section_chars, historical_limit),
+    transcript_source = prepare_historical_transcript(
+        input,
+        include_current_message=include_current_message,
     )
-    historical: dict[str, object] = {"current_plan": plan}
-    if len(serialize_context_json(historical)) > historical_limit:
-        length = len(serialize_context_json(historical))
+    mandatory_transcript: dict[str, object] = {}
+    if transcript_source.total_after_deduplication:
+        mandatory_transcript = {
+            "active_session_transcript": [],
+            "active_session_transcript_turns_omitted": (
+                transcript_source.total_after_deduplication
+            ),
+        }
+
+    minimal_plan = minimal_plan_projection(input.current_plan)
+
+    def plan_fits(plan_doc: dict[str, object]) -> bool:
+        if len(serialize_context_json(plan_doc)) > limits.max_plan_context_chars:
+            return False
+        candidate = {"current_plan": plan_doc, **mandatory_transcript}
+        return len(serialize_context_json(candidate)) <= historical_limit
+
+    if not plan_fits(minimal_plan):
         raise ValueError(
-            "therapy minimal historical context exceeds budget: "
-            f"{length} > {historical_limit}"
+            "therapy minimal plan and transcript marker exceed the "
+            f"{historical_limit}-character historical context limit"
         )
+
+    # Prefer richest plan that still leaves room for the mandatory transcript
+    # omission marker; transcript *content* is packed afterward and may be empty.
+    plan = enrich_plan_projection(
+        input.current_plan,
+        baseline=minimal_plan,
+        fits=plan_fits,
+    )
+    historical: dict[str, object] = {"current_plan": plan, **mandatory_transcript}
 
     _pack_historical_transcript(
         historical,
-        _historical_transcript_source(
-            input,
-            include_current_message=include_current_message,
-        ),
+        transcript_source,
         historical_limit=historical_limit,
     )
     if briefing is not None:
@@ -197,9 +250,3 @@ def build_untrusted_therapy_document(
     if include_current_message and input.latest_user_message:
         document["current_patient_message"] = input.latest_user_message
     return document
-
-
-def project_transcript_atoms(
-    turns: Sequence[TranscriptTurn],
-) -> list[dict[str, object]]:
-    return [transcript_turn_payload(turn) for turn in turns]

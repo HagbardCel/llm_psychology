@@ -15,7 +15,7 @@ class TherapyContextLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     max_transcript_turns: int = Field(default=12, ge=1)
-    max_section_chars: int = Field(default=2000, ge=200)
+    max_plan_context_chars: int = Field(default=2000, ge=200)
     max_historical_context_chars: int = Field(default=12000, ge=1000)
 
 

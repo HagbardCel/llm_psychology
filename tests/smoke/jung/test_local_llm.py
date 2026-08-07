@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -37,8 +38,18 @@ from tests.smoke.jung.smoke_env import (
     smoke_request_timeout_seconds,
     smoke_strict_acceptance,
 )
-from tests.smoke.jung.smoke_evidence import COLLECTOR
+from tests.smoke.jung.smoke_evidence import COLLECTOR, ProviderAttemptCollector
 from tests.smoke.jung.smoke_path import SmokeOperationResult, run_smoke_path
+
+
+@dataclass
+class SmokeGatewayContext:
+    gateway: ObservedLLMGateway
+    attempts: ProviderAttemptCollector
+    _raw: OpenAICompatibleLLM
+
+    async def aclose(self) -> None:
+        await self._raw.aclose()
 
 
 def _required_smoke_env(name: str) -> str:
@@ -122,7 +133,7 @@ async def gateway(smoke_extra_body: dict[str, object] | None, diagnostic_run):
     _required_smoke_env("LOCAL_LLM_SMOKE_SERVER")
     _required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL")
     _required_smoke_env("LOCAL_LLM_SMOKE_MODEL")
-    COLLECTOR.reset_provider_attempts()
+    attempts = ProviderAttemptCollector()
     config = AdapterConfig(
         base_url=_required_smoke_env("LOCAL_LLM_SMOKE_BASE_URL"),
         api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
@@ -131,23 +142,24 @@ async def gateway(smoke_extra_body: dict[str, object] | None, diagnostic_run):
     raw = OpenAICompatibleLLM(
         config,
         recorder=diagnostic_run,
-        on_provider_attempt=COLLECTOR.observe_provider_attempt,
+        on_provider_attempt=attempts.observe,
     )
-    gateway = ObservedLLMGateway(
+    observed = ObservedLLMGateway(
         raw,
         log_metadata=True,
         recorder=diagnostic_run,
     )
-    yield gateway
-    await raw.aclose()
+    context = SmokeGatewayContext(gateway=observed, attempts=attempts, _raw=raw)
+    yield context
+    await context.aclose()
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_therapy_stream(gateway: ObservedLLMGateway) -> None:
+async def test_smoke_therapy_stream(gateway: SmokeGatewayContext) -> None:
     policies = _policies()
     processor = TherapyProcessor(
-        gateway,
+        gateway.gateway,
         response_policy=policies[LLMTask.THERAPY_RESPONSE],
     )
 
@@ -178,16 +190,17 @@ async def test_smoke_therapy_stream(gateway: ObservedLLMGateway) -> None:
         name="therapy",
         budget_seconds=smoke_path_budget_seconds("therapy"),
         operation=operation,
+        provider_attempts_snapshot=gateway.attempts.snapshot,
     )
     assert result
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_assessment_processor(gateway: ObservedLLMGateway) -> None:
+async def test_smoke_assessment_processor(gateway: SmokeGatewayContext) -> None:
     policies = _policies()
     processor = AssessmentProcessor(
-        gateway,
+        gateway.gateway,
         assessment_policy=policies[LLMTask.ASSESSMENT],
     )
 
@@ -208,15 +221,16 @@ async def test_smoke_assessment_processor(gateway: ObservedLLMGateway) -> None:
         name="assessment",
         budget_seconds=smoke_path_budget_seconds("assessment"),
         operation=operation,
+        provider_attempts_snapshot=gateway.attempts.snapshot,
     )
 
 
 @pytest.mark.real_llm
 @pytest.mark.asyncio
-async def test_smoke_post_session_processor(gateway: ObservedLLMGateway) -> None:
+async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> None:
     policies = _policies()
     processor = PostSessionProcessor(
-        gateway,
+        gateway.gateway,
         analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
         update_policy=policies[LLMTask.POST_SESSION_UPDATE],
     )
@@ -273,6 +287,7 @@ async def test_smoke_post_session_processor(gateway: ObservedLLMGateway) -> None
         name="post_session",
         budget_seconds=smoke_path_budget_seconds("post_session"),
         operation=operation,
+        provider_attempts_snapshot=gateway.attempts.snapshot,
     )
 
     from jung.domain.text import normalize_content
@@ -332,9 +347,6 @@ async def test_smoke_post_session_processor(gateway: ObservedLLMGateway) -> None
     path.negation_turn_selected = negation_turn_selected
     path.negation_invariant_evaluated = negation_invariant_evaluated
     path.negation_invariant_passed = negation_invariant_passed
-    path.provider_attempts = COLLECTOR.provider_attempts_by_task.get(
-        "post_session_analysis"
-    )
 
     if smoke_strict_acceptance():
         if COLLECTOR.server_version is None:

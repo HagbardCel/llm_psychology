@@ -10,7 +10,10 @@ from jung.llm.prompt_context import (
     render_context_user_message,
     rendered_context_user_message_length,
 )
-from jung.phases.context_projection import pack_transcript_turns
+from jung.phases.context_projection import (
+    ProjectionBudgetError,
+    pack_transcript_turns,
+)
 from jung.phases.post_session.models import (
     PostSessionInput,
     ResolvedSessionAnalysis,
@@ -61,25 +64,36 @@ BASE_UPDATE_INSTRUCTIONS = (
 
 
 @dataclass(frozen=True, slots=True)
-class AnalysisPrompt:
-    user_message: str
+class AnalysisRequest:
+    messages: tuple[ChatMessage, ...]
     visible_sequences: frozenset[int]
 
 
-def build_analysis_user_message(input: PostSessionInput) -> AnalysisPrompt:
-    """Build the analysis user message with a visible-sequence allowlist."""
+def build_analysis_request(input: PostSessionInput) -> AnalysisRequest:
+    """Build the complete analysis request with a visible-sequence allowlist."""
 
-    def fits(document: dict[str, object]) -> bool:
+    def fits(transcript_doc: dict[str, object]) -> bool:
+        document = {
+            **transcript_doc,
+            "therapy_style": input.selected_style.name,
+        }
         return (
             rendered_context_user_message_length(document, task=_ANALYSIS_TASK)
             <= _ANALYSIS_USER_MESSAGE_LIMIT
         )
 
-    packed = pack_transcript_turns(
-        input.transcript,
-        fits=fits,
-        require_two_roles=True,
-    )
+    try:
+        packed = pack_transcript_turns(
+            input.transcript,
+            fits=fits,
+            require_two_roles=True,
+        )
+    except ProjectionBudgetError as exc:
+        raise ValueError(
+            "post-session analysis cannot fit a two-role transcript projection "
+            f"within the {_ANALYSIS_USER_MESSAGE_LIMIT}-character user-message limit"
+        ) from exc
+
     document = {
         "transcript": packed.document["transcript"],
         "transcript_turns_omitted": packed.document["transcript_turns_omitted"],
@@ -88,18 +102,14 @@ def build_analysis_user_message(input: PostSessionInput) -> AnalysisPrompt:
     user_message = render_context_user_message(document, task=_ANALYSIS_TASK)
     if len(user_message) > _ANALYSIS_USER_MESSAGE_LIMIT:
         raise ValueError(
-            "post-session analysis user message exceeds budget: "
-            f"{len(user_message)} > {_ANALYSIS_USER_MESSAGE_LIMIT}"
+            "post-session analysis user message exceeds the "
+            f"{_ANALYSIS_USER_MESSAGE_LIMIT}-character user-message limit"
         )
     visible = frozenset(
         int(item["sequence"])  # type: ignore[index, call-overload]
         for item in packed.document["transcript"]  # type: ignore[union-attr]
     )
-    return AnalysisPrompt(user_message=user_message, visible_sequences=visible)
 
-
-def build_analysis_messages(input: PostSessionInput) -> list[ChatMessage]:
-    prompt = build_analysis_user_message(input)
     style_instructions = input.selected_style.post_session_instructions or ""
     system_parts = [BASE_ANALYSIS_INSTRUCTIONS]
     if style_instructions.strip():
@@ -107,10 +117,11 @@ def build_analysis_messages(input: PostSessionInput) -> list[ChatMessage]:
             f"Style reflection instructions:\n{style_instructions.strip()}"
         )
     system_parts.append(UNTRUSTED_CONTEXT_RULE)
-    return [
+    messages = (
         ChatMessage(role=ChatRole.SYSTEM, content="\n\n".join(system_parts)),
-        ChatMessage(role=ChatRole.USER, content=prompt.user_message),
-    ]
+        ChatMessage(role=ChatRole.USER, content=user_message),
+    )
+    return AnalysisRequest(messages=messages, visible_sequences=visible)
 
 
 def build_update_messages(

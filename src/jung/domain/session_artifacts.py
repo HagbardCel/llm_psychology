@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -147,15 +147,3 @@ class SessionBriefing(BaseModel):
 def parse_session_briefing(raw: Mapping[str, Any]) -> SessionBriefing:
     """Strictly validate a persisted briefing mapping."""
     return SessionBriefing.model_validate(raw)
-
-
-def assert_canonical_evidence_order(
-    evidence: Sequence[InterventionEvidence],
-) -> None:
-    """Raise if evidence is not already in canonical order."""
-    canonical = tuple(sorted(evidence, key=_evidence_sort_key))
-    if tuple(evidence) != canonical:
-        raise ValueError(
-            "intervention_evidence must be in canonical order "
-            "(therapist_sequence, patient_sequence or 0)"
-        )
