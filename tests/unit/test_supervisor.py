@@ -50,7 +50,11 @@ async def test_explicit_name_reuse_after_completion() -> None:
         assert supervisor.start(name="work", run=finish) is True
         await asyncio.wait_for(done.wait(), timeout=1.0)
         second_done = asyncio.Event()
-        assert supervisor.start(name="work", run=second_done.set) is True
+
+        async def second_finish() -> None:
+            second_done.set()
+
+        assert supervisor.start(name="work", run=second_finish) is True
         await asyncio.wait_for(second_done.wait(), timeout=1.0)
 
 
@@ -134,21 +138,18 @@ async def test_shutdown_timeout_cancels_owned_task() -> None:
 async def test_start_recovers_name_after_create_task_failure() -> None:
     from unittest.mock import patch
 
-    original = asyncio.TaskGroup.create_task
-    calls = 0
     done = asyncio.Event()
 
-    def flaky_create_task(self, coro, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            coro.close()
-            raise RuntimeError("create failed")
-        return original(self, coro, **kwargs)
+    async def mark_done() -> None:
+        done.set()
+
+    def fail_create_task(self, coro, **kwargs):
+        raise RuntimeError("create failed")
 
     async with TaskSupervisor() as supervisor:
-        with patch.object(asyncio.TaskGroup, "create_task", flaky_create_task):
+        with patch.object(asyncio.TaskGroup, "create_task", fail_create_task):
             with pytest.raises(RuntimeError, match="create failed"):
-                supervisor.start(name="work", run=done.set)
-            assert supervisor.start(name="work", run=done.set) is True
+                supervisor.start(name="work", run=mark_done)
+
+        assert supervisor.start(name="work", run=mark_done) is True
         await asyncio.wait_for(done.wait(), timeout=1.0)
