@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal
@@ -107,10 +107,19 @@ def minimal_plan_projection(plan: Plan) -> dict[str, object]:
     }
 
 
-def _iter_rich_plan_candidates(plan: Plan) -> list[dict[str, object]]:
-    """Yield progressively richer plan projections, richest first."""
-    candidates: list[dict[str, object]] = []
-    for max_items in range(20, 0, -1):
+def _iter_rich_plan_candidates(plan: Plan) -> Iterator[dict[str, object]]:
+    """Yield progressively richer plan projections, richest first.
+
+    Search order is ``max_items`` descending, then ``max_item_chars``
+    descending. Consecutive identical candidates are skipped.
+    """
+    longest_list_len = max(
+        (len(getattr(plan, field)) for field in _PLAN_LIST_FIELDS),
+        default=0,
+    )
+    max_items_start = min(20, max(1, longest_list_len))
+    previous: dict[str, object] | None = None
+    for max_items in range(max_items_start, 0, -1):
         for max_item_chars in range(500, 20, -20):
             candidate: dict[str, object] = {
                 "focus": bounded_text(plan.focus, max_item_chars),
@@ -126,8 +135,10 @@ def _iter_rich_plan_candidates(plan: Plan) -> list[dict[str, object]]:
                     max_item_chars=max_item_chars,
                     keep_at_least_one=field in _REQUIRED_PLAN_LIST_FIELDS,
                 )
-            candidates.append(candidate)
-    return candidates
+            if candidate == previous:
+                continue
+            previous = candidate
+            yield candidate
 
 
 def enrich_plan_projection(

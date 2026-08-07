@@ -10,6 +10,7 @@ import pytest
 from jung.domain.models import Plan
 from jung.phases.context_projection import (
     ProjectionBudgetError,
+    _iter_rich_plan_candidates,
     enrich_plan_projection,
     minimal_plan_projection,
     pack_transcript_turns,
@@ -70,6 +71,25 @@ def test_minimal_and_enriched_plan_preserve_canonical_keys() -> None:
     assert set(enriched) == _PLAN_KEYS
     assert enriched["themes"] == ["worry", "sleep"]
     assert enriched["revision_recommendations"] == ["review goals"]
+
+
+def test_rich_plan_candidates_are_lazy_and_bounded() -> None:
+    plan = _plan()
+    candidates = _iter_rich_plan_candidates(plan)
+    assert iter(candidates) is candidates
+    materialized = list(candidates)
+    assert len(materialized) <= 48
+    assert all(
+        previous != current
+        for previous, current in zip(materialized, materialized[1:], strict=False)
+    )
+    first = materialized[0]
+    assert first["focus"] == plan.focus
+    assert first["current_progress"] == plan.current_progress
+    assert first["themes"] == list(plan.themes)
+    assert first["goals"] == list(plan.goals)
+    assert first["planned_interventions"] == list(plan.planned_interventions)
+    assert first["revision_recommendations"] == list(plan.revision_recommendations)
 
 
 def test_enrich_plan_requires_fitting_baseline() -> None:
