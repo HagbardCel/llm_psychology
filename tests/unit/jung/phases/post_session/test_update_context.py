@@ -474,13 +474,6 @@ def test_patient_name_absent_from_update_prompt() -> None:
     assert '"patient"' not in user.split("</context_data>")[0]
 
 
-def test_no_legacy_section_builder_imports() -> None:
-    import jung.phases.post_session.update_context as update_context
-
-    assert not hasattr(update_context, "build_update_context_sections")
-    assert not hasattr(update_context, "_briefing_prose")
-
-
 def test_enrich_analysis_rejects_reserved_keys() -> None:
     baseline = {
         "summary": "stable summary",

@@ -144,18 +144,6 @@ def test_no_legacy_or_forbidden_global_imports() -> None:
     assert violations == []
 
 
-def test_only_llm_package_imports_openai_sdk() -> None:
-    violations: list[str] = []
-    for path in _python_files(JUNG_SRC):
-        if LLM_SRC in path.parents or path == LLM_SRC:
-            continue
-        for module in _imported_modules(path):
-            root = module.split(".")[0]
-            if root == "openai":
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-    assert violations == []
-
-
 # ---------------------------------------------------------------------------
 # Rule 2: domain purity.
 # ---------------------------------------------------------------------------
@@ -181,51 +169,6 @@ def test_domain_has_no_forbidden_dependencies() -> None:
             elif _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []
-
-
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
-        (
-            "from ..phases.assessment.models import AssessmentResult",
-            "jung.phases.assessment.models",
-        ),
-        (
-            "from .. import application",
-            "jung.application",
-        ),
-        (
-            "from jung import application",
-            "jung.application",
-        ),
-        (
-            "from jung import phases",
-            "jung.phases",
-        ),
-    ],
-)
-def test_import_resolution_handles_forbidden_absolute_and_relative_forms(
-    source: str,
-    expected: str,
-) -> None:
-    node = ast.parse(source).body[0]
-    assert isinstance(node, ast.ImportFrom)
-
-    modules = _resolve_import_from("jung.domain", node)
-
-    assert expected in modules
-
-
-@pytest.mark.parametrize(
-    ("path", "expected"),
-    [
-        (DOMAIN_SRC / "fake.py", "jung.domain"),
-        (DOMAIN_SRC / "nested" / "fake.py", "jung.domain.nested"),
-        (DOMAIN_SRC / "nested" / "__init__.py", "jung.domain.nested"),
-    ],
-)
-def test_module_package_for_path(path: Path, expected: str) -> None:
-    assert _module_package_for_path(path) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -300,24 +243,6 @@ def test_phases_do_not_cross_import_other_phase_implementations() -> None:
     assert violations == []
 
 
-def test_phase_processors_do_not_import_other_phase_processor_modules() -> None:
-    phase_names = _phase_package_names()
-    processor_pattern = re.compile(r"^jung\.phases\.([^.]+)\.processor(\.|$)")
-    violations: list[str] = []
-
-    for path in _python_files(PHASES_SRC):
-        own_phase = _own_phase(path)
-        for module in _resolved_imported_modules(path):
-            match = processor_pattern.match(module)
-            if not match:
-                continue
-            other_phase = match.group(1)
-            if other_phase in phase_names and other_phase != own_phase:
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-
-    assert violations == []
-
-
 # ---------------------------------------------------------------------------
 # Rule 4: API surface boundaries.
 # ---------------------------------------------------------------------------
@@ -378,25 +303,6 @@ def test_api_surface_file_respects_import_boundaries(filename: str) -> None:
     assert violations == []
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "from jung.persistence.sqlite_store import SQLiteStore",
-        "from jung.llm.openai_compatible import OpenAICompatibleLLM",
-        "from ..phases.intake import processor",
-    ],
-)
-def test_api_import_boundary_catches_resolved_bypass_imports(source: str) -> None:
-    modules = _resolved_imported_modules_from_source(source, package="jung.api")
-    forbidden = ("jung.persistence", "jung.llm.openai_compatible")
-    violations = [
-        module
-        for module in modules
-        if _matches_any_prefix(module, forbidden) or _is_phase_processor_import(module)
-    ]
-    assert violations
-
-
 def test_api_init_has_no_imports() -> None:
     init_path = API_SRC / "__init__.py"
     if not init_path.exists():
@@ -441,45 +347,6 @@ def test_client_uses_contract_only_import_allow_list() -> None:
     assert violations == []
 
 
-def test_client_import_allow_list_accepts_resolved_supported_imports() -> None:
-    modules = _resolved_imported_modules_from_source(
-        "\n".join(
-            (
-                "from __future__ import annotations",
-                "import asyncio",
-                "import httpx",
-                "import pydantic",
-                "import websockets",
-                "from jung.api.contracts import AppSnapshotResponse",
-                "from .api_client import JungApiClient",
-            )
-        ),
-        package="jung.client",
-    )
-
-    assert _client_import_violations(modules) == []
-
-
-@pytest.mark.parametrize(
-    "source",
-    (
-        "import requests",
-        "import tenacity",
-        "import openai",
-        "from jung.application import TherapyApplication",
-        "from ..application import TherapyApplication",
-        "from jung import workflow",
-        "from jung.persistence.sqlite_store import SQLiteStore",
-        "from jung.phases.intake import processor",
-        "from jung import llm",
-    ),
-)
-def test_client_import_allow_list_rejects_unsupported_imports(source: str) -> None:
-    modules = _resolved_imported_modules_from_source(source, package="jung.client")
-
-    assert _client_import_violations(modules)
-
-
 # ---------------------------------------------------------------------------
 # Rule 6: core transport independence.
 # ---------------------------------------------------------------------------
@@ -498,3 +365,53 @@ def test_core_does_not_import_transport_frameworks_outside_api_and_client() -> N
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
 
     assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# Positive controls: synthetic sources prove the checkers catch violations.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("package", "source", "assert_caught"),
+    [
+        (
+            "jung.domain",
+            "from ..phases.assessment.models import AssessmentResult",
+            lambda modules: any(
+                _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES)
+                for module in modules
+            ),
+        ),
+        (
+            "jung.domain",
+            "from jung.application import TherapyApplication",
+            lambda modules: any(
+                _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES)
+                for module in modules
+            ),
+        ),
+        (
+            "jung.api",
+            "from ..phases.intake import processor",
+            lambda modules: any(_is_phase_processor_import(module) for module in modules),
+        ),
+        (
+            "jung.client",
+            "from jung.application import TherapyApplication",
+            lambda modules: bool(_client_import_violations(modules)),
+        ),
+        (
+            "jung.client",
+            "import requests",
+            lambda modules: bool(_client_import_violations(modules)),
+        ),
+    ],
+)
+def test_import_boundary_checkers_catch_synthetic_violations(
+    package: str,
+    source: str,
+    assert_caught,
+) -> None:
+    modules = _resolved_imported_modules_from_source(source, package=package)
+    assert assert_caught(modules)

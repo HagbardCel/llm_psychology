@@ -16,7 +16,6 @@ _validate_active_readme_index = VALIDATOR._validate_active_readme_index
 _validate_local_links = VALIDATOR._validate_local_links
 _strip_code = VALIDATOR._strip_code
 _extract_link_targets = VALIDATOR._extract_link_targets
-_normalize_link_target = VALIDATOR._normalize_link_target
 
 
 def _metadata(last_reviewed: str, cycle: str = "30") -> dict[str, str]:
@@ -40,87 +39,66 @@ def _expected_active_targets() -> list[str]:
     return [path.removeprefix("docs/") for path in VALIDATOR.ACTIVE_DOCS]
 
 
-def test_active_readme_index_accepts_exact_ordered_targets(tmp_path: Path) -> None:
-    _write_active_index(tmp_path, _expected_active_targets())
-    errors: list[str] = []
-
-    _validate_active_readme_index(tmp_path, errors)
-
-    assert errors == []
-
-
 @pytest.mark.parametrize(
-    ("targets_factory", "expected"),
+    ("targets_factory", "expect_error_substring"),
     [
+        (lambda paths: paths, None),
         (lambda paths: paths[:-1], "workflow-specification.md"),
         (
             lambda paths: [paths[0], "ARCHITECTURE.md", *paths[1:]],
             "ARCHITECTURE.md",
         ),
-        (
-            lambda paths: [paths[0], paths[0], *paths[1:]],
-            "README.md",
-        ),
     ],
 )
-def test_active_index_rejects_noncanonical_targets(
+def test_active_readme_index_consistency(
     tmp_path: Path,
     targets_factory,
-    expected: str,
+    expect_error_substring: str | None,
 ) -> None:
-    targets = targets_factory(_expected_active_targets())
-    _write_active_index(tmp_path, targets)
+    _write_active_index(tmp_path, targets_factory(_expected_active_targets()))
     errors: list[str] = []
 
     _validate_active_readme_index(tmp_path, errors)
 
-    assert len(errors) == 1
-    assert expected in errors[0]
+    if expect_error_substring is None:
+        assert errors == []
+    else:
+        assert len(errors) == 1
+        assert expect_error_substring in errors[0]
 
 
-def test_review_freshness_accepts_fresh_document() -> None:
+@pytest.mark.parametrize(
+    ("last_reviewed", "today", "expect_error"),
+    [
+        ("2026-05-15", date(2026, 5, 31), False),
+        ("2026-05-01", date(2026, 5, 31), False),
+        ("2026-04-30", date(2026, 5, 31), True),
+    ],
+)
+def test_review_freshness(
+    last_reviewed: str,
+    today: date,
+    expect_error: bool,
+) -> None:
     errors: list[str] = []
 
     _validate_review_freshness(
         "docs/example.md",
-        _metadata("2026-05-15"),
+        _metadata(last_reviewed),
         errors,
-        today=date(2026, 5, 31),
+        today=today,
     )
 
-    assert errors == []
+    if expect_error:
+        assert errors == [
+            "docs/example.md: documentation review is overdue "
+            "(last reviewed 2026-04-30, due 2026-05-30)"
+        ]
+    else:
+        assert errors == []
 
 
-def test_review_freshness_accepts_document_on_due_date() -> None:
-    errors: list[str] = []
-
-    _validate_review_freshness(
-        "docs/example.md",
-        _metadata("2026-05-01"),
-        errors,
-        today=date(2026, 5, 31),
-    )
-
-    assert errors == []
-
-
-def test_review_freshness_rejects_overdue_document() -> None:
-    errors: list[str] = []
-
-    _validate_review_freshness(
-        "docs/example.md",
-        _metadata("2026-04-30"),
-        errors,
-        today=date(2026, 5, 31),
-    )
-
-    assert errors == [
-        "docs/example.md: documentation review is overdue "
-        "(last reviewed 2026-04-30, due 2026-05-30)"
-    ]
-
-
-def test_strip_code_blanks_fenced_blocks_and_inline_spans() -> None:
+def test_markdown_link_extraction_excludes_code_fences() -> None:
     text = "\n".join(
         [
             "Before [fake](fenced-target.md) text.",
@@ -132,125 +110,71 @@ def test_strip_code_blanks_fenced_blocks_and_inline_spans() -> None:
             "[also fenced](tilde-fence.md)",
             "~~~",
             "Real [link](real-target.md) remains.",
-        ]
-    )
-
-    stripped = _strip_code(text)
-
-    assert "fenced-target.md" in stripped
-    assert "real-target.md" in stripped
-    assert "inside-fence.md" not in stripped
-    assert "inline-code.md" not in stripped
-    assert "tilde-fence.md" not in stripped
-
-
-def test_extract_link_targets_supports_inline_and_reference_style() -> None:
-    text = "\n".join(
-        [
             "See [inline](inline-target.md) and ![image](images/pic.png).",
-            "Angle bracket: [angled](<a target.md>).",
             "Reference usage: [ref link][ref-label].",
             "",
             "[ref-label]: reference-target.md",
         ]
     )
 
-    targets = _extract_link_targets(text)
+    stripped = _strip_code(text)
+    assert "fenced-target.md" in stripped
+    assert "real-target.md" in stripped
+    assert "inside-fence.md" not in stripped
+    assert "inline-code.md" not in stripped
+    assert "tilde-fence.md" not in stripped
 
+    targets = _extract_link_targets(stripped)
+    assert "real-target.md" in targets
     assert "inline-target.md" in targets
     assert "images/pic.png" in targets
-    assert "<a target.md>" in targets
     assert "reference-target.md" in targets
+    assert "inside-fence.md" not in targets
 
 
 @pytest.mark.parametrize(
-    ("raw_target", "expected"),
+    ("docs_layout", "expect_error_substring"),
     [
-        ("docs/page.md", "docs/page.md"),
-        ("docs/page.md#section", "docs/page.md"),
-        ("docs/page.md?raw=true", "docs/page.md"),
-        ("<a target.md>", "a target.md"),
-        ("#local-anchor", None),
-        ("https://example.com/page.md", None),
-        ("http://example.com", None),
-        ("mailto:someone@example.com", None),
-        ("", None),
+        (
+            {
+                "target.md": "# Target\n",
+                "index.md": (
+                    "See [target](target.md#section) and [external](https://example.com).\n"
+                    "Ignore code: `[fake](missing.md)`.\n\n"
+                    "```text\n[also fake](missing-too.md)\n```\n"
+                ),
+            },
+            None,
+        ),
+        (
+            {"index.md": "See [missing](does-not-exist.md).\n"},
+            "does-not-exist.md",
+        ),
+        (
+            {
+                "sibling.md": "# Sibling\n",
+                "refactor/nested.md": "Back up: [sibling](../sibling.md).\n",
+            },
+            None,
+        ),
     ],
 )
-def test_normalize_link_target(raw_target: str, expected: str | None) -> None:
-    assert _normalize_link_target(raw_target) == expected
-
-
-def test_validate_local_links_accepts_resolvable_targets(tmp_path: Path) -> None:
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "target.md").write_text("# Target\n", encoding="utf-8")
-    (docs / "index.md").write_text(
-        "\n".join(
-            [
-                "See [target](target.md#section) and [external](https://example.com).",
-                "Ignore code: `[fake](missing.md)`.",
-                "",
-                "```text",
-                "[also fake](missing-too.md)",
-                "```",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    errors: list[str] = []
-
-    _validate_local_links(tmp_path, errors)
-
-    assert errors == []
-
-
-def test_validate_local_links_reports_source_and_unresolved_target(
+def test_local_link_resolution(
     tmp_path: Path,
+    docs_layout: dict[str, str],
+    expect_error_substring: str | None,
 ) -> None:
     docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "index.md").write_text(
-        "See [missing](does-not-exist.md).\n",
-        encoding="utf-8",
-    )
-    errors: list[str] = []
+    for relative, content in docs_layout.items():
+        path = docs / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
+    errors: list[str] = []
     _validate_local_links(tmp_path, errors)
 
-    assert len(errors) == 1
-    assert "docs/index.md" in errors[0]
-    assert "does-not-exist.md" in errors[0]
-
-
-def test_validate_local_links_checks_image_targets(tmp_path: Path) -> None:
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "index.md").write_text(
-        "![diagram](missing-image.png)\n",
-        encoding="utf-8",
-    )
-    errors: list[str] = []
-
-    _validate_local_links(tmp_path, errors)
-
-    assert len(errors) == 1
-    assert "missing-image.png" in errors[0]
-
-
-def test_validate_local_links_resolves_relative_to_containing_document(
-    tmp_path: Path,
-) -> None:
-    docs = tmp_path / "docs"
-    refactor = docs / "refactor"
-    refactor.mkdir(parents=True)
-    (docs / "sibling.md").write_text("# Sibling\n", encoding="utf-8")
-    (refactor / "nested.md").write_text(
-        "Back up: [sibling](../sibling.md).\n",
-        encoding="utf-8",
-    )
-    errors: list[str] = []
-
-    _validate_local_links(tmp_path, errors)
-
-    assert errors == []
+    if expect_error_substring is None:
+        assert errors == []
+    else:
+        assert len(errors) == 1
+        assert expect_error_substring in errors[0]

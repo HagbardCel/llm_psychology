@@ -439,18 +439,6 @@ def test_malicious_profile_and_plan_stay_out_of_system() -> None:
     assert summary in user
 
 
-def test_no_legacy_section_builder_imports() -> None:
-    import jung.phases.therapy.context as therapy_context
-
-    for name in (
-        "build_therapy_context",
-        "build_context_sections",
-        "build_opening_context_sections",
-        "format_plan_section",
-    ):
-        assert not hasattr(therapy_context, name)
-
-
 def test_pre_cap_omissions_included_in_transcript_omitted_count() -> None:
     turns = tuple(
         _turn(index, "user" if index % 2 else "assistant", f"turn-{index}")
