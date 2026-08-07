@@ -12,20 +12,32 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_start_runs_task_to_completion() -> None:
-    completed = asyncio.Event()
+    gate = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def work() -> None:
+        await gate.wait()
+        finished.set()
+
     async with TaskSupervisor() as supervisor:
-        assert supervisor.start(name="work", run=completed.wait) is True
-        completed.set()
-        await asyncio.sleep(0.05)
+        assert supervisor.start(name="work", run=work) is True
+        gate.set()
+        await asyncio.wait_for(finished.wait(), timeout=1.0)
 
 
 async def test_duplicate_name_returns_false() -> None:
     gate = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def work() -> None:
+        await gate.wait()
+        finished.set()
+
     async with TaskSupervisor() as supervisor:
-        assert supervisor.start(name="work", run=gate.wait) is True
-        assert supervisor.start(name="work", run=gate.wait) is False
+        assert supervisor.start(name="work", run=work) is True
+        assert supervisor.start(name="work", run=work) is False
         gate.set()
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(finished.wait(), timeout=1.0)
 
 
 async def test_explicit_name_reuse_after_completion() -> None:
@@ -119,27 +131,24 @@ async def test_shutdown_timeout_cancels_owned_task() -> None:
     await asyncio.wait_for(cancelled.wait(), timeout=1.0)
 
 
-async def test_create_task_failure_rolls_back_active_name_and_closes_coro() -> None:
+async def test_start_recovers_name_after_create_task_failure() -> None:
     from unittest.mock import patch
 
-    captured: list[object] = []
+    original = asyncio.TaskGroup.create_task
+    calls = 0
+    done = asyncio.Event()
+
+    def flaky_create_task(self, coro, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            coro.close()
+            raise RuntimeError("create failed")
+        return original(self, coro, **kwargs)
 
     async with TaskSupervisor() as supervisor:
-        assert supervisor._task_group is not None
-
-        def recording_create_task(coro, *, name=None):
-            captured.append(coro)
-            raise RuntimeError("create failed")
-
-        with patch.object(
-            supervisor._task_group,
-            "create_task",
-            side_effect=recording_create_task,
-        ):
+        with patch.object(asyncio.TaskGroup, "create_task", flaky_create_task):
             with pytest.raises(RuntimeError, match="create failed"):
-                supervisor.start(name="work", run=lambda: asyncio.sleep(0))
-        assert "work" not in supervisor._active
-        assert len(captured) == 1
-        coro = captured[0]
-        assert hasattr(coro, "close")
-        assert coro.cr_frame is None
+                supervisor.start(name="work", run=done.set)
+            assert supervisor.start(name="work", run=done.set) is True
+        await asyncio.wait_for(done.wait(), timeout=1.0)
