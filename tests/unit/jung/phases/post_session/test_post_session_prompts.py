@@ -112,6 +112,30 @@ def test_analysis_prompt_puts_style_and_untrusted_rule_in_system() -> None:
     assert user.index("</context_data>") < user.index("Analyze the completed session.")
 
 
+def test_analysis_system_defines_patient_turn_citation_selection() -> None:
+    request = build_analysis_request(_input())
+    system = next(
+        message.content for message in request.messages if message.role is ChatRole.SYSTEM
+    )
+    user = next(
+        message.content for message in request.messages if message.role is ChatRole.USER
+    )
+    assert "patient_turn_citations" in system
+    assert "durable cross-session" in system
+    assert "complete wording" in system
+    assert "safety-relevant" in system
+    assert "negations" in system
+    assert "Omit citations when no turn meets that bar" in system
+    assert "Do not invent or reproduce turn text" in system
+    assert "never invent or reproduce turn text" in system
+    assert "For intervention_citations, patient_sequence is only a later patient" in system
+    assert "acknowledging or referring back" in system
+    assert "leave the intervention patient_sequence null" in system
+    assert "cite it separately in patient_turn_citations" in system
+    assert "Analyze the completed session." in user
+    assert "durable cross-session" not in user
+
+
 def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None:
     analysis = SessionAnalysisResult(
         summary="Sleep difficulties explored.",
