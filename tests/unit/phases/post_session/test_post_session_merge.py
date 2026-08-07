@@ -2,14 +2,36 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from jung.domain.grounding import GroundedPatientTurn
-from jung.phases.post_session.merge import merge_derived_profile
-from jung.phases.post_session.models import DerivedProfilePatch
+from jung.domain.models import Plan
+from jung.phases.post_session.merge import (
+    merge_derived_profile,
+    merge_plan_content,
+    plan_patch_is_noop,
+)
+from jung.phases.post_session.models import DerivedProfilePatch, PlanPatch
+
+
+def _plan() -> Plan:
+    now = datetime.now(UTC)
+    return Plan(
+        id=uuid4(),
+        version=1,
+        selected_style="cbt",
+        focus="anxiety",
+        themes=["worry"],
+        goals=["sleep"],
+        current_progress="baseline",
+        planned_interventions=["grounding"],
+        revision_recommendations=[],
+        created_at=now,
+    )
 
 
 def test_empty_patch_preserves_none_derived_profile() -> None:
@@ -180,3 +202,17 @@ def test_empty_patch_canonicalizes_existing_grounded_turns() -> None:
     }
     merged = merge_derived_profile(current, DerivedProfilePatch())
     assert merged == {"grounded_patient_turns": [turn]}
+
+
+def test_plan_patch_noop_and_revision_merge() -> None:
+    plan = _plan()
+    noop_patch = PlanPatch()
+    assert plan_patch_is_noop(plan, noop_patch) is True
+    assert merge_plan_content(plan, noop_patch) is None
+
+    changed = merge_plan_content(
+        plan,
+        PlanPatch(current_progress="improved sleep hygiene"),
+    )
+    assert changed is not None
+    assert changed.current_progress == "improved sleep hygiene"

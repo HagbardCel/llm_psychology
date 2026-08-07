@@ -1,4 +1,4 @@
-"""Post-session processor and merge tests."""
+"""Post-session processor orchestration tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from jung.domain.models import Plan, Profile
 from jung.llm.errors import InvalidLLMOutput
 from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
-from jung.phases.post_session.merge import merge_plan_content, plan_patch_is_noop
 from jung.phases.post_session.models import (
     InterventionCitation,
     PatientTurnCitation,
@@ -185,19 +184,7 @@ async def test_assistant_only_transcript_makes_zero_llm_calls() -> None:
     gateway.assert_exhausted()
 
 
-async def test_whitespace_only_transcript_rejected_before_fakellm() -> None:
-    gateway = FakeLLM(
-        [
-            StructuredExpectation(
-                task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
-                    summary="should not be used",
-                    key_themes=("sleep",),
-                ),
-            ),
-        ]
-    )
+def test_whitespace_only_transcript_is_rejected_by_input_model() -> None:
     with pytest.raises(ValidationError, match="non-empty"):
         _input(
             (
@@ -215,7 +202,6 @@ async def test_whitespace_only_transcript_rejected_before_fakellm() -> None:
                 ),
             )
         )
-    assert len(gateway._expectations) == 1  # noqa: SLF001
 
 
 async def test_post_session_processor_makes_two_structured_calls() -> None:
@@ -325,20 +311,6 @@ async def test_post_session_processor_rejects_invalid_plan_patch() -> None:
     with pytest.raises(InvalidLLMOutput):
         await processor.process(_input(_conversational_transcript()))
     gateway.assert_exhausted()
-
-
-def test_plan_patch_noop_and_revision_merge() -> None:
-    plan = _plan()
-    noop_patch = PlanPatch()
-    assert plan_patch_is_noop(plan, noop_patch) is True
-    assert merge_plan_content(plan, noop_patch) is None
-
-    changed = merge_plan_content(
-        plan,
-        PlanPatch(current_progress="improved sleep hygiene"),
-    )
-    assert changed is not None
-    assert changed.current_progress == "improved sleep hygiene"
 
 
 async def test_post_session_processor_skips_update_when_analysis_fails() -> None:
