@@ -297,7 +297,6 @@ async def build_test_application(
             supervisor=active_supervisor,
             now=clock,
             new_id=ids,
-            recorder=recorder,
         )
         if recover:
             await application.recover_on_startup()

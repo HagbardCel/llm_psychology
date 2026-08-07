@@ -1103,17 +1103,14 @@ async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
         if line.strip()
     ]
     kinds = [entry["kind"] for entry in lines]
-    assert "llm.call.start" in kinds
     assert "llm.provider.request" in kinds
     assert "llm.provider.response" in kinds
-    assert "llm.call.complete" in kinds
+    assert "llm.accepted" not in kinds
     response = next(
         entry for entry in lines if entry["kind"] == "llm.provider.response"
     )
     assert response["data"]["raw_response_text"] == "hello"
-    complete = next(entry for entry in lines if entry["kind"] == "llm.call.complete")
-    assert "raw_response_text" not in complete["data"]
-    assert complete["data"]["response_chars"] == 5
+    assert "llm.call.complete" not in kinds
 
 
 async def test_structured_diagnostics_capture_request_and_validated_result(
@@ -1164,7 +1161,7 @@ async def test_structured_diagnostics_capture_request_and_validated_result(
     kinds = [entry["kind"] for entry in lines]
     assert "llm.provider.request" in kinds
     assert "llm.provider.response" in kinds
-    assert "llm.call.complete" in kinds
+    assert "llm.accepted" in kinds
     request = next(entry for entry in lines if entry["kind"] == "llm.provider.request")
     assert request["data"]["messages"][0]["content"] == "give json"
     assert "api_key" not in json.dumps(request)
@@ -1175,12 +1172,10 @@ async def test_structured_diagnostics_capture_request_and_validated_result(
     assert response["data"]["prompt_tokens"] == 3
     assert response["data"]["completion_tokens"] == 2
     assert request["data"]["max_completion_tokens"] is None
-    complete = next(entry for entry in lines if entry["kind"] == "llm.call.complete")
-    assert complete["data"]["result"]["value"] == "ok"
-    assert complete["context"]["llm_call_id"] == complete["data"]["call_id"]
-    start = next(entry for entry in lines if entry["kind"] == "llm.call.start")
-    assert start["context"]["llm_call_id"] == start["data"]["call_id"]
-    assert "provider_attempt_ids" not in complete["data"]
+    accepted = next(entry for entry in lines if entry["kind"] == "llm.accepted")
+    assert accepted["data"]["result"]["value"] == "ok"
+    assert accepted["data"]["output_type"] == "_Answer"
+    assert "llm_call_id" in accepted["context"]
 
 
 def _assert_one_terminal(
@@ -1238,12 +1233,6 @@ async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
     ]
     _assert_one_terminal(
         lines,
-        start_kind="llm.call.start",
-        terminal_kinds={"llm.call.complete", "llm.call.error"},
-        id_field="call_id",
-    )
-    _assert_one_terminal(
-        lines,
         start_kind="llm.provider.request",
         terminal_kinds={"llm.provider.response", "llm.provider.error"},
         id_field="provider_attempt_id",
@@ -1251,8 +1240,7 @@ async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
     error = next(entry for entry in lines if entry["kind"] == "llm.provider.error")
     assert error["data"]["error_type"] == "_UnexpectedProviderBug"
     assert "sdk defect" in error["data"]["error_message"]
-    call_error = next(entry for entry in lines if entry["kind"] == "llm.call.error")
-    assert call_error["data"]["status"] == "error"
+    assert not any(e["kind"].startswith("llm.call.") for e in lines)
 
 
 async def test_hostile_str_provider_error_records_safe_message_structured(
@@ -1286,12 +1274,6 @@ async def test_hostile_str_provider_error_records_safe_message_structured(
         .splitlines()
         if line.strip()
     ]
-    _assert_one_terminal(
-        lines,
-        start_kind="llm.call.start",
-        terminal_kinds={"llm.call.complete", "llm.call.error"},
-        id_field="call_id",
-    )
     _assert_one_terminal(
         lines,
         start_kind="llm.provider.request",
@@ -1334,12 +1316,6 @@ async def test_hostile_str_provider_error_records_safe_message_stream(
         .splitlines()
         if line.strip()
     ]
-    _assert_one_terminal(
-        lines,
-        start_kind="llm.call.start",
-        terminal_kinds={"llm.call.complete", "llm.call.error"},
-        id_field="call_id",
-    )
     _assert_one_terminal(
         lines,
         start_kind="llm.provider.request",
@@ -1402,18 +1378,10 @@ async def test_stream_early_aclose_emits_abandoned_terminals(tmp_path: Path) -> 
         .splitlines()
         if line.strip()
     ]
-    call_error = next(entry for entry in lines if entry["kind"] == "llm.call.error")
-    assert call_error["data"]["status"] == "abandoned"
     provider_error = next(
         entry for entry in lines if entry["kind"] == "llm.provider.error"
     )
     assert provider_error["data"]["status"] == "abandoned"
-    _assert_one_terminal(
-        lines,
-        start_kind="llm.call.start",
-        terminal_kinds={"llm.call.complete", "llm.call.error"},
-        id_field="call_id",
-    )
     _assert_one_terminal(
         lines,
         start_kind="llm.provider.request",
@@ -1496,8 +1464,6 @@ async def test_stream_early_aclose_closes_sdk_stream(
         .splitlines()
         if line.strip()
     ]
-    call_error = next(entry for entry in lines if entry["kind"] == "llm.call.error")
-    assert call_error["data"]["status"] == "abandoned"
     provider_error = next(
         entry for entry in lines if entry["kind"] == "llm.provider.error"
     )
@@ -1507,6 +1473,7 @@ async def test_stream_early_aclose_closes_sdk_stream(
 async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from jung.diagnostics import DiagnosticRun
     from jung.llm.tracing import ObservedLLMGateway
@@ -1557,13 +1524,14 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
         )
         observed = ObservedLLMGateway(gateway, recorder=recorder)
 
-        chunks = []
-        async for chunk in observed.stream_text(
-            [ChatMessage(role=ChatRole.USER, content="hi")],
-            _policy(mode=StructuredOutputMode.PROMPT),
-        ):
-            chunks.append(chunk)
-        assert chunks == ["hello"]
+        with caplog.at_level(logging.WARNING):
+            chunks = []
+            async for chunk in observed.stream_text(
+                [ChatMessage(role=ChatRole.USER, content="hi")],
+                _policy(mode=StructuredOutputMode.PROMPT),
+            ):
+                chunks.append(chunk)
+            assert chunks == ["hello"]
 
     lines = [
         json.loads(line)
@@ -1572,12 +1540,10 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
         .splitlines()
         if line.strip()
     ]
-    cleanup = next(
-        entry for entry in lines if entry["kind"] == "llm.provider.cleanup.error"
+    assert not any(e["kind"] == "llm.provider.cleanup.error" for e in lines)
+    assert any(
+        "llm provider stream close failed" in r.message for r in caplog.records
     )
-    assert cleanup["data"]["error_type"] == "CancelledError"
-    assert cleanup["data"]["close_method"] == "aclose"
-
     call_errors = [e for e in lines if e["kind"] == "llm.provider.error"]
     assert not call_errors
 
@@ -1661,21 +1627,13 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
         if line.strip()
     ]
 
-    call_errors = [
-        e
-        for e in lines
-        if e["kind"] == "llm.call.error" and e["data"]["status"] == "cancelled"
-    ]
     provider_errors = [
         e
         for e in lines
         if e["kind"] == "llm.provider.error" and e["data"]["status"] == "cancelled"
     ]
-    assert len(call_errors) == 1
     assert len(provider_errors) == 1
-    assert (
-        provider_errors[0]["data"]["llm_call_id"] == call_errors[0]["data"]["call_id"]
-    )
+    assert provider_errors[0]["context"].get("llm_call_id") or provider_errors[0]["data"].get("llm_call_id")
 
 
 async def test_stream_preserves_stream_cancel_message_over_close_cancel(
@@ -1769,20 +1727,9 @@ async def test_stream_preserves_stream_cancel_message_over_close_cancel(
         .splitlines()
         if line.strip()
     ]
-    starts = [e for e in lines if e["kind"] == "llm.call.start"]
-    assert len(starts) == 1
-    call_id = starts[0]["data"]["call_id"]
-    call_terminals = [
-        e
-        for e in lines
-        if e["kind"] in {"llm.call.complete", "llm.call.error"}
-        and e["data"].get("call_id") == call_id
-    ]
-    assert len(call_terminals) == 1
-    assert call_terminals[0]["data"]["status"] == "cancelled"
-
     provider_requests = [e for e in lines if e["kind"] == "llm.provider.request"]
     assert len(provider_requests) == 1
+    call_id = provider_requests[0]["data"]["llm_call_id"]
     provider_attempt_id = provider_requests[0]["data"]["provider_attempt_id"]
     provider_terminals = [
         e
@@ -1793,9 +1740,7 @@ async def test_stream_preserves_stream_cancel_message_over_close_cancel(
     assert len(provider_terminals) == 1
     assert provider_terminals[0]["data"]["status"] == "cancelled"
     assert provider_terminals[0]["data"]["llm_call_id"] == call_id
-
-    cleanup = [e for e in lines if e["kind"] == "llm.provider.cleanup.error"]
-    assert not cleanup
+    assert not any(e["kind"] == "llm.provider.cleanup.error" for e in lines)
     assert not any(e["kind"] == "llm.stream.cleanup.error" for e in lines)
 
 
@@ -1877,18 +1822,6 @@ async def test_stream_cancel_with_close_cancellederror_keeps_single_terminals(
         .splitlines()
         if line.strip()
     ]
-    starts = [e for e in lines if e["kind"] == "llm.call.start"]
-    assert len(starts) == 1
-    call_id = starts[0]["data"]["call_id"]
-    call_terminals = [
-        e
-        for e in lines
-        if e["kind"] in {"llm.call.complete", "llm.call.error"}
-        and e["data"].get("call_id") == call_id
-    ]
-    assert len(call_terminals) == 1
-    assert call_terminals[0]["data"]["status"] == "cancelled"
-
     provider_requests = [e for e in lines if e["kind"] == "llm.provider.request"]
     assert len(provider_requests) == 1
     provider_attempt_id = provider_requests[0]["data"]["provider_attempt_id"]
@@ -1900,10 +1833,7 @@ async def test_stream_cancel_with_close_cancellederror_keeps_single_terminals(
     ]
     assert len(provider_terminals) == 1
     assert provider_terminals[0]["data"]["status"] == "cancelled"
-
-    cleanup = [e for e in lines if e["kind"] == "llm.provider.cleanup.error"]
-    assert len(cleanup) == 1
-    assert cleanup[0]["data"]["error_type"] == "CancelledError"
+    assert not any(e["kind"] == "llm.provider.cleanup.error" for e in lines)
 
 
 async def test_provider_close_failure_without_recorder_logs_safe_warning(
@@ -2078,17 +2008,6 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
         assert len(matches) == 1, f"expected exactly one {kind}"
         return matches[0]
 
-    call_start = only("llm.call.start")
-    call_terminals = [
-        e
-        for e in lines
-        if e["kind"] in {"llm.call.complete", "llm.call.error"}
-        and e["data"].get("call_id") == call_start["data"]["call_id"]
-    ]
-    assert len(call_terminals) == 1
-    assert call_terminals[0]["kind"] == "llm.call.error"
-    assert call_terminals[0]["data"]["status"] == "abandoned"
-
     provider_start = only("llm.provider.request")
     provider_terminals = [
         e
@@ -2100,8 +2019,7 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
     assert len(provider_terminals) == 1
     assert provider_terminals[0]["kind"] == "llm.provider.error"
     assert provider_terminals[0]["data"]["status"] == "abandoned"
-
-    assert provider_start["data"]["llm_call_id"] == call_start["data"]["call_id"]
+    assert provider_start["data"]["llm_call_id"]
 
     assert len(attempts) == 1
     assert attempts[0].status == "abandoned"

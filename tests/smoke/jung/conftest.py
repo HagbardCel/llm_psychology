@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from jung.diagnostics import DiagnosticRun, sanitize_url
+from jung.diagnostics import DiagnosticRun
 from tests.smoke.jung.smoke_evidence import COLLECTOR, render_smoke_evidence
 
 _session_failed = False
@@ -26,21 +26,9 @@ def diagnostic_run(request: pytest.FixtureRequest):
         yield None
         return
 
-    metadata = {
-        "server": os.environ.get("LOCAL_LLM_SMOKE_SERVER"),
-        "model": os.environ.get("LOCAL_LLM_SMOKE_MODEL"),
-        "provider_base_url": sanitize_url(
-            os.environ.get("LOCAL_LLM_SMOKE_BASE_URL", "")
-        ),
-        "structured_mode": os.environ.get(
-            "LOCAL_LLM_SMOKE_STRUCTURED_MODE",
-            "json_schema",
-        ),
-    }
     secret_values = [os.environ.get("OPENAI_API_KEY", "")]
     with DiagnosticRun(
         Path(raw),
-        metadata=metadata,
         secret_values=secret_values,
     ) as recorder:
         yield recorder
