@@ -1541,9 +1541,7 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
         if line.strip()
     ]
     assert not any(e["kind"] == "llm.provider.cleanup.error" for e in lines)
-    assert any(
-        "llm provider stream close failed" in r.message for r in caplog.records
-    )
+    assert any("llm provider stream close failed" in r.message for r in caplog.records)
     call_errors = [e for e in lines if e["kind"] == "llm.provider.error"]
     assert not call_errors
 
@@ -1633,7 +1631,9 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
         if e["kind"] == "llm.provider.error" and e["data"]["status"] == "cancelled"
     ]
     assert len(provider_errors) == 1
-    assert provider_errors[0]["context"].get("llm_call_id") or provider_errors[0]["data"].get("llm_call_id")
+    assert provider_errors[0]["context"].get("llm_call_id") or provider_errors[0][
+        "data"
+    ].get("llm_call_id")
 
 
 async def test_stream_preserves_stream_cancel_message_over_close_cancel(

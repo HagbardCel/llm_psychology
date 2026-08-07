@@ -28,7 +28,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 SCHEMA_VERSION: Final = 1
-_MIN_SECRET_LEN: Final = 8
 _TOKEN_METRIC_KEYS: Final = frozenset(
     {
         "prompt_tokens",
@@ -100,9 +99,7 @@ def diagnostic_context(**fields: Any) -> Iterator[DiagnosticContext]:
     """
     unknown = set(fields) - set(DiagnosticContext.__dataclass_fields__)
     if unknown:
-        raise TypeError(
-            f"unknown diagnostic context fields: {sorted(unknown)}"
-        )
+        raise TypeError(f"unknown diagnostic context fields: {sorted(unknown)}")
     current = current_diagnostic_context()
     updates: dict[str, Any] = {}
     for name, value in fields.items():
@@ -194,10 +191,9 @@ def sanitize_value(
     secret_values: Sequence[str] = (),
 ) -> Any:
     """JSON-safe serialization with structural and exact-value redaction."""
+    # Caller-designated secrets are always redacted, including short values.
     secrets = tuple(
-        secret
-        for secret in secret_values
-        if isinstance(secret, str) and len(secret) >= _MIN_SECRET_LEN
+        secret for secret in secret_values if isinstance(secret, str) and secret
     )
 
     def redact_string(text: str) -> str:
@@ -258,9 +254,7 @@ class DiagnosticRecorder:
     ) -> None:
         self._run_dir = Path(run_dir)
         self._secret_values = tuple(
-            value
-            for value in secret_values
-            if isinstance(value, str) and len(value) >= _MIN_SECRET_LEN
+            value for value in secret_values if isinstance(value, str) and value
         )
         self._lock = threading.Lock()
         self._sequence = 0

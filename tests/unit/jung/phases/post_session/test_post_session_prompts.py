@@ -7,10 +7,15 @@ from uuid import uuid4
 
 import pytest
 
+import jung.phases.post_session.prompts as prompts
 from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import ChatRole
-from jung.llm.prompt_context import UNTRUSTED_CONTEXT_RULE
+from jung.llm.prompt_context import (
+    UNTRUSTED_CONTEXT_RULE,
+    rendered_context_user_message_length,
+)
+from jung.phases.context_projection import transcript_turn_payload
 from jung.phases.post_session.evidence_validation import validate_session_analysis
 from jung.phases.post_session.models import (
     InterventionCitation,
@@ -242,6 +247,64 @@ def test_oversized_completed_transcript_retains_closing_material() -> None:
     # Complete-or-omit: no truncated excerpts inside the data block.
     data_block = user.split("<context_data>")[1].split("</context_data>")[0]
     assert "..." not in data_block
+
+
+def test_therapy_style_serialized_budget_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extra turn fits without therapy_style but overflows when style is counted."""
+
+    style = load_styles()["cbt"]
+    filler = "sleep worry " * 40
+    turns = tuple(
+        TranscriptTurn(
+            message_id=uuid4(),
+            sequence=index,
+            role="assistant" if index % 2 else "user",
+            content=f"{filler} turn-{index}",
+        )
+        for index in range(1, 5)
+    )
+    transcript_payload = [transcript_turn_payload(turn) for turn in turns]
+    task = prompts._ANALYSIS_TASK
+    without_style = rendered_context_user_message_length(
+        {
+            "transcript": transcript_payload,
+            "transcript_turns_omitted": 0,
+        },
+        task=task,
+    )
+    with_style = rendered_context_user_message_length(
+        {
+            "transcript": transcript_payload,
+            "transcript_turns_omitted": 0,
+            "therapy_style": style.name,
+        },
+        task=task,
+    )
+    assert without_style < with_style
+
+    # Limit admits the full transcript only if therapy_style is ignored.
+    limit = without_style
+    assert with_style > limit
+    monkeypatch.setattr(prompts, "_ANALYSIS_USER_MESSAGE_LIMIT", limit)
+
+    request = build_analysis_request(
+        PostSessionInput(
+            transcript=turns,
+            current_plan=_plan(),
+            profile=Profile(name="Alex", primary_language="English"),
+            selected_style=style,
+        )
+    )
+    assert request.visible_sequences != frozenset({1, 2, 3, 4})
+    assert request.visible_sequences <= frozenset({1, 2, 3, 4})
+    assert len(request.visible_sequences) >= 2
+    user = next(
+        message.content for message in request.messages if message.role is ChatRole.USER
+    )
+    data_block = user.split("<context_data>")[1].split("</context_data>")[0]
+    assert f'"therapy_style":"{style.name}"' in data_block
 
 
 def test_citation_of_non_visible_sequence_rejected() -> None:

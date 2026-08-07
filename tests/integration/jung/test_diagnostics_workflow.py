@@ -125,9 +125,7 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
         assert ctx["task"].startswith("chat:")
         assert ctx.get("llm_call_id")
 
-    task_events = [
-        e for e in events if e["kind"] in {"task.started", "task.completed"}
-    ]
+    task_events = [e for e in events if e["kind"] in {"task.started", "task.completed"}]
     assert {e["context"]["task"] for e in task_events} == {
         llm_accepted[0]["context"]["task"]
     }

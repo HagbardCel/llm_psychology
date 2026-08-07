@@ -87,6 +87,27 @@ def test_sanitize_value_exact_secret_replacement() -> None:
     assert sanitized["message"] == "failed using [REDACTED]"
 
 
+def test_sanitize_value_redacts_short_caller_designated_secrets() -> None:
+    secret = "abc123"
+    sanitized = sanitize_value(
+        {"error_message": f"authentication failed for {secret}"},
+        secret_values=[secret],
+    )
+    assert sanitized["error_message"] == "authentication failed for [REDACTED]"
+
+
+def test_recorder_redacts_short_configured_secrets(tmp_path: Path) -> None:
+    secret = "abc123"
+    with DiagnosticRun(tmp_path / "run", secret_values=[secret]) as recorder:
+        recorder.record(
+            "operation.status",
+            {"error_message": f"authentication failed for {secret}"},
+        )
+    lines = _trace_lines(tmp_path / "run")
+    status = next(e for e in lines if e["kind"] == "operation.status")
+    assert status["data"]["error_message"] == "authentication failed for [REDACTED]"
+
+
 def test_sanitize_value_common_project_types() -> None:
     payload = {
         "uuid": UUID("00000000-0000-0000-0000-000000000001"),
