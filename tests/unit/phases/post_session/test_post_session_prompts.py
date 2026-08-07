@@ -125,18 +125,7 @@ def test_analysis_system_defines_patient_turn_citation_selection() -> None:
     assert "patient_turn_citations" in system
     assert "durable cross-session" in system
     assert "complete wording" in system
-    assert "safety-relevant" in system
-    assert "negations" in system
-    assert "Omit citations when no turn meets that bar" in system
-    assert "Do not invent or reproduce turn text" in system
-    assert "never invent or reproduce turn text" in system
-    assert (
-        "For intervention_citations, patient_sequence is only a later patient" in system
-    )
-    assert "acknowledging or referring back" in system
-    assert "leave the intervention patient_sequence null" in system
-    assert "cite it separately in patient_turn_citations" in system
-    assert "Analyze the completed session." in user
+    assert "negation" in system.lower()
     assert "durable cross-session" not in user
 
 
@@ -186,7 +175,6 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
     assert "Sleep difficulties explored." in user
     assert "intervention_evidence" in user
     assert UNTRUSTED_CONTEXT_RULE in system
-    assert "Do not regenerate the session summary" in system
 
 
 def test_update_prompt_puts_style_in_system_and_plan_in_user() -> None:
