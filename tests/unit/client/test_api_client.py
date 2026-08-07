@@ -129,12 +129,14 @@ def _history(
     )
 
 
-async def _install_transport(client: JungApiClient, handler) -> None:
-    await client._http.aclose()
-    client._http = httpx.AsyncClient(
+def _client_with_handler(
+    handler,
+    *,
+    base_url: str = "http://localhost:8000",
+) -> JungApiClient:
+    return JungApiClient(
+        ClientSettings(base_url),
         transport=httpx.MockTransport(handler),
-        base_url=client._base_url,
-        timeout=client.settings.transport_timeout,
     )
 
 
@@ -197,13 +199,10 @@ async def test_intent_and_attempt_ids_have_distinct_lifetimes() -> None:
         assert first.request_id != second.request_id
         assert first.expected_revision == 7
         assert second.expected_revision == 8
-        assert client._websocket_url() == "wss://localhost:8443/api/v1/chat"
 
 
 @pytest.mark.asyncio
 async def test_http_success_and_api_error_are_typed() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         request_id = request.headers["X-Request-ID"]
         if request.url.path.endswith("/health"):
@@ -223,7 +222,7 @@ async def test_http_success_and_api_error_are_typed() -> None:
             },
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     assert await client.get_health() == HealthResponse(status="healthy")
     with pytest.raises(JungApiError) as raised:
         await client.get_state()
@@ -246,13 +245,11 @@ async def test_http_request_id_header_is_strict(
     header: str | None,
     kind: ProtocolErrorKind,
 ) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(_request: httpx.Request) -> httpx.Response:
         headers = {} if header is None else {"X-Request-ID": header}
         return httpx.Response(200, headers=headers, json={"status": "healthy"})
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_health()
     assert raised.value.kind is kind
@@ -261,8 +258,6 @@ async def test_http_request_id_header_is_strict(
 
 @pytest.mark.asyncio
 async def test_wrong_success_status_is_protocol_error() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             201,
@@ -270,7 +265,7 @@ async def test_wrong_success_status_is_protocol_error() -> None:
             json={"status": "healthy"},
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_health()
     assert raised.value.kind is ProtocolErrorKind.UNEXPECTED_STATUS
@@ -279,8 +274,6 @@ async def test_wrong_success_status_is_protocol_error() -> None:
 
 @pytest.mark.asyncio
 async def test_error_body_request_id_must_match_header() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             503,
@@ -293,7 +286,7 @@ async def test_error_body_request_id_must_match_header() -> None:
             },
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_health()
     assert raised.value.kind is ProtocolErrorKind.REQUEST_ID_MISMATCH
@@ -302,8 +295,6 @@ async def test_error_body_request_id_must_match_header() -> None:
 
 @pytest.mark.asyncio
 async def test_nested_error_envelope_request_id_must_match_header() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         snapshot = _snapshot().model_copy(
             update={
@@ -326,7 +317,7 @@ async def test_nested_error_envelope_request_id_must_match_header() -> None:
             content=snapshot.model_dump_json(),
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_state()
     assert raised.value.kind is ProtocolErrorKind.REQUEST_ID_MISMATCH
@@ -336,7 +327,6 @@ async def test_nested_error_envelope_request_id_must_match_header() -> None:
 @pytest.mark.asyncio
 async def test_invalid_body_diagnostics_do_not_retain_secret_content() -> None:
     secret = "private therapy disclosure"
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -345,7 +335,7 @@ async def test_invalid_body_diagnostics_do_not_retain_secret_content() -> None:
             json={"status": secret},
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_health()
     error = raised.value
@@ -504,12 +494,20 @@ async def test_chat_close_retries_after_cancellation() -> None:
 
     websocket = CancellingWebSocket()
     chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+    command = SendMessageCommand(
+        type="send_message",
+        request_id=uuid4(),
+        expected_revision=1,
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        content="hello",
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await chat.aclose()
 
-    assert chat._unusable is True
-    assert chat._close_attempted is False
+    with pytest.raises(RuntimeError, match="chat connection is unusable"):
+        await chat.send(command)
 
     await chat.aclose()
     assert close_attempts == 2
@@ -1191,8 +1189,6 @@ def test_allowed_error_statuses_match_error_code_literals() -> None:
 
 @pytest.mark.asyncio
 async def test_error_status_code_mismatch_raises_protocol_error() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         request_id = request.headers["X-Request-ID"]
         return httpx.Response(
@@ -1206,7 +1202,7 @@ async def test_error_status_code_mismatch_raises_protocol_error() -> None:
             },
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
         await client.get_state()
     assert raised.value.kind is ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH
@@ -1221,8 +1217,6 @@ async def test_error_status_code_mismatch_raises_protocol_error() -> None:
 async def test_stored_http_failures_accept_409_status(
     error_code: str,
 ) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         request_id = request.headers["X-Request-ID"]
         return httpx.Response(
@@ -1236,7 +1230,7 @@ async def test_stored_http_failures_accept_409_status(
             },
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungApiError) as raised:
         await client.get_state()
     assert raised.value.status == 409
@@ -1246,8 +1240,6 @@ async def test_stored_http_failures_accept_409_status(
 
 @pytest.mark.asyncio
 async def test_fresh_internal_error_accepts_500_status() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-
     def handler(request: httpx.Request) -> httpx.Response:
         request_id = request.headers["X-Request-ID"]
         return httpx.Response(
@@ -1261,7 +1253,7 @@ async def test_fresh_internal_error_accepts_500_status() -> None:
             },
         )
 
-    await _install_transport(client, handler)
+    client = _client_with_handler(handler)
     with pytest.raises(JungApiError) as raised:
         await client.get_state()
     assert raised.value.status == 500

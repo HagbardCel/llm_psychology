@@ -396,7 +396,12 @@ ServerEventAdapter = TypeAdapter(ServerEvent)
 
 
 class JungApiClient:
-    def __init__(self, settings: ClientSettings) -> None:
+    def __init__(
+        self,
+        settings: ClientSettings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.settings = settings
         self._base_url = _validated_origin(settings.base_url)
         self._transport_timeout = _validated_timeout(
@@ -410,6 +415,7 @@ class JungApiClient:
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._transport_timeout,
+            transport=transport,
         )
         self._closed = False
 
