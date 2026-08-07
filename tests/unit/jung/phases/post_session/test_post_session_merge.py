@@ -8,21 +8,17 @@ import pytest
 from pydantic import ValidationError
 
 from jung.domain.grounding import GroundedPatientTurn
-from jung.phases.post_session.merge import (
-    derived_profile_patch_is_empty,
-    merge_derived_profile,
-)
+from jung.phases.post_session.merge import merge_derived_profile
 from jung.phases.post_session.models import DerivedProfilePatch
 
 
 def test_empty_patch_preserves_none_derived_profile() -> None:
     assert merge_derived_profile(None, DerivedProfilePatch()) is None
-    assert derived_profile_patch_is_empty(DerivedProfilePatch()) is True
 
 
-def test_empty_patch_preserves_sparse_derived_profile() -> None:
+def test_empty_patch_drops_unknown_only_mapping() -> None:
     current = {"custom_observation": "existing"}
-    assert merge_derived_profile(current, DerivedProfilePatch()) == current
+    assert merge_derived_profile(current, DerivedProfilePatch()) is None
 
 
 def test_empty_patch_validates_existing_grounded_turns() -> None:
@@ -93,6 +89,7 @@ def test_merge_dedups_by_source_message_id_with_stable_order() -> None:
         ),
     )
     assert merged is not None
+    assert set(merged) == {"grounded_patient_turns"}
     turns = merged["grounded_patient_turns"]
     assert len(turns) == 2
     assert turns[0]["source_message_id"] == str(first_id)
@@ -141,7 +138,7 @@ def test_malformed_stored_entries_raise_visibly() -> None:
         )
 
 
-def test_merge_preserves_unrelated_keys() -> None:
+def test_merge_drops_unknown_keys() -> None:
     message_id = uuid4()
     current = {
         "custom_observation": "keep me",
@@ -159,6 +156,27 @@ def test_merge_preserves_unrelated_keys() -> None:
             )
         ),
     )
-    assert merged is not None
-    assert merged["custom_observation"] == "keep me"
-    assert len(merged["grounded_patient_turns"]) == 1
+    assert merged == {
+        "grounded_patient_turns": [
+            GroundedPatientTurn(
+                source_message_id=message_id,
+                source_sequence=1,
+                content="new turn",
+            ).model_dump(mode="json"),
+        ]
+    }
+
+
+def test_empty_patch_canonicalizes_existing_grounded_turns() -> None:
+    message_id = uuid4()
+    turn = GroundedPatientTurn(
+        source_message_id=message_id,
+        source_sequence=1,
+        content="retained",
+    ).model_dump(mode="json")
+    current = {
+        "custom_observation": "drop me",
+        "grounded_patient_turns": [turn],
+    }
+    merged = merge_derived_profile(current, DerivedProfilePatch())
+    assert merged == {"grounded_patient_turns": [turn]}

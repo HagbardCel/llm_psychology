@@ -13,37 +13,21 @@ from jung.phases.post_session.models import (
 )
 
 
-def derived_profile_patch_is_empty(patch: DerivedProfilePatch) -> bool:
-    return not patch.grounded_patient_turns
-
-
 def merge_derived_profile(
     current: dict[str, Any] | None,
     patch: DerivedProfilePatch,
 ) -> dict[str, Any] | None:
-    if current is not None:
-        existing = parse_grounded_patient_turns(current)
-    else:
-        existing = ()
-
-    if not patch.grounded_patient_turns:
-        return current
-
-    merged: dict[str, Any] = dict(current or {})
+    existing = parse_grounded_patient_turns(current) if current is not None else ()
     by_message_id = {item.source_message_id: item for item in existing}
     for item in patch.grounded_patient_turns:
         by_message_id.setdefault(item.source_message_id, item)
-    merged["grounded_patient_turns"] = [
-        item.model_dump(mode="json") for item in by_message_id.values()
-    ]
-    return merged
-
-
-def derived_profile_changed(
-    current: dict[str, Any] | None,
-    patch: DerivedProfilePatch,
-) -> bool:
-    return merge_derived_profile(current, patch) != current
+    if not by_message_id:
+        return None
+    return {
+        "grounded_patient_turns": [
+            item.model_dump(mode="json") for item in by_message_id.values()
+        ]
+    }
 
 
 def _current_plan_content(current: Plan) -> PlanContent:

@@ -690,9 +690,13 @@ def test_complete_post_session_empty_profile_patch_preserves_none(
     }
 
 
-def test_complete_post_session_empty_profile_patch_preserves_sparse_mapping(
+def test_complete_post_session_store_persists_opaque_derived_profile_json(
     store: SQLiteStore,
 ) -> None:
+    """SQLiteStore treats derived_profile as opaque JSON (no shape policy).
+
+    Canonicalization belongs in merge_derived_profile before persistence.
+    """
     scenario = advance_to_post_session(store)
     sparse = {"custom_observation": "existing"}
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
