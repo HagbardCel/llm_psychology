@@ -1,25 +1,34 @@
-"""Integration coverage for diagnostic capture across a chat turn."""
+"""Integration coverage for lean diagnostic logging."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sqlite3
-import threading
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from jung.composition import application_context
-from jung.config import ApplicationSettings
-from jung.diagnostics import DiagnosticCaptureError, DiagnosticRun, diagnostic_context
+from jung.composition import _record_cleanup_failure
+from jung.diagnostics import DiagnosticRun
 from jung.domain.commands import SendMessage, UpdateProfile
-from jung.domain.models import ChatTurnStatus, Profile, Stage
-from jung.llm.fake import FakeLLM
-from jung.llm.gateway import LLMSettings
-from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
+from jung.domain.models import (
+    AppSnapshot,
+    ChatTurnStatus,
+    Operation,
+    OperationKind,
+    OperationStatus,
+    Profile,
+    Stage,
+)
+from jung.events import EventStream, OperationChanged, SnapshotChanged
+from jung.llm.errors import LLMUnavailable
+from jung.llm.fake import FailureExpectation, FakeLLM
+from jung.llm.gateway import LLMTask
+from jung.persistence.sqlite_store import SQLiteStore
+from jung.supervisor import TaskSupervisor
 
 from .application_fixtures import (
     build_test_application,
@@ -39,853 +48,263 @@ def _kinds(events: list[dict[str, object]]) -> list[str]:
     return [str(event["kind"]) for event in events]
 
 
-def _file_state(run_dir: Path) -> dict[str, tuple[int, int]]:
-    return {
-        path.name: (path.stat().st_size, path.stat().st_mtime_ns)
-        for path in run_dir.iterdir()
-        if path.is_file()
-    }
+async def _wait_until_idle(supervisor: TaskSupervisor) -> None:
+    for _ in range(200):
+        if not supervisor._active:
+            return
+        await asyncio.sleep(0.01)
+    raise TimeoutError("supervisor still active")
 
 
-async def test_diagnostic_chat_turn_causal_chain(tmp_path: Path) -> None:
+async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
 
-    with DiagnosticRun(run_dir, metadata={"test": "causal-chain"}) as recorder:
-        store = SQLiteStore(db_path, recorder=recorder)
+    with DiagnosticRun(run_dir) as recorder:
+        store = SQLiteStore(db_path)
         store.initialize()
-        store.backup_to(recorder.artifact_path("database-start.sqlite"))
-
         fake = FakeLLM(
             intake_message_expectations("Welcome. Tell me what brings you here.")
         )
+        request_id = uuid4()
+        client_message_id = uuid4()
         async with build_test_application(store, fake, recorder=recorder) as runtime:
-            with diagnostic_context(request_id=str(uuid4())):
-                await runtime.application.update_profile(
-                    UpdateProfile(
-                        expected_revision=0,
-                        profile=Profile(name="Alex", primary_language="English"),
-                    )
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Alex", primary_language="English"),
                 )
-                session = (await runtime.application.get_snapshot()).active_session
-                assert session is not None
-                turn = await runtime.application.submit_message(
-                    SendMessage(
-                        expected_revision=(
-                            await runtime.application.get_snapshot()
-                        ).revision,
-                        session_id=session.id,
-                        client_message_id=uuid4(),
-                        content="I feel anxious.",
-                        request_id=uuid4(),
-                    )
+            )
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            turn = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content="I feel anxious.",
+                    request_id=request_id,
                 )
-                completed = await wait_for_chat_turn(
-                    runtime.application,
-                    turn.id,
-                    ChatTurnStatus.COMPLETE,
-                )
-                assert completed.status is ChatTurnStatus.COMPLETE
-
-        store.backup_to(recorder.artifact_path("database-end.sqlite"))
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "success"
-    assert manifest["evidence_complete"] is True
-    assert manifest["run_status_scope"] == "runtime_lifecycle"
+            )
+            completed = await wait_for_chat_turn(
+                runtime.application,
+                turn.id,
+                ChatTurnStatus.COMPLETE,
+            )
+            assert completed.status is ChatTurnStatus.COMPLETE
 
     events = _load_trace(run_dir)
     kinds = _kinds(events)
-    assert "store.call.start" in kinds
-    assert "store.call.complete" in kinds
-    assert "database.sql" in kinds
-    assert "application.event" in kinds
-    assert "task.scheduled" in kinds
+    assert kinds[0] == "diagnostics.start"
+    assert kinds[-1] == "diagnostics.end"
+    assert "chat.turn.accepted" in kinds
+    assert "llm.accepted" in kinds
+    assert "chat.turn.completed" in kinds
     assert "task.started" in kinds
     assert "task.completed" in kinds
-    assert "llm.call.start" in kinds
-    assert "llm.call.complete" in kinds
+    assert "llm.call.start" not in kinds
+    assert "application.event" not in kinds
+    assert "store.call.start" not in kinds
 
-    turn_id = str(turn.id)
-    chat_events = [
-        event
-        for event in events
-        if event.get("context", {}).get("turn_id") == turn_id  # type: ignore[union-attr]
-        or (
-            isinstance(event.get("data"), dict)
-            and str(event["data"]).find(turn_id) >= 0
+    accepted = next(e for e in events if e["kind"] == "chat.turn.accepted")
+    assert accepted["data"]["session_id"] == str(session.id)
+    assert accepted["data"]["turn_id"] == str(turn.id)
+    assert accepted["data"]["client_message_id"] == str(client_message_id)
+    assert accepted["data"]["request_id"] == str(request_id)
+
+    llm_accepted = [e for e in events if e["kind"] == "llm.accepted"]
+    assert llm_accepted
+    for event in llm_accepted:
+        ctx = event["context"]
+        assert ctx["session_id"] == str(session.id)
+        assert ctx["turn_id"] == str(turn.id)
+        assert ctx["client_message_id"] == str(client_message_id)
+        assert ctx["request_id"] == str(request_id)
+        assert ctx["task"].startswith("chat:")
+        assert ctx.get("llm_call_id")
+
+    task_events = [e for e in events if e["kind"] in {"task.started", "task.completed"}]
+    assert {e["context"]["task"] for e in task_events} == {
+        llm_accepted[0]["context"]["task"]
+    }
+
+
+async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+
+    with DiagnosticRun(run_dir) as recorder:
+        store = SQLiteStore(db_path)
+        store.initialize()
+        fake = FakeLLM(
+            [
+                FailureExpectation(
+                    task=LLMTask.INTAKE_PATCH,
+                    error=LLMUnavailable("provider down"),
+                )
+            ]
         )
-    ]
-    assert chat_events
-
-    start_db = run_dir / "database-start.sqlite"
-    end_db = run_dir / "database-end.sqlite"
-    assert start_db.is_file()
-    assert end_db.is_file()
-    for path in (start_db, end_db):
-        conn = sqlite3.connect(path)
-        try:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert int(version) >= 1
-        finally:
-            conn.close()
-
-    end_conn = sqlite3.connect(end_db)
-    try:
-        messages = end_conn.execute(
-            "SELECT role, content FROM messages ORDER BY sequence"
-        ).fetchall()
-    finally:
-        end_conn.close()
-    assert any(role == "user" and "anxious" in content for role, content in messages)
-    assert any(role == "assistant" and content.strip() for role, content in messages)
-
-
-async def test_backup_to_rejects_existing_and_sets_mode(tmp_path: Path) -> None:
-    db_path = tmp_path / "source.db"
-    store = SQLiteStore(db_path)
-    store.initialize()
-    dest = tmp_path / "backup.sqlite"
-    store.backup_to(dest)
-    assert dest.is_file()
-    assert oct(dest.stat().st_mode & 0o777) == "0o600"
-    assert list(tmp_path.glob(".backup.sqlite.*.tmp")) == []
-    with sqlite3.connect(dest) as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == SCHEMA_VERSION
-    with pytest.raises(FileExistsError):
-        store.backup_to(dest)
-
-
-async def test_backup_to_cleans_temp_on_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    db_path = tmp_path / "source.db"
-    store = SQLiteStore(db_path)
-    store.initialize()
-    dest = tmp_path / "backup-fail.sqlite"
-
-    def boom(src: object, dst: object) -> None:
-        raise OSError("publish failed")
-
-    monkeypatch.setattr(os, "replace", boom)
-    with pytest.raises(OSError, match="publish failed"):
-        store.backup_to(dest)
-    assert not dest.exists()
-    assert list(tmp_path.glob(".backup-fail.sqlite.*.tmp")) == []
-
-
-def _assert_snapshot_terminal(
-    events: list[dict[str, object]], *, phase: str, artifact: str
-) -> None:
-    starts = [
-        event
-        for event in events
-        if event["kind"] == "database.snapshot.start"
-        and event["data"]["phase"] == phase
-        and event["data"]["artifact"] == artifact
-    ]
-    terminals = [
-        event
-        for event in events
-        if event["kind"] in {"database.snapshot.complete", "database.snapshot.error"}
-        and event["data"]["phase"] == phase
-        and event["data"]["artifact"] == artifact
-    ]
-    assert len(starts) == 1
-    assert len(terminals) == 1
-
-
-async def test_application_context_diagnostic_lifecycle_happy_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-    run_dir = tmp_path / "composed-run"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "composed.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-    async with application_context(settings) as runtime:
-        assert runtime.recorder is not None
-        snapshot = await runtime.application.get_snapshot()
-        assert snapshot.stage is Stage.SETUP
-
-    assert (run_dir / "database-start.sqlite").is_file()
-    assert (run_dir / "database-end.sqlite").is_file()
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "success"
-    assert manifest["evidence_complete"] is True
-    events = _load_trace(run_dir)
-    _assert_snapshot_terminal(events, phase="start", artifact="database-start.sqlite")
-    _assert_snapshot_terminal(events, phase="end", artifact="database-end.sqlite")
-
-    # Manifest finalize is the last lifecycle step; nothing may mutate afterward.
-    state_after_exit = _file_state(run_dir)
-    await asyncio.sleep(0.05)
-    assert _file_state(run_dir) == state_after_exit
-
-
-async def test_application_context_start_snapshot_failure_still_attempts_end(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-    run_dir = tmp_path / "start-fail-run"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "start-fail.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    original = SQLiteStore.backup_to
-    calls = {"n": 0}
-    injected = RuntimeError("start snapshot boom")
-
-    def flaky_backup(self: SQLiteStore, destination: Path) -> None:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise injected
-        return original(self, destination)
-
-    monkeypatch.setattr(SQLiteStore, "backup_to", flaky_backup)
-    with pytest.raises(RuntimeError) as exc_info:
-        async with application_context(settings):
-            pass
-    assert exc_info.value is injected
-    assert calls["n"] >= 2
-    assert not (run_dir / "database-start.sqlite").exists()
-    assert (run_dir / "database-end.sqlite").is_file()
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "failed"
-    assert manifest["evidence_complete"] is False
-    events = _load_trace(run_dir)
-    start_kinds = [
-        event["kind"]
-        for event in events
-        if event["data"].get("phase") == "start"
-        and str(event["kind"]).startswith("database.snapshot.")
-    ]
-    assert start_kinds == ["database.snapshot.start", "database.snapshot.error"]
-    _assert_snapshot_terminal(events, phase="end", artifact="database-end.sqlite")
-
-
-async def test_application_context_records_cleanup_errors_first_and_later(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Runtime exception wins as primary, but all cleanup failures are recorded."""
-
-    body_exc = RuntimeError("body failed")
-    shutdown_exc = RuntimeError("shutdown failed")
-    llm_close_exc = RuntimeError("llm close failed")
-
-    class CloseFailLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            raise llm_close_exc
-
-    async def failing_shutdown(self: object, *, timeout_seconds: float) -> None:
-        raise shutdown_exc
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CloseFailLLM)
-    monkeypatch.setattr("jung.composition.TaskSupervisor.shutdown", failing_shutdown)
-
-    run_dir = tmp_path / "cleanup-events"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "cleanup-events.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    with pytest.raises(RuntimeError) as exc_info:
-        async with application_context(settings):
-            raise body_exc
-
-    assert exc_info.value is body_exc
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "failed"
-    assert manifest["evidence_complete"] is True
+        async with build_test_application(store, fake, recorder=recorder) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            turn = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
+                    session_id=session.id,
+                    client_message_id=uuid4(),
+                    content="I feel anxious.",
+                    request_id=uuid4(),
+                )
+            )
+            failed = await wait_for_chat_turn(
+                runtime.application,
+                turn.id,
+                ChatTurnStatus.FAILED,
+            )
+            assert failed.status is ChatTurnStatus.FAILED
 
     events = _load_trace(run_dir)
-    cleanup_events = [
-        event for event in events if str(event["kind"]) == "runtime.cleanup.error"
-    ]
-    assert any(
-        ev["data"]["step"] == "supervisor.shutdown"
-        and ev["data"]["selected_as_cleanup_error"] is True
-        for ev in cleanup_events
-    )
-    assert any(
-        ev["data"]["step"] == "llm.aclose"
-        and ev["data"]["selected_as_cleanup_error"] is False
-        for ev in cleanup_events
-    )
+    kinds = _kinds(events)
+    assert "chat.turn.accepted" in kinds
+    assert "chat.turn.failed" in kinds
+    assert "task.completed" in kinds
+    failed_event = next(e for e in events if e["kind"] == "chat.turn.failed")
+    assert failed_event["data"]["error_code"]
+    assert "retryable" in failed_event["data"]
 
 
-async def test_application_context_ambient_cancel_drains_aclose_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Ambient cancel during aclose records drained failure then cancellation."""
-
-    close_started = asyncio.Event()
-    close_release = asyncio.Event()
-    close_finished = asyncio.Event()
-    aclose_exc = RuntimeError("aclose failed after cancel")
-
-    class BlockingCloseLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            close_started.set()
-            try:
-                await close_release.wait()
-                raise aclose_exc
-            finally:
-                close_finished.set()
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", BlockingCloseLLM)
-
-    run_dir = tmp_path / "aclose-drain"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "aclose-drain.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    async def runner() -> None:
-        async with application_context(settings):
-            await asyncio.sleep(0.01)
-
-    task = asyncio.create_task(runner())
-    await close_started.wait()
-    task.cancel()
-    await asyncio.sleep(0.01)
-    assert not task.done()
-    assert not close_finished.is_set()
-
-    close_release.set()
-    with pytest.raises(asyncio.CancelledError) as exc_info:
-        await task
-
-    assert isinstance(exc_info.value, asyncio.CancelledError)
-    assert close_finished.is_set() is True
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "failed"
-    assert manifest["evidence_complete"] is True
-
-    events = _load_trace(run_dir)
-    aclose_events = [
-        event
-        for event in events
-        if str(event["kind"]) == "runtime.cleanup.error"
-        and event["data"]["step"] == "llm.aclose"
-    ]
-    assert len(aclose_events) == 2
-    drained, selected = aclose_events
-    assert drained["data"]["error_type"] == "RuntimeError"
-    assert drained["data"]["discovered_while_draining"] is True
-    assert drained["data"]["selected_as_cleanup_error"] is False
-    assert selected["data"]["error_type"] == "CancelledError"
-    assert selected["data"]["discovered_while_draining"] is False
-    assert selected["data"]["selected_as_cleanup_error"] is True
-
-    mtime_before = (run_dir / "manifest.json").stat().st_mtime_ns
-    await asyncio.sleep(0.05)
-    assert (run_dir / "manifest.json").stat().st_mtime_ns == mtime_before
-
-
-async def test_application_context_ambient_cancel_drains_aclose_with_runtime_primary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Runtime primary stays primary; drained aclose failures stay secondary."""
-
-    body_exc = RuntimeError("body failed")
-    close_started = asyncio.Event()
-    close_release = asyncio.Event()
-    aclose_exc = RuntimeError("aclose failed after cancel")
-
-    class BlockingCloseLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            close_started.set()
-            await close_release.wait()
-            raise aclose_exc
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", BlockingCloseLLM)
-
-    run_dir = tmp_path / "aclose-drain-primary"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "aclose-drain-primary.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    async def runner() -> None:
-        async with application_context(settings):
-            raise body_exc
-
-    task = asyncio.create_task(runner())
-    await close_started.wait()
-    task.cancel()
-    await asyncio.sleep(0.01)
-    close_release.set()
-
-    with pytest.raises(RuntimeError) as exc_info:
-        await task
-    assert exc_info.value is body_exc
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["evidence_complete"] is True
-
-    events = _load_trace(run_dir)
-    aclose_events = [
-        event
-        for event in events
-        if str(event["kind"]) == "runtime.cleanup.error"
-        and event["data"]["step"] == "llm.aclose"
-    ]
-    assert len(aclose_events) == 2
-    assert all(ev["data"]["selected_as_cleanup_error"] is False for ev in aclose_events)
-    assert any(
-        ev["data"]["discovered_while_draining"] is True
-        and ev["data"]["error_type"] == "RuntimeError"
-        for ev in aclose_events
-    )
-    assert any(
-        ev["data"]["discovered_while_draining"] is False
-        and ev["data"]["error_type"] == "CancelledError"
-        for ev in aclose_events
-    )
-
-
-async def test_application_context_direct_aclose_cancellederror_not_duplicated(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Owned aclose CancelledError is recorded once, not as a drained duplicate."""
-
-    cancel_exc = asyncio.CancelledError("aclose-own-cancel")
-
-    class CancelCloseLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            raise cancel_exc
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CancelCloseLLM)
-
-    run_dir = tmp_path / "aclose-direct-cancel"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "aclose-direct-cancel.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    with pytest.raises(asyncio.CancelledError) as exc_info:
-        async with application_context(settings):
-            pass
-
-    assert exc_info.value is cancel_exc
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["evidence_complete"] is True
-
-    events = _load_trace(run_dir)
-    aclose_events = [
-        event
-        for event in events
-        if str(event["kind"]) == "runtime.cleanup.error"
-        and event["data"]["step"] == "llm.aclose"
-    ]
-    assert len(aclose_events) == 1
-    assert aclose_events[0]["data"]["selected_as_cleanup_error"] is True
-    assert aclose_events[0]["data"]["discovered_while_draining"] is False
-    assert aclose_events[0]["data"]["error_type"] == "CancelledError"
-
-
-async def test_application_context_end_snapshot_cancel_does_not_mask_shutdown_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End-snapshot cancellation is secondary when cleanup already failed."""
-
-    shutdown_exc = RuntimeError("shutdown failed")
-
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    async def failing_shutdown(self: object, *, timeout_seconds: float) -> None:
-        raise shutdown_exc
-
-    original_capture_snapshot = None
-    import jung.composition as composition_module
-
-    original_capture_snapshot = composition_module._capture_snapshot
-
-    async def cancel_on_end_snapshot(
-        *,
-        store: SQLiteStore,
-        recorder: object,
-        settings: object,
-        phase: str,
-    ) -> None:
-        if phase == "end":
-            raise asyncio.CancelledError()
-        await original_capture_snapshot(
-            store=store,
-            recorder=recorder,  # type: ignore[arg-type]
-            settings=settings,  # type: ignore[arg-type]
-            phase=phase,
+async def test_snapshot_changed_emits_workflow_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        stream = EventStream(recorder=recorder)
+        snapshot = AppSnapshot(
+            revision=2,
+            stage=Stage.INTAKE,
+            profile_complete=True,
         )
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-    monkeypatch.setattr("jung.composition.TaskSupervisor.shutdown", failing_shutdown)
-    monkeypatch.setattr("jung.composition._capture_snapshot", cancel_on_end_snapshot)
-
-    run_dir = tmp_path / "shutdown-end-cancel"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "shutdown-end-cancel.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    with pytest.raises(RuntimeError) as exc_info:
-        async with application_context(settings):
-            pass
-
-    assert exc_info.value is shutdown_exc
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "failed"
-    assert manifest["evidence_complete"] is True
+        await stream.publish(SnapshotChanged(snapshot))
 
     events = _load_trace(run_dir)
-    cleanup_events = [
-        event for event in events if str(event["kind"]) == "runtime.cleanup.error"
-    ]
-    assert any(
-        ev["data"]["step"] == "supervisor.shutdown"
-        and ev["data"]["selected_as_cleanup_error"] is True
-        for ev in cleanup_events
-    )
-    assert any(
-        ev["data"]["step"] == "database.end_snapshot"
-        and ev["data"]["selected_as_cleanup_error"] is False
-        for ev in cleanup_events
-    )
+    workflow = next(e for e in events if e["kind"] == "workflow.state")
+    assert workflow["data"] == {"revision": 2, "stage": Stage.INTAKE.value}
 
 
-@pytest.mark.parametrize("end_snapshot_raises", [False, True])
-async def test_application_context_end_snapshot_cancel_drains_worker(
+async def test_operation_changed_emits_status_and_workflow_state(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    end_snapshot_raises: bool,
 ) -> None:
-    """Cancellation during end snapshot must drain the to_thread worker."""
-
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-
-    end_started = threading.Event()
-    end_release = threading.Event()
-    end_finished = threading.Event()
-
-    original_backup_to = SQLiteStore.backup_to
-
-    def blocking_backup_to(self: SQLiteStore, destination: Path) -> None:
-        if destination.name == "database-end.sqlite":
-            end_started.set()
-            try:
-                end_release.wait(timeout=5.0)
-                if end_snapshot_raises:
-                    # Simulate failure after cancellation; _capture_snapshot must still drain.
-                    raise RuntimeError("backup boom")
-                original_backup_to(self, destination)
-            finally:
-                end_finished.set()
-            return
-        original_backup_to(self, destination)
-
-    monkeypatch.setattr(SQLiteStore, "backup_to", blocking_backup_to)
-
-    run_dir = tmp_path / (
-        "end-snapshot-cancel-drains-fail"
-        if end_snapshot_raises
-        else "end-snapshot-cancel-drains-ok"
-    )
-    settings = ApplicationSettings(
-        database_path=tmp_path / "end-snapshot-cancel-drains.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    async def runner() -> None:
-        async with application_context(settings):
-            await asyncio.sleep(0.01)
-
-    task = asyncio.create_task(runner())
-    await asyncio.to_thread(end_started.wait, 2.0)
-    assert end_started.is_set() is True
-
-    # Cancel while end snapshot worker is blocked; application_context must not finalize yet.
-    task.cancel()
-    await asyncio.sleep(0.01)
-    assert not task.done()
-    assert not end_finished.is_set()
-
-    end_release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert end_finished.is_set() is True
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == "failed"
-    assert manifest["evidence_complete"] is (not end_snapshot_raises)
-
-
-@pytest.mark.parametrize("end_snapshot_raises", [False, True])
-async def test_application_context_end_snapshot_repeated_cancel_drains_worker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    end_snapshot_raises: bool,
-) -> None:
-    """Cancellation during snapshot draining must not orphan the backup worker."""
-
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
-
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-
-    end_started = threading.Event()
-    end_release = threading.Event()
-    end_finished = threading.Event()
-
-    original_backup_to = SQLiteStore.backup_to
-
-    def blocking_backup_to(self: SQLiteStore, destination: Path) -> None:
-        if destination.name == "database-end.sqlite":
-            end_started.set()
-            try:
-                end_release.wait(timeout=5.0)
-                if end_snapshot_raises:
-                    raise RuntimeError("backup boom")
-                original_backup_to(self, destination)
-            finally:
-                end_finished.set()
-            return
-        original_backup_to(self, destination)
-
-    monkeypatch.setattr(SQLiteStore, "backup_to", blocking_backup_to)
-
-    import jung.composition as composition_module
-
-    drain_started = asyncio.Event()
-    original_drain = composition_module.drain_cancelled_task
-
-    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
-        drain_started.set()
-        return await original_drain(task)
-
-    monkeypatch.setattr(
-        composition_module,
-        "drain_cancelled_task",
-        observed_drain,
-    )
-
-    run_dir = tmp_path / (
-        "end-snapshot-repeat-cancel-fail"
-        if end_snapshot_raises
-        else "end-snapshot-repeat-cancel-ok"
-    )
-    settings = ApplicationSettings(
-        database_path=tmp_path / "end-snapshot-repeat-cancel.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    async def runner() -> None:
-        async with application_context(settings):
-            await asyncio.sleep(0.01)
-
-    task = asyncio.create_task(runner())
-    await asyncio.to_thread(end_started.wait, 2.0)
-    assert end_started.is_set() is True
-
-    # First cancellation reaches the snapshot shield; drain must be entered before
-    # the second cancellation to prove cancellation during draining.
-    task.cancel("first-cancel")
-    await drain_started.wait()
-    task.cancel("second-cancel")
-    await asyncio.sleep(0.01)
-    assert not task.done()
-    assert not end_finished.is_set()
-
-    end_release.set()
-    with pytest.raises(asyncio.CancelledError) as exc_info:
-        await task
-
-    assert exc_info.value.args == ("first-cancel",)
-    assert end_finished.is_set() is True
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["evidence_complete"] is (not end_snapshot_raises)
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        stream = EventStream(recorder=recorder)
+        now = datetime.now(UTC)
+        operation = Operation(
+            id=uuid4(),
+            kind=OperationKind.ASSESSMENT,
+            status=OperationStatus.FAILED,
+            attempt=1,
+            source_session_id=uuid4(),
+            created_at=now,
+            updated_at=now,
+            error_code="llm_unavailable",
+            error_message="down",
+            retryable=True,
+        )
+        snapshot = AppSnapshot(
+            revision=3,
+            stage=Stage.ASSESSMENT,
+            profile_complete=True,
+        )
+        await stream.publish(OperationChanged(operation, snapshot))
 
     events = _load_trace(run_dir)
-    snapshot_terminals = [
-        event
-        for event in events
-        if str(event["kind"])
-        in {"database.snapshot.complete", "database.snapshot.error"}
-        and event["data"]["phase"] == "end"
-    ]
-    assert len(snapshot_terminals) == 1
-    expected_kind = (
-        "database.snapshot.error"
-        if end_snapshot_raises
-        else "database.snapshot.complete"
-    )
-    assert snapshot_terminals[0]["kind"] == expected_kind
-
-    state_after_exit = _file_state(run_dir)
-    await asyncio.sleep(0.05)
-    assert _file_state(run_dir) == state_after_exit
+    kinds = _kinds(events)
+    assert kinds.count("operation.status") == 1
+    assert kinds.count("workflow.state") == 1
+    status = next(e for e in events if e["kind"] == "operation.status")
+    assert status["data"]["status"] == OperationStatus.FAILED.value
+    assert status["data"]["error_code"] == "llm_unavailable"
+    assert status["data"]["retryable"] is True
+    assert status["data"]["revision"] == 3
+    assert status["data"]["source_session_id"] == str(operation.source_session_id)
+    workflow = next(e for e in events if e["kind"] == "workflow.state")
+    assert workflow["data"] == {"revision": 3, "stage": Stage.ASSESSMENT.value}
 
 
-async def test_application_context_end_snapshot_failure_is_evidence_incomplete(
+async def test_pre_running_ownership_failure_emits_task_failed(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Snapshot creation failures are diagnostic evidence issues, not cleanup exceptions."""
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        supervisor = TaskSupervisor(recorder=recorder)
 
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
+        async def failing_run() -> None:
+            # Mimic worker body before running_owned: re-raise.
+            raise RuntimeError("ownership failed")
 
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
-
-    original_backup_to = SQLiteStore.backup_to
-
-    def boom_on_end(self: SQLiteStore, destination: Path) -> None:
-        if destination.name == "database-end.sqlite":
-            raise RuntimeError("end snapshot boom")
-        original_backup_to(self, destination)
-
-    monkeypatch.setattr(SQLiteStore, "backup_to", boom_on_end)
-
-    run_dir = tmp_path / "end-snapshot-evidence-incomplete"
-    settings = ApplicationSettings(
-        database_path=tmp_path / "end-snapshot-evidence-incomplete.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        debug_run_dir=run_dir,
-        shutdown_timeout_seconds=2.0,
-    )
-
-    with pytest.raises(DiagnosticCaptureError, match="evidence incomplete"):
-        async with application_context(settings):
-            pass
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    # Evidence-incomplete without a primary error is reported via DiagnosticCaptureError,
-    # but the diagnostic run_status reflects whether a primary exception was present.
-    assert manifest["run_status"] == "success"
-    assert manifest["evidence_complete"] is False
+        async with supervisor:
+            assert supervisor.start(name="operation:test", run=failing_run)
+            await _wait_until_idle(supervisor)
 
     events = _load_trace(run_dir)
-    runtime_cleanup_events = [
-        e for e in events if str(e["kind"]) == "runtime.cleanup.error"
-    ]
-    assert not any(
-        e["data"]["step"] == "database.end_snapshot" for e in runtime_cleanup_events
-    )
+    kinds = _kinds(events)
+    assert "task.started" in kinds
+    assert "task.failed" in kinds
+    assert "task.completed" not in kinds
+    failed = next(e for e in events if e["kind"] == "task.failed")
+    assert failed["context"]["task"] == "operation:test"
+    assert failed["data"]["error_type"] == "RuntimeError"
+
+
+async def test_dead_trace_cleanup_still_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        real_write = recorder._trace_file.write
+
+        def flaky(text: str) -> int:
+            if '"kind":"workflow.state"' in text.replace(" ", ""):
+                raise OSError("disk full")
+            return real_write(text)
+
+        monkeypatch.setattr(recorder._trace_file, "write", flaky)
+        recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
+        with caplog.at_level(logging.WARNING):
+            _record_cleanup_failure(
+                recorder,
+                step="llm.aclose",
+                exc=RuntimeError("close failed"),
+                selected_as_cleanup_error=False,
+            )
+        assert any("runtime cleanup failed" in r.message for r in caplog.records)
+
+
+async def test_shutdown_timeout_recorded(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        supervisor = TaskSupervisor(recorder=recorder)
+        async with supervisor:
+            started = asyncio.Event()
+
+            async def hang() -> None:
+                started.set()
+                await asyncio.sleep(60)
+
+            assert supervisor.start(name="hang", run=hang)
+            await started.wait()
+            await supervisor.shutdown(timeout_seconds=0.01)
+
+    kinds = _kinds(_load_trace(run_dir))
+    assert "task.shutdown_timeout" in kinds
+    assert "task.cancelled" in kinds

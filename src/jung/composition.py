@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
@@ -20,7 +19,6 @@ from jung.diagnostics import (
     DiagnosticRecorder,
     DiagnosticRun,
     _safe_exception_message,
-    sanitize_url,
 )
 from jung.events import EventStream
 from jung.llm.gateway import AdapterConfig, LLMTask, ModelPolicy, StructuredOutputMode
@@ -33,7 +31,10 @@ from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
 from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.intake.processor import IntakeProcessor
-from jung.phases.post_session.models import PostSessionResult, SessionAnalysisResult
+from jung.phases.post_session.models import (
+    PostSessionUpdateResult,
+    SessionAnalysisResult,
+)
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
@@ -52,6 +53,14 @@ def _record_cleanup_failure(
     selected_as_cleanup_error: bool,
     discovered_while_draining: bool = False,
 ) -> None:
+    logger.warning(
+        "runtime cleanup failed step=%s error_type=%s selected_as_cleanup_error=%s "
+        "discovered_while_draining=%s",
+        step,
+        type(exc).__name__,
+        selected_as_cleanup_error,
+        discovered_while_draining,
+    )
     if recorder is not None:
         recorder.record(
             "runtime.cleanup.error",
@@ -63,16 +72,6 @@ def _record_cleanup_failure(
                 "discovered_while_draining": discovered_while_draining,
             },
         )
-    else:
-        # Keep signal in logs without marking evidence incomplete.
-        logger.warning(
-            "cleanup failure step=%s error_type=%s selected_as_cleanup_error=%s "
-            "discovered_while_draining=%s",
-            step,
-            type(exc).__name__,
-            selected_as_cleanup_error,
-            discovered_while_draining,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +80,6 @@ class ApplicationRuntime:
     events: EventStream
     supervisor: TaskSupervisor
     llm: OpenAICompatibleLLM
-    recorder: DiagnosticRecorder | None = None
 
 
 def _default_now() -> datetime:
@@ -96,7 +94,7 @@ _SCHEMA_OUTPUT_TYPES = {
     LLMTask.INTAKE_PATCH: IntakeRecordPatch,
     LLMTask.ASSESSMENT: AssessmentResult,
     LLMTask.POST_SESSION_ANALYSIS: SessionAnalysisResult,
-    LLMTask.POST_SESSION_UPDATE: PostSessionResult,
+    LLMTask.POST_SESSION_UPDATE: PostSessionUpdateResult,
 }
 
 
@@ -114,26 +112,6 @@ def _secret_values(settings: ApplicationSettings) -> list[str]:
     if settings.llm.default_headers:
         secrets.extend(settings.llm.default_headers.values())
     return [value for value in secrets if value]
-
-
-def _diagnostic_metadata(settings: ApplicationSettings) -> dict[str, Any]:
-    policies = build_model_policies(settings.llm)
-    return {
-        "database_path": str(settings.database_path),
-        "model": settings.llm.default_model,
-        "provider_base_url": sanitize_url(settings.llm.base_url),
-        "structured_output_modes": {
-            task.value: policies[task].structured_output_mode.value for task in LLMTask
-        },
-        "timeouts_seconds": {
-            task.value: policies[task].timeout_seconds for task in LLMTask
-        },
-        "max_completion_tokens": {
-            task.value: policies[task].max_completion_tokens
-            for task in LLMTask
-            if policies[task].max_completion_tokens is not None
-        },
-    }
 
 
 async def _drain_cleanup_step(
@@ -175,73 +153,8 @@ async def _drain_cleanup_step(
         raise cancellation
 
 
-async def _capture_snapshot(
-    *,
-    store: SQLiteStore,
-    recorder: DiagnosticRecorder,
-    settings: ApplicationSettings,
-    phase: str,
-) -> None:
-    artifact = f"database-{phase}.sqlite"
-    payload_base: dict[str, object] = {
-        "name": artifact,
-        "phase": phase,
-        "database_path": str(settings.database_path),
-        "artifact": artifact,
-    }
-    recorder.record("database.snapshot.start", payload_base)
-    started = time.perf_counter()
-    destination = recorder.artifact_path(artifact)
-
-    def record_complete() -> None:
-        recorder.record(
-            "database.snapshot.complete",
-            {
-                **payload_base,
-                "elapsed_seconds": time.perf_counter() - started,
-            },
-        )
-
-    def record_error(exc: BaseException, *, after_cancellation: bool = False) -> None:
-        label = f"database-{phase} snapshot failed"
-        if after_cancellation:
-            label = f"database-{phase} snapshot failed after cancellation"
-        recorder.capture_error(label, exc)
-        recorder.record(
-            "database.snapshot.error",
-            {
-                **payload_base,
-                "elapsed_seconds": time.perf_counter() - started,
-                "error_type": type(exc).__name__,
-                "error_message": _safe_exception_message(exc),
-            },
-        )
-
-    try:
-        task = asyncio.create_task(asyncio.to_thread(store.backup_to, destination))
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as cancellation:
-            failure = await drain_cancelled_task(task)
-            if failure is None:
-                record_complete()
-            else:
-                record_error(failure, after_cancellation=True)
-                raise cancellation from failure
-            raise cancellation
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        record_error(exc)
-        raise
-    else:
-        record_complete()
-
-
 async def _cleanup_application_runtime(
     *,
-    settings: ApplicationSettings,
-    store: SQLiteStore,
     recorder: DiagnosticRecorder | None,
     llm: OpenAICompatibleLLM | None,
     supervisor: TaskSupervisor | None,
@@ -249,6 +162,7 @@ async def _cleanup_application_runtime(
     application: TherapyApplication | None,
     primary: _ExcInfo | None,
     cleanup_error: _ExcInfo | None,
+    shutdown_timeout_seconds: float,
 ) -> tuple[_ExcInfo | None, _ExcInfo | None]:
     if application is not None:
         try:
@@ -271,7 +185,7 @@ async def _cleanup_application_runtime(
     if supervisor is not None:
         try:
             await _drain_cleanup_step(
-                supervisor.shutdown(timeout_seconds=settings.shutdown_timeout_seconds),
+                supervisor.shutdown(timeout_seconds=shutdown_timeout_seconds),
                 on_drained_failure=lambda exc: _record_cleanup_failure(
                     recorder,
                     step="supervisor.shutdown",
@@ -320,29 +234,6 @@ async def _cleanup_application_runtime(
                     exc=exc,
                     selected_as_cleanup_error=selected_as_cleanup_error,
                 )
-
-    if recorder is not None:
-        try:
-            await _capture_snapshot(
-                store=store,
-                recorder=recorder,
-                settings=settings,
-                phase="end",
-            )
-        except asyncio.CancelledError as cancel:
-            # Cleanup-time cancellation becomes the propagated exception only when
-            # no runtime/startup exception and no cleanup error exist yet.
-            selected_as_cleanup_error = primary is None and cleanup_error is None
-            if selected_as_cleanup_error:
-                cleanup_error = (cancel, cancel.__traceback__)
-            _record_cleanup_failure(
-                recorder,
-                step="database.end_snapshot",
-                exc=cancel,
-                selected_as_cleanup_error=selected_as_cleanup_error,
-            )
-        except Exception:
-            pass
 
     if llm is not None:
         try:
@@ -404,14 +295,13 @@ async def application_context(
     if settings.debug_run_dir is not None:
         run_cm = DiagnosticRun(
             settings.debug_run_dir,
-            metadata=_diagnostic_metadata(settings),
             secret_values=_secret_values(settings),
         )
     else:
         run_cm = nullcontext(None)
 
     with run_cm as recorder:
-        store = SQLiteStore(settings.database_path, recorder=recorder)
+        store = SQLiteStore(settings.database_path)
         await asyncio.to_thread(store.initialize)
 
         llm: OpenAICompatibleLLM | None = None
@@ -422,14 +312,6 @@ async def application_context(
         cleanup_error: _ExcInfo | None = None
 
         try:
-            if recorder is not None:
-                await _capture_snapshot(
-                    store=store,
-                    recorder=recorder,
-                    settings=settings,
-                    phase="start",
-                )
-
             policies = build_model_policies(settings.llm)
             _preflight_json_schema_policies(policies)
             adapter_config = AdapterConfig(
@@ -485,7 +367,6 @@ async def application_context(
                 supervisor=supervisor,
                 now=now or _default_now,
                 new_id=new_id or _default_new_id,
-                recorder=recorder,
             )
             await application.recover_on_startup()
             runtime = ApplicationRuntime(
@@ -493,7 +374,6 @@ async def application_context(
                 events=events,
                 supervisor=supervisor,
                 llm=llm,
-                recorder=recorder,
             )
             try:
                 yield runtime
@@ -504,8 +384,6 @@ async def application_context(
                 primary = (exc, exc.__traceback__)
         finally:
             primary, cleanup_error = await _cleanup_application_runtime(
-                settings=settings,
-                store=store,
                 recorder=recorder,
                 llm=llm,
                 supervisor=supervisor,
@@ -513,6 +391,7 @@ async def application_context(
                 application=application,
                 primary=primary,
                 cleanup_error=cleanup_error,
+                shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
             )
 
         if primary is not None:

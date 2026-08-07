@@ -19,10 +19,6 @@ class TranscriptTurn(BaseModel):
     content: str
 
 
-def normalize_transcript_content(text: str) -> str:
-    return " ".join(text.split())
-
-
 def messages_to_transcript(messages: list[Message]) -> tuple[TranscriptTurn, ...]:
     turns: list[TranscriptTurn] = []
     for message in messages:

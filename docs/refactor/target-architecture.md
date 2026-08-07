@@ -371,7 +371,13 @@ Test profiles use temporary data volumes or isolated data directories, not dupli
 
 Retain structured command, operation, and LLM call tracing through boundary decorators/middleware. Diagnostics observe the system and must not become workflow state or API contract fields.
 
-Minimum useful records:
+Ordinary logs may include safe LLM metadata when enabled. Opt-in
+`JUNG_DEBUG_RUN_DIR` writes a sensitive correlated `trace.jsonl` for local
+debugging (provider LLM traffic, accepted structured outputs, domain
+outcomes, workflow state, and task lifecycle)—not a forensic completeness
+guarantee. See `docs/safety-and-data.md`.
+
+Minimum useful ordinary-log records:
 
 - command accepted/completed/failed;
 - stage before/after and state revision;

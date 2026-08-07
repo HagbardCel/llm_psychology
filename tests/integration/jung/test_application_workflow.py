@@ -147,7 +147,7 @@ async def test_end_session_creates_post_session_operation(store: SQLiteStore) ->
         session_id=therapy_id,
         now=ready.now,
     )
-    fake = FakeLLM(post_session_expectations())
+    fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
         revision = (await runtime.application.get_snapshot()).revision
         snapshot = await runtime.application.end_session(

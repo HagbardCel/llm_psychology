@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -48,21 +48,14 @@ TARGET_TABLES = frozenset(
 
 
 @contextmanager
-def connect(
-    database_path: Path,
-    *,
-    trace_callback: Callable[[str], None] | None = None,
-) -> Iterator[sqlite3.Connection]:
+def connect(database_path: Path) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(database_path)
     try:
-        if trace_callback is not None:
-            conn.set_trace_callback(trace_callback)
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         yield conn
     finally:
-        conn.set_trace_callback(None)
         conn.close()
 
 

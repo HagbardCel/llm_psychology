@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar
 
 from jung.llm.errors import LLMTimeout
 from tests.smoke.jung.smoke_env import smoke_strict_acceptance
-from tests.smoke.jung.smoke_evidence import SmokeEvidenceCollector, SmokePathResult
+from tests.smoke.jung.smoke_evidence import (
+    ProviderAttemptSnapshot,
+    SmokeEvidenceCollector,
+    SmokePathResult,
+)
 
 T = TypeVar("T")
 
@@ -29,6 +33,7 @@ async def run_smoke_path(
     name: SmokePathName,
     budget_seconds: float,
     operation: Callable[[], Awaitable[SmokeOperationResult[T]]],
+    provider_attempts_snapshot: Callable[[], Mapping[str, ProviderAttemptSnapshot]],
 ) -> T:
     started = time.perf_counter()
     strict = smoke_strict_acceptance()
@@ -89,5 +94,6 @@ async def run_smoke_path(
             acceptance_passed=acceptance_passed,
             acceptance_max_seconds=budget_seconds,
             error_type=error_type,
+            provider_attempts_by_task=provider_attempts_snapshot(),
         )
         setattr(collector, name, path_result)

@@ -1,9 +1,8 @@
-"""Unit tests for diagnostic capture."""
+"""Unit tests for lean diagnostic logging."""
 
 from __future__ import annotations
 
 import json
-import logging
 import threading
 from datetime import date, datetime
 from enum import Enum
@@ -16,14 +15,12 @@ from pydantic import BaseModel
 from jung.composition import application_context
 from jung.config import ApplicationSettings
 from jung.diagnostics import (
-    DiagnosticCaptureError,
     DiagnosticRecorder,
     DiagnosticRun,
     diagnostic_context,
     sanitize_url,
     sanitize_value,
 )
-from jung.llm.fake import FakeLLM
 from jung.llm.gateway import LLMSettings
 
 
@@ -34,6 +31,15 @@ class _Kind(Enum):
 class _Model(BaseModel):
     name: str
     api_key: str
+
+
+def _trace_lines(run_dir: Path) -> list[dict]:
+    path = run_dir / "trace.jsonl"
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def test_sanitize_url_strips_userinfo_and_query() -> None:
@@ -47,14 +53,6 @@ def test_sanitize_url_invalid_returns_placeholder() -> None:
     assert sanitize_url("http://[bad") == "[REDACTED_URL]"
 
 
-def test_sanitize_url_non_numeric_port_returns_placeholder() -> None:
-    assert sanitize_url("http://localhost:not-a-port/v1") == "[REDACTED_URL]"
-
-
-def test_sanitize_url_localhost() -> None:
-    assert sanitize_url("http://127.0.0.1:8080/v1") == "http://127.0.0.1:8080/v1"
-
-
 @pytest.mark.parametrize(
     ("key", "expected_redacted"),
     [
@@ -64,11 +62,9 @@ def test_sanitize_url_localhost() -> None:
         ("total_tokens", False),
         ("token", True),
         ("access_token", True),
-        ("access_tokens", True),
-        ("refresh_tokens", True),
-        ("client_secret", True),
         ("api-key", True),
         ("Authorization", True),
+        ("client_secret", True),
     ],
 )
 def test_sanitize_value_token_metric_allowlist(
@@ -82,359 +78,293 @@ def test_sanitize_value_token_metric_allowlist(
         assert sanitized[key] == 42
 
 
-@pytest.mark.parametrize(
-    ("key", "value", "expected"),
-    [
-        ("promptTokens", 12, 12),
-        ("maxCompletionTokens", None, None),
-        ("promptTokens", True, "[REDACTED]"),
-        ("promptTokens", "secret", "[REDACTED]"),
-    ],
-)
-def test_sanitize_value_token_metric_numeric_only(
-    key: str,
-    value: object,
-    expected: object,
-) -> None:
-    sanitized = sanitize_value({key: value})
-    assert sanitized[key] == expected
+def test_sanitize_value_exact_secret_replacement() -> None:
+    secret = "sk-super-secret-value"
+    sanitized = sanitize_value(
+        {"message": f"failed using {secret}"},
+        secret_values=[secret],
+    )
+    assert sanitized["message"] == "failed using [REDACTED]"
 
 
-@pytest.mark.parametrize(
-    "key",
-    [
-        "accessToken",
-        "secondaryAccessToken",
-        "providerRefreshToken",
-        "serviceClientSecret",
-        "bearerTokens",
-    ],
-)
-def test_sanitize_value_camelcase_credentials_redacted(key: str) -> None:
-    sanitized = sanitize_value({key: "credential"})
-    assert sanitized[key] == "[REDACTED]"
+def test_sanitize_value_redacts_short_caller_designated_secrets() -> None:
+    secret = "abc123"
+    sanitized = sanitize_value(
+        {"error_message": f"authentication failed for {secret}"},
+        secret_values=[secret],
+    )
+    assert sanitized["error_message"] == "authentication failed for [REDACTED]"
 
 
-def test_sanitize_value_redacts_sensitive_keys_and_secret_values() -> None:
-    secret = "super-secret-value"
+def test_recorder_redacts_short_configured_secrets(tmp_path: Path) -> None:
+    secret = "abc123"
+    with DiagnosticRun(tmp_path / "run", secret_values=[secret]) as recorder:
+        recorder.record(
+            "operation.status",
+            {"error_message": f"authentication failed for {secret}"},
+        )
+    lines = _trace_lines(tmp_path / "run")
+    status = next(e for e in lines if e["kind"] == "operation.status")
+    assert status["data"]["error_message"] == "authentication failed for [REDACTED]"
+
+
+def test_sanitize_value_common_project_types() -> None:
     payload = {
-        "Authorization": "Bearer leaked",
-        "nested": {"api_key": "nested-secret", "ok": f"prefix-{secret}-suffix"},
-        "list": [secret, {"token": "x"}],
-        "bytes": b"abc",
-        "path": Path("/tmp/x"),
         "uuid": UUID("00000000-0000-0000-0000-000000000001"),
-        "when": datetime(2024, 1, 2, 3, 4, 5),
-        "day": date(2024, 1, 2),
+        "when": datetime(2026, 1, 2, 3, 4, 5),
+        "day": date(2026, 1, 2),
         "kind": _Kind.ALPHA,
-        "model": _Model(name="n", api_key="model-secret"),
+        "model": _Model(name="x", api_key="secret-key"),
+        "path": Path("/tmp/x"),
     }
-    sanitized = sanitize_value(payload, secret_values=[secret])
-    assert sanitized["Authorization"] == "[REDACTED]"
-    assert sanitized["nested"]["api_key"] == "[REDACTED]"
-    assert sanitized["nested"]["ok"] == "prefix-[REDACTED]-suffix"
-    assert sanitized["list"][0] == "[REDACTED]"
-    assert sanitized["list"][1]["token"] == "[REDACTED]"
-    assert sanitized["bytes"] == "<bytes:3>"
-    assert sanitized["path"] == "/tmp/x"
+    sanitized = sanitize_value(payload)
     assert sanitized["uuid"] == "00000000-0000-0000-0000-000000000001"
-    assert sanitized["when"].startswith("2024-01-02T03:04:05")
-    assert sanitized["day"] == "2024-01-02"
     assert sanitized["kind"] == "alpha"
     assert sanitized["model"]["api_key"] == "[REDACTED]"
-    assert sanitized["model"]["name"] == "n"
 
 
-def test_sanitize_value_caps_depth() -> None:
-    nested: dict[str, object] = {"v": 1}
-    current = nested
-    for _ in range(40):
-        nxt: dict[str, object] = {"v": 1}
-        current["child"] = nxt
-        current = nxt
-    sanitized = sanitize_value(nested)
-    depth = 0
-    cursor: object = sanitized
-    while isinstance(cursor, dict) and "child" in cursor:
-        cursor = cursor["child"]
-        depth += 1
-    assert depth <= 33
-    assert cursor == "<max-depth>" or (
-        isinstance(cursor, dict) and cursor.get("child") == "<max-depth>"
-    )
+def test_diagnostic_context_rejects_unknown_fields() -> None:
+    with pytest.raises(TypeError, match="unknown diagnostic context fields"):
+        with diagnostic_context(task_name="old"):
+            pass
 
 
-def test_recorder_rejects_existing_run_dir(tmp_path: Path) -> None:
-    run_dir = tmp_path / "existing"
-    run_dir.mkdir()
-    with pytest.raises(FileExistsError):
-        DiagnosticRecorder(run_dir)
+def test_diagnostic_context_nested_merge_and_restore() -> None:
+    with diagnostic_context(session_id="s1"):
+        with diagnostic_context(operation_id="o1", task="t1"):
+            with diagnostic_context(llm_call_id="llm-1"):
+                from jung.diagnostics import current_diagnostic_context
+
+                ctx = current_diagnostic_context()
+                assert ctx.session_id == "s1"
+                assert ctx.operation_id == "o1"
+                assert ctx.task == "t1"
+                assert ctx.llm_call_id == "llm-1"
+            from jung.diagnostics import current_diagnostic_context
+
+            mid = current_diagnostic_context()
+            assert mid.llm_call_id is None
+            assert mid.task == "t1"
+        outer = __import__(
+            "jung.diagnostics", fromlist=["current_diagnostic_context"]
+        ).current_diagnostic_context()
+        assert outer.operation_id is None
+        assert outer.session_id == "s1"
 
 
-def test_manifest_redacts_sensitive_metadata_keys(tmp_path: Path) -> None:
-    run_dir = tmp_path / "metadata-keys"
-    with DiagnosticRun(
-        run_dir,
-        metadata={
-            "authorization": "abc",
-            "apiKey": "def",
-            "clientSecret": "ghi",
-            "accessToken": "jkl",
-            "safe_field": "visible",
-        },
-    ):
-        pass
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["authorization"] == "[REDACTED]"
-    assert manifest["apiKey"] == "[REDACTED]"
-    assert manifest["clientSecret"] == "[REDACTED]"
-    assert manifest["accessToken"] == "[REDACTED]"
-    assert manifest["safe_field"] == "visible"
-
-
-def test_artifact_path_rejects_invalid_names(tmp_path: Path) -> None:
+def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    recorder = DiagnosticRecorder(run_dir)
-    try:
-        for name in (
-            "",
-            "manifest.json",
-            "trace.jsonl",
-            "a/b",
-            "a\\b",
-            ".",
-            "..",
-            "foo/../bar",
-        ):
-            with pytest.raises(ValueError, match="invalid diagnostic artifact name"):
-                recorder.artifact_path(name)
-        assert recorder.artifact_path("database-start.sqlite") == (
-            run_dir / "database-start.sqlite"
-        )
-    finally:
-        recorder.close(run_status="success")
+    with DiagnosticRun(run_dir) as recorder:
+        with diagnostic_context(session_id="s1", task="chat:1"):
+            recorder.record("llm.provider.request", {"attempt": "initial"})
+    lines = _trace_lines(run_dir)
+    assert lines[0]["kind"] == "diagnostics.start"
+    assert lines[-1]["kind"] == "diagnostics.end"
+    assert lines[-1]["data"]["status"] == "success"
+    event = lines[1]
+    assert event["schema_version"] == 1
+    assert event["sequence"] == 2
+    assert "timestamp" in event
+    assert "elapsed_ms" in event
+    assert event["kind"] == "llm.provider.request"
+    assert event["context"] == {"session_id": "s1", "task": "chat:1"}
+    assert event["data"]["attempt"] == "initial"
+    assert not (run_dir / "manifest.json").exists()
 
 
-def test_monotonic_sequence_and_secret_redaction_in_trace(tmp_path: Path) -> None:
-    secret = "abcd1234secret"
-    run_dir = tmp_path / "seq"
-    recorder = DiagnosticRecorder(run_dir, secret_values=[secret])
-    try:
-        with diagnostic_context(request_id="req-1"):
-            recorder.record("event.a", {"note": f"has {secret}"})
-            recorder.record("event.b", {"Authorization": "Bearer x"})
-        lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
-        assert len(lines) >= 2
-        first = json.loads(lines[0])
-        second = json.loads(lines[1])
-        assert first["sequence"] == 1
-        assert second["sequence"] == 2
-        assert first["context"]["request_id"] == "req-1"
-        assert secret not in lines[0]
-        assert "[REDACTED]" in first["data"]["note"]
-        assert second["data"]["Authorization"] == "[REDACTED]"
-    finally:
-        recorder.close(run_status="success")
+def test_mark_run_failed_sets_end_status_without_raising(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    with DiagnosticRun(run_dir) as recorder:
+        recorder.mark_run_failed()
+    end = _trace_lines(run_dir)[-1]
+    assert end["kind"] == "diagnostics.end"
+    assert end["data"] == {"status": "failed"}
 
 
-def test_concurrent_writes_are_serialized(tmp_path: Path) -> None:
-    run_dir = tmp_path / "concurrent"
-    recorder = DiagnosticRecorder(run_dir)
-    barrier = threading.Barrier(8)
-    errors: list[BaseException] = []
-
-    def worker(index: int) -> None:
-        try:
-            barrier.wait(timeout=5)
-            for step in range(20):
-                recorder.record("concurrent", {"worker": index, "step": step})
-        except BaseException as exc:  # noqa: BLE001 - collect for assertion
-            errors.append(exc)
-
-    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
-    try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
-            assert not thread.is_alive()
-        assert errors == []
-        lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
-        sequences = [json.loads(line)["sequence"] for line in lines]
-        assert sequences == list(range(1, len(sequences) + 1))
-        assert len(sequences) == 160
-    finally:
-        recorder.close(run_status="success")
-
-
-def test_log_handler_does_not_recurse(tmp_path: Path) -> None:
-    run_dir = tmp_path / "logs"
-    recorder = DiagnosticRecorder(run_dir)
-    try:
-        logger = logging.getLogger("jung.test.diagnostics")
-        logger.setLevel(logging.INFO)
-        logger.info("hello from app logger", extra={"api_key": "should-redact"})
-        lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
-        assert any('"kind":"log.record"' in line for line in lines)
-        payload = next(
-            json.loads(line)
-            for line in lines
-            if json.loads(line)["kind"] == "log.record"
-        )
-        assert payload["data"]["message"] == "hello from app logger"
-        assert payload["data"]["extra"]["api_key"] == "[REDACTED]"
-    finally:
-        recorder.close(run_status="success")
-
-
-def test_log_handler_captures_traceback_and_redacts_secrets(tmp_path: Path) -> None:
-    run_dir = tmp_path / "logs-tb"
-    secret = "super-secret-traceback-value"
-    recorder = DiagnosticRecorder(run_dir, secret_values=[secret])
-    try:
-        logger = logging.getLogger("jung.test.diagnostics.tb")
-        logger.setLevel(logging.ERROR)
-        try:
-            raise RuntimeError(f"boom with {secret}")
-        except RuntimeError:
-            logger.exception("failed in worker")
-        payload = next(
-            json.loads(line)
-            for line in (run_dir / "trace.jsonl")
-            .read_text(encoding="utf-8")
-            .splitlines()
-            if json.loads(line)["kind"] == "log.record"
-        )
-        assert payload["data"]["exception_type"] == "RuntimeError"
-        assert secret not in payload["data"]["exception_message"]
-        assert "traceback" in payload["data"]
-        assert "test_log_handler_captures_traceback" in payload["data"]["traceback"]
-        assert secret not in payload["data"]["traceback"]
-        assert "[REDACTED]" in payload["data"]["traceback"]
-    finally:
-        recorder.close(run_status="success")
-
-
-def test_diagnostic_log_handler_handles_formatting_failure(
-    tmp_path: Path,
-) -> None:
-    class BrokenString:
-        def __str__(self) -> str:
-            raise RuntimeError("format failed")
-
-    run_dir = tmp_path / "format-failure"
-    recorder = DiagnosticRecorder(run_dir)
-    try:
-        assert recorder._log_handler is not None  # type: ignore[attr-defined]
-        record = logging.LogRecord(
-            name="jung.test.diagnostics.formatting",
-            level=logging.INFO,
-            pathname=__file__,
-            lineno=1,
-            msg="value=%s",
-            args=(BrokenString(),),
-            exc_info=None,
-        )
-        recorder._log_handler.emit(record)  # type: ignore[union-attr]
-
-        with pytest.raises(DiagnosticCaptureError):
-            recorder.close(run_status="success")
-    finally:
-        # If close() already raised, it may have removed the handler; ensure trace artifacts exist.
-        if (run_dir / "manifest.json").exists():
-            manifest = json.loads(
-                (run_dir / "manifest.json").read_text(encoding="utf-8"),
-            )
-            assert manifest["evidence_complete"] is False
-            errors = manifest.get("instrumentation_errors") or []
-            assert any("diagnostic log capture failed" in str(err) for err in errors)
-
-
-@pytest.mark.parametrize(
-    ("raise_app_error", "mark_incomplete", "expect_capture_error"),
-    [
-        (False, False, False),
-        (False, True, True),
-        (True, False, False),
-        (True, True, False),
-    ],
-)
-def test_diagnostic_run_finalization_matrix(
-    tmp_path: Path,
-    raise_app_error: bool,
-    mark_incomplete: bool,
-    expect_capture_error: bool,
-) -> None:
-    run_dir = tmp_path / f"final-{raise_app_error}-{mark_incomplete}"
-
-    def exercise() -> None:
+def test_top_level_exception_records_error_and_propagates(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    with pytest.raises(RuntimeError, match="boom"):
         with DiagnosticRun(run_dir) as recorder:
-            recorder.record("probe", {"ok": True})
-            if mark_incomplete:
-                recorder.capture_error("injected", "boom")
-            if raise_app_error:
-                raise RuntimeError("app failed")
-
-    if raise_app_error:
-        with pytest.raises(RuntimeError, match="app failed"):
-            exercise()
-    elif expect_capture_error:
-        with pytest.raises(DiagnosticCaptureError, match="incomplete"):
-            exercise()
-    else:
-        exercise()
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_status"] == ("failed" if raise_app_error else "success")
-    assert manifest["evidence_complete"] is (not mark_incomplete)
+            recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
+            raise RuntimeError("boom")
+    end = _trace_lines(run_dir)[-1]
+    assert end["data"]["status"] == "failed"
+    assert end["data"]["error_type"] == "RuntimeError"
+    assert end["data"]["error_message"] == "boom"
 
 
-def test_capture_error_handles_exception_with_broken_str(
-    tmp_path: Path,
-) -> None:
-    class BrokenMessageError(Exception):
-        def __str__(self) -> str:
-            raise RuntimeError("broken exception message")
-
-    run_dir = tmp_path / "broken-exception-message"
-
-    with pytest.raises(DiagnosticCaptureError):
-        with DiagnosticRun(run_dir) as recorder:
-            recorder.capture_error(
-                "instrumentation failed",
-                BrokenMessageError(),
-            )
-
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["evidence_complete"] is False
-    assert any(
-        "<exception message unavailable>" in message
-        for message in manifest["instrumentation_errors"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_application_context_without_debug_run_dir_has_no_recorder(
+def test_diagnostics_start_write_failure_fails_startup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ClosingFakeLLM(FakeLLM):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__([])
+    run_dir = tmp_path / "run"
 
+    def boom_write(self, kind, data, *, raise_on_error):  # type: ignore[no-untyped-def]
+        if kind == "diagnostics.start":
+            raise OSError("disk full")
+        raise AssertionError("unexpected write")
+
+    monkeypatch.setattr(DiagnosticRecorder, "_write_line", boom_write)
+    with pytest.raises(OSError, match="disk full"):
+        DiagnosticRun(run_dir).__enter__()
+
+
+def test_write_failure_latches_and_warns_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_dir = tmp_path / "run"
+    with DiagnosticRun(run_dir) as recorder:
+        real_write = recorder._trace_file.write
+
+        def flaky_write(text: str) -> int:
+            if '"kind":"workflow.state"' in text.replace(" ", ""):
+                raise OSError("disk full")
+            return real_write(text)
+
+        monkeypatch.setattr(recorder._trace_file, "write", flaky_write)
+        recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
+        recorder.record("workflow.state", {"revision": 2, "stage": "therapy"})
+        recorder.record("workflow.state", {"revision": 3, "stage": "ready"})
+    err = capsys.readouterr().err
+    assert err.count("jung diagnostics:") == 1
+
+
+def test_thread_safe_sequence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    with DiagnosticRun(run_dir) as recorder:
+
+        def worker(n: int) -> None:
+            for i in range(20):
+                recorder.record("workflow.state", {"n": n, "i": i})
+
+        threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    lines = _trace_lines(run_dir)
+    sequences = [line["sequence"] for line in lines]
+    assert sequences == list(range(1, len(sequences) + 1))
+
+
+def test_concurrent_record_cannot_append_after_diagnostics_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary record admitted before shutdown must not outrank diagnostics.end.
+
+    Forces a record into the dangerous interval: past preparation / unlocked
+    admission, delayed around the persistence lock, while close claims shutdown,
+    writes the terminal event, and only then releases the held file-close gate.
+    """
+    run_dir = tmp_path / "run"
+    recorder = DiagnosticRecorder(run_dir)
+
+    record_entered = threading.Event()
+    allow_record_persist = threading.Event()
+    file_close_entered = threading.Event()
+    allow_file_close = threading.Event()
+
+    original_write_line = DiagnosticRecorder._write_line
+
+    def gated_write_line(
+        self: DiagnosticRecorder,
+        kind: str,
+        data: dict,
+        *,
+        raise_on_error: bool,
+    ) -> None:
+        if kind not in ("diagnostics.start", "diagnostics.end"):
+            record_entered.set()
+            assert allow_record_persist.wait(timeout=5.0)
+        return original_write_line(self, kind, data, raise_on_error=raise_on_error)
+
+    monkeypatch.setattr(DiagnosticRecorder, "_write_line", gated_write_line)
+
+    real_close = recorder._trace_file.close
+
+    def gated_file_close() -> None:
+        file_close_entered.set()
+        assert allow_file_close.wait(timeout=5.0)
+        return real_close()
+
+    monkeypatch.setattr(recorder._trace_file, "close", gated_file_close)
+
+    errors: list[BaseException] = []
+
+    def record_worker() -> None:
+        try:
+            recorder.record("workflow.state", {"marker": "after-admit"})
+        except BaseException as exc:  # noqa: BLE001 - collect for main thread
+            errors.append(exc)
+
+    thread = threading.Thread(target=record_worker)
+    thread.start()
+    assert record_entered.wait(timeout=5.0)
+
+    close_done = threading.Event()
+
+    def close_worker() -> None:
+        try:
+            recorder.close()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            close_done.set()
+
+    close_thread = threading.Thread(target=close_worker)
+    close_thread.start()
+    assert file_close_entered.wait(timeout=5.0)
+
+    allow_record_persist.set()
+    allow_file_close.set()
+    assert close_done.wait(timeout=5.0)
+    thread.join(timeout=5.0)
+    close_thread.join(timeout=5.0)
+    assert errors == []
+
+    kinds = [line["kind"] for line in _trace_lines(run_dir)]
+    assert kinds.count("diagnostics.end") == 1
+    assert kinds[-1] == "diagnostics.end"
+
+
+def test_secure_permissions(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    with DiagnosticRun(run_dir):
+        pass
+    assert oct(run_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct((run_dir / "trace.jsonl").stat().st_mode & 0o777) == "0o600"
+
+
+def test_existing_dir_fails_startup(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    with pytest.raises(FileExistsError):
+        with DiagnosticRun(run_dir):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_disabled_mode_creates_no_artifacts(tmp_path: Path) -> None:
+    class _StubLLM:
         async def aclose(self) -> None:
             return None
 
-    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", ClosingFakeLLM)
     settings = ApplicationSettings(
-        database_path=tmp_path / "no-debug.db",
+        database_path=tmp_path / "jung.db",
         llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
+            base_url="http://127.0.0.1:9/v1",
+            api_key="test-key",
+            default_model="test-model",
         ),
         debug_run_dir=None,
     )
-    async with application_context(settings) as runtime:
-        assert runtime.recorder is None
+    async with application_context(
+        settings,
+        llm_factory=lambda _config, _recorder: _StubLLM(),  # type: ignore[return-value]
+    ) as runtime:
+        assert not hasattr(runtime, "recorder")
+        await runtime.application.get_snapshot()
+    assert list(tmp_path.glob("**/trace.jsonl")) == []

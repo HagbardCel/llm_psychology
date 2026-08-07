@@ -7,7 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from jung.diagnostics import _safe_exception_message
+from jung.diagnostics import _safe_exception_message, diagnostic_context
 
 if TYPE_CHECKING:
     from jung.diagnostics import DiagnosticRecorder
@@ -46,10 +46,8 @@ class TaskSupervisor:
         if not self._accepting or self._task_group is None:
             raise SupervisorClosed("supervisor is closed to new tasks")
         if name in self._active:
-            self._record("task.duplicate", {"name": name})
             return False
         self._active.add(name)
-        self._record("task.scheduled", {"name": name})
         coro = self._run_wrapper(name, run)
         try:
             task = self._task_group.create_task(coro, name=name)
@@ -86,27 +84,28 @@ class TaskSupervisor:
         name: str,
         run: Callable[[], Awaitable[None]],
     ) -> None:
-        self._record("task.started", {"name": name})
-        try:
-            await run()
-        except asyncio.CancelledError:
-            self._record("task.cancelled", {"name": name})
-            raise
-        except Exception as exc:
-            self._record(
-                "task.failed",
-                {
-                    "name": name,
-                    "error_type": type(exc).__name__,
-                    "error_message": _safe_exception_message(exc),
-                },
-            )
-            logger.exception("supervised task failed: %s", name)
-        else:
-            self._record("task.completed", {"name": name})
-        finally:
-            self._active.discard(name)
-            self._tasks.pop(name, None)
+        with diagnostic_context(task=name):
+            self._record("task.started", {"name": name})
+            try:
+                await run()
+            except asyncio.CancelledError:
+                self._record("task.cancelled", {"name": name})
+                raise
+            except Exception as exc:
+                self._record(
+                    "task.failed",
+                    {
+                        "name": name,
+                        "error_type": type(exc).__name__,
+                        "error_message": _safe_exception_message(exc),
+                    },
+                )
+                logger.exception("supervised task failed: %s", name)
+            else:
+                self._record("task.completed", {"name": name})
+            finally:
+                self._active.discard(name)
+                self._tasks.pop(name, None)
 
     def _record(self, kind: str, data: dict[str, object]) -> None:
         if self._recorder is None:

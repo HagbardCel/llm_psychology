@@ -211,7 +211,7 @@ async def test_application_context_wires_loaded_llm_configuration(
         raw_llm = runtime.llm
         snapshot = await runtime.application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
-        assert runtime.recorder is None
+        assert not hasattr(runtime, "recorder")
 
     assert len(captured_config) == 1
     config = captured_config[0]

@@ -124,8 +124,17 @@ Policy decisions:
 - `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read.
 - `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available.
 - `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text.
-- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1.
+- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below.
 - `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`.
+- Observable `intervention_evidence` item fields (when present inside a briefing document):
+  - `intervention_description` (string): model-generated interpretive label
+  - `therapist_sequence` (int): transcript sequence of the cited therapist turn
+  - `therapist_content` (string): server-resolved full whitespace-normalized content of that assistant turn
+  - `patient_sequence` (int \| null): later patient turn when a response is cited
+  - `patient_content` (string \| null): server-resolved full whitespace-normalized content of that user turn
+  - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response.
+- Removed legacy intervention status values such as `"proposed"`, `"accepted"`, `"completed"`, and `"responded"` are not emitted.
+- Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1.
 - API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
 - `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`.

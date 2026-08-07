@@ -60,26 +60,31 @@ Three separate switches:
 | --- | --- |
 | `JUNG_API_LOG_LEVEL` | Console log verbosity |
 | `JUNG_ENABLE_LLM_TRACING` | Safe LLM timing/count metadata in ordinary logs |
-| `JUNG_DEBUG_RUN_DIR` | Full sensitive diagnostic evidence in a local run directory |
+| `JUNG_DEBUG_RUN_DIR` | Opt-in sensitive structured diagnostic `trace.jsonl` |
 
 `JUNG_ENABLE_LLM_TRACING=true` records operational metadata (task, model,
 mode, timing, role sequence, message counts, and character counts). Prompt
 contents are not written to ordinary logs.
 
-`JUNG_DEBUG_RUN_DIR` enables structured local evidence capture
-(`manifest.json`, `trace.jsonl`, and for the composed application also
-`database-start.sqlite` / `database-end.sqlite`). The directory must not
-already exist. Treat the entire run directory as highly sensitive: it may
-contain exact prompts, model responses, and database contents.
+`JUNG_DEBUG_RUN_DIR` enables lean local diagnostic capture: a new directory
+(must not already exist) containing `trace.jsonl` with correlated events for
+LLM provider traffic, accepted structured outputs, chat/operation outcomes,
+workflow state, and supervised task lifecycle. Directory mode is `0700` and
+the trace file is `0600` where the platform supports it.
 
-Manifest `run_status` describes runtime lifecycle outcome only
-(`run_status_scope: runtime_lifecycle`), not whether every command or
-background operation succeeded. A manifest left in `"running"` after process
-exit is interrupted/unfinalized evidence.
+Treat the entire run directory as highly sensitive: it may contain exact
+prompts, model responses, and patient text. Handle it like the local database.
 
-Avoid duplicate representations within the same boundary. Values may still
-appear at multiple architectural boundaries (provider → events → store →
-database snapshot) to prove correct handoff.
+`diagnostics.end.status` describes the enclosing diagnostic run/harness
+outcome only—not whether every chat turn or background operation succeeded.
+Domain failures appear as separate events (`chat.turn.failed`,
+`operation.status`). After a successful diagnostic startup (directory created
+and `diagnostics.start` written), later write failures are best-effort: they
+warn once to stderr and never change application outcome. Diagnostic JSONL is
+not a smoke acceptance criterion.
+
+When `JUNG_DEBUG_RUN_DIR` is unset, no diagnostic directory is created and
+runtime behavior is unchanged.
 
 ## Erasing local data
 

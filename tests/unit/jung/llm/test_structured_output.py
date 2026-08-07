@@ -17,7 +17,10 @@ from jung.llm.structured import (
 )
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
-from jung.phases.post_session.models import PostSessionResult, SessionAnalysisResult
+from jung.phases.post_session.models import (
+    PostSessionUpdateResult,
+    SessionAnalysisResult,
+)
 
 
 class _Sample(BaseModel):
@@ -63,7 +66,7 @@ def test_response_format_uses_strict_provider_schema() -> None:
         IntakeRecordPatch,
         AssessmentResult,
         SessionAnalysisResult,
-        PostSessionResult,
+        PostSessionUpdateResult,
     ],
 )
 def test_real_output_models_produce_valid_strict_provider_payload(

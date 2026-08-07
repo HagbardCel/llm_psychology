@@ -6,6 +6,7 @@ from jung.phases.context_bounds import (
     bounded_text,
     newest_lines_within_budget,
 )
+from jung.styles import load_styles
 
 
 def test_bounded_text_zero_limit_returns_empty() -> None:
@@ -51,3 +52,11 @@ def test_newest_lines_within_budget_bounds_oversized_newest_line() -> None:
     selected = newest_lines_within_budget([oversized], 20)
     assert selected == [bounded_text(oversized, 20)]
     assert len(selected[0]) <= 20
+
+
+def test_style_instructions_fit_documented_system_budgets() -> None:
+    """Style instructions live in system messages, not historical JSON budgets."""
+    for style in load_styles().values():
+        post_session = style.post_session_instructions or ""
+        assert len(post_session) <= 2000
+        assert len(style.therapist_instructions) <= 2000

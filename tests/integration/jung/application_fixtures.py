@@ -36,11 +36,11 @@ from jung.phases.intake.models import (
 )
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
-    DerivedProfilePatch,
+    PatientTurnCitation,
     PlanPatch,
-    PostSessionResult,
+    PostSessionUpdateResult,
     SessionAnalysisResult,
-    SessionBriefing,
+    SessionBriefingDraft,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
@@ -56,7 +56,19 @@ def assessment_result() -> AssessmentResult:
     return AssessmentResult.model_validate(assessment_result_data())
 
 
-def post_session_expectations() -> list[StreamExpectation | StructuredExpectation]:
+def post_session_expectations(
+    *,
+    patient_sequence: int | None = None,
+    update_fragments: tuple[str, ...] = (),
+) -> list[StreamExpectation | StructuredExpectation]:
+    """Expectations for a conversational therapy transcript (user + assistant).
+
+    Non-conversational sessions (empty, user-only, or assistant-only) take the
+    deterministic zero-call path and must use ``FakeLLM([])`` instead.
+    """
+    citations = ()
+    if patient_sequence is not None:
+        citations = (PatientTurnCitation(patient_sequence=patient_sequence),)
     return [
         StructuredExpectation(
             task=LLMTask.POST_SESSION_ANALYSIS,
@@ -64,22 +76,20 @@ def post_session_expectations() -> list[StreamExpectation | StructuredExpectatio
             response=SessionAnalysisResult(
                 summary="Patient explored sleep difficulties.",
                 key_themes=("sleep",),
+                patient_turn_citations=citations,
             ),
         ),
         StructuredExpectation(
             task=LLMTask.POST_SESSION_UPDATE,
-            output_type=PostSessionResult,
-            response=PostSessionResult(
-                session_summary="Sleep remained difficult.",
-                session_briefing=SessionBriefing(
+            output_type=PostSessionUpdateResult,
+            response=PostSessionUpdateResult(
+                session_briefing=SessionBriefingDraft(
                     narrative_handoff="Session focused on sleep.",
                     recommended_opening_focus="sleep routine",
                 ),
-                derived_profile_patch=DerivedProfilePatch(
-                    observations=("reports poor sleep",)
-                ),
                 plan_patch=PlanPatch(current_progress="some progress"),
             ),
+            message_fragments=update_fragments,
         ),
     ]
 
@@ -287,7 +297,6 @@ async def build_test_application(
             supervisor=active_supervisor,
             now=clock,
             new_id=ids,
-            recorder=recorder,
         )
         if recover:
             await application.recover_on_startup()

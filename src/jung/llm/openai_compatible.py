@@ -524,30 +524,13 @@ class OpenAICompatibleLLM:
         if close_method is None:
             return
 
-        terminal_outcome = status if status != "started" else "abandoned"
-
         def _record_close_failure(exc: BaseException) -> None:
-            if self._recorder is None:
-                logger.warning(
-                    "llm provider stream close failed task=%s close_method=%s "
-                    "error_type=%s",
-                    policy.task.value,
-                    close_method_name,
-                    type(exc).__name__,
-                )
-                return
-            self._recorder.record(
-                "llm.provider.cleanup.error",
-                {
-                    "provider_attempt_id": provider_attempt_id,
-                    "llm_call_id": current_diagnostic_context().llm_call_id,
-                    "task": policy.task.value,
-                    "attempt": "initial",
-                    "outcome_status": terminal_outcome,
-                    "close_method": close_method_name,
-                    "error_type": type(exc).__name__,
-                    "error_message": _safe_exception_message(exc),
-                },
+            logger.warning(
+                "llm provider stream close failed task=%s close_method=%s "
+                "error_type=%s",
+                policy.task.value,
+                close_method_name,
+                type(exc).__name__,
             )
 
         await close_awaitable_safely(
