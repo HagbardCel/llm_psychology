@@ -72,6 +72,8 @@ class SmokePathResult:
         default_factory=dict
     )
     result_shape_valid: bool | None = None
+    # Grounding and negation moved to the hard evals; these stay for
+    # backward-compatible evidence JSON and are no longer populated by smoke.
     evidence_complete: bool | None = None
     negation_turn_selected: bool | None = None
     negation_invariant_evaluated: bool | None = None

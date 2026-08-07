@@ -225,9 +225,6 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
         analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
         update_policy=policies[LLMTask.POST_SESSION_UPDATE],
     )
-    negation_sequence = 3
-    negation_content = "I do not think I want to die."
-    ordinary_negation = "It is not true that everyone hates me."
     transcript = (
         TranscriptTurn(
             message_id=uuid4(),
@@ -239,23 +236,17 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
             message_id=uuid4(),
             sequence=2,
             role="user",
-            content=ordinary_negation,
+            content="It is not true that everyone hates me.",
         ),
         TranscriptTurn(
             message_id=uuid4(),
             sequence=3,
-            role="user",
-            content=negation_content,
-        ),
-        TranscriptTurn(
-            message_id=uuid4(),
-            sequence=4,
             role="assistant",
             content="Thank you for saying that so clearly.",
         ),
         TranscriptTurn(
             message_id=uuid4(),
-            sequence=5,
+            sequence=4,
             role="user",
             content="I slept badly.",
         ),
@@ -281,69 +272,16 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
         provider_attempts_snapshot=gateway.attempts.snapshot,
     )
 
-    from jung.domain.text import normalize_content
-
-    turns_by_sequence = {turn.sequence: turn for turn in transcript}
-    grounded = result.derived_profile_patch.grounded_patient_turns
-    evidence = result.session_briefing.intervention_evidence
-
+    # Grounding and negation behavior are owned by the hard evals
+    # (`make evals`); smoke only proves the structured post-session result
+    # parses against the supported schema.
     result_shape_valid = bool(result.session_summary and result.session_briefing)
-    evidence_complete = True
-    for turn in grounded:
-        source = turns_by_sequence.get(turn.source_sequence)
-        if source is None or source.role != "user":
-            evidence_complete = False
-            break
-        if turn.content != normalize_content(source.content):
-            evidence_complete = False
-            break
-    for item in evidence:
-        therapist = turns_by_sequence.get(item.therapist_sequence)
-        if therapist is None or therapist.role != "assistant":
-            evidence_complete = False
-            break
-        if item.therapist_content != normalize_content(therapist.content):
-            evidence_complete = False
-            break
-        expected_status = (
-            "response_cited" if item.patient_sequence is not None else "delivered"
-        )
-        if item.status != expected_status:
-            evidence_complete = False
-            break
-        if item.patient_sequence is not None:
-            patient = turns_by_sequence.get(item.patient_sequence)
-            if (
-                patient is None
-                or patient.role != "user"
-                or item.patient_content != normalize_content(patient.content)
-            ):
-                evidence_complete = False
-                break
-
-    selected = next(
-        (turn for turn in grounded if turn.source_sequence == negation_sequence),
-        None,
-    )
-    negation_turn_selected = selected is not None
-    negation_invariant_evaluated = negation_turn_selected
-    negation_invariant_passed = (
-        selected is not None and selected.content == normalize_content(negation_content)
-    )
 
     path = COLLECTOR.post_session
     assert path is not None
     path.result_shape_valid = result_shape_valid
-    path.evidence_complete = evidence_complete
-    path.negation_turn_selected = negation_turn_selected
-    path.negation_invariant_evaluated = negation_invariant_evaluated
-    path.negation_invariant_passed = negation_invariant_passed
 
     if smoke_strict_acceptance():
         if COLLECTOR.server_version is None:
             pytest.fail("LOCAL_LLM_SMOKE_SERVER_VERSION must be set under strict smoke")
         assert result_shape_valid
-        assert evidence_complete
-        assert negation_turn_selected
-        assert negation_invariant_evaluated
-        assert negation_invariant_passed
