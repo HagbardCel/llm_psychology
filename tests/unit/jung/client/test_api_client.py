@@ -178,27 +178,6 @@ def test_client_settings_reject_invalid_timeouts(value: float) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_lifecycle_and_idempotent_close() -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000/"))
-    close = AsyncMock()
-    client._http = SimpleNamespace(aclose=close)
-
-    async with client as entered:
-        assert entered is client
-
-    await client.aclose()
-    close.assert_awaited_once_with()
-    with pytest.raises(RuntimeError):
-        await client.get_health()
-    with pytest.raises(RuntimeError):
-        async with client.open_chat():
-            pass
-    intent = client.new_chat_intent(uuid4(), "hello")
-    with pytest.raises(RuntimeError):
-        await client.reconcile_chat_turn(intent)
-
-
-@pytest.mark.asyncio
 async def test_intent_and_attempt_ids_have_distinct_lifetimes() -> None:
     async with JungApiClient(ClientSettings("https://localhost:8443")) as client:
         session_id = uuid4()

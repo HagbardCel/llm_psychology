@@ -159,7 +159,7 @@ async def test_end_session_creates_post_session_operation(store: SQLiteStore) ->
     assert snapshot.current_operation.status is OperationStatus.PENDING
 
 
-async def test_full_assessment_e2e_with_fake_llm(store: SQLiteStore) -> None:
+async def test_assessment_application_journey(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -265,7 +265,7 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
     fake.assert_exhausted()
 
 
-async def test_full_therapy_to_post_session_e2e(store: SQLiteStore) -> None:
+async def test_therapy_to_post_session_application_journey(store: SQLiteStore) -> None:
     advance_to_ready(store)
     fake = FakeLLM(
         [

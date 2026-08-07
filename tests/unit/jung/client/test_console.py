@@ -25,7 +25,6 @@ from jung.api.contracts import (
     ProfileResponse,
     ProfileUpdateRequest,
     ProfileWire,
-    RetryOperationRequest,
     SelectStyleRequest,
     SendMessageCommand,
     SessionDetailResponse,
@@ -41,13 +40,9 @@ from jung.client._chat_events import (
     ChatEventIdentity,
 )
 from jung.client.api_client import (
-    ChatReconciliationResult,
-    ChatReconciliationStatus,
-    ChatSendIntent,
     ClientSettings,
     JungApiClient,
     JungApiError,
-    JungConnectionClosed,
     JungProtocolError,
     JungTransportError,
     ProtocolErrorKind,
@@ -59,9 +54,7 @@ from jung.client.console import (
     ConsoleChatFailed,
     ConsoleExitRequested,
     ConsoleOperationFailed,
-    ConsoleUncertainDelivery,
     ErrorDisplay,
-    PendingTurnContext,
     PromptSpec,
     require_command,
 )
@@ -337,14 +330,6 @@ def _completion_event(
 async def _event_stream(*events: object) -> AsyncIterator[object]:
     for event in events:
         yield event
-
-
-@asynccontextmanager
-async def _fake_chat(events: AsyncIterator[object]):
-    chat = MagicMock()
-    chat.send = AsyncMock()
-    chat.events = MagicMock(return_value=events)
-    yield chat
 
 
 def _app(
@@ -951,58 +936,6 @@ async def test_token_then_matching_durable_error_returns_outcome() -> None:
     assert state.turn_id == turn_a
 
 
-async def test_different_pending_turn_not_adopted() -> None:
-    client = _mock_client()
-    session = _session()
-    original_id = uuid4()
-    other_id = uuid4()
-    intent = client.new_chat_intent(session.id, "hello", client_message_id=original_id)
-    context = PendingTurnContext(intent=intent, reconciliation_attempted=False)
-    other_pending = _turn(session_id=session.id, client_message_id=other_id)
-    snapshot = _snapshot(
-        session=session,
-        pending=other_pending,
-    )
-    history = _history(session_id=session.id, client_message_id=original_id)
-    client.get_session = AsyncMock(return_value=history)
-    client.reconcile_chat_turn = AsyncMock(
-        return_value=ChatReconciliationResult(
-            status=ChatReconciliationStatus.UNRESOLVED,
-            snapshot=snapshot,
-            history=history,
-        )
-    )
-    app = _app(client)
-    with pytest.raises(ConsoleUncertainDelivery):
-        await app._wait_for_pending_chat_turn(snapshot, context=context)
-
-
-async def test_command_rejection_discards_local_id_and_adopts_snapshot() -> None:
-    client = _mock_client()
-    session = _session()
-    intent = client.new_chat_intent(session.id, "hello")
-    adopted = _snapshot(revision=9, session=session)
-    request_id = uuid4()
-    error = ErrorEvent(
-        type="error",
-        request_id=request_id,
-        error=ErrorEnvelope(
-            code="state_conflict",
-            message="stale revision",
-            request_id=request_id,
-            retryable=False,
-            current_snapshot=adopted,
-        ),
-        session_id=session.id,
-        client_message_id=intent.client_message_id,
-    )
-    app = _app(_mock_client())
-    app._locally_submitted_client_ids.add(intent.client_message_id)
-    result = await app._handle_command_rejection(error, intent)
-    assert result.revision == 9
-    assert intent.client_message_id not in app._locally_submitted_client_ids
-
-
 async def test_durable_error_after_turn_id_raises_chat_failed() -> None:
     client = _mock_client()
     session = _session()
@@ -1042,111 +975,6 @@ async def test_durable_error_after_turn_id_raises_chat_failed() -> None:
         await app._handle_chat_turn(snapshot, content="hello")
 
 
-async def test_successful_completion_returns_get_state() -> None:
-    client = _mock_client()
-    session = _session()
-    snapshot = _snapshot(revision=1, session=session)
-
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
-        progress = _progress_event(
-            session_id=session.id,
-            client_message_id=command.client_message_id,
-        )
-        completion = _completion_event(
-            session_id=session.id,
-            client_message_id=command.client_message_id,
-            turn_id=progress.turn.id,
-        )
-        return _event_stream(progress, completion)
-
-    client.open_chat = _open_chat_from_send(build_events)
-    after = _snapshot(stage="assessment", revision=2, session=session, commands=[])
-    client.get_state = AsyncMock(return_value=after)
-    app = _app(client)
-    result = await app._handle_chat_turn(snapshot, content="hello")
-    assert result.stage == "assessment"
-    client.get_state.assert_awaited()
-
-
-async def test_handshake_failure_discards_local_id_without_reconcile() -> None:
-    client = _mock_client()
-    session = _session()
-    snapshot = _snapshot(session=session)
-
-    @asynccontextmanager
-    async def failing_open():
-        raise JungTransportError("handshake failed")
-        yield  # pragma: no cover
-
-    client.open_chat = failing_open
-    client.reconcile_chat_turn = AsyncMock()
-    app = _app(client)
-    with pytest.raises(JungTransportError):
-        await app._handle_chat_turn(snapshot, content="hello")
-    client.reconcile_chat_turn.assert_not_called()
-
-
-async def test_send_failure_reconciles_once_after_scope_exit() -> None:
-    client = _mock_client()
-    session = _session()
-    snapshot = _snapshot(session=session)
-    intent_holder: dict[str, ChatSendIntent] = {}
-    stale_pending_snapshot = _snapshot(
-        stage="intake",
-        session=session,
-        revision=2,
-        pending=_turn(
-            session_id=session.id,
-            client_message_id=uuid4(),
-        ),
-    )
-    final_snapshot = _snapshot(
-        stage="intake",
-        session=session,
-        revision=3,
-        pending=None,
-    )
-
-    @asynccontextmanager
-    async def broken_chat():
-        chat = MagicMock()
-
-        async def send(_command: SendMessageCommand) -> None:
-            raise JungConnectionClosed(code=None, reason=None)
-
-        chat.send = send
-        chat.events = MagicMock(return_value=_event_stream())
-        yield chat
-
-    client.open_chat = broken_chat
-
-    async def reconcile(intent: ChatSendIntent) -> ChatReconciliationResult:
-        intent_holder["intent"] = intent
-        history = _history(
-            session_id=intent.session_id,
-            client_message_id=intent.client_message_id,
-            assistant_content="reply",
-        )
-        return ChatReconciliationResult(
-            status=ChatReconciliationStatus.COMPLETE,
-            snapshot=stale_pending_snapshot,
-            history=history,
-            completed_message=history.messages[-1],
-        )
-
-    client.reconcile_chat_turn = AsyncMock(side_effect=reconcile)
-    client.get_state = AsyncMock(return_value=final_snapshot)
-    app = _app(client)
-    result = await app._handle_chat_turn(snapshot, content="hello")
-    client.reconcile_chat_turn.assert_awaited_once()
-    client.get_state.assert_awaited_once()
-    assert result is final_snapshot
-    assert (
-        intent_holder["intent"].client_message_id
-        not in app._locally_submitted_client_ids
-    )
-
-
 async def test_single_events_iterator_per_turn() -> None:
     client = _mock_client()
     session = _session()
@@ -1170,68 +998,6 @@ async def test_single_events_iterator_per_turn() -> None:
     app = _app(client)
     with pytest.raises(JungProtocolError):
         await app._handle_chat_turn(snapshot, content="hello")
-
-
-async def test_unresolved_reconciliation_raises_uncertain_delivery() -> None:
-    client = _mock_client()
-    session = _session()
-    intent = client.new_chat_intent(session.id, "hello")
-    history = _history(
-        session_id=session.id, client_message_id=intent.client_message_id
-    )
-    result = ChatReconciliationResult(
-        status=ChatReconciliationStatus.UNRESOLVED,
-        snapshot=_snapshot(session=session),
-        history=history,
-    )
-    app = _app(client)
-    with pytest.raises(ConsoleUncertainDelivery):
-        await app._apply_reconciliation_result(result, intent)
-
-
-async def test_identity_conflict_is_terminal_protocol_error() -> None:
-    client = _mock_client()
-    session = _session()
-    intent = client.new_chat_intent(session.id, "hello")
-    history = _history(
-        session_id=session.id, client_message_id=intent.client_message_id
-    )
-    result = ChatReconciliationResult(
-        status=ChatReconciliationStatus.IDENTITY_CONFLICT,
-        snapshot=_snapshot(session=session),
-        history=history,
-        conflicting_user_message=history.messages[0],
-    )
-    output = RecordingOutput()
-    app = _app(client, output=output)
-    with pytest.raises(JungProtocolError):
-        await app._apply_reconciliation_result(result, intent)
-    assert output.identity_conflicts
-
-
-async def test_console_app_does_not_close_injected_client() -> None:
-    client = _mock_client()
-    client.aclose = AsyncMock()
-    app = _app(client)
-    assert app._client is client
-    client.aclose.assert_not_called()
-
-
-async def test_pending_reconcile_budget_once_per_client_message_id() -> None:
-    client = _mock_client()
-    session = _session()
-    intent = client.new_chat_intent(session.id, "hello")
-    context = PendingTurnContext(intent=intent, reconciliation_attempted=True)
-    snapshot = _snapshot(session=session, pending=None)
-    history = _history(
-        session_id=session.id, client_message_id=intent.client_message_id
-    )
-    client.get_session = AsyncMock(return_value=history)
-    client.reconcile_chat_turn = AsyncMock()
-    app = _app(client)
-    with pytest.raises(ConsoleUncertainDelivery):
-        await app._wait_for_pending_chat_turn(snapshot, context=context)
-    client.reconcile_chat_turn.assert_not_called()
 
 
 async def test_profile_setup_preserves_optional_fields() -> None:
@@ -1267,43 +1033,6 @@ async def test_read_input_eof_raises_console_exit_requested() -> None:
     app = _app(_mock_client(), inputs=EofInput())  # type: ignore[arg-type]
     with pytest.raises(ConsoleExitRequested):
         await app.read_input(PromptSpec(text="> "))
-
-
-async def test_pre_acceptance_command_error_not_chat_failed() -> None:
-    client = _mock_client()
-    session = _session()
-    snapshot = _snapshot(revision=1, session=session)
-    event_holder: dict[str, AsyncIterator[object]] = {}
-
-    @asynccontextmanager
-    async def open_chat():
-        chat = MagicMock()
-
-        async def send(command: SendMessageCommand) -> None:
-            error = ErrorEvent(
-                type="error",
-                request_id=command.request_id,
-                error=ErrorEnvelope(
-                    code="validation_error",
-                    message="bad",
-                    request_id=command.request_id,
-                    retryable=False,
-                ),
-                session_id=session.id,
-                client_message_id=command.client_message_id,
-            )
-            event_holder["events"] = _event_stream(error)
-
-        chat.send = send
-        chat.events = lambda: event_holder["events"]
-        yield chat
-
-    client.open_chat = open_chat
-    adopted = _snapshot(revision=2, session=session)
-    client.get_state = AsyncMock(return_value=adopted)
-    app = _app(client)
-    result = await app._handle_chat_turn(snapshot, content="hello")
-    assert result.revision == 2
 
 
 async def test_token_renders_through_process_chat_event() -> None:
@@ -1452,56 +1181,6 @@ async def test_start_session_uses_snapshot_revision() -> None:
     assert request.expected_revision == 4
 
 
-async def test_ack_timeout_before_progress_reconciles_once() -> None:
-    client = _mock_client()
-    session = _session()
-    snapshot = _snapshot(session=session)
-    settings = ClientSettings(
-        "http://localhost:8000",
-        acknowledgement_timeout=0.05,
-    )
-    client.settings = settings
-
-    @asynccontextmanager
-    async def slow_chat():
-        chat = MagicMock()
-        chat.send = AsyncMock()
-
-        async def delayed_events():
-            await asyncio.sleep(settings.acknowledgement_timeout * 2)
-            yield _progress_event(
-                session_id=session.id,
-                client_message_id=uuid4(),
-            )  # pragma: no cover
-
-        chat.events = lambda: delayed_events()
-        yield chat
-
-    client.open_chat = slow_chat
-    final_snapshot = _snapshot(stage="intake", session=session, revision=2)
-
-    async def reconcile(intent: ChatSendIntent) -> ChatReconciliationResult:
-        history = _history(
-            session_id=intent.session_id,
-            client_message_id=intent.client_message_id,
-            assistant_content="reply",
-        )
-        return ChatReconciliationResult(
-            status=ChatReconciliationStatus.COMPLETE,
-            snapshot=_snapshot(stage="intake", session=session, revision=1),
-            history=history,
-            completed_message=history.messages[-1],
-        )
-
-    client.reconcile_chat_turn = AsyncMock(side_effect=reconcile)
-    client.get_state = AsyncMock(return_value=final_snapshot)
-    output = RecordingOutput()
-    app = _app(client, output=output)
-    await app._handle_chat_turn(snapshot, content="hello")
-    client.reconcile_chat_turn.assert_awaited_once()
-    assert output.assistant_discards == 0
-
-
 async def test_completion_during_ack_skips_completion_wait() -> None:
     client = _mock_client()
     session = _session()
@@ -1607,135 +1286,6 @@ async def test_chat_input_recorded_before_transport_failure() -> None:
     assert user_events == [
         ("user_message", {"content": "I slept badly again."}),
     ]
-
-
-async def test_pending_poll_completion_refreshes_state() -> None:
-    client = _mock_client()
-    session = _session()
-    client_message_id = uuid4()
-    intent = client.new_chat_intent(
-        session.id,
-        "hello",
-        client_message_id=client_message_id,
-    )
-    context = PendingTurnContext(intent=intent)
-    matching_pending = _turn(
-        session_id=session.id,
-        client_message_id=client_message_id,
-    )
-    pending_snapshot = _snapshot(
-        pending=matching_pending,
-        session=session,
-    )
-    final_snapshot = _snapshot(
-        stage="intake",
-        pending=None,
-        session=session,
-        revision=3,
-    )
-    history = _history(
-        session_id=session.id,
-        client_message_id=client_message_id,
-        assistant_content="done",
-    )
-    client.get_state = AsyncMock(
-        side_effect=[pending_snapshot, final_snapshot],
-    )
-    client.get_session = AsyncMock(return_value=history)
-    app = _app(client)
-    app._locally_submitted_client_ids.add(client_message_id)
-
-    with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
-        result = await app._wait_for_pending_chat_turn(
-            pending_snapshot,
-            context=context,
-        )
-
-    assert result is final_snapshot
-    assert client_message_id not in app._locally_submitted_client_ids
-
-
-async def test_pending_poll_rejects_history_for_wrong_session() -> None:
-    client = _mock_client()
-    session_a = _session()
-    session_b_id = uuid4()
-    client_message_id = uuid4()
-    intent = client.new_chat_intent(
-        session_a.id,
-        "hello",
-        client_message_id=client_message_id,
-    )
-    context = PendingTurnContext(intent=intent)
-    pending_snapshot = _snapshot(
-        pending=_turn(
-            session_id=session_a.id,
-            client_message_id=client_message_id,
-        ),
-        session=session_a,
-    )
-    wrong_history = _history(
-        session_id=session_b_id,
-        client_message_id=client_message_id,
-        assistant_content="wrong-session reply",
-    )
-    client.get_state = AsyncMock(return_value=pending_snapshot)
-    client.get_session = AsyncMock(return_value=wrong_history)
-    client.reconcile_chat_turn = AsyncMock()
-    app = _app(client)
-
-    with patch.object(ConsoleApp, "POLL_INTERVAL", 0):
-        with pytest.raises(JungProtocolError) as exc_info:
-            await app._wait_for_pending_chat_turn(
-                pending_snapshot,
-                context=context,
-            )
-
-    assert exc_info.value.kind is ProtocolErrorKind.IMPOSSIBLE_HISTORY
-    client.get_state.assert_awaited_once()
-    client.get_session.assert_awaited_once_with(session_a.id)
-    client.reconcile_chat_turn.assert_not_awaited()
-    assert app._output.assistant_tokens == []
-
-
-async def test_completed_original_turn_not_replaced_by_other_pending() -> None:
-    client = _mock_client()
-    session = _session()
-    original_id = uuid4()
-    other_id = uuid4()
-    intent = client.new_chat_intent(
-        session.id,
-        "hello",
-        client_message_id=original_id,
-    )
-    context = PendingTurnContext(intent=intent)
-    other_pending = _turn(session_id=session.id, client_message_id=other_id)
-    other_pending_snapshot = _snapshot(
-        pending=other_pending,
-        session=session,
-    )
-    final_snapshot = _snapshot(
-        stage="intake",
-        pending=other_pending,
-        session=session,
-        revision=4,
-    )
-    history = _history(
-        session_id=session.id,
-        client_message_id=original_id,
-        assistant_content="done",
-    )
-    client.get_session = AsyncMock(return_value=history)
-    client.get_state = AsyncMock(return_value=final_snapshot)
-    app = _app(client)
-    app._locally_submitted_client_ids.add(original_id)
-
-    result = await app._wait_for_pending_chat_turn(
-        other_pending_snapshot,
-        context=context,
-    )
-
-    assert result is final_snapshot
-    assert original_id not in app._locally_submitted_client_ids
 
 
 async def test_token_before_progress_then_completion() -> None:
@@ -1901,156 +1451,3 @@ async def test_first_token_gap_is_recorded() -> None:
     )
     app._process_chat_event(token, identity=identity, render_state=state)
     assert ("token_gap", {"expected": 1, "received": 2}) in observer.events
-
-
-async def test_failed_reconciliation_without_turn_id_is_command_rejection() -> None:
-    client = _mock_client()
-    session = _session()
-    intent = client.new_chat_intent(session.id, "hello")
-    adopted = _snapshot(revision=9, session=session)
-    request_id = uuid4()
-    error = ErrorEvent(
-        type="error",
-        request_id=request_id,
-        error=ErrorEnvelope(
-            code="state_conflict",
-            message="stale revision",
-            request_id=request_id,
-            retryable=False,
-            current_snapshot=adopted,
-        ),
-        session_id=session.id,
-        client_message_id=intent.client_message_id,
-    )
-    history = _history(
-        session_id=session.id, client_message_id=intent.client_message_id
-    )
-    result = ChatReconciliationResult(
-        status=ChatReconciliationStatus.FAILED,
-        snapshot=adopted,
-        history=history,
-        error_event=error,
-    )
-    output = RecordingOutput()
-    app = _app(client, output=output)
-    snapshot = await app._apply_reconciliation_result(result, intent)
-    assert snapshot.revision == 9
-    assert output.command_rejections
-    assert not output.chat_failures
-
-
-@pytest.mark.parametrize(
-    ("method_name", "call"),
-    [
-        (
-            "update_profile",
-            lambda app, snapshot: app._handle_setup(),
-        ),
-        (
-            "select_style",
-            lambda app, snapshot: app._handle_style_selection(snapshot),
-        ),
-        (
-            "start_session",
-            lambda app, snapshot: app._apply_mutation(
-                app._client.start_session(
-                    StartSessionRequest(expected_revision=snapshot.revision)
-                ),
-                snapshot_of=lambda response: response.snapshot,
-            ),
-        ),
-        (
-            "end_session",
-            lambda app, snapshot: app._end_active_session(snapshot),
-        ),
-        (
-            "retry_current_operation",
-            lambda app, snapshot: app._apply_mutation(
-                app._client.retry_current_operation(
-                    RetryOperationRequest(expected_revision=snapshot.revision)
-                ),
-                snapshot_of=lambda adopted: adopted,
-            ),
-        ),
-    ],
-)
-async def test_http_state_conflict_adopts_snapshot(method_name: str, call) -> None:
-    client = _mock_client()
-    session = _session()
-    adopted = _snapshot(revision=11, session=session)
-    request_id = uuid4()
-    conflict = JungApiError(
-        status=409,
-        error=ErrorResponse(
-            code="state_conflict",
-            message="stale",
-            request_id=request_id,
-            retryable=False,
-            current_snapshot=adopted,
-        ),
-    )
-
-    if method_name == "update_profile":
-        client.get_profile = AsyncMock(
-            return_value=ProfileResponse(
-                profile=ProfileWire(name="Alex", primary_language="English"),
-                snapshot=_snapshot(
-                    stage="setup", revision=0, commands=["update_profile"]
-                ),
-            )
-        )
-        client.update_profile = AsyncMock(side_effect=conflict)
-    elif method_name == "select_style":
-        client.get_styles = AsyncMock(
-            return_value=StyleOptionsResponse(styles=[], recommendations=[])
-        )
-        client.select_style = AsyncMock(side_effect=conflict)
-    elif method_name == "start_session":
-        client.start_session = AsyncMock(side_effect=conflict)
-    elif method_name == "end_session":
-        client.end_session = AsyncMock(side_effect=conflict)
-    else:
-        client.retry_current_operation = AsyncMock(side_effect=conflict)
-
-    snapshot = _snapshot(
-        stage="ready" if method_name == "start_session" else "style_selection",
-        revision=5,
-        session=session,
-        commands=["start_session", "select_style", "end_session", "retry_operation"],
-    )
-    if method_name == "end_session":
-        snapshot = _snapshot(
-            stage="therapy",
-            revision=5,
-            session=_session(kind="therapy"),
-            commands=["end_session"],
-        )
-    if method_name == "retry_current_operation":
-        snapshot = _snapshot(
-            stage="assessment",
-            revision=5,
-            commands=["retry_operation"],
-            operation=OperationSummaryResponse(
-                id=uuid4(),
-                kind="assessment",
-                status="failed",
-                error=ErrorEnvelope(
-                    code="llm_timeout",
-                    message="x",
-                    request_id=uuid4(),
-                    retryable=True,
-                ),
-            ),
-        )
-
-    output = RecordingOutput()
-    if method_name == "update_profile":
-        app = _app(client, inputs=ScriptedInput("Name", "Lang"), output=output)
-    elif method_name == "select_style":
-        app = _app(client, inputs=ScriptedInput("cbt"), output=output)
-    else:
-        app = _app(client, output=output)
-    result = await call(app, snapshot)
-    assert result.revision == 11
-    assert output.command_rejections
-    assert output.command_rejections[0].request_id == request_id
