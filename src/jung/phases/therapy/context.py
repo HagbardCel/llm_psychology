@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from jung.domain.grounding import GroundedPatientTurn, parse_grounded_patient_turns
 from jung.domain.session_artifacts import SessionBriefing, parse_session_briefing
+from jung.domain.text import normalize_content
 from jung.llm.prompt_context import serialize_context_json
 from jung.phases.context_bounds import bounded_text
 from jung.phases.context_projection import (
@@ -19,7 +20,7 @@ from jung.phases.context_projection import (
     project_primary_language,
 )
 from jung.phases.therapy.models import TherapyTurnInput
-from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
+from jung.phases.transcript import TranscriptTurn
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +45,8 @@ def prepare_historical_transcript(
     turns = list(input.transcript)
     latest = input.latest_user_message if include_current_message else None
     if turns and latest and turns[-1].role == "user":
-        final_content = normalize_transcript_content(turns[-1].content)
-        if final_content == normalize_transcript_content(latest):
+        final_content = normalize_content(turns[-1].content)
+        if final_content == normalize_content(latest):
             turns = turns[:-1]
     total_after_deduplication = len(turns)
     cap = input.context_limits.max_transcript_turns

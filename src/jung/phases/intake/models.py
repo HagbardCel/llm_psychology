@@ -7,8 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from jung.domain.models import Profile
+from jung.domain.text import normalize_content
 from jung.llm.gateway import ChatMessage
-from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
+from jung.phases.transcript import TranscriptTurn
 
 Confidence = Literal["high", "medium", "low"]
 EvidenceResponseStatus = Literal["informative", "unknown", "unable_to_answer"]
@@ -185,10 +186,10 @@ class IntakeTurnInput(BaseModel):
             raise ValueError(
                 "a transcript ending in a user turn requires latest_user_message"
             )
-        normalized_message = normalize_transcript_content(self.latest_user_message)
+        normalized_message = normalize_content(self.latest_user_message)
         if not normalized_message:
             raise ValueError("latest_user_message must be nonblank")
-        if normalize_transcript_content(final_turn.content) != normalized_message:
+        if normalize_content(final_turn.content) != normalized_message:
             raise ValueError(
                 "latest_user_message must match the final transcript user turn"
             )

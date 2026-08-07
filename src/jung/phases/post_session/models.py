@@ -21,7 +21,8 @@ from jung.domain.session_artifacts import (
     InterventionStatus,
     SessionBriefing,
 )
-from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
+from jung.domain.text import normalize_content
+from jung.phases.transcript import TranscriptTurn
 from jung.styles import StyleDefinition
 
 __all__ = [
@@ -70,7 +71,12 @@ class InterventionCitation(BaseModel):
 
 
 class PatientTurnCitation(BaseModel):
-    """Model-facing citation of a patient turn by sequence only."""
+    """Sequence-only citation of a patient turn selected for durable memory.
+
+    The backend resolves ``patient_sequence`` to authoritative full-turn
+    content and message ID. Selected turns become durable cross-session
+    context; cite sparingly and never invent or reproduce turn text.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -202,8 +208,6 @@ class PostSessionInput(BaseModel):
         message_ids = [turn.message_id for turn in self.transcript]
         if len(message_ids) != len(set(message_ids)):
             raise ValueError("transcript message IDs must be unique")
-        if any(
-            not normalize_transcript_content(turn.content) for turn in self.transcript
-        ):
+        if any(not normalize_content(turn.content) for turn in self.transcript):
             raise ValueError("transcript turn content must be non-empty")
         return self

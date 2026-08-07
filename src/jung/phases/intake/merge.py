@@ -7,12 +7,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from jung.domain.text import normalize_content
 from jung.phases.intake.models import (
     IntakeEvidence,
     IntakeRecord,
     IntakeRecordPatch,
 )
-from jung.phases.transcript import TranscriptTurn, normalize_transcript_content
+from jung.phases.transcript import TranscriptTurn
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 MAX_INTAKE_DROP_REASONS = 25
@@ -58,7 +59,7 @@ def count_patch_evidence(patch: IntakeRecordPatch) -> int:
 
 
 def _normalize_evidence_text(text: str) -> str:
-    return normalize_transcript_content(text).casefold()
+    return normalize_content(text).casefold()
 
 
 def _evidence_drop_reason(
