@@ -5,16 +5,20 @@ developer workflow; Docker remains available for reproducible CI/runtime images.
 
 ## Layout
 
+Generic pytest options and collection hooks live in the repo-root `conftest.py`
+so that suites outside `tests/` can reuse `--no-mocks` and the `real_llm` gate.
+
 ```
 tests/
-├── conftest.py              # Generic pytest options and collection hooks
-├── unit/                    # Unit tests (jung/ + support scripts)
-├── integration/jung/        # Jung API / application / store integration tests
-├── smoke/jung/              # Opt-in local-model smoke (make smoke-local-llm)
+├── support/                 # Cross-suite helpers (API fixtures, local-model clients)
+├── unit/                    # Unit tests, grouped by the code area they cover
+├── integration/             # API / application / store / client integration tests
 ├── e2e/                     # Deterministic jung-console workflow probe
-├── jung_api_fixtures.py     # Shared API fixtures for probes and e2e
-└── console_probe_support.py # Probe helpers used by jung-console e2e
+└── smoke/                   # Opt-in local-model smoke (make smoke-local-llm)
 ```
+
+`tests/support/local_llm.py` owns connection and client construction shared by
+every real-model suite; suite-specific acceptance policy stays in that suite.
 
 Pytest discovery under `tests/unit` and `tests/integration` is authoritative.
 There is no Makefile path allowlist. Console E2E lives under `tests/e2e` and is
@@ -34,7 +38,7 @@ Native equivalent:
 
 ```bash
 uv run --locked pytest -m "not real_llm" tests/unit tests/integration
-uv run --locked pytest tests/unit/jung/...
+uv run --locked pytest tests/unit/...
 ```
 
 ## Conventions

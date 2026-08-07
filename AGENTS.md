@@ -54,7 +54,7 @@ there are no separate Phase-numbered validator scripts.
 - Default suite: `make test` (`tests/unit` + `tests/integration`, not `real_llm`)
 - Unit: `make test-unit`
 - Integration: `make test-integration`
-- Single path: `uv run --locked pytest tests/unit/jung/...`
+- Single path: `uv run --locked pytest tests/unit/...`
 - Deterministic console probe: `make probe-console` (E2E once; not part of `make test`)
 - Release-candidate validation: `make finalization-check`
 

@@ -67,7 +67,7 @@
       "request": "launch",
       "module": "pytest",
       "args": [
-        "tests/unit/jung/",
+        "tests/unit/",
         "-o",
         "asyncio_mode=auto",
         "-v",
@@ -87,7 +87,7 @@
       "request": "launch",
       "module": "pytest",
       "args": [
-        "tests/integration/jung/",
+        "tests/integration/",
         "-o",
         "asyncio_mode=auto",
         "-v",

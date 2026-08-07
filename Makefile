@@ -8,9 +8,9 @@ export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
 export HOST_GID ?= $(shell id -g)
 
-LOCAL_LLM_SMOKE_TARGET ?= tests/smoke/jung/test_local_llm.py
+LOCAL_LLM_SMOKE_TARGET ?= tests/smoke/test_local_llm_compatibility.py
 LOCAL_LLM_SMOKE_PYTEST_ARGS ?= -q
-CONSOLE_E2E_TEST := tests/e2e/test_console_v1_workflow.py
+CONSOLE_E2E_TEST := tests/e2e/test_console_workflow.py
 PROBE_OUTPUT_DIR ?= logs/workflow-probes/console-v1
 PROBE_ABS_OUTPUT_DIR := $(abspath $(PROBE_OUTPUT_DIR))
 
