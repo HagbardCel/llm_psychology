@@ -304,8 +304,6 @@ class DiagnosticRecorder:
 
     def record(self, kind: str, data: Mapping[str, Any] | None = None) -> None:
         """Record an event without propagating write failures."""
-        if self._closed or self._write_failed:
-            return
         try:
             self._write_line(kind, dict(data or {}), raise_on_error=False)
         except Exception:
@@ -318,29 +316,32 @@ class DiagnosticRecorder:
                 return
             self._closed = True
             run_failed = self._run_failed or primary_exception is not None
+            status = "failed" if run_failed else "success"
+            end_data: dict[str, object] = {"status": status}
+            if primary_exception is not None:
+                end_data["error_type"] = type(primary_exception).__name__
+                end_data["error_message"] = _safe_exception_message(primary_exception)
 
-        status = "failed" if run_failed else "success"
-        end_data: dict[str, object] = {"status": status}
-        if primary_exception is not None:
-            end_data["error_type"] = type(primary_exception).__name__
-            end_data["error_message"] = _safe_exception_message(primary_exception)
+            try:
+                if not self._write_failed and self._trace_file is not None:
+                    self._write_line_locked(
+                        "diagnostics.end",
+                        end_data,
+                        raise_on_error=False,
+                    )
+            except Exception:
+                self._latch_write_failure_locked("diagnostics.end failed")
 
-        # Temporarily allow the terminal write even after close flagged;
-        # use the write path while the file is still open.
-        try:
-            if not self._write_failed and self._trace_file is not None:
-                self._write_line("diagnostics.end", end_data, raise_on_error=False)
-        except Exception:
-            self._latch_write_failure("diagnostics.end failed")
-
-        try:
-            if self._trace_file is not None:
-                self._trace_file.flush()
-                self._trace_file.close()
-        except OSError as exc:
-            self._latch_write_failure(f"trace close failed: {type(exc).__name__}")
-        finally:
-            self._trace_file = None
+            try:
+                if self._trace_file is not None:
+                    self._trace_file.flush()
+                    self._trace_file.close()
+            except OSError as exc:
+                self._latch_write_failure_locked(
+                    f"trace close failed: {type(exc).__name__}"
+                )
+            finally:
+                self._trace_file = None
 
     def _write_line_or_raise(self, kind: str, data: Mapping[str, Any]) -> None:
         self._write_line(kind, dict(data), raise_on_error=True)
@@ -356,42 +357,84 @@ class DiagnosticRecorder:
         context = current_diagnostic_context().as_dict()
         now = datetime.now(UTC)
         with self._lock:
-            if self._trace_file is None:
-                if raise_on_error:
-                    raise RuntimeError("diagnostic trace file is not open")
+            if self._closed:
                 return
             if self._write_failed and not raise_on_error:
                 return
-            self._sequence += 1
-            sequence = self._sequence
-            elapsed_ms = (time.perf_counter() - self._started_monotonic) * 1000.0
-            line = json.dumps(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "sequence": sequence,
-                    "timestamp": now.isoformat(),
-                    "elapsed_ms": round(elapsed_ms, 3),
-                    "kind": kind,
-                    "context": context,
-                    "data": payload,
-                },
-                ensure_ascii=True,
-                separators=(",", ":"),
-                default=str,
+            self._persist_line_locked(
+                kind,
+                payload,
+                context=context,
+                now=now,
+                raise_on_error=raise_on_error,
             )
-            try:
-                self._trace_file.write(line + "\n")
-                self._trace_file.flush()
-            except OSError:
-                if raise_on_error:
-                    raise
-                self._write_failed = True
-                self._warn_write_failure_locked("trace write failed")
+
+    def _write_line_locked(
+        self,
+        kind: str,
+        data: Mapping[str, Any],
+        *,
+        raise_on_error: bool,
+    ) -> None:
+        """Sanitize and persist one event. Caller must hold ``self._lock``."""
+        if self._write_failed and not raise_on_error:
+            return
+        payload = sanitize_value(dict(data), secret_values=self._secret_values)
+        self._persist_line_locked(
+            kind,
+            payload,
+            context=current_diagnostic_context().as_dict(),
+            now=datetime.now(UTC),
+            raise_on_error=raise_on_error,
+        )
+
+    def _persist_line_locked(
+        self,
+        kind: str,
+        payload: Any,
+        *,
+        context: Mapping[str, str],
+        now: datetime,
+        raise_on_error: bool,
+    ) -> None:
+        """Write a prepared event. Caller must hold ``self._lock``."""
+        if self._trace_file is None:
+            if raise_on_error:
+                raise RuntimeError("diagnostic trace file is not open")
+            return
+        self._sequence += 1
+        sequence = self._sequence
+        elapsed_ms = (time.perf_counter() - self._started_monotonic) * 1000.0
+        line = json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "sequence": sequence,
+                "timestamp": now.isoformat(),
+                "elapsed_ms": round(elapsed_ms, 3),
+                "kind": kind,
+                "context": dict(context),
+                "data": payload,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        try:
+            self._trace_file.write(line + "\n")
+            self._trace_file.flush()
+        except OSError:
+            if raise_on_error:
+                raise
+            self._write_failed = True
+            self._warn_write_failure_locked("trace write failed")
 
     def _latch_write_failure(self, reason: str) -> None:
         with self._lock:
-            self._write_failed = True
-            self._warn_write_failure_locked(reason)
+            self._latch_write_failure_locked(reason)
+
+    def _latch_write_failure_locked(self, reason: str) -> None:
+        self._write_failed = True
+        self._warn_write_failure_locked(reason)
 
     def _warn_write_failure_locked(self, reason: str) -> None:
         if self._warned_write_failure:

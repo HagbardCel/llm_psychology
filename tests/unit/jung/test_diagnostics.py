@@ -249,6 +249,87 @@ def test_thread_safe_sequence(tmp_path: Path) -> None:
     assert sequences == list(range(1, len(sequences) + 1))
 
 
+def test_concurrent_record_cannot_append_after_diagnostics_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary record admitted before shutdown must not outrank diagnostics.end.
+
+    Forces a record into the dangerous interval: past preparation / unlocked
+    admission, delayed around the persistence lock, while close claims shutdown,
+    writes the terminal event, and only then releases the held file-close gate.
+    """
+    run_dir = tmp_path / "run"
+    recorder = DiagnosticRecorder(run_dir)
+
+    record_entered = threading.Event()
+    allow_record_persist = threading.Event()
+    file_close_entered = threading.Event()
+    allow_file_close = threading.Event()
+
+    original_write_line = DiagnosticRecorder._write_line
+
+    def gated_write_line(
+        self: DiagnosticRecorder,
+        kind: str,
+        data: dict,
+        *,
+        raise_on_error: bool,
+    ) -> None:
+        if kind not in ("diagnostics.start", "diagnostics.end"):
+            record_entered.set()
+            assert allow_record_persist.wait(timeout=5.0)
+        return original_write_line(self, kind, data, raise_on_error=raise_on_error)
+
+    monkeypatch.setattr(DiagnosticRecorder, "_write_line", gated_write_line)
+
+    real_close = recorder._trace_file.close
+
+    def gated_file_close() -> None:
+        file_close_entered.set()
+        assert allow_file_close.wait(timeout=5.0)
+        return real_close()
+
+    monkeypatch.setattr(recorder._trace_file, "close", gated_file_close)
+
+    errors: list[BaseException] = []
+
+    def record_worker() -> None:
+        try:
+            recorder.record("workflow.state", {"marker": "after-admit"})
+        except BaseException as exc:  # noqa: BLE001 - collect for main thread
+            errors.append(exc)
+
+    thread = threading.Thread(target=record_worker)
+    thread.start()
+    assert record_entered.wait(timeout=5.0)
+
+    close_done = threading.Event()
+
+    def close_worker() -> None:
+        try:
+            recorder.close()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            close_done.set()
+
+    close_thread = threading.Thread(target=close_worker)
+    close_thread.start()
+    assert file_close_entered.wait(timeout=5.0)
+
+    allow_record_persist.set()
+    allow_file_close.set()
+    assert close_done.wait(timeout=5.0)
+    thread.join(timeout=5.0)
+    close_thread.join(timeout=5.0)
+    assert errors == []
+
+    kinds = [line["kind"] for line in _trace_lines(run_dir)]
+    assert kinds.count("diagnostics.end") == 1
+    assert kinds[-1] == "diagnostics.end"
+
+
 def test_secure_permissions(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     with DiagnosticRun(run_dir):
