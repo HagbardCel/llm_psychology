@@ -204,7 +204,6 @@ async def _submit_chat_command(
 ) -> None:
     with diagnostic_context(
         request_id=str(command.request_id),
-        connection_id=connection_id,
         session_id=str(command.session_id),
         client_message_id=str(command.client_message_id),
     ):

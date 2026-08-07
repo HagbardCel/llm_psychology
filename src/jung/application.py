@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from jung import workflow
 from jung._async_cleanup import drain_cancelled_task
-from jung.diagnostics import _safe_exception_message, diagnostic_context
+from jung.diagnostics import diagnostic_context
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -87,9 +86,6 @@ from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
 from jung.supervisor import SupervisorClosed, TaskSupervisor
 
-if TYPE_CHECKING:
-    from jung.diagnostics import DiagnosticRecorder
-
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
@@ -123,7 +119,6 @@ class TherapyApplication:
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
-        recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._store = store
         self._intake = intake
@@ -135,7 +130,6 @@ class TherapyApplication:
         self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
-        self._recorder = recorder
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
@@ -153,50 +147,8 @@ class TherapyApplication:
         # Bounded shutdown applies around LLM/background work; an already-running
         # local SQLite call is allowed to finish before the mutation lock releases.
         method_name = getattr(fn, "__name__", None) or type(fn).__name__
-        recorder = self._recorder
 
-        def invoke() -> _T:
-            if recorder is None:
-                return fn(*args, **kwargs)
-
-            store_call_id = recorder.next_id("store")
-            with diagnostic_context(store_call_id=store_call_id):
-                recorder.record(
-                    "store.call.start",
-                    {
-                        "store_call_id": store_call_id,
-                        "method": method_name,
-                        "arguments": {"args": list(args), "kwargs": dict(kwargs)},
-                    },
-                )
-                started = time.perf_counter()
-                try:
-                    result = fn(*args, **kwargs)
-                except Exception as exc:
-                    recorder.record(
-                        "store.call.error",
-                        {
-                            "store_call_id": store_call_id,
-                            "method": method_name,
-                            "elapsed_seconds": time.perf_counter() - started,
-                            "error_type": type(exc).__name__,
-                            "error_message": _safe_exception_message(exc),
-                        },
-                    )
-                    raise
-                else:
-                    recorder.record(
-                        "store.call.complete",
-                        {
-                            "store_call_id": store_call_id,
-                            "method": method_name,
-                            "elapsed_seconds": time.perf_counter() - started,
-                            "result": result,
-                        },
-                    )
-                    return result
-
-        task = asyncio.create_task(asyncio.to_thread(invoke))
+        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError as cancellation:
@@ -702,6 +654,7 @@ class TherapyApplication:
                 run=lambda: self._run_chat_worker(
                     turn.id,
                     turn.session_id,
+                    turn.client_message_id,
                     request_id,
                 ),
             )
@@ -815,13 +768,14 @@ class TherapyApplication:
         self,
         turn_id: UUID,
         session_id: UUID,
+        client_message_id: UUID,
         request_id: UUID | None,
     ) -> None:
         with diagnostic_context(
             turn_id=str(turn_id),
             session_id=str(session_id),
+            client_message_id=str(client_message_id),
             request_id=str(request_id) if request_id is not None else None,
-            task_name=f"chat:{turn_id}",
         ):
             try:
                 session = await self._run_store(self._store.get_session, session_id)
@@ -1034,10 +988,7 @@ class TherapyApplication:
         await self._events.publish(SnapshotChanged(snapshot))
 
     async def _run_operation_worker(self, operation_id: UUID) -> None:
-        with diagnostic_context(
-            operation_id=str(operation_id),
-            task_name=f"operation:{operation_id}",
-        ):
+        with diagnostic_context(operation_id=str(operation_id)):
             await self._run_operation_worker_body(operation_id)
 
     async def _run_operation_worker_body(self, operation_id: UUID) -> None:
@@ -1060,7 +1011,6 @@ class TherapyApplication:
             with diagnostic_context(
                 operation_id=str(operation_id),
                 session_id=str(operation.source_session_id),
-                task_name=f"operation:{operation.kind.value}:{operation_id}",
             ):
                 try:
                     await self._events.publish(OperationChanged(operation, snapshot))
@@ -1150,6 +1100,7 @@ class TherapyApplication:
                     "operation ownership transition failed operation_id=%s",
                     operation_id,
                 )
+                raise
 
     async def _persist_operation_failure_if_running(
         self,
