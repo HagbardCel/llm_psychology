@@ -101,3 +101,38 @@ def test_openapi_snapshot_response_contract(api_app) -> None:
         assert response_schema["$ref"].endswith("AppSnapshotResponse"), (
             f"{label} {status_code} schema is not AppSnapshotResponse"
         )
+
+
+def _schema_contains(node: object, needle: str) -> bool:
+    if isinstance(node, str):
+        return node == needle
+    if isinstance(node, dict):
+        if needle in node:
+            return True
+        return any(_schema_contains(value, needle) for value in node.values())
+    if isinstance(node, list):
+        return any(_schema_contains(value, needle) for value in node)
+    return False
+
+
+def test_openapi_has_no_optimistic_revision_concurrency(api_app) -> None:
+    schema = api_app.openapi()
+    for forbidden in (
+        "expected" + "_revision",
+        "state" + "_conflict",
+        "current" + "_snapshot",
+    ):
+        assert not _schema_contains(schema, forbidden), forbidden
+
+    snapshot = schema["components"]["schemas"]["AppSnapshotResponse"]
+    assert "revision" not in snapshot.get("properties", {})
+
+    bodyless = (
+        ("post", "/api/v1/sessions"),
+        ("post", "/api/v1/sessions/{session_id}/end"),
+        ("post", "/api/v1/operations/current/retry"),
+    )
+    for method, path in bodyless:
+        label = _operation_label(method, path)
+        operation = schema["paths"][path][method]
+        assert "requestBody" not in operation, f"{label} must not declare requestBody"

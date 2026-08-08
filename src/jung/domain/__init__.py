@@ -1,9 +1,7 @@
 from jung.domain.commands import (
     EndSession,
-    RetryOperation,
     SelectStyle,
     SendMessage,
-    StartSession,
     UpdateProfile,
 )
 from jung.domain.errors import (
@@ -12,7 +10,6 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    RevisionConflict,
     StoredWorkFailure,
 )
 from jung.domain.models import (
@@ -60,14 +57,11 @@ __all__ = [
     "Plan",
     "PlanContent",
     "Profile",
-    "RetryOperation",
-    "RevisionConflict",
     "SelectStyle",
     "SendMessage",
     "Session",
     "SessionKind",
     "Stage",
-    "StartSession",
     "StoredProfile",
     "StoredWorkFailure",
     "UpdateProfile",

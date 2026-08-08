@@ -17,7 +17,6 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    RevisionConflict,
 )
 from jung.domain.models import (
     AppState,
@@ -119,7 +118,7 @@ class SQLiteStore:
     def get_app_state(self) -> AppState:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT stage, revision, created_at, updated_at FROM app_state WHERE singleton_id = 1"
+                "SELECT stage, created_at, updated_at FROM app_state WHERE singleton_id = 1"
             ).fetchone()
             if row is None:
                 raise NotFound("app_state")
@@ -278,7 +277,6 @@ class SQLiteStore:
         self,
         profile: Profile,
         *,
-        expected_revision: int,
         intake_session_id: UUID | None,
         now: datetime,
     ) -> AppState:
@@ -326,7 +324,7 @@ class SQLiteStore:
                     "intake_session_id must be None while profile remains incomplete"
                 )
 
-        return self._write(expected_revision, mutate, now=now)
+        return self._write(mutate)
 
     def get_latest_completed_operation(self, kind: OperationKind) -> Operation | None:
         with self._connect() as conn:
@@ -476,7 +474,6 @@ class SQLiteStore:
                         now=now,
                     )
                 self._set_stage(conn, Stage.ASSESSMENT, now)
-                self._increment_revision(conn, now)
                 turn_holder["turn"] = self._load_chat_turn(conn, turn_id)
                 state = self._load_app_state(conn)
                 conn.commit()
@@ -509,7 +506,7 @@ class SQLiteStore:
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
 
-        self._write(None, mutate, now=now)
+        self._write(mutate)
         operation = self.get_operation(operation_id)
         assert operation is not None
         return operation
@@ -545,7 +542,7 @@ class SQLiteStore:
             self._ensure_operation_updated(conn, cursor, operation_id)
             self._set_stage(conn, Stage.STYLE_SELECTION, now)
 
-        return self._write(None, mutate, now=now)
+        return self._write(mutate)
 
     def fail_operation(
         self,
@@ -577,7 +574,7 @@ class SQLiteStore:
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
 
-        self._write(None, mutate, now=now)
+        self._write(mutate)
         operation = self.get_operation(operation_id)
         assert operation is not None
         return operation
@@ -586,7 +583,6 @@ class SQLiteStore:
         self,
         operation_id: UUID,
         *,
-        expected_revision: int,
         now: datetime,
     ) -> Operation:
         def mutate(conn: sqlite3.Connection) -> None:
@@ -606,7 +602,7 @@ class SQLiteStore:
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
 
-        self._write(expected_revision, mutate, now=now)
+        self._write(mutate)
         operation = self.get_operation(operation_id)
         assert operation is not None
         return operation
@@ -614,7 +610,6 @@ class SQLiteStore:
     def select_style_and_create_initial_plan(
         self,
         *,
-        expected_revision: int,
         style_id: str,
         plan_id: UUID,
         content: PlanContent,
@@ -674,13 +669,12 @@ class SQLiteStore:
             )
             self._set_stage(conn, Stage.READY, now)
 
-        state = self._write(expected_revision, mutate, now=now)
+        state = self._write(mutate)
         return state, plan_holder["plan"]
 
     def start_therapy_session(
         self,
         *,
-        expected_revision: int,
         session_id: UUID,
         now: datetime,
     ) -> tuple[AppState, Session]:
@@ -719,13 +713,12 @@ class SQLiteStore:
             ).fetchone()
             session_holder["session"] = sql.row_to_session(row)
 
-        state = self._write(expected_revision, mutate, now=now)
+        state = self._write(mutate)
         return state, session_holder["session"]
 
     def end_therapy_session(
         self,
         *,
-        expected_revision: int,
         session_id: UUID,
         operation_id: UUID,
         now: datetime,
@@ -740,10 +733,6 @@ class SQLiteStore:
                     state = self._load_app_state(conn)
                     conn.rollback()
                     return state, existing
-
-                revision = self._load_revision(conn)
-                if revision != expected_revision:
-                    raise RevisionConflict(expected_revision, revision)
 
                 self._require_stage(conn, {Stage.THERAPY})
                 session = self._require_open_session(conn, session_id)
@@ -761,7 +750,6 @@ class SQLiteStore:
                     now=now,
                 )
                 self._set_stage(conn, Stage.POST_SESSION, now)
-                self._increment_revision(conn, now)
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
@@ -930,12 +918,11 @@ class SQLiteStore:
             self._ensure_operation_updated(conn, cursor, operation_id)
             self._set_stage(conn, Stage.READY, now)
 
-        return self._write(None, mutate, now=now)
+        return self._write(mutate)
 
     def accept_chat_message(
         self,
         *,
-        expected_revision: int,
         session_id: UUID,
         client_message_id: UUID,
         turn_id: UUID,
@@ -952,10 +939,6 @@ class SQLiteStore:
                 if existing is not None:
                     conn.rollback()
                     return None, existing
-
-                revision = self._load_revision(conn)
-                if revision != expected_revision:
-                    raise RevisionConflict(expected_revision, revision)
 
                 stage = self._load_stage(conn)
                 if stage not in {Stage.INTAKE, Stage.THERAPY}:
@@ -1005,7 +988,6 @@ class SQLiteStore:
                         sql.dt(now),
                     ),
                 )
-                self._increment_revision(conn, now)
                 turn = self._load_chat_turn(conn, turn_id)
                 conn.commit()
             except Exception as exc:
@@ -1093,7 +1075,7 @@ class SQLiteStore:
             )
             self._ensure_chat_turn_updated(conn, cursor, turn_id)
 
-        self._write(None, mutate, now=now)
+        self._write(mutate)
         turn = self.get_chat_turn(turn_id)
         assert turn is not None
         return turn
@@ -1128,7 +1110,7 @@ class SQLiteStore:
             )
             self._ensure_chat_turn_updated(conn, cursor, turn_id)
 
-        self._write(None, mutate, now=now)
+        self._write(mutate)
         turn = self.get_chat_turn(turn_id)
         assert turn is not None
         return turn
@@ -1137,7 +1119,6 @@ class SQLiteStore:
         self,
         turn_id: UUID,
         *,
-        expected_revision: int,
         now: datetime,
     ) -> ChatTurn:
         def mutate(conn: sqlite3.Connection) -> None:
@@ -1162,7 +1143,7 @@ class SQLiteStore:
             )
             self._ensure_chat_turn_updated(conn, cursor, turn_id)
 
-        self._write(expected_revision, mutate, now=now)
+        self._write(mutate)
         turn = self.get_chat_turn(turn_id)
         assert turn is not None
         return turn
@@ -1193,7 +1174,6 @@ class SQLiteStore:
                     ),
                 )
                 recovered = [self._load_operation(conn, UUID(row[0])) for row in rows]
-                self._increment_revision(conn, now)
                 conn.commit()
                 return recovered
             except Exception as exc:
@@ -1228,7 +1208,6 @@ class SQLiteStore:
                     ),
                 )
                 recovered = [self._load_chat_turn(conn, UUID(row[0])) for row in rows]
-                self._increment_revision(conn, now)
                 conn.commit()
                 return recovered
             except Exception as exc:
@@ -1237,19 +1216,12 @@ class SQLiteStore:
 
     def _write(
         self,
-        expected_revision: int | None,
         mutate: Callable[[sqlite3.Connection], None],
-        *,
-        now: datetime,
     ) -> AppState:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                revision = self._load_revision(conn)
-                if expected_revision is not None and revision != expected_revision:
-                    raise RevisionConflict(expected_revision, revision)
                 mutate(conn)
-                self._increment_revision(conn, now)
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
@@ -1331,7 +1303,7 @@ class SQLiteStore:
 
     def _load_app_state(self, conn: sqlite3.Connection) -> AppState:
         row = conn.execute(
-            "SELECT stage, revision, created_at, updated_at FROM app_state WHERE singleton_id = 1"
+            "SELECT stage, created_at, updated_at FROM app_state WHERE singleton_id = 1"
         ).fetchone()
         if row is None:
             raise NotFound("app_state")
@@ -1381,24 +1353,6 @@ class SQLiteStore:
             ),
         )
         return self._load_operation(conn, operation_id)
-
-    def _load_revision(self, conn: sqlite3.Connection) -> int:
-        row = conn.execute(
-            "SELECT revision FROM app_state WHERE singleton_id = 1"
-        ).fetchone()
-        if row is None:
-            raise NotFound("app_state")
-        return int(row[0])
-
-    def _increment_revision(self, conn: sqlite3.Connection, now: datetime) -> None:
-        conn.execute(
-            """
-            UPDATE app_state
-            SET revision = revision + 1, updated_at = ?
-            WHERE singleton_id = 1
-            """,
-            (sql.dt(now),),
-        )
 
     def _load_stage(self, conn: sqlite3.Connection) -> Stage:
         row = conn.execute(

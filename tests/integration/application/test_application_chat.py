@@ -8,8 +8,8 @@ from uuid import uuid4
 import pytest
 
 from jung.application import TherapyApplication
-from jung.domain.commands import EndSession, SendMessage, StartSession, UpdateProfile
-from jung.domain.errors import Busy, RevisionConflict, StoredWorkFailure
+from jung.domain.commands import EndSession, SendMessage, UpdateProfile
+from jung.domain.errors import Busy, StoredWorkFailure
 from jung.domain.models import ChatTurn, ChatTurnStatus, MessageRole, Profile, Stage
 from jung.events import ChatTokenGenerated, ChatTurnAccepted, ChatTurnCompleted
 from jung.llm.errors import LLMTimeout, LLMUnavailable
@@ -65,7 +65,6 @@ async def test_chat_worker_persists_sanitized_error_message(store: SQLiteStore) 
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -73,7 +72,6 @@ async def test_chat_worker_persists_sanitized_error_message(store: SQLiteStore) 
         assert session is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
                 client_message_id=uuid4(),
                 content="hello",
@@ -96,7 +94,6 @@ async def test_submit_message_completes_intake_turn(store: SQLiteStore) -> None:
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -104,7 +101,6 @@ async def test_submit_message_completes_intake_turn(store: SQLiteStore) -> None:
         assert session_id is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id.id,
                 client_message_id=uuid4(),
                 content="I feel anxious.",
@@ -129,7 +125,6 @@ async def test_duplicate_client_message_id_returns_same_turn(
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -137,7 +132,6 @@ async def test_duplicate_client_message_id_returns_same_turn(
         assert session_id is not None
         first = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id.id,
                 client_message_id=client_message_id,
                 content="hello",
@@ -145,7 +139,6 @@ async def test_duplicate_client_message_id_returns_same_turn(
         )
         duplicate = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=99,
                 session_id=session_id.id,
                 client_message_id=client_message_id,
                 content="ignored",
@@ -177,7 +170,6 @@ async def test_second_message_while_pending_raises_busy(store: SQLiteStore) -> N
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -185,7 +177,6 @@ async def test_second_message_while_pending_raises_busy(store: SQLiteStore) -> N
         assert session_id is not None
         await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id.id,
                 client_message_id=uuid4(),
                 content="first",
@@ -194,9 +185,6 @@ async def test_second_message_while_pending_raises_busy(store: SQLiteStore) -> N
         with pytest.raises(Busy, match="another chat generation is active"):
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content="second",
@@ -218,19 +206,12 @@ async def test_chat_tokens_are_published_during_generation(store: SQLiteStore) -
     )
     advance_to_ready(store)
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         session = started.session
         collected: list[object] = []
         async with runtime.events.subscribe() as events:
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=uuid4(),
                     content="I need help sleeping.",
@@ -278,7 +259,6 @@ async def test_failed_chat_retry_uses_persisted_original_content(
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -289,7 +269,6 @@ async def test_failed_chat_retry_uses_persisted_original_content(
         original_content = "original content"
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=client_message_id,
                 content=original_content,
@@ -302,7 +281,6 @@ async def test_failed_chat_retry_uses_persisted_original_content(
         )
         retried = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=client_message_id,
                 content="retry",
@@ -337,16 +315,11 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
         ]
     )
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         session = started.session
         client_message_id = uuid4()
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
                 client_message_id=client_message_id,
                 content="therapy original",
@@ -359,16 +332,12 @@ async def test_failed_chat_retry_after_closed_session_raises_stored_work_failure
         )
         await runtime.application.end_session(
             EndSession(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
             )
         )
         with pytest.raises(StoredWorkFailure) as exc_info:
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry",
@@ -405,7 +374,6 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -415,7 +383,6 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
         failed_client_id = uuid4()
         turn_a = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=failed_client_id,
                 content="failed turn",
@@ -428,7 +395,6 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
         )
         turn_b = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content="distinct completed turn",
@@ -443,9 +409,6 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
         with pytest.raises(StoredWorkFailure) as exc_info:
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session_id,
                     client_message_id=failed_client_id,
                     content="retry failed turn",
@@ -456,70 +419,6 @@ async def test_failed_chat_retry_after_later_completed_turn_is_rejected(
         assert after_messages == before_messages
         persisted = await runtime.application.get_chat_turn(turn_a.id)
         assert persisted.status is ChatTurnStatus.FAILED
-    fake.assert_exhausted()
-
-
-async def test_failed_chat_retry_with_stale_revision_raises_revision_conflict(
-    store: SQLiteStore,
-) -> None:
-    fake = FakeLLM(
-        [
-            StructuredExpectation(
-                task=LLMTask.INTAKE_PATCH,
-                output_type=IntakeRecordPatch,
-                response=IntakeRecordPatch(),
-            ),
-            FailureExpectation(
-                task=LLMTask.INTAKE_RESPONSE, error=LLMTimeout("timeout")
-            ),
-        ]
-    )
-    async with build_test_application(store, fake) as runtime:
-        await runtime.application.update_profile(
-            UpdateProfile(
-                expected_revision=0,
-                profile=Profile(name="Alex", primary_language="English"),
-            )
-        )
-        active = (await runtime.application.get_snapshot()).active_session
-        assert active is not None
-        session_id = active.id
-        client_message_id = uuid4()
-        turn = await runtime.application.submit_message(
-            SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
-                session_id=session_id,
-                client_message_id=client_message_id,
-                content="original content",
-            )
-        )
-        await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.FAILED,
-        )
-        stale_revision = (await runtime.application.get_snapshot()).revision
-        await runtime.application.update_profile(
-            UpdateProfile(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
-                profile=Profile(name="Alex Updated", primary_language="English"),
-            )
-        )
-        current_revision = (await runtime.application.get_snapshot()).revision
-        with pytest.raises(RevisionConflict):
-            await runtime.application.submit_message(
-                SendMessage(
-                    expected_revision=stale_revision,
-                    session_id=session_id,
-                    client_message_id=client_message_id,
-                    content="retry",
-                )
-            )
-        persisted = await runtime.application.get_chat_turn(turn.id)
-        assert persisted.status is ChatTurnStatus.FAILED
-        assert not runtime.application._generation_lock.locked()
-        snapshot_after = await runtime.application.get_snapshot()
-        assert snapshot_after.revision == current_revision
     fake.assert_exhausted()
 
 
@@ -565,7 +464,6 @@ async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -575,7 +473,6 @@ async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
         failed_client_id = uuid4()
         turn_a = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=failed_client_id,
                 content="failed turn",
@@ -588,7 +485,6 @@ async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
         )
         await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content="distinct pending turn",
@@ -599,7 +495,6 @@ async def test_failed_chat_retry_while_distinct_turn_pending_raises_busy(
         with pytest.raises(Busy, match="another chat generation is active"):
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=snapshot.revision,
                     session_id=session_id,
                     client_message_id=failed_client_id,
                     content="retry failed turn",
@@ -656,7 +551,6 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -667,9 +561,6 @@ async def test_submit_message_cancel_during_store_call_drains_and_releases_lock(
             submit_task = asyncio.create_task(
                 runtime.application.submit_message(
                     SendMessage(
-                        expected_revision=(
-                            await runtime.application.get_snapshot()
-                        ).revision,
                         session_id=session_id.id,
                         client_message_id=uuid4(),
                         content="hello",
@@ -739,20 +630,17 @@ async def test_submit_message_cancel_after_turn_assigned_worker_completes_and_re
         runtime.application._assemble_snapshot_locked = gated_assemble
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
         session_id = (await runtime.application.get_snapshot()).active_session
         assert session_id is not None
-        revision = (await runtime.application.get_snapshot()).revision
         gate_next_assemble = True
         submit_task: asyncio.Task[ChatTurn] | None = None
         try:
             submit_task = asyncio.create_task(
                 runtime.application.submit_message(
                     SendMessage(
-                        expected_revision=revision,
                         session_id=session_id.id,
                         client_message_id=uuid4(),
                         content="hello",
@@ -811,7 +699,6 @@ async def test_submit_message_cancel_during_accepted_event_publication(
         runtime.application._events = runtime.events
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -820,9 +707,6 @@ async def test_submit_message_cancel_during_accepted_event_publication(
         submit_task = asyncio.create_task(
             runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content="hello",
@@ -850,7 +734,6 @@ async def test_chat_schedule_failure_returns_failed_turn(store: SQLiteStore) -> 
     async with build_test_application(store, fake, supervisor=supervisor) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -858,7 +741,6 @@ async def test_chat_schedule_failure_returns_failed_turn(store: SQLiteStore) -> 
         assert session_id is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id.id,
                 client_message_id=uuid4(),
                 content="hello",
@@ -893,7 +775,6 @@ async def test_publication_exception_still_schedules_chat(store: SQLiteStore) ->
         runtime.application._events = runtime.events
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -901,7 +782,6 @@ async def test_publication_exception_still_schedules_chat(store: SQLiteStore) ->
         assert session_id is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id.id,
                 client_message_id=uuid4(),
                 content="hello",

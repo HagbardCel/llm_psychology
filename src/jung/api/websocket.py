@@ -21,14 +21,13 @@ from jung.api.contracts import (
     ServerEvent,
     build_error_event,
     map_application_event,
-    to_snapshot_response,
 )
 from jung.api.deps import ApiNotReady, WebSocketRuntime, get_websocket_runtime
 from jung.api.errors import new_request_id, to_error_envelope
 from jung.api.settings import ApiSettings
 from jung.diagnostics import diagnostic_context
 from jung.domain.commands import SendMessage
-from jung.domain.errors import DomainError, RevisionConflict, StoredWorkFailure
+from jung.domain.errors import DomainError, StoredWorkFailure
 from jung.events import (
     ApplicationEvent,
     ChatTokenGenerated,
@@ -123,7 +122,6 @@ def _validation_envelope(request_id: UUID) -> ErrorEnvelope:
         message=_VALIDATION_MESSAGE,
         request_id=request_id,
         retryable=False,
-        current_snapshot=None,
     )
 
 
@@ -223,7 +221,6 @@ async def _submit_chat_command_body(
     send_event,
 ) -> None:
     domain_command = SendMessage(
-        expected_revision=command.expected_revision,
         session_id=command.session_id,
         client_message_id=command.client_message_id,
         content=command.content,
@@ -231,39 +228,6 @@ async def _submit_chat_command_body(
     )
     try:
         turn = await runtime.application.submit_message(domain_command)
-    except RevisionConflict as exc:
-        context = MappingContext(request_id=command.request_id)
-        wire_snapshot = None
-        try:
-            snapshot = await runtime.application.get_snapshot()
-            wire_snapshot = to_snapshot_response(snapshot, context=context)
-        except Exception as enrichment_exc:
-            logger.error(
-                "Failed to enrich WebSocket revision conflict",
-                extra={
-                    "connection_id": connection_id,
-                    "request_id": str(command.request_id),
-                    "exception_type": type(enrichment_exc).__name__,
-                },
-            )
-        envelope = to_error_envelope(
-            exc,
-            request_id=context.request_id,
-            current_snapshot=wire_snapshot,
-        )
-        _log_command_rejected(
-            connection_id=connection_id,
-            command=command,
-            error_code=envelope.code,
-        )
-        await send_event(
-            build_error_event(
-                envelope,
-                context=context,
-                session_id=command.session_id,
-                client_message_id=command.client_message_id,
-            )
-        )
     except DomainError as exc:
         context = MappingContext(request_id=command.request_id)
         envelope = to_error_envelope(exc, request_id=context.request_id)

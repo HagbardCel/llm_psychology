@@ -115,7 +115,6 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
     ) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -123,7 +122,6 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
         assert session is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
                 client_message_id=uuid4(),
                 content="I feel anxious.",
@@ -185,6 +183,8 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
     assert not any(e.get("data", {}).get("task") == "intake_response" for e in events)
 
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert "revision" not in state["app_state"]
+    assert set(state["app_state"]) >= {"stage", "created_at", "updated_at"}
     assert any(s["id"] == str(session.id) for s in state["sessions"])
     turn_rows = [t for t in state["chat_turns"] if t["id"] == str(turn.id)]
     assert len(turn_rows) == 1
@@ -224,7 +224,6 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
     ) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -232,7 +231,6 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
         assert session is not None
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
                 client_message_id=uuid4(),
                 content="I feel anxious.",
@@ -291,6 +289,7 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
     assert "chat.turn.completed" in kinds
 
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert "revision" not in state["app_state"]
     turn_rows = [t for t in state["chat_turns"] if t["id"] == str(turn.id)]
     assert len(turn_rows) == 1
     assert turn_rows[0]["status"] == ChatTurnStatus.COMPLETE.value

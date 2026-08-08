@@ -64,7 +64,6 @@ async def test_recover_on_startup_marks_stale_chat_turn_failed(
     intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=turn_id,
@@ -199,7 +198,6 @@ async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
         first_update = asyncio.create_task(
             app.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -208,7 +206,6 @@ async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
         blocked_update = asyncio.create_task(
             app.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Jordan", primary_language="English"),
                 )
             )
@@ -228,7 +225,6 @@ async def test_shutdown_rejects_new_commands(store: SQLiteStore) -> None:
         with pytest.raises(Busy, match="shutting down"):
             await runtime.application.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -236,7 +232,6 @@ async def test_shutdown_rejects_new_commands(store: SQLiteStore) -> None:
         with pytest.raises(Busy, match="shutting down"):
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=0,
                     session_id=uuid4(),
                     client_message_id=uuid4(),
                     content="too late",

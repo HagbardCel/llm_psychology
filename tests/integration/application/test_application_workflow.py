@@ -11,10 +11,9 @@ from jung.domain.commands import (
     EndSession,
     SelectStyle,
     SendMessage,
-    StartSession,
     UpdateProfile,
 )
-from jung.domain.errors import NotFound
+from jung.domain.errors import InvalidCommand, NotFound
 from jung.domain.models import (
     ChatTurnStatus,
     Profile,
@@ -44,7 +43,6 @@ async def test_start_session_publishes_resulting_snapshot(store: SQLiteStore) ->
     advance_to_ready(store)
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
         published: list[object] = []
         async with runtime.events.subscribe() as events:
 
@@ -53,9 +51,7 @@ async def test_start_session_publishes_resulting_snapshot(store: SQLiteStore) ->
                 published.append(event)
 
             collector = asyncio.create_task(_collect())
-            started = await runtime.application.start_session(
-                StartSession(expected_revision=revision)
-            )
+            started = await runtime.application.start_session()
             await asyncio.wait_for(collector, timeout=1.0)
 
     assert len(published) == 1
@@ -66,21 +62,50 @@ async def test_start_session_publishes_resulting_snapshot(store: SQLiteStore) ->
     assert event.snapshot.active_session.id == started.session.id
 
 
+async def test_start_session_when_not_ready_raises_invalid_command(
+    store: SQLiteStore,
+) -> None:
+    async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
+        with pytest.raises(InvalidCommand, match="start_session is not allowed"):
+            await runtime.application.start_session()
+        snapshot = await runtime.application.get_snapshot()
+        assert snapshot.stage is Stage.SETUP
+
+
+async def test_sequential_profile_updates_latter_wins(store: SQLiteStore) -> None:
+    async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        await runtime.application.update_profile(
+            UpdateProfile(
+                profile=Profile(
+                    name="Alexandra",
+                    primary_language="English",
+                    notes="updated",
+                ),
+            )
+        )
+        view = await runtime.application.get_profile()
+
+    assert view.profile.name == "Alexandra"
+    assert view.profile.notes == "updated"
+    assert view.snapshot.stage is Stage.INTAKE
+
+
 async def test_end_session_unknown_session_raises_not_found(store: SQLiteStore) -> None:
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
         with pytest.raises(NotFound):
-            await runtime.application.end_session(
-                EndSession(expected_revision=revision, session_id=uuid4())
-            )
+            await runtime.application.end_session(EndSession(session_id=uuid4()))
 
 
 async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> None:
@@ -130,7 +155,6 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
     async with build_test_application(store, fake) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -139,9 +163,6 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
         for content in turn_messages:
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content=content,
@@ -153,10 +174,7 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
                 ChatTurnStatus.COMPLETE,
             )
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
-        revision = (await runtime.application.get_snapshot()).revision
-        snapshot = await runtime.application.select_style(
-            SelectStyle(expected_revision=revision, style_id="cbt")
-        )
+        snapshot = await runtime.application.select_style(SelectStyle(style_id="cbt"))
     assert snapshot.stage is Stage.READY
     fake.assert_exhausted()
 
@@ -173,14 +191,10 @@ async def test_therapy_to_post_session_application_journey(store: SQLiteStore) -
         ]
     )
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         session = started.session
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
                 client_message_id=uuid4(),
                 content="I slept badly again.",
@@ -193,7 +207,6 @@ async def test_therapy_to_post_session_application_journey(store: SQLiteStore) -
         )
         snapshot = await runtime.application.end_session(
             EndSession(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session.id,
             )
         )

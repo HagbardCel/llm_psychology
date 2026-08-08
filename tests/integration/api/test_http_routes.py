@@ -57,11 +57,9 @@ async def test_get_profile_returns_seeded_profile(
 
 @pytest.mark.asyncio
 async def test_put_profile_success(started_api_client: AsyncClient) -> None:
-    revision = (await started_api_client.get("/api/v1/state")).json()["revision"]
     response = await started_api_client.put(
         "/api/v1/profile",
         json={
-            "expected_revision": revision,
             "profile": {
                 "name": "Alex",
                 "primary_language": "English",
@@ -91,10 +89,9 @@ async def test_get_styles_before_and_after_assessment(
 
 @pytest.mark.asyncio
 async def test_select_style_invalid_stage(started_api_client: AsyncClient) -> None:
-    revision = (await started_api_client.get("/api/v1/state")).json()["revision"]
     response = await started_api_client.put(
         "/api/v1/style",
-        json={"expected_revision": revision, "style_id": "cbt"},
+        json={"style_id": "cbt"},
     )
     assert response.status_code == 409
     assert response.json()["code"] == "invalid_command"
@@ -131,11 +128,7 @@ async def test_start_session_returns_atomic_body(
     started_api_client: AsyncClient,
 ) -> None:
     advance_to_ready(store)
-    revision = (await started_api_client.get("/api/v1/state")).json()["revision"]
-    response = await started_api_client.post(
-        "/api/v1/sessions",
-        json={"expected_revision": revision},
-    )
+    response = await started_api_client.post("/api/v1/sessions")
     assert response.status_code == 201
     payload = response.json()
     assert payload["session"]["id"] == payload["snapshot"]["active_session"]["id"]
@@ -149,15 +142,10 @@ async def test_end_session_returns_accepted_snapshot(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
-    revision = store.get_app_state().revision
-    response = await started_api_client.post(
-        f"/api/v1/sessions/{therapy_id}/end",
-        json={"expected_revision": revision},
-    )
+    response = await started_api_client.post(f"/api/v1/sessions/{therapy_id}/end")
     assert response.status_code == 202
     assert response.json()["stage"] == "post_session"
 
@@ -249,11 +237,7 @@ async def test_retry_operation_returns_accepted_snapshot(
                 operation_id,
                 OperationStatus.FAILED,
             )
-            revision = (await client.get("/api/v1/state")).json()["revision"]
-            response = await client.post(
-                "/api/v1/operations/current/retry",
-                json={"expected_revision": revision},
-            )
+            response = await client.post("/api/v1/operations/current/retry")
 
             assert response.status_code == 202
             payload = response.json()

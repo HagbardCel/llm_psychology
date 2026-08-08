@@ -27,7 +27,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 _TOKEN_METRIC_KEYS: Final = frozenset(
     {
         "prompt_tokens",

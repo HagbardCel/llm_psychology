@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from jung.api.contracts import RetryOperationRequest
 from jung.client.api_client import ClientSettings, JungApiClient
 from jung.domain.models import ChatTurnStatus, OperationStatus
 from jung.llm.errors import LLMTimeout
@@ -82,12 +81,10 @@ async def test_assessment_failure_retry_preserves_operation_identity(
             assert failed.operation.error.retryable is True
             assert "retry_operation" in failed.available_commands
 
-            retry_snapshot = await client.retry_current_operation(
-                RetryOperationRequest(expected_revision=failed.revision),
-            )
-            assert retry_snapshot.revision > failed.revision
+            retry_snapshot = await client.retry_current_operation()
             if retry_snapshot.operation is not None:
                 assert retry_snapshot.operation.id == operation_id
+                assert retry_snapshot.operation.status == "pending"
 
             completed = await wait_for_snapshot(
                 client,
@@ -142,7 +139,6 @@ async def test_completed_work_survives_server_restart_without_recomputation(
                 description="assessment to complete on server A",
             )
             styles_a = await client_a.get_styles()
-            revision_a = snapshot_a.revision
 
     assert server_a_recording.recorded_tasks == (LLMTask.ASSESSMENT,)
     server_a_recording.assert_exhausted()
@@ -159,7 +155,6 @@ async def test_completed_work_survives_server_restart_without_recomputation(
     assert style_selection_projection(snapshot_b) == style_selection_projection(
         snapshot_a
     )
-    assert snapshot_b.revision >= revision_a
     assert_styles_equivalent(styles_b, styles_a)
     assert server_b_recording.recorded_tasks == ()
     server_b_recording.assert_exhausted()
@@ -177,7 +172,6 @@ async def test_stale_running_operation_recovers_on_startup(
         operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
-    initial_revision = store.get_app_state().revision
     recording = RecordingFakeLLM(
         FakeLLM(
             [
@@ -199,7 +193,7 @@ async def test_stale_running_operation_recovers_on_startup(
                 predicate=lambda item: item.stage == "style_selection",
                 description="stale operation recovery",
             )
-            assert snapshot.revision > initial_revision
+            assert snapshot.stage == "style_selection"
             styles = await client.get_styles()
             assert_styles_equivalent(styles, expected_style_options_response())
 
@@ -220,7 +214,6 @@ async def test_stale_pending_chat_turn_failed_in_place_without_replacement(
     turn_id = uuid4()
     client_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=session_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -230,7 +223,6 @@ async def test_stale_pending_chat_turn_failed_in_place_without_replacement(
     )
     initial_turn_count = count_chat_turns_for_session(store, session_id)
     assert initial_turn_count == 1
-    initial_revision = store.get_app_state().revision
 
     recording = RecordingFakeLLM(FakeLLM(()))
     test_app = create_test_api_app(store=store, fake_llm=recording)
@@ -240,7 +232,6 @@ async def test_stale_pending_chat_turn_failed_in_place_without_replacement(
             await wait_for_health(client)
             snapshot = await client.get_state()
             assert snapshot.active_chat_turn is None
-            assert snapshot.revision > initial_revision
             history = await client.get_session(session_id)
             user_messages = [
                 message

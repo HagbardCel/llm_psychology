@@ -22,21 +22,20 @@ def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
         operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
-    revision = store.get_app_state().revision
     recovered = store.recover_stale_operations(now=now)
     assert len(recovered) == 1
     assert recovered[0].status == OperationStatus.PENDING
-    assert store.get_app_state().revision == revision + 1
     again = store.recover_stale_operations(now=now)
     assert again == []
-    assert store.get_app_state().revision == revision + 1
+    operation = store.get_operation(operation_id)
+    assert operation is not None
+    assert operation.status == OperationStatus.PENDING
 
 
 def test_recover_stale_chat_turns_is_idempotent(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=turn_id,
@@ -44,12 +43,10 @@ def test_recover_stale_chat_turns_is_idempotent(store: SQLiteStore) -> None:
         content="hello",
         now=now,
     )
-    revision = store.get_app_state().revision
     recovered = store.recover_stale_chat_turns(now=now)
     assert len(recovered) == 1
     assert recovered[0].status == ChatTurnStatus.FAILED
     assert recovered[0].retryable is True
-    assert store.get_app_state().revision == revision + 1
     again = store.recover_stale_chat_turns(now=now)
     assert again == []
     assert len(store.list_messages(intake_id)) == 1

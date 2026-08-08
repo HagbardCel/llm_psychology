@@ -162,7 +162,7 @@ def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     assert lines[-1]["kind"] == "diagnostics.end"
     assert lines[-1]["data"]["status"] == "success"
     event = lines[1]
-    assert event["schema_version"] == 2
+    assert event["schema_version"] == 3
     assert event["sequence"] == 2
     assert "timestamp" in event
     assert "elapsed_ms" in event
@@ -186,7 +186,7 @@ def test_top_level_exception_records_error_and_propagates(tmp_path: Path) -> Non
     run_dir = tmp_path / "run"
     with pytest.raises(RuntimeError, match="boom"):
         with DiagnosticRun(run_dir) as recorder:
-            recorder.record("workflow.transition", {"revision": 1, "stage": "intake"})
+            recorder.record("test.event", {"value": 1})
             raise RuntimeError("boom")
     end = _trace_lines(run_dir)[-1]
     assert end["data"]["status"] == "failed"
@@ -220,14 +220,14 @@ def test_write_failure_latches_and_warns_once(
         real_write = recorder._trace_file.write
 
         def flaky_write(text: str) -> int:
-            if '"kind":"workflow.transition"' in text.replace(" ", ""):
+            if '"kind":"test.event"' in text.replace(" ", ""):
                 raise OSError("disk full")
             return real_write(text)
 
         monkeypatch.setattr(recorder._trace_file, "write", flaky_write)
-        recorder.record("workflow.transition", {"revision": 1, "stage": "intake"})
-        recorder.record("workflow.transition", {"revision": 2, "stage": "therapy"})
-        recorder.record("workflow.transition", {"revision": 3, "stage": "ready"})
+        recorder.record("test.event", {"value": 1})
+        recorder.record("test.event", {"value": 2})
+        recorder.record("test.event", {"value": 3})
     err = capsys.readouterr().err
     assert err.count("jung diagnostics:") == 1
 
@@ -238,7 +238,7 @@ def test_thread_safe_sequence(tmp_path: Path) -> None:
 
         def worker(n: int) -> None:
             for i in range(20):
-                recorder.record("workflow.transition", {"n": n, "i": i})
+                recorder.record("test.event", {"n": n, "i": i})
 
         threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
         for thread in threads:
@@ -297,7 +297,7 @@ def test_concurrent_record_cannot_append_after_diagnostics_end(
 
     def record_worker() -> None:
         try:
-            recorder.record("workflow.transition", {"marker": "after-admit"})
+            recorder.record("test.event", {"marker": "after-admit"})
         except BaseException as exc:  # noqa: BLE001 - collect for main thread
             errors.append(exc)
 

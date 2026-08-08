@@ -248,16 +248,8 @@ class AppState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     stage: Stage
-    revision: int
     created_at: UtcDateTime
     updated_at: UtcDateTime
-
-    @field_validator("revision")
-    @classmethod
-    def revision_non_negative(cls, value: int) -> int:
-        if value < 0:
-            raise ValueError("revision must be >= 0")
-        return value
 
 
 class WorkflowFacts(BaseModel):
@@ -279,7 +271,6 @@ class AppSnapshot(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    revision: int
     stage: Stage
     profile_complete: bool
     selected_style: str | None = None

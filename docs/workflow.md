@@ -17,8 +17,8 @@ source_of_truth_for: Supported workflow, recovery, and command-conflict semantic
 
 | Stage | Entry condition | Exit condition | Edit policy |
 |---|---|---|---|
-| `SETUP` | fresh database | complete profile → `INTAKE` | profile fields editable |
-| `INTAKE` | complete profile | processor accepts complete intake → assessment operation / `ASSESSMENT` | profile editable; intake chat accepted |
+| `SETUP` | fresh database | complete profile → `INTAKE` | profile fields editable (may be incomplete) |
+| `INTAKE` | complete profile | processor accepts complete intake → assessment operation / `ASSESSMENT` | profile fields editable, but profile must remain complete; intake chat accepted |
 | `ASSESSMENT` | assessment operation pending/running | complete → `STYLE_SELECTION` | no profile/style/session/chat edits |
 | `STYLE_SELECTION` | recommendations and assessment result durable | valid style + initial plan → `READY` | only style selection |
 | `READY` | no active session/operation | start session → `THERAPY` | profile is read-only; start session only |
@@ -39,19 +39,27 @@ Intake is complete only when the durable record meets the processor's required s
 | `THERAPY` | no | yes | no | no | active session only | no |
 | `POST_SESSION` | no | no | no | no | no | failed post-session only |
 
-All non-table combinations return `invalid_command`. Commands atomically compare `expected_revision`; stale values return `state_conflict` with a snapshot. Chat idempotency is evaluated first. Conflicting mutation, session, operation, or generation returns `busy`.
+All non-table combinations return `invalid_command`. Commands are serialized
+server-side and evaluated against authoritative state at execution time; there
+is no client revision token. Chat idempotency is evaluated first. Conflicting
+mutation, session, operation, or generation returns `busy`.
+
+Sequential valid `update_profile` commands are last-writer-wins: each accepted
+write replaces the stored profile. During `INTAKE`, profile fields remain
+editable, but the profile must remain complete once `INTAKE` has begun; an
+incomplete profile update returns `invalid_command`.
 
 ## Transition table
 
 | Current stage | Command/event | Preconditions | Atomic persisted changes | Resulting stage |
 |---|---|---|---|---|
-| `SETUP` | `update_profile` completes profile | profile passes validation | profile saved; revision incremented | `INTAKE` |
-| `INTAKE` | intake completion (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING`; revision incremented | `ASSESSMENT` |
-| `ASSESSMENT` | operation completes | structured assessment result valid; includes initial plan material | assessment result saved; operation `COMPLETE`; revision incremented | `STYLE_SELECTION` |
-| `STYLE_SELECTION` | `select_style` | style valid; assessment result contains initial plan material | selected style + initial immutable plan; revision incremented | `READY` |
-| `READY` | `start_session` | no active session/operation/generation | therapy session row; revision incremented | `THERAPY` |
-| `THERAPY` | `end_session` | active session matches command | session ended; post-session `Operation` `PENDING`; revision incremented | `POST_SESSION` |
-| `POST_SESSION` | operation completes | post-session patch valid | profile/plan revisions saved; operation `COMPLETE`; revision incremented | `READY` |
+| `SETUP` | `update_profile` completes profile | profile passes validation | profile saved | `INTAKE` |
+| `INTAKE` | intake completion (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING` | `ASSESSMENT` |
+| `ASSESSMENT` | operation completes | structured assessment result valid; includes initial plan material | assessment result saved; operation `COMPLETE` | `STYLE_SELECTION` |
+| `STYLE_SELECTION` | `select_style` | style valid; assessment result contains initial plan material | selected style + initial immutable plan | `READY` |
+| `READY` | `start_session` | no active session/operation/generation | therapy session row | `THERAPY` |
+| `THERAPY` | `end_session` | active session matches command | session ended; post-session `Operation` `PENDING` | `POST_SESSION` |
+| `POST_SESSION` | operation completes | post-session patch valid | profile/plan revisions saved; operation `COMPLETE` | `READY` |
 
 Failed operations and failed chat turns **never** advance stage. Retry reuses the same durable record.
 
@@ -62,9 +70,9 @@ PENDING → RUNNING → COMPLETE
                   ↘ FAILED
 ```
 
-1. **Creation transaction**: persist workflow mutation, create `PENDING` operation keyed by `(kind, source_session_id)`, increment revision.
+1. **Creation transaction**: persist workflow mutation, create `PENDING` operation keyed by `(kind, source_session_id)`.
 2. **Start**: supervisor marks `RUNNING` outside the acceptance transaction.
-3. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable, increment revision.
+3. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable.
 4. **Failure**: persist stable error code and retryability; leave stage unchanged.
 5. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
 6. **Idempotency**: `(kind, source_session_id)` is unique; duplicate acceptance returns the existing operation.
@@ -76,11 +84,11 @@ PENDING → COMPLETE
         ↘ FAILED
 ```
 
-1. **Acceptance transaction**: validate stage/session/revision; resolve `(session_id, client_message_id)`; persist user message + `PENDING` turn; increment revision; schedule generation.
+1. **Acceptance transaction**: validate stage/session against authoritative state; resolve `(session_id, client_message_id)`; persist user message + `PENDING` turn; schedule generation.
 2. **Generation**: supervisor streams tokens through `EventStream`; tokens are ephemeral.
-3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; increment revision; emit completion notifications.
-4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged; increment revision when failure occurs after acceptance.
-5. **Duplicate client message**: same ID never creates a second user message. `PENDING` and `COMPLETE` return the durable turn; a non-retryable `FAILED` turn raises its stored failure; a retryable `FAILED` turn may, after generation availability, structural eligibility, and revision checks, reset the **same** durable turn to `PENDING` and regenerate. See [API v1](api-v1.md) for the full precedence list.
+3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; emit completion notifications.
+4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged when failure occurs after acceptance.
+5. **Duplicate client message**: same ID never creates a second user message. `PENDING` and `COMPLETE` return the durable turn; a non-retryable `FAILED` turn raises its stored failure; a retryable `FAILED` turn may, after generation availability and structural eligibility, reset the **same** durable turn to `PENDING` and regenerate. See [API v1](api-v1.md) for the full precedence list.
 6. **During active generation**: conflicting distinct `send_message` returns `busy`; same idempotent resubmit returns in-progress or stored completion.
 
 A pending turn cannot resume token generation exactly after crash; startup converts stale pending turns to retryable `FAILED` while preserving the user message.

@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from jung.domain.errors import InvariantViolation, PersistenceFailure, RevisionConflict
+from jung.domain.errors import InvariantViolation, PersistenceFailure
 from jung.domain.models import (
     CommandName,
     NewPlanRevision,
@@ -46,7 +46,6 @@ def _plan_content(**overrides: object) -> PlanContent:
 def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
     store.update_profile(
         Profile(name="", primary_language="English"),
-        expected_revision=0,
         intake_session_id=None,
         now=datetime.now(UTC),
     )
@@ -54,16 +53,39 @@ def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
     assert store.get_active_session() is None
 
 
-def test_write_uses_transaction_now_for_revision_timestamp(store: SQLiteStore) -> None:
+def test_stage_transition_updates_app_state_timestamp(store: SQLiteStore) -> None:
     fixed_now = datetime(2026, 7, 12, 10, 30, tzinfo=UTC)
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
         intake_session_id=uuid4(),
         now=fixed_now,
     )
     state = store.get_app_state()
+    assert state.stage == Stage.INTAKE
     assert state.updated_at == fixed_now
+
+
+def test_intake_profile_edit_updates_profile_not_app_state_timestamp(
+    store: SQLiteStore,
+) -> None:
+    open_intake(store)
+    app_state_before = store.get_app_state()
+    profile_before = store.get_profile()
+    assert profile_before is not None
+    edit_now = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    store.update_profile(
+        Profile(name="Alexandra", primary_language="English"),
+        intake_session_id=None,
+        now=edit_now,
+    )
+    profile_after = store.get_profile()
+    assert profile_after is not None
+    assert profile_after.profile.name == "Alexandra"
+    assert profile_after.updated_at == edit_now
+    assert profile_after.updated_at != profile_before.updated_at
+    app_state_after = store.get_app_state()
+    assert app_state_after.stage == Stage.INTAKE
+    assert app_state_after.updated_at == app_state_before.updated_at
 
 
 def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) -> None:
@@ -74,18 +96,15 @@ def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) ->
     assert session.kind == SessionKind.INTAKE
     assert session.ended_at is None
     assert store.get_app_state().stage == Stage.INTAKE
-    assert store.get_app_state().revision == 1
 
 
 def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
     open_intake(store)
-    revision = store.get_app_state().revision
     now = datetime.now(UTC)
     active_before = store.get_active_session()
     assert active_before is not None
     store.update_profile(
         Profile(name="Alexandra", primary_language="English"),
-        expected_revision=revision,
         intake_session_id=None,
         now=now,
     )
@@ -99,7 +118,6 @@ def test_intake_profile_edit_cannot_make_profile_incomplete(store: SQLiteStore) 
     with pytest.raises(InvariantViolation):
         store.update_profile(
             Profile(name=" ", primary_language="English"),
-            expected_revision=store.get_app_state().revision,
             intake_session_id=None,
             now=datetime.now(UTC),
         )
@@ -109,7 +127,6 @@ def test_setup_complete_profile_requires_intake_session_id(store: SQLiteStore) -
     with pytest.raises(InvariantViolation):
         store.update_profile(
             Profile(name="Alex", primary_language="English"),
-            expected_revision=0,
             intake_session_id=None,
             now=datetime.now(UTC),
         )
@@ -119,7 +136,6 @@ def test_setup_incomplete_profile_rejects_intake_session_id(store: SQLiteStore) 
     with pytest.raises(InvariantViolation):
         store.update_profile(
             Profile(name="", primary_language="English"),
-            expected_revision=0,
             intake_session_id=uuid4(),
             now=datetime.now(UTC),
         )
@@ -130,7 +146,6 @@ def test_intake_profile_edit_rejects_intake_session_id(store: SQLiteStore) -> No
     with pytest.raises(InvariantViolation):
         store.update_profile(
             Profile(name="Alexandra", primary_language="English"),
-            expected_revision=store.get_app_state().revision,
             intake_session_id=uuid4(),
             now=datetime.now(UTC),
         )
@@ -224,7 +239,6 @@ def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> Non
     assert failed.attempt == 1
     retried = store.retry_operation(
         operation_id,
-        expected_revision=store.get_app_state().revision,
         now=now,
     )
     assert retried.status == OperationStatus.PENDING
@@ -306,7 +320,6 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
         original_plan_count = conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
 
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    revision_before = store.get_app_state().revision
     with pytest.raises(PersistenceFailure):
         store.complete_post_session(
             scenario.post_session_operation_id,
@@ -327,7 +340,6 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
 
     state = store.get_app_state()
     assert state.stage == Stage.POST_SESSION
-    assert state.revision == revision_before
 
     session = store.get_session(scenario.therapy_session_id)
     assert session is not None
@@ -390,7 +402,6 @@ def test_select_style_rejects_malformed_plan_list_elements(store: SQLiteStore) -
     )
     with pytest.raises(ValidationError):
         store.select_style_and_create_initial_plan(
-            expected_revision=store.get_app_state().revision,
             style_id="cbt",
             plan_id=uuid4(),
             content=_plan_content(goals=["   "]),
@@ -463,23 +474,6 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
         )
 
 
-def test_stale_revision_leaves_database_unchanged(store: SQLiteStore) -> None:
-    intake_id, now = open_intake(store)
-    revision = store.get_app_state().revision
-    with pytest.raises(RevisionConflict):
-        store.accept_chat_message(
-            expected_revision=revision - 1,
-            session_id=intake_id,
-            client_message_id=uuid4(),
-            turn_id=uuid4(),
-            user_message_id=uuid4(),
-            content="stale",
-            now=now,
-        )
-    assert store.get_app_state().revision == revision
-    assert store.get_app_state().stage == Stage.INTAKE
-
-
 def test_non_retryable_failed_operation_hides_retry_command(
     store: SQLiteStore,
 ) -> None:
@@ -530,21 +524,17 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
     post_op_id = uuid4()
-    revision = store.get_app_state().revision
     _, first_operation = store.end_therapy_session(
-        expected_revision=revision,
         session_id=therapy_id,
         operation_id=post_op_id,
         now=ready.now,
     )
     first_state = store.get_app_state()
     second_state, second_operation = store.end_therapy_session(
-        expected_revision=revision - 1,
         session_id=therapy_id,
         operation_id=uuid4(),
         now=ready.now,
@@ -552,7 +542,7 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
     assert second_state == first_state
     assert second_operation.id == first_operation.id
     assert second_operation.status == first_operation.status
-    assert store.get_app_state().revision == revision + 1
+    assert store.get_app_state().stage == Stage.POST_SESSION
     with sqlite3.connect(store.database_path) as conn:
         count = conn.execute(
             """
@@ -603,7 +593,6 @@ def test_invalid_plan_fields_raise_invariant_violation(
         content_kwargs[invalid_field] = invalid_value
         with pytest.raises(ValidationError):
             store.select_style_and_create_initial_plan(
-                expected_revision=store.get_app_state().revision,
                 style_id="cbt",
                 plan_id=uuid4(),
                 content=PlanContent(**content_kwargs),
@@ -613,7 +602,6 @@ def test_invalid_plan_fields_raise_invariant_violation(
         return
 
     store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
         style_id="cbt",
         plan_id=uuid4(),
         content=PlanContent(**content_kwargs),
@@ -622,13 +610,11 @@ def test_invalid_plan_fields_raise_invariant_violation(
     )
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=now,
     )
     post_op_id = uuid4()
     store.end_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         operation_id=post_op_id,
         now=now,
@@ -714,12 +700,10 @@ def test_complete_post_session_store_persists_opaque_derived_profile_json(
     post_op_id = uuid4()
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=scenario.now,
     )
     store.end_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         operation_id=post_op_id,
         now=scenario.now,

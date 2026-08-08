@@ -157,7 +157,7 @@ def load_trace_events(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def extract_touched_ids(events: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:
-    """Extract IDs only from schema-v2 context and known lifecycle payload fields."""
+    """Extract IDs only from diagnostic context and known lifecycle payload fields."""
     collected: dict[str, set[str]] = {
         "session_id": set(),
         "turn_id": set(),

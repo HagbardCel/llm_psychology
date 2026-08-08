@@ -236,7 +236,6 @@ async def test_get_profile_returns_incomplete_profile_in_setup(
     async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
         snapshot = await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language=""),
             )
         )
@@ -254,7 +253,6 @@ async def test_get_profile_returns_profile_view_after_update(
     async with build_test_application(store, FakeLLM([]), recover=False) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )

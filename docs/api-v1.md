@@ -50,28 +50,29 @@ Policy decisions:
 - `GET /api/v1/styles` always returns the style catalog. Recommendations are empty before assessment completion; afterward they contain the completed assessment recommendations and remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;
 - `GET /api/v1/health` reports **process readiness only** (`HealthResponse` with `status="healthy"`). Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
 - For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied;
-- `state_conflict` responses include `current_snapshot` with the authoritative revision.
+- During `INTAKE`, `PUT /profile` may edit profile fields but the profile must remain complete; an incomplete body returns `409 invalid_command`;
+- Embedded snapshots in live WebSocket notifications describe the state associated with that notification; they are not freshness tokens. When a client requires authoritative current state, it uses `GET /api/v1/state`.
 
 ## 2. Endpoint matrix
 
-| Method/path | Allowed stage | Request | Response | Errors | Revision effect |
+| Method/path | Allowed stage | Request | Response | Errors | Durable effect |
 |---|---|---|---|---|---|
 | `GET /api/v1/state` | all | — | `200 AppSnapshotResponse` | — | read only |
 | `GET /api/v1/profile` | all | — | `200 ProfileResponse` | `404 not_found` if the required profile singleton row is unexpectedly absent | read only |
-| `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdateRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
+| `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdateRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `422 validation_error` | profile persisted; `SETUP` → `INTAKE` when complete |
 | `GET /api/v1/styles` | all | — | `200 StyleOptionsResponse` | — | read only |
-| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyleRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
+| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyleRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `422 validation_error` | selected style + initial immutable plan |
 | `GET /api/v1/sessions` | all | — | `200 SessionListResponse` | — | read only |
 | `GET /api/v1/sessions/{session_id}` | all | — | `200 SessionHistoryResponse` | `404 not_found` | read only |
-| `POST /api/v1/sessions` | `READY` | `StartSessionRequest` | `201 StartSessionResponse` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
-| `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | `EndSessionRequest` | `202 AppSnapshotResponse` | `404 not_found`, `409 invalid_command`, `409 state_conflict`, `409 busy` | end session + post-session operation + revision |
-| `POST /api/v1/operations/current/retry` | failed operation visible | `RetryOperationRequest` | `202 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `409 busy` | requeue same operation |
+| `POST /api/v1/sessions` | `READY` | — (bodyless) | `201 StartSessionResponse` | `409 invalid_command`, `409 busy` | new therapy session |
+| `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | — (bodyless) | `202 AppSnapshotResponse` | `404 not_found`, `409 invalid_command`, `409 busy` | end session + post-session operation |
+| `POST /api/v1/operations/current/retry` | failed operation visible | — (bodyless) | `202 AppSnapshotResponse` | `409 invalid_command`, `409 busy` | requeue same operation |
 | `GET /api/v1/health` | all | — | `200 HealthResponse` (`status="healthy"`) | `503` when process not ready | read only |
-| `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | chat acceptance increments revision; completion increments again |
+| `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | acceptance and completion persist durable chat state |
 
-State-changing HTTP requests require `expected_revision`. Non-chat commands are serialized through `expected_revision` and application invariants. A retry after an uncertain response fetches the authoritative snapshot (`GET /api/v1/state` or the conflict envelope's `current_snapshot`). Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
+`AppSnapshotResponse` carries stage, completeness, active session/operation/chat turn, and available commands. It does not include a revision field. State-changing commands are serialized server-side and validated against authoritative state at execution time; clients do not send concurrency tokens. A retry after an uncertain response fetches the authoritative snapshot via `GET /api/v1/state`. Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
 
-`PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Intake completion is processor-driven and creates/reuses the assessment operation. The assessment operation persists formulation, style recommendations, and style-neutral initial plan material. `select_style` requires a completed assessment containing initial plan material; it performs no new LLM call and atomically stores the selected style and materializes the first immutable plan.
+`PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Once `INTAKE` has begun, subsequent profile updates must keep the profile complete or the command returns `409 invalid_command`. Intake completion is processor-driven and creates/reuses the assessment operation. The assessment operation persists formulation, style recommendations, and style-neutral initial plan material. `select_style` requires a completed assessment containing initial plan material; it performs no new LLM call and atomically stores the selected style and materializes the first immutable plan.
 
 ## 3. WebSocket messages
 
@@ -100,24 +101,24 @@ types) rather than duplicating nested fields here.
 
 ### Server
 
-| Event | Required identifiers | Ordering | Persistence point | Revision |
+| Event | Required identifiers | Ordering | Persistence point | Durable effect |
 |---|---|---|---|---|
 | `token` | `session_id`, `turn_id`, `request_id`, `sequence`, `text` | strictly increasing `sequence` per turn | none (ephemeral) | none |
-| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummaryResponse`) | after acceptance | user message + pending turn stored | incremented at acceptance |
-| `message_completed` | `session_id`, `turn` (`ChatTurnSummaryResponse`), `message` (`MessageResponse`) | after final token | assistant message + complete turn stored | incremented at completion |
-| `snapshot_changed` | `snapshot` (`AppSnapshotResponse`) | after durable mutation | snapshot reread | matches stored revision |
-| `operation_changed` | `operation` (`OperationSummaryResponse`), `snapshot` (`AppSnapshotResponse`) | when operation status changes | operation row updated | matches stored revision |
+| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummaryResponse`) | after acceptance | user message + pending turn stored | acceptance persisted |
+| `message_completed` | `session_id`, `turn` (`ChatTurnSummaryResponse`), `message` (`MessageResponse`) | after final token | assistant message + complete turn stored | completion persisted |
+| `snapshot_changed` | `snapshot` (`AppSnapshotResponse`) | after durable mutation | snapshot reread | notification-associated snapshot |
+| `operation_changed` | `operation` (`OperationSummaryResponse`), `snapshot` (`AppSnapshotResponse`) | when operation status changes | operation row updated | notification-associated snapshot |
 | `error` | `error` (`ErrorEnvelope`), optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
 
-Chat error revision semantics:
+Chat error durable semantics:
 
-| Error point | Durable change | Revision |
-|---|---|---|
-| Before command acceptance | none | unchanged |
-| After accepted generation fails | `ChatTurn → FAILED` | incremented |
-| Ephemeral token delivery failure for one subscriber | none | unchanged |
+| Error point | Durable change |
+|---|---|
+| Before command acceptance | none |
+| After accepted generation fails | `ChatTurn → FAILED` |
+| Ephemeral token delivery failure for one subscriber | none |
 
-A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`.
+A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`. Embedded snapshots in these notifications describe the state associated with that notification; they are not freshness tokens. Authoritative current state is read via `GET /api/v1/state`.
 
 `error` correlation requirements:
 
@@ -131,25 +132,24 @@ Duplicate `(session_id, client_message_id)` retransmission of an existing `PENDI
 
 Absence from `active_chat_turn` is not evidence that the durable turn row is absent. Completed and failed turns disappear from the snapshot; reconcile through session history and duplicate submission semantics.
 
-Duplicate `(session_id, client_message_id)` resolution happens before revision validation. Precedence:
+Duplicate `(session_id, client_message_id)` resolution precedence:
 
 1. resolve duplicate durable state by `(session_id, client_message_id)`;
-2. `PENDING` and `COMPLETE`: return durable state without revision validation;
+2. `PENDING` and `COMPLETE`: return durable state;
 3. permanent `FAILED`: return stored non-retryable error;
 4. retryable `FAILED`: reject conflicting active generation as `busy` before structural checks;
 5. retryable `FAILED` that is structurally obsolete (session closed, wrong stage, or a later durable message exists): return non-retryable stored-work error carrying the original failure code/message;
-6. retryable `FAILED` that remains the latest conversational turn: validate `expected_revision`, then reset the same row to `PENDING` and schedule generation.
+6. retryable `FAILED` that remains the latest conversational turn: reset the same row to `PENDING` and schedule generation.
 
 `busy` rejects a second distinct active generation.
 
-## 4. Errors, revisions, and reconnect rules
+## 4. Errors and reconnect rules
 
 ### Error mapping
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `invalid_command` | 409 | Command not permitted in current stage |
-| `state_conflict` | 409 | Stale `expected_revision`; includes `current_snapshot` |
+| `invalid_command` | 409 | Command not permitted in current stage or violates stage invariants (including incomplete profile during `INTAKE`) |
 | `busy` | 409 | Conflicting session, mutation, operation, or generation |
 | `not_found` | 404 | Unknown session or resource |
 | `validation_error` | 422 | Request body failed validation |
@@ -172,7 +172,7 @@ LLM failure never advances workflow stage.
 
 ### Reconnect and uncertain delivery
 
-After any disconnect or uncertain delivery, the client preserves the original `session_id`, `client_message_id`, and message content. Each transmission attempt uses a fresh `request_id` and the latest snapshot `expected_revision`.
+After any disconnect or uncertain delivery, the client preserves the original `session_id`, `client_message_id`, and message content. Each transmission attempt uses a fresh `request_id`. Clients do not carry or refresh a concurrency revision.
 
 One reconciliation invocation performs at most:
 
@@ -193,7 +193,7 @@ Canonical sequence:
    - matching user and assistant with the same ID → complete;
    - matching user plus pending turn in snapshot → in progress;
    - matching user, no assistant, no pending turn → retransmit same ID;
-   - no matching user message → retransmit same ID with latest revision;
+   - no matching user message → retransmit same ID;
 5. when retransmitting, wait for matching `message_in_progress`, `message_completed`, or an error matching the current `request_id` before acceptance or the retained `client_message_id` after durable acceptance;
 6. if no matching event within the bounded acknowledgement interval, fetch state and history again and treat refreshed durable HTTP state as authoritative;
 7. never reconstruct a completed message from missed `token` events.

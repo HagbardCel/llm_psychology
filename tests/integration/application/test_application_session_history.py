@@ -26,14 +26,12 @@ async def test_get_session_history_preserves_store_derived_client_message_ids(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
     client_message_id = uuid4()
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -63,7 +61,6 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
@@ -96,9 +93,6 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
             mutation_started.set()
             await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=therapy_id,
                     client_message_id=new_client_message_id,
                     content=new_content,

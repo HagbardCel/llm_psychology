@@ -180,9 +180,7 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "snapshot"
-        and entry.get("revision") is not None
-        and entry.get("stage") is not None
+        entry.get("category") == "snapshot" and entry.get("stage") is not None
         for entry in timeline
     )
     assert any(

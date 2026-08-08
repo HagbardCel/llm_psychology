@@ -9,9 +9,7 @@ import pytest
 
 from jung.domain.commands import (
     EndSession,
-    RetryOperation,
     SendMessage,
-    StartSession,
     UpdateProfile,
 )
 from jung.domain.models import (
@@ -142,14 +140,10 @@ async def test_conversational_post_session_persists_authoritative_grounded_turn(
         ]
     )
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         session_id = started.session.id
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content=patient_text,
@@ -166,7 +160,6 @@ async def test_conversational_post_session_persists_authoritative_grounded_turn(
         )
         await runtime.application.end_session(
             EndSession(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
             )
         )
@@ -209,13 +202,9 @@ async def test_malformed_derived_profile_fails_therapy_as_internal_error(
 
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=started.session.id,
                 client_message_id=uuid4(),
                 content="I slept badly.",
@@ -277,10 +266,7 @@ async def test_post_session_processing_failure_leaves_session_artifacts_unchange
         ]
     )
     async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        started = await runtime.application.start_session(
-            StartSession(expected_revision=revision)
-        )
+        started = await runtime.application.start_session()
         session_id = started.session.id
         plan_before = runtime.store.get_current_plan()
         profile_before = runtime.store.get_profile()
@@ -289,7 +275,6 @@ async def test_post_session_processing_failure_leaves_session_artifacts_unchange
 
         turn = await runtime.application.submit_message(
             SendMessage(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content="I slept badly.",
@@ -302,7 +287,6 @@ async def test_post_session_processing_failure_leaves_session_artifacts_unchange
         )
         await runtime.application.end_session(
             EndSession(
-                expected_revision=(await runtime.application.get_snapshot()).revision,
                 session_id=session_id,
             )
         )
@@ -357,10 +341,7 @@ async def test_failed_operation_can_be_retried(store: SQLiteStore) -> None:
             operation_id,
             OperationStatus.FAILED,
         )
-        revision = (await runtime.application.get_snapshot()).revision
-        await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision)
-        )
+        await runtime.application.retry_operation()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
 
@@ -449,10 +430,7 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
             operation_id,
             OperationStatus.FAILED,
         )
-        revision = (await runtime.application.get_snapshot()).revision
-        await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision)
-        )
+        await runtime.application.retry_operation()
         runtime.application.begin_shutdown()
         gate.set()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
@@ -514,7 +492,6 @@ async def test_end_session_schedules_operation_when_publish_cancelled(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
@@ -538,11 +515,8 @@ async def test_end_session_schedules_operation_when_publish_cancelled(
     async with build_test_application(store, fake) as runtime:
         runtime.events = GatedPublishEventStream(runtime.events)
         runtime.application._events = runtime.events
-        revision = (await runtime.application.get_snapshot()).revision
         end_task = asyncio.create_task(
-            runtime.application.end_session(
-                EndSession(expected_revision=revision, session_id=therapy_id)
-            )
+            runtime.application.end_session(EndSession(session_id=therapy_id))
         )
         await asyncio.wait_for(publish_gate.wait(), timeout=2.0)
         end_task.cancel()
@@ -605,10 +579,7 @@ async def test_retry_operation_schedules_operation_when_publish_fails(
             operation_id,
             OperationStatus.FAILED,
         )
-        revision = (await runtime.application.get_snapshot()).revision
-        await runtime.application.retry_operation(
-            RetryOperation(expected_revision=revision)
-        )
+        await runtime.application.retry_operation()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
 
@@ -619,7 +590,6 @@ async def test_end_session_schedules_when_assemble_cancelled(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
@@ -641,14 +611,11 @@ async def test_end_session_schedules_when_assemble_cancelled(
             return result
 
         runtime.application._assemble_snapshot_locked = gated_assemble
-        revision = (await runtime.application.get_snapshot()).revision
         gate_next_assemble = True
         end_task: asyncio.Task | None = None
         try:
             end_task = asyncio.create_task(
-                runtime.application.end_session(
-                    EndSession(expected_revision=revision, session_id=therapy_id)
-                )
+                runtime.application.end_session(EndSession(session_id=therapy_id))
             )
             await asyncio.wait_for(assemble_entered.wait(), timeout=2.0)
             end_task.cancel()
@@ -706,12 +673,9 @@ async def test_retry_operation_schedules_when_assemble_raises(
             operation_id,
             OperationStatus.FAILED,
         )
-        revision = (await runtime.application.get_snapshot()).revision
         gate_next_assemble = True
         with pytest.raises(RuntimeError, match="injected assemble failure"):
-            await runtime.application.retry_operation(
-                RetryOperation(expected_revision=revision)
-            )
+            await runtime.application.retry_operation()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
     fake.assert_exhausted()
 
@@ -775,7 +739,6 @@ async def test_final_intake_schedules_when_load_message_fails(
         runtime.application._load_message = failing_load_message
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -786,9 +749,6 @@ async def test_final_intake_schedules_when_load_message_fails(
                 fail_on_next_load = True
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session_id.id,
                     client_message_id=uuid4(),
                     content=content,

@@ -9,14 +9,10 @@ import pytest
 
 from jung.api.contracts import (
     AppSnapshotResponse,
-    EndSessionRequest,
-    ErrorEvent,
     MessageInProgressEvent,
     ProfileUpdateRequest,
     ProfileWire,
-    RetryOperationRequest,
     SelectStyleRequest,
-    StartSessionRequest,
 )
 from jung.client.api_client import (
     ChatReconciliationStatus,
@@ -83,7 +79,6 @@ async def test_typed_reads_profile_update_and_session_history(
 
         updated = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(
                     name="Alex",
                     primary_language="English",
@@ -121,24 +116,20 @@ async def test_select_style_start_and_end_methods_use_exact_contracts(
     )
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        selection_state = await client.get_state()
+        await client.get_state()
         ready = await client.select_style(
             SelectStyleRequest(
-                expected_revision=selection_state.revision,
                 style_id="cbt",
             )
         )
         assert ready.stage == "ready"
 
-        started = await client.start_session(
-            StartSessionRequest(expected_revision=ready.revision)
-        )
+        started = await client.start_session()
         assert started.snapshot.stage == "therapy"
         assert started.snapshot.active_session is not None
 
         ended = await client.end_session(
             started.session.id,
-            EndSessionRequest(expected_revision=started.snapshot.revision),
         )
         assert ended.stage == "post_session"
 
@@ -166,10 +157,8 @@ async def test_retry_current_operation_and_typed_not_found(
     )
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        failed = await client.get_state()
-        retried = await client.retry_current_operation(
-            RetryOperationRequest(expected_revision=failed.revision)
-        )
+        await client.get_state()
+        retried = await client.retry_current_operation()
         assert retried.operation is not None
         assert retried.operation.id == operation_id
 
@@ -179,7 +168,7 @@ async def test_retry_current_operation_and_typed_not_found(
         assert raised.value.code == "not_found"
 
 
-async def test_scoped_chat_decodes_typed_events_and_yields_server_errors(
+async def test_scoped_chat_decodes_typed_events(
     uvicorn_api_urls,
     fake_llm: FakeLLM,
 ) -> None:
@@ -187,27 +176,24 @@ async def test_scoped_chat_decodes_typed_events_and_yields_server_errors(
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        initial = await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
         assert state.active_session is not None
         intent = client.new_chat_intent(state.active_session.id, "hello")
-        stale = client.new_message_command(
-            intent,
-            expected_revision=state.revision - 1,
-        )
+        command = client.new_message_command(intent)
 
         async with client.open_chat() as chat:
-            await chat.send(stale)
+            await chat.send(command)
             async for event in chat.events():
-                if isinstance(event, ErrorEvent):
-                    assert event.error.code == "state_conflict"
-                    assert event.client_message_id == intent.client_message_id
+                if isinstance(event, MessageInProgressEvent):
+                    assert event.session_id == intent.session_id
+                    assert event.turn.client_message_id == intent.client_message_id
                     break
+            else:
+                pytest.fail("expected MessageInProgressEvent")
 
 
 async def test_reconcile_returns_complete_without_retransmission(
@@ -219,7 +205,6 @@ async def test_reconcile_returns_complete_without_retransmission(
     client_message_id = uuid4()
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=session_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -255,7 +240,6 @@ async def test_reconcile_detects_identity_conflict_before_retransmission(
     session_id, now = open_intake(store)
     client_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=session_id,
         client_message_id=client_message_id,
         turn_id=uuid4(),
@@ -285,10 +269,9 @@ async def test_reconcile_retransmits_once_and_refreshes_durable_state(
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -328,10 +311,9 @@ async def test_reconcile_matches_durable_failure_with_remapped_request_id(
     ]
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -401,10 +383,9 @@ async def test_reconcile_event_silent_duplicate_uses_final_http_refresh(
     async with JungApiClient(
         ClientSettings(http_base, acknowledgement_timeout=0.05)
     ) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -427,7 +408,6 @@ async def test_reconcile_event_silent_duplicate_uses_final_http_refresh(
                 turn_id = uuid4()
                 user_message_id = uuid4()
                 store.accept_chat_message(
-                    expected_revision=command.expected_revision,
                     session_id=command.session_id,
                     client_message_id=command.client_message_id,
                     turn_id=turn_id,
@@ -495,10 +475,9 @@ async def test_reconcile_ignores_queued_unrelated_snapshot_event(
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -507,7 +486,7 @@ async def test_reconcile_ignores_queued_unrelated_snapshot_event(
         profile = await client.get_profile()
         subscriber_count = len(runtime_probe.runtime.events._subscribers)
         real_open_chat = client.open_chat
-        queued_revision = None
+        queued_stage = None
         saw_queued_snapshot = False
 
         class TrackingChat:
@@ -522,7 +501,8 @@ async def test_reconcile_ignores_queued_unrelated_snapshot_event(
                 async for event in self._chat.events():
                     if (
                         event.type == "snapshot_changed"
-                        and event.snapshot.revision == queued_revision
+                        and event.snapshot.stage == queued_stage
+                        and event.snapshot.active_session is not None
                     ):
                         saw_queued_snapshot = True
                     yield event
@@ -532,12 +512,11 @@ async def test_reconcile_ignores_queued_unrelated_snapshot_event(
 
         @asynccontextmanager
         async def open_chat_with_queued_event():
-            nonlocal queued_revision
+            nonlocal queued_stage
             async with real_open_chat() as chat:
                 await _wait_for_subscribers(runtime_probe, subscriber_count + 1)
                 queued = await client.update_profile(
                     ProfileUpdateRequest(
-                        expected_revision=profile.snapshot.revision,
                         profile=ProfileWire(
                             name=profile.profile.name,
                             primary_language=profile.profile.primary_language,
@@ -546,7 +525,7 @@ async def test_reconcile_ignores_queued_unrelated_snapshot_event(
                         ),
                     )
                 )
-                queued_revision = queued.revision
+                queued_stage = queued.stage
                 yield TrackingChat(chat)
 
         client.open_chat = open_chat_with_queued_event
@@ -572,10 +551,9 @@ async def test_reconcile_uses_final_http_refresh_after_confirmed_acceptance(
     async with JungApiClient(
         ClientSettings(http_base, acknowledgement_timeout=0.05)
     ) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -637,10 +615,9 @@ async def test_reconcile_unresolved_when_send_never_delegates(
     http_base, _ws_url = uvicorn_api_urls
 
     async with JungApiClient(ClientSettings(http_base)) as client:
-        initial = await client.get_state()
+        await client.get_state()
         state = await client.update_profile(
             ProfileUpdateRequest(
-                expected_revision=initial.revision,
                 profile=ProfileWire(name="Alex", primary_language="English"),
             )
         )
@@ -683,7 +660,6 @@ async def test_reconcile_failed_duplicate_preserves_durable_identity(
     turn_id = uuid4()
     user_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=session_id,
         client_message_id=client_message_id,
         turn_id=turn_id,

@@ -30,7 +30,6 @@ from jung.api.contracts import (
     SessionDetailResponse,
     SessionHistoryResponse,
     SessionSummaryResponse,
-    StartSessionRequest,
     StartSessionResponse,
     StyleOptionsResponse,
     StyleSummaryResponse,
@@ -174,7 +173,6 @@ class ScriptedInput:
 def _snapshot(
     *,
     stage: str = "intake",
-    revision: int = 1,
     commands: list[str] | None = None,
     session: SessionSummaryResponse | None = None,
     pending: ChatTurnSummaryResponse | None = None,
@@ -183,7 +181,6 @@ def _snapshot(
     if commands is None:
         commands = ["send_message"]
     return AppSnapshotResponse(
-        revision=revision,
         stage=stage,  # type: ignore[arg-type]
         profile_complete=True,
         active_session=session,
@@ -391,7 +388,7 @@ def _error_event(
         type="error",
         request_id=request_id,
         error=ErrorEnvelope(
-            code="llm_timeout" if turn_id is not None else "state_conflict",
+            code="llm_timeout" if turn_id is not None else "invalid_command",
             message="failed",
             request_id=request_id,
             retryable=False,
@@ -402,10 +399,10 @@ def _error_event(
     )
 
 
-async def test_mutations_use_authoritative_snapshot_revision() -> None:
+async def test_chat_turn_builds_message_command_without_revision() -> None:
     client = _mock_client()
     session = _session()
-    snapshot = _snapshot(revision=7, session=session)
+    snapshot = _snapshot(session=session)
 
     def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
         progress = _progress_event(
@@ -434,12 +431,13 @@ async def test_mutations_use_authoritative_snapshot_revision() -> None:
             yield chat
 
     client.open_chat = tracking_open_chat
-    after = _snapshot(revision=8, stage="assessment", session=session, commands=[])
+    after = _snapshot(stage="assessment", session=session, commands=[])
     client.get_state = AsyncMock(side_effect=[snapshot, after])
     app = _app(client, inputs=ScriptedInput("hello"))
     await app._handle_chat_turn(snapshot, content="hello")
     assert sent_commands
-    assert sent_commands[0].expected_revision == 7
+    assert "expected" + "_revision" not in type(sent_commands[0]).model_fields
+    assert sent_commands[0].content == "hello"
 
 
 async def test_stage_alone_does_not_authorize_mutation() -> None:
@@ -532,7 +530,6 @@ async def test_therapy_quit_command_vs_word_quit() -> None:
     session = _session(kind="therapy")
     therapy = _snapshot(
         stage="therapy",
-        revision=3,
         session=session,
         commands=["send_message", "end_session"],
     )
@@ -581,12 +578,11 @@ async def test_retryable_operation_invalid_input_reprompts() -> None:
     )
     snapshot = _snapshot(
         stage="assessment",
-        revision=2,
         operation=operation,
         commands=["retry_operation"],
     )
     client.retry_current_operation = AsyncMock(
-        return_value=_snapshot(stage="style_selection", revision=3)
+        return_value=_snapshot(stage="style_selection")
     )
     app = _app(client, inputs=ScriptedInput("maybe", "/retry"))
     result = await app._handle_operation_stage(snapshot)
@@ -645,7 +641,7 @@ async def test_operation_complete_without_stage_transition_is_protocol_error() -
         kind="assessment",
         status="complete",
     )
-    snapshot = _snapshot(stage="assessment", revision=2, operation=operation)
+    snapshot = _snapshot(stage="assessment", operation=operation)
     client.get_state = AsyncMock(return_value=snapshot)
     app = _app(client)
     with pytest.raises(JungProtocolError):
@@ -1009,12 +1005,10 @@ async def test_profile_setup_preserves_optional_fields() -> None:
             date_of_birth=date(1990, 1, 2),
             notes="keep me",
         ),
-        snapshot=_snapshot(stage="setup", revision=0, commands=["update_profile"]),
+        snapshot=_snapshot(stage="setup", commands=["update_profile"]),
     )
     client.get_profile = AsyncMock(return_value=profile)
-    client.update_profile = AsyncMock(
-        return_value=_snapshot(stage="intake", revision=1)
-    )
+    client.update_profile = AsyncMock(return_value=_snapshot(stage="intake"))
     observer = RecordingObserver()
     app = _app(client, inputs=ScriptedInput("New Name", "French"), observer=observer)
     await app._handle_setup()
@@ -1066,7 +1060,7 @@ async def test_operation_changed_observer_records_operation_fields() -> None:
         client_message_id=uuid4(),
         request_id=uuid4(),
     )
-    snapshot = _snapshot(stage="assessment", revision=3)
+    snapshot = _snapshot(stage="assessment")
     operation = OperationSummaryResponse(
         id=uuid4(),
         kind="assessment",
@@ -1085,7 +1079,6 @@ async def test_operation_changed_observer_records_operation_fields() -> None:
                 "type": "operation_changed",
                 "operation_kind": "assessment",
                 "operation_status": "running",
-                "revision": 3,
                 "stage": "assessment",
             },
         )
@@ -1098,11 +1091,9 @@ async def test_style_selection_recovers_from_invalid_command_through_run() -> No
         styles=[StyleSummaryResponse(id="cbt", name="CBT", description="")],
         recommendations=[],
     )
-    initial = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
-    refreshed = _snapshot(
-        stage="style_selection", revision=5, commands=["select_style"]
-    )
-    ready = _snapshot(stage="ready", revision=6, commands=["start_session"])
+    initial = _snapshot(stage="style_selection", commands=["select_style"])
+    refreshed = _snapshot(stage="style_selection", commands=["select_style"])
+    ready = _snapshot(stage="ready", commands=["start_session"])
 
     client.get_state = AsyncMock(side_effect=[initial, refreshed])
     client.get_styles = AsyncMock(return_value=styles)
@@ -1115,7 +1106,6 @@ async def test_style_selection_recovers_from_invalid_command_through_run() -> No
                     message="unknown style",
                     request_id=uuid4(),
                     retryable=False,
-                    current_snapshot=None,
                 ),
             ),
             ready,
@@ -1138,47 +1128,47 @@ async def test_style_selection_recovers_from_invalid_command_through_run() -> No
     assert client.select_style.await_count == 2
     second_request = client.select_style.await_args_list[1].args[0]
     assert isinstance(second_request, SelectStyleRequest)
-    assert second_request.expected_revision == refreshed.revision
+    assert second_request.style_id == "cbt"
     assert any(snap.stage == "ready" for snap in output.snapshots)
     assert output.snapshots[-1].stage == "ready"
 
 
-async def test_style_selection_uses_snapshot_revision() -> None:
+async def test_style_selection_sends_style_id_only() -> None:
     client = _mock_client()
-    snapshot = _snapshot(stage="style_selection", revision=5, commands=["select_style"])
+    snapshot = _snapshot(stage="style_selection", commands=["select_style"])
     client.get_styles = AsyncMock(
         return_value=StyleOptionsResponse(
             styles=[StyleSummaryResponse(id="cbt", name="CBT", description="")],
             recommendations=[],
         )
     )
-    client.select_style = AsyncMock(return_value=_snapshot(stage="ready", revision=6))
+    client.select_style = AsyncMock(return_value=_snapshot(stage="ready"))
     observer = RecordingObserver()
     app = _app(client, inputs=ScriptedInput("cbt"), observer=observer)
     await app._handle_style_selection(snapshot)
     request = client.select_style.await_args.args[0]
     assert isinstance(request, SelectStyleRequest)
-    assert request.expected_revision == 5
+    assert request.style_id == "cbt"
+    assert "expected" + "_revision" not in type(request).model_fields
     assert not any(event == "user_message" for event, _ in observer.events)
 
 
-async def test_start_session_uses_snapshot_revision() -> None:
+async def test_start_session_is_bodyless() -> None:
     client = _mock_client()
-    ready = _snapshot(stage="ready", revision=4, commands=["start_session"])
+    ready = _snapshot(stage="ready", commands=["start_session"])
     client.start_session = AsyncMock(
         return_value=StartSessionResponse(
             session=_session(kind="therapy"),
-            snapshot=_snapshot(stage="therapy", revision=5),
+            snapshot=_snapshot(stage="therapy"),
         )
     )
     app = _app(client, inputs=ScriptedInput("start"))
     action = (await app.read_input(PromptSpec(text="> "))).strip()
     assert action == "start"
     require_command(set(ready.available_commands), "start_session")
-    await client.start_session(StartSessionRequest(expected_revision=ready.revision))
-    request = client.start_session.await_args.args[0]
-    assert isinstance(request, StartSessionRequest)
-    assert request.expected_revision == 4
+    await client.start_session()
+    assert client.start_session.await_args.args == ()
+    assert client.start_session.await_args.kwargs == {}
 
 
 async def test_completion_during_ack_skips_completion_wait() -> None:
@@ -1195,7 +1185,7 @@ async def test_completion_during_ack_skips_completion_wait() -> None:
         return _event_stream(completion)
 
     client.open_chat = _open_chat_from_send(build_events)
-    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake"))
     output = RecordingOutput()
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -1232,7 +1222,7 @@ async def test_completion_after_ack_timeout_still_completes() -> None:
         return events()
 
     client.open_chat = _open_chat_from_send(build_events)
-    after = _snapshot(stage="intake", revision=7, session=session)
+    after = _snapshot(stage="intake", session=session)
     client.get_state = AsyncMock(return_value=after)
     client.reconcile_chat_turn = AsyncMock()
     output = RecordingOutput()
@@ -1251,7 +1241,7 @@ async def test_completion_after_ack_timeout_still_completes() -> None:
             with suppress(asyncio.CancelledError):
                 await task
 
-    assert result.revision == 7
+    assert result.stage == "intake"
     client.reconcile_chat_turn.assert_not_awaited()
     assert output.assistant_direct == ["reply"]
 
@@ -1325,7 +1315,7 @@ async def test_token_before_progress_then_completion() -> None:
         return _event_stream(token, progress, token2, completion)
 
     client.open_chat = _open_chat_from_send(build_events)
-    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake"))
     output = RecordingOutput()
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -1353,7 +1343,7 @@ async def test_progress_completion_without_tokens_renders_direct() -> None:
         return _event_stream(progress, completion)
 
     client.open_chat = _open_chat_from_send(build_events)
-    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake"))
     output = RecordingOutput()
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -1389,7 +1379,7 @@ async def test_streamed_text_differs_uses_correction() -> None:
         return _event_stream(progress, token, completion)
 
     client.open_chat = _open_chat_from_send(build_events)
-    client.get_state = AsyncMock(return_value=_snapshot(stage="intake", revision=2))
+    client.get_state = AsyncMock(return_value=_snapshot(stage="intake"))
     output = RecordingOutput()
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")

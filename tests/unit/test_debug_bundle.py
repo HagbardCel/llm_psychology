@@ -63,8 +63,8 @@ def test_write_manifest_and_export_snapshot(tmp_path: Path) -> None:
         finalize_debug_bundle(recorder, store)
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["diagnostic_schema_version"] == 2
-    assert manifest["database_schema_version_expected"] == 3
+    assert manifest["diagnostic_schema_version"] == 3
+    assert manifest["database_schema_version_expected"] == 4
     assert "sekrit" not in json.dumps(manifest)
     assert manifest["llm"]["provider_url"] == "http://127.0.0.1:8080/v1"
     assert manifest["llm"]["tasks"]["intake_patch"]["model"] == "m1"
@@ -90,7 +90,6 @@ def test_export_db_snapshot_handles_reserved_path_chars(tmp_path: Path) -> None:
     store.initialize()
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
         intake_session_id=uuid4(),
         now=datetime.now(UTC),
     )
@@ -160,7 +159,6 @@ def test_finalize_records_runtime_error_when_plan_query_fails(
     session_id = uuid4()
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
-        expected_revision=0,
         intake_session_id=session_id,
         now=datetime.now(UTC),
     )

@@ -37,7 +37,6 @@ def test_validate_snapshot_invariants_rejects_setup_with_session() -> None:
         started_at=now,
     )
     snapshot = AppSnapshot(
-        revision=1,
         stage=Stage.SETUP,
         profile_complete=True,
         active_session=session,
@@ -64,7 +63,6 @@ def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
         created_at=now,
     )
     snapshot = AppSnapshot(
-        revision=1,
         stage=Stage.READY,
         profile_complete=True,
         selected_style="unknown-style",

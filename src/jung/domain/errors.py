@@ -11,15 +11,6 @@ class InvalidCommand(DomainError):
     """Command is not permitted in the current workflow state."""
 
 
-class RevisionConflict(DomainError):
-    """Optimistic concurrency check failed."""
-
-    def __init__(self, expected: int, actual: int) -> None:
-        self.expected = expected
-        self.actual = actual
-        super().__init__(f"expected revision {expected}, found {actual}")
-
-
 class Busy(DomainError):
     """Conflicting session, mutation, operation, or generation."""
 
