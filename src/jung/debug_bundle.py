@@ -496,8 +496,8 @@ def export_db_snapshot(*, run_dir: Path, database: Path) -> Path:
     destination_created = False
     try:
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(fd)
         destination_created = True
+        os.close(fd)
 
         uri = database.resolve().as_uri() + "?mode=ro"
         source = sqlite3.connect(uri, uri=True)

@@ -128,6 +128,28 @@ def test_export_db_snapshot_cleans_up_after_post_create_failure(
     assert not destination.exists()
 
 
+def test_export_db_snapshot_cleans_up_when_close_fails_after_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "jung.db"
+    SQLiteStore(db_path).initialize()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    destination = run_dir / "db_snapshot.sqlite"
+
+    real_close = debug_bundle.os.close
+
+    def close_then_fail(fd: int) -> None:
+        real_close(fd)
+        raise OSError("forced close failure")
+
+    monkeypatch.setattr(debug_bundle.os, "close", close_then_fail)
+    with pytest.raises(OSError, match="forced close failure"):
+        export_db_snapshot(run_dir=run_dir, database=db_path)
+    assert not destination.exists()
+
+
 def test_finalize_records_runtime_error_when_plan_query_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
