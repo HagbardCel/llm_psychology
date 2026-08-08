@@ -1,14 +1,17 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-21
+last_reviewed: 2026-08-08
 review_cycle_days: 30
-source_of_truth_for: Supported workflow, recovery, and concurrency semantics
+source_of_truth_for: Supported workflow, recovery, and command-conflict semantics
 ---
 
 # Workflow Specification
 
-> This document governs the supported Jung workflow runtime. Wire DTO shapes live in the [API v1 Contract](api-v1-contract.md).
+> This document governs the supported Jung workflow runtime. Wire DTO shapes and
+> public errors live in the [API v1 Contract](api-v1.md). Runtime synchronization
+> structure lives in [Architecture](architecture.md). Database reset and data
+> erasure live in [Safety and Data Handling](safety-and-data.md).
 
 ## Stages
 
@@ -77,7 +80,7 @@ PENDING → COMPLETE
 2. **Generation**: supervisor streams tokens through `EventStream`; tokens are ephemeral.
 3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; increment revision; emit completion notifications.
 4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged; increment revision when failure occurs after acceptance.
-5. **Duplicate client message**: same ID never creates a second user message; pending/complete/failed paths return the stored outcome.
+5. **Duplicate client message**: same ID never creates a second user message. `PENDING` and `COMPLETE` return the durable turn; a non-retryable `FAILED` turn raises its stored failure; a retryable `FAILED` turn may, after generation availability, structural eligibility, and revision checks, reset the **same** durable turn to `PENDING` and regenerate. See [API v1](api-v1.md) for the full precedence list.
 6. **During active generation**: conflicting distinct `send_message` returns `busy`; same idempotent resubmit returns in-progress or stored completion.
 
 A pending turn cannot resume token generation exactly after crash; startup converts stale pending turns to retryable `FAILED` while preserving the user message.
@@ -87,7 +90,7 @@ A pending turn cannot resume token generation exactly after crash; startup conve
 At startup, before accepting mutations:
 
 - stale `RUNNING` operations → `PENDING`, scheduled by supervisor;
-- stale pending/running chat turns → retryable `FAILED`;
+- stale **pending** chat turns → retryable `FAILED`;
 - completed operations/turns are not rerun.
 
 On shutdown:
@@ -144,30 +147,14 @@ Provider models cite sequences only. The backend resolves complete authoritative
 
 Intervention status is derived as `delivered` or `response_cited` from whether a later user turn was cited. `response_cited` means a chronologically later user turn was selected — not that the turn semantically responded to the intervention. `intervention_description` remains a model-generated interpretation made auditable by its grounded citation.
 
-Patient-turn citations select patient-authored turns whose complete wording should be retained as durable cross-session context; cite sparingly, especially safety-relevant clarifications or negations where partial wording could reverse meaning, and omit when nothing qualifies. Patient-turn citations are unique by patient sequence. Durable turns are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. LLM profile projection is an allowlist of `grounded_patient_turns` only; unknown legacy keys are dropped at merge and never re-enter prompts.
+Patient-turn citations select patient-authored turns whose complete wording should be retained as durable cross-session context; cite sparingly, especially safety-relevant clarifications or negations where partial wording could reverse meaning, and omit when nothing qualifies. Patient-turn citations are unique by patient sequence. Durable turns are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. LLM profile projection is an allowlist of `grounded_patient_turns` only; unknown keys are dropped at merge and never re-enter prompts.
 
 The same patient turn may intentionally appear both as intervention `patient_content` and as a durable patient-turn selection. Context packing treats them as separate atoms under one shared budget.
 
 Malformed stored `grounded_patient_turns` (including explicit `null`) fail fast as an internal application error during post-session merge or therapy context assembly. They are not LLM-correctable and are not silently omitted.
 
-Lifetime accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
+Accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
 
 ### Failure behavior
 
 After an unrecoverable validation, LLM, or derived-profile storage failure, the operation transitions to `FAILED`, but no session summary, briefing, derived-profile update, or plan revision is persisted.
-
-### Local database reset
-
-This change is a breaking representation for durable derived profiles. Recreate local development databases externally after checking out the branch:
-
-```bash
-rm -f \
-  data/local/jung.db \
-  data/local/jung.db-wal \
-  data/local/jung.db-shm \
-  data/usertest/jung.db \
-  data/usertest/jung.db-wal \
-  data/usertest/jung.db-shm
-```
-
-Do not add automatic deletion, startup reset behavior, migration logic, or committed SQLite files.

@@ -1,7 +1,7 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-21
+last_reviewed: 2026-08-08
 review_cycle_days: 90
 source_of_truth_for: Product safety, sensitive-data handling, network exposure, and local data erasure
 ---
@@ -146,4 +146,6 @@ any copied database exports separately.
 ## Related canonical documentation
 
 - [Documentation Index](README.md)
-- [Target Architecture](refactor/target-architecture.md)
+- [Architecture](architecture.md)
+- [Development](development.md)
+- [Database](database.md)
