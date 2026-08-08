@@ -347,6 +347,15 @@ def test_client_uses_contract_only_import_allow_list() -> None:
     assert violations == []
 
 
+def test_chat_events_does_not_import_api_client() -> None:
+    path = CLIENT_SRC / "_chat_events.py"
+    assert path.is_file(), "jung.client._chat_events correlation boundary is missing"
+
+    modules = _resolved_imported_modules(path)
+    assert "jung.client.api_client" not in modules
+    assert not any(module.startswith("jung.client.api_client.") for module in modules)
+
+
 # ---------------------------------------------------------------------------
 # Rule 6: core transport independence.
 # ---------------------------------------------------------------------------

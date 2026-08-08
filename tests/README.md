@@ -62,6 +62,7 @@ boundary itself is the problem.
 | --- | --- | --- |
 | Chat idempotency | `integration/store/test_store_chat.py` — duplicate keys, retries, ordering, recovery | one use-case case in `integration/application/test_application_chat.py`; one round-trip in `integration/api/test_websocket_chat.py` and `integration/client/`; one journey step in `e2e/` |
 | Error sanitization | `unit/application/test_invariants.py` (`_classify_worker_error`) and `unit/api/test_error_mapping.py` | `integration/api/test_http_errors.py` asserts the wire response carries the public code and no internals |
+| Generated HTTP schema and route surface | `integration/api/test_openapi.py` — operation inventory, common headers/error responses, snapshot response types, docs exposure | none; the generated schema is itself the boundary |
 | Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts a grounded result is persisted and read back intact |
 | Worker-error classification | `unit/application/test_invariants.py` | `integration/application/test_application_operations.py` asserts a failed operation surfaces the classified code |
 | Workflow transitions | `unit/domain/test_workflow.py` — the full legal/illegal transition matrix | `integration/store/test_store_workflow.py` for persisted stage changes; one `e2e/` journey |

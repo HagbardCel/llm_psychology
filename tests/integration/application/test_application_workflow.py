@@ -17,13 +17,10 @@ from jung.domain.commands import (
 from jung.domain.errors import NotFound
 from jung.domain.models import (
     ChatTurnStatus,
-    CommandName,
-    OperationKind,
-    OperationStatus,
     Profile,
-    SessionKind,
     Stage,
 )
+from jung.events import SnapshotChanged
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
@@ -38,60 +35,12 @@ from .application_fixtures import (
     wait_for_chat_turn,
     wait_for_stage,
 )
-from .scenarios import advance_to_ready, complete_intake_for_assessment, open_intake
+from .scenarios import advance_to_ready
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_update_profile_creates_intake_session(store: SQLiteStore) -> None:
-    fake = FakeLLM([])
-    async with build_test_application(store, fake) as runtime:
-        snapshot = await runtime.application.update_profile(
-            UpdateProfile(
-                expected_revision=0,
-                profile=Profile(name="Alex", primary_language="English"),
-            )
-        )
-    assert snapshot.stage is Stage.INTAKE
-    assert snapshot.active_session is not None
-    assert snapshot.active_session.kind is SessionKind.INTAKE
-
-
-async def test_seeded_ready_snapshot_exposes_start_session(store: SQLiteStore) -> None:
-    advance_to_ready(store)
-    fake = FakeLLM([])
-    async with build_test_application(store, fake) as runtime:
-        snapshot = await runtime.application.get_snapshot()
-    assert snapshot.stage is Stage.READY
-    assert CommandName.START_SESSION in snapshot.available_commands
-
-
-async def test_select_style_advances_to_ready(store: SQLiteStore) -> None:
-    intake_id, now = open_intake(store)
-    operation_id = uuid4()
-    complete_intake_for_assessment(
-        store,
-        intake_session_id=intake_id,
-        now=now,
-        operation_id=operation_id,
-    )
-    store.mark_operation_running(operation_id, now=now)
-    store.complete_assessment(
-        operation_id,
-        result=assessment_result().model_dump(mode="json"),
-        now=now,
-    )
-    fake = FakeLLM([])
-    async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        snapshot = await runtime.application.select_style(
-            SelectStyle(expected_revision=revision, style_id="cbt")
-        )
-    assert snapshot.stage is Stage.READY
-    assert snapshot.selected_style == "cbt"
-
-
-async def test_start_session_enters_therapy(store: SQLiteStore) -> None:
+async def test_start_session_publishes_resulting_snapshot(store: SQLiteStore) -> None:
     advance_to_ready(store)
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
@@ -108,18 +57,13 @@ async def test_start_session_enters_therapy(store: SQLiteStore) -> None:
                 StartSession(expected_revision=revision)
             )
             await asyncio.wait_for(collector, timeout=1.0)
-        session = started.session
-        snapshot = started.snapshot
-    from jung.events import SnapshotChanged
 
-    assert snapshot.stage is Stage.THERAPY
-    assert session.kind is SessionKind.THERAPY
-    assert snapshot.active_session is not None
-    assert snapshot.active_session.id == session.id
     assert len(published) == 1
     event = published[0]
     assert isinstance(event, SnapshotChanged)
-    assert event.snapshot == snapshot
+    assert event.snapshot == started.snapshot
+    assert event.snapshot.active_session is not None
+    assert event.snapshot.active_session.id == started.session.id
 
 
 async def test_end_session_unknown_session_raises_not_found(store: SQLiteStore) -> None:
@@ -137,54 +81,6 @@ async def test_end_session_unknown_session_raises_not_found(store: SQLiteStore) 
             await runtime.application.end_session(
                 EndSession(expected_revision=revision, session_id=uuid4())
             )
-
-
-async def test_end_session_creates_post_session_operation(store: SQLiteStore) -> None:
-    ready = advance_to_ready(store)
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        now=ready.now,
-    )
-    fake = FakeLLM([])
-    async with build_test_application(store, fake) as runtime:
-        revision = (await runtime.application.get_snapshot()).revision
-        snapshot = await runtime.application.end_session(
-            EndSession(expected_revision=revision, session_id=therapy_id)
-        )
-    assert snapshot.stage is Stage.POST_SESSION
-    assert snapshot.current_operation is not None
-    assert snapshot.current_operation.kind is OperationKind.POST_SESSION
-    assert snapshot.current_operation.status is OperationStatus.PENDING
-
-
-async def test_assessment_application_journey(store: SQLiteStore) -> None:
-    intake_id, now = open_intake(store)
-    operation_id = uuid4()
-    complete_intake_for_assessment(
-        store,
-        intake_session_id=intake_id,
-        now=now,
-        operation_id=operation_id,
-    )
-    fake = FakeLLM(
-        [
-            StructuredExpectation(
-                task=LLMTask.ASSESSMENT,
-                output_type=AssessmentResult,
-                response=assessment_result(),
-            )
-        ]
-    )
-    async with build_test_application(store, fake) as runtime:
-        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
-        revision = (await runtime.application.get_snapshot()).revision
-        snapshot = await runtime.application.select_style(
-            SelectStyle(expected_revision=revision, style_id="cbt")
-        )
-    assert snapshot.stage is Stage.READY
-    fake.assert_exhausted()
 
 
 async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> None:
