@@ -104,11 +104,10 @@ def test_openapi_snapshot_response_contract(api_app) -> None:
 
 
 def _schema_contains(node: object, needle: str) -> bool:
+    if isinstance(node, str):
+        return node == needle
     if isinstance(node, dict):
         if needle in node:
-            return True
-        properties = node.get("properties")
-        if isinstance(properties, dict) and needle in properties:
             return True
         return any(_schema_contains(value, needle) for value in node.values())
     if isinstance(node, list):

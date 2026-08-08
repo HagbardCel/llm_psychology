@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,6 +12,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from jung.api.contracts import (
     COMMAND_ORDER,
+    ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     ErrorResponse,
@@ -550,6 +552,10 @@ def test_app_snapshot_response_schema_has_no_revision() -> None:
 
     properties = AppSnapshotResponse.model_json_schema()["properties"]
     assert "revision" not in properties
+
+
+def test_error_code_excludes_removed_conflict_token() -> None:
+    assert "state" + "_conflict" not in get_args(ErrorCode)
 
 
 def test_error_response_inherits_error_envelope_fields() -> None:
