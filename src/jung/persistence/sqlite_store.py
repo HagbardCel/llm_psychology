@@ -20,8 +20,6 @@ from jung.domain.errors import (
 )
 from jung.domain.models import (
     AppState,
-    ChatTurn,
-    ChatTurnStatus,
     Message,
     MessageRole,
     NewPlanRevision,
@@ -173,23 +171,21 @@ class SQLiteStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT m.id, m.session_id, m.sequence, m.role, m.content, m.created_at,
-                       CASE m.role
-                           WHEN 'user' THEN user_turn.client_message_id
-                           WHEN 'assistant' THEN assistant_turn.client_message_id
-                           ELSE NULL
-                       END AS client_message_id
-                FROM messages m
-                LEFT JOIN chat_turns user_turn
-                    ON user_turn.user_message_id = m.id
-                LEFT JOIN chat_turns assistant_turn
-                    ON assistant_turn.assistant_message_id = m.id
-                WHERE m.session_id = ?
-                ORDER BY m.sequence ASC
+                SELECT id, session_id, sequence, role, content, client_message_id,
+                       created_at
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY sequence ASC
                 """,
                 (str(session_id),),
             ).fetchall()
             return [sql.row_to_message(row) for row in rows]
+
+    def get_messages_by_client_id(
+        self, session_id: UUID, client_message_id: UUID
+    ) -> tuple[Message | None, Message | None]:
+        with self._connect() as conn:
+            return self._load_messages_by_client_id(conn, session_id, client_message_id)
 
     def get_current_operation(self) -> Operation | None:
         with self._connect() as conn:
@@ -219,55 +215,12 @@ class SQLiteStore:
             ).fetchone()
             return sql.row_to_operation(row) if row else None
 
-    def get_chat_turn(self, turn_id: UUID) -> ChatTurn | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, session_id, client_message_id, status, user_message_id,
-                       assistant_message_id, error_code, error_message, retryable,
-                       created_at, updated_at, completed_at
-                FROM chat_turns WHERE id = ?
-                """,
-                (str(turn_id),),
-            ).fetchone()
-            return sql.row_to_chat_turn(row) if row else None
-
-    def get_chat_turn_by_client_id(
-        self, session_id: UUID, client_message_id: UUID
-    ) -> ChatTurn | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, session_id, client_message_id, status, user_message_id,
-                       assistant_message_id, error_code, error_message, retryable,
-                       created_at, updated_at, completed_at
-                FROM chat_turns
-                WHERE session_id = ? AND client_message_id = ?
-                """,
-                (str(session_id), str(client_message_id)),
-            ).fetchone()
-            return sql.row_to_chat_turn(row) if row else None
-
     def get_active_session(self) -> Session | None:
         with self._connect() as conn:
             row = conn.execute(
                 f"{_SESSION_SELECT} WHERE ended_at IS NULL LIMIT 1"
             ).fetchone()
             return sql.row_to_session(row) if row else None
-
-    def get_active_chat_turn(self) -> ChatTurn | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, session_id, client_message_id, status, user_message_id,
-                       assistant_message_id, error_code, error_message, retryable,
-                       created_at, updated_at, completed_at
-                FROM chat_turns
-                WHERE status = 'pending'
-                LIMIT 1
-                """
-            ).fetchone()
-            return sql.row_to_chat_turn(row) if row else None
 
     def load_snapshot_facts(self) -> WorkflowFacts:
         with self._connect() as conn:
@@ -381,32 +334,145 @@ class SQLiteStore:
             ).fetchall()
             return [sql.row_to_plan(row) for row in plan_rows]
 
-    def complete_final_intake_turn(
+    def append_user_message(
         self,
-        turn_id: UUID,
         *,
+        session_id: UUID,
+        client_message_id: UUID,
+        user_message_id: UUID,
+        content: str,
+        now: datetime,
+    ) -> Message:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                stage = self._load_stage(conn)
+                if stage not in {Stage.INTAKE, Stage.THERAPY}:
+                    raise InvariantViolation(
+                        "chat is only allowed in intake or therapy"
+                    )
+                session = self._require_open_session(conn, session_id)
+                if stage == Stage.INTAKE and session.kind != SessionKind.INTAKE:
+                    raise InvariantViolation("intake chat requires intake session")
+                if stage == Stage.THERAPY and session.kind != SessionKind.THERAPY:
+                    raise InvariantViolation("therapy chat requires therapy session")
+                latest = self._latest_message(conn, session_id)
+                if latest is not None and latest.role is MessageRole.USER:
+                    raise InvariantViolation(
+                        "unanswered user message must be retried before sending another"
+                    )
+                existing_user, _existing_assistant = self._load_messages_by_client_id(
+                    conn, session_id, client_message_id
+                )
+                if existing_user is not None:
+                    raise InvariantViolation(
+                        "user message already exists for client_message_id"
+                    )
+                sequence = self._next_sequence(conn, session_id)
+                created_at = sql.dt(now)
+                conn.execute(
+                    """
+                    INSERT INTO messages (
+                        id, session_id, sequence, role, content, client_message_id,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(user_message_id),
+                        str(session_id),
+                        sequence,
+                        MessageRole.USER.value,
+                        content,
+                        str(client_message_id),
+                        created_at,
+                    ),
+                )
+                message = Message(
+                    id=user_message_id,
+                    session_id=session_id,
+                    sequence=sequence,
+                    role=MessageRole.USER,
+                    content=content,
+                    client_message_id=client_message_id,
+                    created_at=sql.parse_dt(created_at),
+                )
+                conn.commit()
+                return message
+            except Exception as exc:
+                conn.rollback()
+                raise sql.translate_sqlite_error(exc) from exc
+
+    def complete_chat_response(
+        self,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
+        assistant_message_id: UUID,
+        content: str,
+        intake_record: dict[str, Any] | None = None,
+        now: datetime,
+    ) -> Message:
+        validated_intake_record: dict[str, Any] | None = None
+        if intake_record is not None:
+            validated_intake_record = sql.validate_json_mapping(
+                intake_record, field_name="intake_record"
+            )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                message = self._insert_assistant_response(
+                    conn,
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    assistant_message_id=assistant_message_id,
+                    content=content,
+                    now=now,
+                )
+                if validated_intake_record is not None:
+                    session_row = conn.execute(
+                        f"{_SESSION_SELECT} WHERE id = ?",
+                        (str(session_id),),
+                    ).fetchone()
+                    if session_row is None:
+                        raise NotFound(f"session {session_id}")
+                    if SessionKind(session_row[1]) is not SessionKind.INTAKE:
+                        raise InvariantViolation(
+                            "intake_record is only allowed for intake sessions"
+                        )
+                    conn.execute(
+                        """
+                        UPDATE sessions
+                        SET intake_record_json = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            sql.json_dumps(validated_intake_record),
+                            str(session_id),
+                        ),
+                    )
+                conn.commit()
+                return message
+            except Exception as exc:
+                conn.rollback()
+                raise sql.translate_sqlite_error(exc) from exc
+
+    def complete_final_intake_response(
+        self,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
         assistant_message_id: UUID,
         content: str,
         intake_record: dict[str, Any],
         operation_id: UUID,
         now: datetime,
-    ) -> tuple[ChatTurn, Operation, AppState]:
+    ) -> tuple[Message, Operation, AppState]:
         validated_intake_record = sql.validate_json_mapping(
             intake_record, field_name="intake_record"
         )
-        turn_holder: dict[str, ChatTurn] = {}
-        operation_holder: dict[str, Operation] = {}
-
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                turn_row = conn.execute(
-                    "SELECT session_id FROM chat_turns WHERE id = ? AND status = ?",
-                    (str(turn_id), ChatTurnStatus.PENDING.value),
-                ).fetchone()
-                if turn_row is None:
-                    raise NotFound(f"chat turn {turn_id}")
-                session_id = UUID(turn_row[0])
                 session_row = conn.execute(
                     f"{_SESSION_SELECT} WHERE id = ?",
                     (str(session_id),),
@@ -416,38 +482,14 @@ class SQLiteStore:
                 if SessionKind(session_row[1]) is not SessionKind.INTAKE:
                     raise InvariantViolation("final intake requires intake session")
                 self._require_stage(conn, {Stage.INTAKE})
-
-                sequence = self._next_sequence(conn, session_id)
-                conn.execute(
-                    """
-                    INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(assistant_message_id),
-                        str(session_id),
-                        sequence,
-                        MessageRole.ASSISTANT.value,
-                        content,
-                        sql.dt(now),
-                    ),
+                message = self._insert_assistant_response(
+                    conn,
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    assistant_message_id=assistant_message_id,
+                    content=content,
+                    now=now,
                 )
-                cursor = conn.execute(
-                    """
-                    UPDATE chat_turns
-                    SET status = ?, assistant_message_id = ?, updated_at = ?, completed_at = ?
-                    WHERE id = ? AND status = ?
-                    """,
-                    (
-                        ChatTurnStatus.COMPLETE.value,
-                        str(assistant_message_id),
-                        sql.dt(now),
-                        sql.dt(now),
-                        str(turn_id),
-                        ChatTurnStatus.PENDING.value,
-                    ),
-                )
-                self._ensure_chat_turn_updated(conn, cursor, turn_id)
                 conn.execute(
                     """
                     UPDATE sessions
@@ -464,9 +506,9 @@ class SQLiteStore:
                     conn, OperationKind.ASSESSMENT, session_id
                 )
                 if existing is not None:
-                    operation_holder["operation"] = existing
+                    operation = existing
                 else:
-                    operation_holder["operation"] = self._insert_pending_operation(
+                    operation = self._insert_pending_operation(
                         conn,
                         kind=OperationKind.ASSESSMENT,
                         source_session_id=session_id,
@@ -474,14 +516,12 @@ class SQLiteStore:
                         now=now,
                     )
                 self._set_stage(conn, Stage.ASSESSMENT, now)
-                turn_holder["turn"] = self._load_chat_turn(conn, turn_id)
                 state = self._load_app_state(conn)
                 conn.commit()
+                return message, operation, state
             except Exception as exc:
                 conn.rollback()
                 raise sql.translate_sqlite_error(exc) from exc
-
-        return turn_holder["turn"], operation_holder["operation"], state
 
     def mark_operation_running(
         self,
@@ -920,234 +960,6 @@ class SQLiteStore:
 
         return self._write(mutate)
 
-    def accept_chat_message(
-        self,
-        *,
-        session_id: UUID,
-        client_message_id: UUID,
-        turn_id: UUID,
-        user_message_id: UUID,
-        content: str,
-        now: datetime,
-    ) -> tuple[AppState | None, ChatTurn]:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                existing = self._load_chat_turn_by_client_id(
-                    conn, session_id, client_message_id
-                )
-                if existing is not None:
-                    conn.rollback()
-                    return None, existing
-
-                stage = self._load_stage(conn)
-                if stage not in {Stage.INTAKE, Stage.THERAPY}:
-                    raise InvariantViolation(
-                        "chat is only allowed in intake or therapy"
-                    )
-                if conn.execute(
-                    "SELECT 1 FROM chat_turns WHERE status = 'pending' LIMIT 1"
-                ).fetchone():
-                    raise Busy("another chat turn is pending")
-                session = self._require_open_session(conn, session_id)
-                if stage == Stage.INTAKE and session.kind != SessionKind.INTAKE:
-                    raise InvariantViolation("intake chat requires intake session")
-                if stage == Stage.THERAPY and session.kind != SessionKind.THERAPY:
-                    raise InvariantViolation("therapy chat requires therapy session")
-
-                sequence = self._next_sequence(conn, session_id)
-                conn.execute(
-                    """
-                    INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(user_message_id),
-                        str(session_id),
-                        sequence,
-                        MessageRole.USER.value,
-                        content,
-                        sql.dt(now),
-                    ),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO chat_turns (
-                        id, session_id, client_message_id, status, user_message_id,
-                        assistant_message_id, error_code, error_message, retryable,
-                        created_at, updated_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?, ?, NULL)
-                    """,
-                    (
-                        str(turn_id),
-                        str(session_id),
-                        str(client_message_id),
-                        ChatTurnStatus.PENDING.value,
-                        str(user_message_id),
-                        sql.dt(now),
-                        sql.dt(now),
-                    ),
-                )
-                turn = self._load_chat_turn(conn, turn_id)
-                conn.commit()
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
-
-        return self.get_app_state(), turn
-
-    def complete_chat_turn(
-        self,
-        turn_id: UUID,
-        *,
-        assistant_message_id: UUID,
-        content: str,
-        intake_record: dict[str, Any] | None = None,
-        now: datetime,
-    ) -> ChatTurn:
-        validated_intake_record: dict[str, Any] | None = None
-        if intake_record is not None:
-            validated_intake_record = sql.validate_json_mapping(
-                intake_record, field_name="intake_record"
-            )
-
-        def mutate(conn: sqlite3.Connection) -> None:
-            row = conn.execute(
-                "SELECT session_id FROM chat_turns WHERE id = ?",
-                (str(turn_id),),
-            ).fetchone()
-            if row is None:
-                raise NotFound(f"chat turn {turn_id}")
-            session_id = UUID(row[0])
-            session_row = conn.execute(
-                f"{_SESSION_SELECT} WHERE id = ?",
-                (str(session_id),),
-            ).fetchone()
-            if session_row is None:
-                raise NotFound(f"session {session_id}")
-            session_kind = SessionKind(session_row[1])
-            if validated_intake_record is not None:
-                if session_kind is not SessionKind.INTAKE:
-                    raise InvariantViolation(
-                        "intake_record is only allowed for intake sessions"
-                    )
-            sequence = self._next_sequence(conn, session_id)
-            conn.execute(
-                """
-                INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(assistant_message_id),
-                    str(session_id),
-                    sequence,
-                    MessageRole.ASSISTANT.value,
-                    content,
-                    sql.dt(now),
-                ),
-            )
-            if validated_intake_record is not None:
-                conn.execute(
-                    """
-                    UPDATE sessions
-                    SET intake_record_json = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        sql.json_dumps(validated_intake_record),
-                        str(session_id),
-                    ),
-                )
-            cursor = conn.execute(
-                """
-                UPDATE chat_turns
-                SET status = ?, assistant_message_id = ?, updated_at = ?, completed_at = ?
-                WHERE id = ? AND status = ?
-                """,
-                (
-                    ChatTurnStatus.COMPLETE.value,
-                    str(assistant_message_id),
-                    sql.dt(now),
-                    sql.dt(now),
-                    str(turn_id),
-                    ChatTurnStatus.PENDING.value,
-                ),
-            )
-            self._ensure_chat_turn_updated(conn, cursor, turn_id)
-
-        self._write(mutate)
-        turn = self.get_chat_turn(turn_id)
-        assert turn is not None
-        return turn
-
-    def fail_chat_turn(
-        self,
-        turn_id: UUID,
-        *,
-        error_code: str,
-        error_message: str,
-        retryable: bool,
-        now: datetime,
-    ) -> ChatTurn:
-        def mutate(conn: sqlite3.Connection) -> None:
-            cursor = conn.execute(
-                """
-                UPDATE chat_turns
-                SET status = ?, error_code = ?, error_message = ?, retryable = ?,
-                    updated_at = ?, completed_at = ?
-                WHERE id = ? AND status = ?
-                """,
-                (
-                    ChatTurnStatus.FAILED.value,
-                    error_code,
-                    error_message,
-                    int(retryable),
-                    sql.dt(now),
-                    sql.dt(now),
-                    str(turn_id),
-                    ChatTurnStatus.PENDING.value,
-                ),
-            )
-            self._ensure_chat_turn_updated(conn, cursor, turn_id)
-
-        self._write(mutate)
-        turn = self.get_chat_turn(turn_id)
-        assert turn is not None
-        return turn
-
-    def retry_chat_turn(
-        self,
-        turn_id: UUID,
-        *,
-        now: datetime,
-    ) -> ChatTurn:
-        def mutate(conn: sqlite3.Connection) -> None:
-            if conn.execute(
-                "SELECT 1 FROM chat_turns WHERE status = 'pending' LIMIT 1"
-            ).fetchone():
-                raise Busy("another chat turn is pending")
-            cursor = conn.execute(
-                """
-                UPDATE chat_turns
-                SET status = ?, error_code = NULL, error_message = NULL,
-                    retryable = 0, updated_at = ?, completed_at = NULL,
-                    assistant_message_id = NULL
-                WHERE id = ? AND status = ? AND retryable = 1
-                """,
-                (
-                    ChatTurnStatus.PENDING.value,
-                    sql.dt(now),
-                    str(turn_id),
-                    ChatTurnStatus.FAILED.value,
-                ),
-            )
-            self._ensure_chat_turn_updated(conn, cursor, turn_id)
-
-        self._write(mutate)
-        turn = self.get_chat_turn(turn_id)
-        assert turn is not None
-        return turn
-
     def recover_stale_operations(self, *, now: datetime) -> list[Operation]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1174,40 +986,6 @@ class SQLiteStore:
                     ),
                 )
                 recovered = [self._load_operation(conn, UUID(row[0])) for row in rows]
-                conn.commit()
-                return recovered
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
-
-    def recover_stale_chat_turns(self, *, now: datetime) -> list[ChatTurn]:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                rows = conn.execute(
-                    "SELECT id FROM chat_turns WHERE status = ?",
-                    (ChatTurnStatus.PENDING.value,),
-                ).fetchall()
-                if not rows:
-                    conn.rollback()
-                    return []
-                conn.execute(
-                    """
-                    UPDATE chat_turns
-                    SET status = ?, error_code = ?, error_message = ?, retryable = 1,
-                        updated_at = ?, completed_at = ?
-                    WHERE status = ?
-                    """,
-                    (
-                        ChatTurnStatus.FAILED.value,
-                        "stale_pending",
-                        "pending chat turn recovered at startup",
-                        sql.dt(now),
-                        sql.dt(now),
-                        ChatTurnStatus.PENDING.value,
-                    ),
-                )
-                recovered = [self._load_chat_turn(conn, UUID(row[0])) for row in rows]
                 conn.commit()
                 return recovered
             except Exception as exc:
@@ -1250,40 +1028,6 @@ class SQLiteStore:
         raise InvariantViolation(
             f"operation {operation_id} is in invalid state {row[0]}"
         )
-
-    def _ensure_chat_turn_updated(
-        self,
-        conn: sqlite3.Connection,
-        cursor: sqlite3.Cursor,
-        turn_id: UUID,
-    ) -> None:
-        if cursor.rowcount:
-            return
-        row = conn.execute(
-            "SELECT status FROM chat_turns WHERE id = ?",
-            (str(turn_id),),
-        ).fetchone()
-        if row is None:
-            raise NotFound(f"chat turn {turn_id}")
-        raise InvariantViolation(f"chat turn {turn_id} is in invalid state {row[0]}")
-
-    def _load_chat_turn_by_client_id(
-        self,
-        conn: sqlite3.Connection,
-        session_id: UUID,
-        client_message_id: UUID,
-    ) -> ChatTurn | None:
-        row = conn.execute(
-            """
-            SELECT id, session_id, client_message_id, status, user_message_id,
-                   assistant_message_id, error_code, error_message, retryable,
-                   created_at, updated_at, completed_at
-            FROM chat_turns
-            WHERE session_id = ? AND client_message_id = ?
-            """,
-            (str(session_id), str(client_message_id)),
-        ).fetchone()
-        return sql.row_to_chat_turn(row) if row else None
 
     def _require_current_plan(self, conn: sqlite3.Connection) -> Plan:
         row = conn.execute(
@@ -1443,20 +1187,6 @@ class SQLiteStore:
             raise NotFound(f"operation {operation_id}")
         return sql.row_to_operation(row)
 
-    def _load_chat_turn(self, conn: sqlite3.Connection, turn_id: UUID) -> ChatTurn:
-        row = conn.execute(
-            """
-            SELECT id, session_id, client_message_id, status, user_message_id,
-                   assistant_message_id, error_code, error_message, retryable,
-                   created_at, updated_at, completed_at
-            FROM chat_turns WHERE id = ?
-            """,
-            (str(turn_id),),
-        ).fetchone()
-        if row is None:
-            raise NotFound(f"chat turn {turn_id}")
-        return sql.row_to_chat_turn(row)
-
     def _load_snapshot_facts(self, conn: sqlite3.Connection) -> WorkflowFacts:
         stage = self._load_stage(conn)
         profile_row = conn.execute(
@@ -1480,9 +1210,6 @@ class SQLiteStore:
             ORDER BY created_at DESC LIMIT 1
             """
         ).fetchone()
-        turn_row = conn.execute(
-            "SELECT status FROM chat_turns WHERE status = 'pending' LIMIT 1"
-        ).fetchone()
         return WorkflowFacts(
             stage=stage,
             profile_complete=is_profile_complete(profile),
@@ -1490,5 +1217,105 @@ class SQLiteStore:
             operation_kind=OperationKind(op_row[0]) if op_row else None,
             operation_status=OperationStatus(op_row[1]) if op_row else None,
             operation_retryable=bool(op_row[2]) if op_row else None,
-            chat_turn_status=ChatTurnStatus(turn_row[0]) if turn_row else None,
+        )
+
+    def _load_messages_by_client_id(
+        self,
+        conn: sqlite3.Connection,
+        session_id: UUID,
+        client_message_id: UUID,
+    ) -> tuple[Message | None, Message | None]:
+        rows = conn.execute(
+            """
+            SELECT id, session_id, sequence, role, content, client_message_id, created_at
+            FROM messages
+            WHERE session_id = ? AND client_message_id = ?
+            """,
+            (str(session_id), str(client_message_id)),
+        ).fetchall()
+        user: Message | None = None
+        assistant: Message | None = None
+        for row in rows:
+            message = sql.row_to_message(row)
+            if message.role is MessageRole.USER:
+                if user is not None:
+                    raise InvariantViolation(
+                        "duplicate user message for client_message_id"
+                    )
+                user = message
+            elif message.role is MessageRole.ASSISTANT:
+                if assistant is not None:
+                    raise InvariantViolation(
+                        "duplicate assistant message for client_message_id"
+                    )
+                assistant = message
+        return user, assistant
+
+    def _latest_message(
+        self, conn: sqlite3.Connection, session_id: UUID
+    ) -> Message | None:
+        row = conn.execute(
+            """
+            SELECT id, session_id, sequence, role, content, client_message_id, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY sequence DESC
+            LIMIT 1
+            """,
+            (str(session_id),),
+        ).fetchone()
+        return sql.row_to_message(row) if row else None
+
+    def _insert_assistant_response(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
+        assistant_message_id: UUID,
+        content: str,
+        now: datetime,
+    ) -> Message:
+        user, assistant = self._load_messages_by_client_id(
+            conn, session_id, client_message_id
+        )
+        if user is None:
+            raise NotFound(f"user message {client_message_id} for session {session_id}")
+        if assistant is not None:
+            raise InvariantViolation(
+                "assistant message already exists for client_message_id"
+            )
+        latest = self._latest_message(conn, session_id)
+        if latest is None or latest.id != user.id:
+            raise InvariantViolation(
+                "assistant response requires unanswered latest user message"
+            )
+        if latest.client_message_id != client_message_id:
+            raise InvariantViolation("client_message_id mismatch for latest user")
+        sequence = self._next_sequence(conn, session_id)
+        created_at = sql.dt(now)
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(assistant_message_id),
+                str(session_id),
+                sequence,
+                MessageRole.ASSISTANT.value,
+                content,
+                str(client_message_id),
+                created_at,
+            ),
+        )
+        return Message(
+            id=assistant_message_id,
+            session_id=session_id,
+            sequence=sequence,
+            role=MessageRole.ASSISTANT,
+            content=content,
+            client_message_id=client_message_id,
+            created_at=sql.parse_dt(created_at),
         )

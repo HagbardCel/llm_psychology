@@ -10,7 +10,6 @@ import pytest
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.errors import Busy
 from jung.domain.models import (
-    ChatTurnStatus,
     OperationStatus,
     Profile,
     Stage,
@@ -56,28 +55,6 @@ async def test_recover_on_startup_reschedules_pending_operation(
         snapshot = await runtime.application.get_snapshot()
     assert snapshot.stage is Stage.STYLE_SELECTION
     fake.assert_exhausted()
-
-
-async def test_recover_on_startup_marks_stale_chat_turn_failed(
-    store: SQLiteStore,
-) -> None:
-    intake_id, now = open_intake(store)
-    turn_id = uuid4()
-    store.accept_chat_message(
-        session_id=intake_id,
-        client_message_id=uuid4(),
-        turn_id=turn_id,
-        user_message_id=uuid4(),
-        content="hello",
-        now=now,
-    )
-    fake = FakeLLM([])
-    async with build_test_application(store, fake) as runtime:
-        turn = await runtime.application.get_chat_turn(turn_id)
-        snapshot = await runtime.application.get_snapshot()
-    assert turn.status is ChatTurnStatus.FAILED
-    assert turn.retryable is True
-    assert snapshot.active_chat_turn is None
 
 
 async def test_stale_running_operation_is_recovered_then_completes(
@@ -230,10 +207,11 @@ async def test_shutdown_rejects_new_commands(store: SQLiteStore) -> None:
             )
         await runtime.supervisor.shutdown(timeout_seconds=1.0)
         with pytest.raises(Busy, match="shutting down"):
-            await runtime.application.submit_message(
+            async for _ in runtime.application.stream_message(
                 SendMessage(
                     session_id=uuid4(),
                     client_message_id=uuid4(),
                     content="too late",
                 )
-            )
+            ):
+                pass

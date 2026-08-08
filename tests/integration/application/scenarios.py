@@ -58,26 +58,26 @@ def complete_intake_for_assessment(
     now: datetime,
     operation_id: UUID | None = None,
 ) -> tuple[UUID, UUID, Operation]:
-    """Accept one intake turn and atomically complete intake plus assessment op."""
+    """Append one intake message and atomically complete intake plus assessment op."""
     operation_id = operation_id or uuid4()
-    turn_id = uuid4()
-    store.accept_chat_message(
+    client_message_id = uuid4()
+    store.append_user_message(
         session_id=intake_session_id,
-        client_message_id=uuid4(),
-        turn_id=turn_id,
+        client_message_id=client_message_id,
         user_message_id=uuid4(),
         content="intake message",
         now=now,
     )
-    _, operation, _ = store.complete_final_intake_turn(
-        turn_id,
+    _, operation, _ = store.complete_final_intake_response(
+        session_id=intake_session_id,
+        client_message_id=client_message_id,
         assistant_message_id=uuid4(),
         content="intake response",
         intake_record=IntakeRecord().model_dump(mode="json"),
         operation_id=operation_id,
         now=now,
     )
-    return turn_id, operation_id, operation
+    return client_message_id, operation_id, operation
 
 
 def advance_to_ready(store: SQLiteStore) -> ReadyScenario:

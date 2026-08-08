@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from jung.client.api_client import ClientSettings, JungApiClient
-from jung.domain.models import ChatTurnStatus, OperationStatus
+from jung.domain.models import OperationStatus
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
@@ -21,7 +21,6 @@ from tests.integration.application.scenarios import (
 from tests.integration.resilience_support import (
     assert_styles_equivalent,
     count_assessment_operations,
-    count_chat_turns_for_session,
     expected_style_options_response,
     style_selection_projection,
     wait_for_health,
@@ -205,63 +204,3 @@ async def test_stale_running_operation_recovers_on_startup(
     assert operation.id == operation_id
     assert operation.status is OperationStatus.COMPLETE
     assert count_assessment_operations(inspection, intake_id) == 1
-
-
-async def test_stale_pending_chat_turn_failed_in_place_without_replacement(
-    store: SQLiteStore,
-) -> None:
-    session_id, now = open_intake(store)
-    turn_id = uuid4()
-    client_message_id = uuid4()
-    store.accept_chat_message(
-        session_id=session_id,
-        client_message_id=client_message_id,
-        turn_id=turn_id,
-        user_message_id=uuid4(),
-        content="hello",
-        now=now,
-    )
-    initial_turn_count = count_chat_turns_for_session(store, session_id)
-    assert initial_turn_count == 1
-
-    recording = RecordingFakeLLM(FakeLLM(()))
-    test_app = create_test_api_app(store=store, fake_llm=recording)
-
-    async with run_uvicorn_api(test_app.app) as (http_base, _ws_url):
-        async with JungApiClient(ClientSettings(http_base)) as client:
-            await wait_for_health(client)
-            snapshot = await client.get_state()
-            assert snapshot.active_chat_turn is None
-            history = await client.get_session(session_id)
-            user_messages = [
-                message
-                for message in history.messages
-                if message.role == "user"
-                and message.client_message_id == client_message_id
-            ]
-            assistant_messages = [
-                message
-                for message in history.messages
-                if message.role == "assistant"
-                and message.client_message_id == client_message_id
-            ]
-            assert len(user_messages) == 1
-            assert len(assistant_messages) == 0
-
-    assert recording.recorded_tasks == ()
-    recording.assert_exhausted()
-    inspection = SQLiteStore(test_app.store_path)
-    final_turn_count = count_chat_turns_for_session(inspection, session_id)
-    assert final_turn_count == initial_turn_count == 1
-    turn_by_id = inspection.get_chat_turn(turn_id)
-    turn_by_client = inspection.get_chat_turn_by_client_id(
-        session_id,
-        client_message_id,
-    )
-    assert turn_by_id is not None
-    assert turn_by_client is not None
-    assert turn_by_client.id == turn_by_id.id == turn_id
-    assert turn_by_id.status is ChatTurnStatus.FAILED
-    assert turn_by_id.error_code == "stale_pending"
-    assert turn_by_id.retryable is True
-    assert turn_by_id.error_message

@@ -10,7 +10,6 @@ import pytest
 from jung.api.contracts import ErrorResponse
 from jung.client.api_client import JungApiError
 from jung.client.console import (
-    ConsoleChatFailed,
     ConsoleExitRequested,
     ConsoleOperationFailed,
     ConsoleUncertainDelivery,
@@ -162,25 +161,6 @@ async def test_async_cli_maps_operation_failure_to_exit_one() -> None:
         patch(
             "jung.client.terminal.ConsoleApp.run",
             AsyncMock(side_effect=ConsoleOperationFailed()),
-        ),
-    ):
-        assert await _async_cli() == 1
-
-
-@pytest.mark.asyncio
-async def test_async_cli_maps_chat_failure_to_exit_one() -> None:
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with (
-        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
-        patch(
-            "jung.client.terminal.JungApiClient",
-            return_value=mock_client,
-        ),
-        patch(
-            "jung.client.terminal.ConsoleApp.run",
-            AsyncMock(side_effect=ConsoleChatFailed()),
         ),
     ):
         assert await _async_cli() == 1

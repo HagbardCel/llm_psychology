@@ -38,7 +38,7 @@ def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
     assert busy == 5000
 
 
-def test_fresh_schema_is_version_four_without_revision_column(
+def test_fresh_schema_is_version_five_without_revision_column(
     store_path: Path,
 ) -> None:
     store = SQLiteStore(store_path)
@@ -48,10 +48,26 @@ def test_fresh_schema_is_version_four_without_revision_column(
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(app_state)").fetchall()
         }
-    assert version == 4
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        message_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        message_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+        ).fetchone()[0]
+    assert version == 5
     assert version == SCHEMA_VERSION
     assert "revision" not in columns
     assert columns == {"singleton_id", "stage", "created_at", "updated_at"}
+    assert "chat_turns" not in tables
+    assert "client_message_id" in message_columns
+    assert "role IN ('user', 'assistant')" in message_sql
+    assert "UNIQUE (session_id, client_message_id, role)" in message_sql
 
 
 def test_user_version_is_set(store_path: Path) -> None:
@@ -62,7 +78,7 @@ def test_user_version_is_set(store_path: Path) -> None:
     assert version == SCHEMA_VERSION
 
 
-@pytest.mark.parametrize("version", [1, 3, 99])
+@pytest.mark.parametrize("version", [1, 3, 4, 99])
 def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -202,197 +218,79 @@ def test_singleton_rejects_second_current_operation(store_path: Path) -> None:
             conn.commit()
 
 
-def test_chat_turn_user_message_id_unique(store_path: Path) -> None:
+def test_messages_role_check_rejects_invalid_role(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     session_id = str(uuid4())
     with sqlite3.connect(store_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         _seed_open_session(conn, session_id)
-        now = datetime.now(UTC).isoformat()
-        user_message_id = str(uuid4())
-        conn.execute(
-            """
-            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-            VALUES (?, ?, 1, 'user', 'hello', ?)
-            """,
-            (user_message_id, session_id, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, status, user_message_id,
-                assistant_message_id, error_code, error_message, retryable,
-                created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, 'failed', ?, NULL, 'test_failure', NULL, 0, ?, ?, ?)
-            """,
-            (str(uuid4()), session_id, str(uuid4()), user_message_id, now, now, now),
-        )
         conn.commit()
-
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
-                INSERT INTO chat_turns (
-                    id, session_id, client_message_id, status, user_message_id,
-                    assistant_message_id, error_code, error_message, retryable,
-                    created_at, updated_at, completed_at
-                ) VALUES (?, ?, ?, 'failed', ?, NULL, 'test_failure', NULL, 0, ?, ?, ?)
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id, created_at
+                ) VALUES (?, ?, 1, 'system', 'nope', ?, ?)
                 """,
                 (
                     str(uuid4()),
                     session_id,
                     str(uuid4()),
-                    user_message_id,
-                    now,
-                    now,
-                    now,
+                    datetime.now(UTC).isoformat(),
                 ),
             )
             conn.commit()
 
 
-def test_chat_turn_assistant_message_id_unique(store_path: Path) -> None:
+def test_messages_require_client_message_id(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     session_id = str(uuid4())
     with sqlite3.connect(store_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         _seed_open_session(conn, session_id)
-        now = datetime.now(UTC).isoformat()
-        user_message_id_one = str(uuid4())
-        user_message_id_two = str(uuid4())
-        assistant_message_id = str(uuid4())
-        conn.execute(
-            """
-            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-            VALUES (?, ?, 1, 'user', 'one', ?)
-            """,
-            (user_message_id_one, session_id, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-            VALUES (?, ?, 2, 'user', 'two', ?)
-            """,
-            (user_message_id_two, session_id, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-            VALUES (?, ?, 3, 'assistant', 'reply', ?)
-            """,
-            (assistant_message_id, session_id, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, status, user_message_id,
-                assistant_message_id, error_code, error_message, retryable,
-                created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, 'complete', ?, ?, NULL, NULL, 0, ?, ?, ?)
-            """,
-            (
-                str(uuid4()),
-                session_id,
-                str(uuid4()),
-                user_message_id_one,
-                assistant_message_id,
-                now,
-                now,
-                now,
-            ),
-        )
         conn.commit()
-
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
-                INSERT INTO chat_turns (
-                    id, session_id, client_message_id, status, user_message_id,
-                    assistant_message_id, error_code, error_message, retryable,
-                    created_at, updated_at, completed_at
-                ) VALUES (?, ?, ?, 'complete', ?, ?, NULL, NULL, 0, ?, ?, ?)
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id, created_at
+                ) VALUES (?, ?, 1, 'user', 'hello', NULL, ?)
                 """,
-                (
-                    str(uuid4()),
-                    session_id,
-                    str(uuid4()),
-                    user_message_id_two,
-                    assistant_message_id,
-                    now,
-                    now,
-                    now,
-                ),
+                (str(uuid4()), session_id, datetime.now(UTC).isoformat()),
             )
             conn.commit()
 
 
-def test_singleton_rejects_second_pending_turn(store_path: Path) -> None:
+def test_messages_unique_client_message_id_per_role(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     session_id = str(uuid4())
+    client_message_id = str(uuid4())
+    now = datetime.now(UTC).isoformat()
     with sqlite3.connect(store_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         _seed_open_session(conn, session_id)
-        message_id, turn_id, client_id, now = _pending_turn_params(conn, session_id)
         conn.execute(
             """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, status, user_message_id,
-                assistant_message_id, error_code, error_message, retryable,
-                created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 1, 'user', 'hello', ?, ?)
             """,
-            (turn_id, session_id, client_id, message_id, now, now),
+            (str(uuid4()), session_id, client_message_id, now),
         )
         conn.commit()
-
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
-                INSERT INTO chat_turns (
-                    id, session_id, client_message_id, status, user_message_id,
-                    assistant_message_id, error_code, error_message, retryable,
-                    created_at, updated_at, completed_at
-                ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id, created_at
+                ) VALUES (?, ?, 2, 'user', 'dup', ?, ?)
                 """,
-                _second_pending_turn_insert_params(conn),
+                (str(uuid4()), session_id, client_message_id, now),
             )
             conn.commit()
-
-
-def _pending_turn_params(
-    conn: sqlite3.Connection, session_id: str | None = None
-) -> tuple[str, str, str, str]:
-    if session_id is None:
-        session_id = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
-    now = datetime.now(UTC).isoformat()
-    message_id = str(uuid4())
-    conn.execute(
-        """
-        INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-        VALUES (?, ?, 1, 'user', 'hello', ?)
-        """,
-        (message_id, session_id, now),
-    )
-    return message_id, str(uuid4()), str(uuid4()), now
-
-
-def _second_pending_turn_insert_params(
-    conn: sqlite3.Connection,
-) -> tuple[str, str, str, str, str, str]:
-    session_id = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
-    now = datetime.now(UTC).isoformat()
-    message_id = str(uuid4())
-    conn.execute(
-        """
-        INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-        VALUES (?, ?, 2, 'user', 'again', ?)
-        """,
-        (message_id, session_id, now),
-    )
-    return str(uuid4()), session_id, str(uuid4()), message_id, now, now
 
 
 def test_plan_empty_focus_rejected_by_schema(store_path: Path) -> None:
@@ -436,10 +334,9 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("table", "update_sql", "params"),
+    ("update_sql", "params"),
     [
         (
-            "operations",
             """
             UPDATE operations
             SET status = 'complete', result_json = NULL
@@ -450,7 +347,6 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             ),
         ),
         (
-            "operations",
             """
             UPDATE operations
             SET status = 'failed', error_code = NULL
@@ -461,29 +357,6 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             ),
         ),
         (
-            "chat_turns",
-            """
-            UPDATE chat_turns
-            SET status = 'complete', assistant_message_id = NULL
-            WHERE id = ?
-            """,
-            lambda conn: (
-                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
-            ),
-        ),
-        (
-            "chat_turns",
-            """
-            UPDATE chat_turns
-            SET status = 'failed', error_code = NULL
-            WHERE id = ?
-            """,
-            lambda conn: (
-                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
-            ),
-        ),
-        (
-            "operations",
             """
             UPDATE operations
             SET status = 'pending', error_message = 'stale'
@@ -494,7 +367,6 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
             ),
         ),
         (
-            "operations",
             """
             UPDATE operations
             SET status = 'pending', retryable = 1
@@ -504,32 +376,10 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
                 conn.execute("SELECT id FROM operations LIMIT 1").fetchone()[0],
             ),
         ),
-        (
-            "chat_turns",
-            """
-            UPDATE chat_turns
-            SET status = 'pending', error_message = 'stale'
-            WHERE id = ?
-            """,
-            lambda conn: (
-                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
-            ),
-        ),
-        (
-            "chat_turns",
-            """
-            UPDATE chat_turns
-            SET status = 'complete', retryable = 1
-            WHERE id = ?
-            """,
-            lambda conn: (
-                conn.execute("SELECT id FROM chat_turns LIMIT 1").fetchone()[0],
-            ),
-        ),
     ],
 )
-def test_status_shape_checks_reject_invalid_rows(
-    store_path: Path, table: str, update_sql: str, params
+def test_operation_status_shape_checks_reject_invalid_rows(
+    store_path: Path, update_sql: str, params
 ) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -546,17 +396,6 @@ def test_status_shape_checks_reject_invalid_rows(
             ) VALUES (?, 'assessment', 'pending', ?, 0, NULL, NULL, NULL, 0, ?, ?)
             """,
             (str(uuid4()), session_id, now, now),
-        )
-        message_id, turn_id, client_id, _ = _pending_turn_params(conn, session_id)
-        conn.execute(
-            """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, status, user_message_id,
-                assistant_message_id, error_code, error_message, retryable,
-                created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, 0, ?, ?, NULL)
-            """,
-            (turn_id, session_id, client_id, message_id, now, now),
         )
         conn.commit()
 

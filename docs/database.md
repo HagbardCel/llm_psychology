@@ -29,13 +29,12 @@ sessions ──plan_id────────────►│
    └──── plans.source_session_id
    │
    ├── messages
-   ├── operations
-   └── chat_turns ──user/assistant_message_id──► messages
+   └── operations
 ```
 
-`client_message_id` lives on `chat_turns` (acceptance idempotency), not
-redundantly on `messages`. Message `client_message_id` in API read models is
-derived from the owning turn.
+Durable chat truth is `messages` only. There is no `chat_turns` table.
+`client_message_id` is stored on every message. A completed exchange is a
+`user` row and an `assistant` row sharing `(session_id, client_message_id)`.
 
 ## Table overview
 
@@ -45,9 +44,8 @@ derived from the owning turn.
 | `profile` | Singleton user-editable profile plus optional derived JSON and current plan pointer | `current_plan_id` → `plans` | `singleton_id = 1` |
 | `sessions` | Intake and therapy sessions | `plan_id` → `plans` | at most one open session globally; therapy sessions must not carry intake JSON |
 | `plans` | Immutable plan revisions | `source_session_id` → `sessions`; `supersedes_plan_id` → `plans` | unique `version`; unique `source_session_id`; at most one successor per superseded plan |
-| `messages` | Durable transcript turns | `session_id` → `sessions` | unique `(session_id, sequence)`; roles `user`/`assistant`/`system` |
+| `messages` | Durable transcript | `session_id` → `sessions` | unique `(session_id, sequence)`; roles `user`/`assistant`; required `client_message_id`; unique `(session_id, client_message_id, role)` |
 | `operations` | Assessment and post-session background work | `source_session_id` → `sessions` | unique `(kind, source_session_id)`; at most one current pending/running/failed operation globally |
-| `chat_turns` | Chat acceptance and generation lifecycle | `session_id` → `sessions`; `user_message_id` / `assistant_message_id` → `messages` | unique `(session_id, client_message_id)`; at most one pending turn globally; unique user/assistant message ownership |
 
 ## DDL-enforced invariants
 
@@ -57,15 +55,14 @@ constant expressions and are therefore **database-global**):
 - `app_state` and `profile` are singletons (`singleton_id = 1`);
 - at most one open session globally (`ended_at IS NULL`);
 - unique message sequence within a session;
+- message roles are `user` or `assistant` only;
+- message acceptance is idempotent by `(session_id, client_message_id, role)`;
 - plan versions are unique and ≥ 1; non-empty `focus` and `current_progress`;
 - one source session creates at most one plan revision (`source_session_id` unique);
 - a non-null `supersedes_plan_id` may be referenced by at most one successor plan;
 - operations are idempotent by `(kind, source_session_id)`;
 - at most one operation whose status is `pending`, `running`, or `failed` globally;
-- chat acceptance is idempotent by `(session_id, client_message_id)`;
-- at most one chat turn with status `pending` globally;
-- `user_message_id` is unique; a non-null `assistant_message_id` is unique;
-- operation and chat status fields are coupled to `result_json` / assistant message / error columns via CHECK constraints;
+- operation status fields are coupled to `result_json` / error columns via CHECK constraints;
 - session kinds are `intake` or `therapy`; therapy rows must not store intake JSON.
 
 ## Store/application persistence invariants
@@ -75,7 +72,8 @@ application rather than claimed as pure SQL guarantees:
 
 - plan revisions are immutable as a programming model (new revision rows, never in-place mutation of plan content);
 - valid workflow stage transitions and command acceptance are application/workflow policy;
-- store APIs create turn-owned user/assistant messages with the owning turn's session and expected roles; these cross-table semantic relationships are application/store invariants rather than SQL constraints (foreign keys only guarantee that the referenced message exists);
+- an open session may have at most one trailing unanswered `USER`; a new user message is rejected until that ID is retried (see [workflow.md](workflow.md));
+- assistant persistence requires an unanswered latest user message in the same session with the matching `client_message_id`;
 - multi-table use cases such as assessment completion and post-session completion commit atomically in store methods;
 - `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`) and commit/rollback; it does not own optimistic concurrency checks or snapshot-revision increments;
 - `TherapyApplication` serializes mutations and validates commands against authoritative state before calling the store;
@@ -105,7 +103,7 @@ JSON TEXT columns hold validated documents owned by specific subsystems:
 ## Initialization and schema compatibility
 
 Schema compatibility is guarded by `PRAGMA user_version` against the code-owned
-`SCHEMA_VERSION` (schema v4). Migrations are not supported.
+`SCHEMA_VERSION` (schema v5). Migrations are not supported.
 
 Initialization behavior:
 

@@ -28,14 +28,13 @@ from jung.diagnostics import (
     sanitize_value,
     write_private_text,
 )
-from jung.domain.models import ChatTurnStatus, OperationStatus
+from jung.domain.models import MessageRole, OperationStatus
 from jung.llm.gateway import ModelPolicy
 from jung.persistence.sqlite_store import SCHEMA_VERSION as DB_SCHEMA_VERSION
 from jung.persistence.sqlite_store import SQLiteStore
 
 _CONTEXT_ID_KEYS = (
     "session_id",
-    "turn_id",
     "operation_id",
     "client_message_id",
     "request_id",
@@ -43,7 +42,6 @@ _CONTEXT_ID_KEYS = (
 )
 _PAYLOAD_ID_KEYS = (
     "session_id",
-    "turn_id",
     "operation_id",
     "plan_id",
     "source_session_id",
@@ -160,7 +158,6 @@ def extract_touched_ids(events: Sequence[Mapping[str, Any]]) -> dict[str, set[st
     """Extract IDs only from diagnostic context and known lifecycle payload fields."""
     collected: dict[str, set[str]] = {
         "session_id": set(),
-        "turn_id": set(),
         "operation_id": set(),
         "plan_id": set(),
     }
@@ -209,7 +206,6 @@ def build_state_projection(
     current_plan = store.get_current_plan()
     active_session = store.get_active_session()
     current_operation = store.get_current_operation()
-    active_chat_turn = store.get_active_chat_turn()
 
     session_ids = set(touched.get("session_id", set()))
     if active_session is not None:
@@ -221,17 +217,17 @@ def build_state_projection(
     if current_operation is not None:
         operation_ids.add(str(current_operation.id))
 
-    turn_ids = set(touched.get("turn_id", set()))
-    if active_chat_turn is not None:
-        turn_ids.add(str(active_chat_turn.id))
-
     sessions: list[Any] = []
     plans_by_id: dict[str, Any] = {}
+    messages_by_session: dict[str, list[Any]] = {}
     for session_id in sorted(session_ids, key=_sort_key_uuid):
         session = store.get_session(UUID(session_id))
         if session is None:
             continue
         sessions.append(_model_dump(session))
+        messages_by_session[session_id] = [
+            _model_dump(message) for message in store.list_messages(UUID(session_id))
+        ]
         for plan in store.list_plans_for_session(UUID(session_id)):
             plans_by_id[str(plan.id)] = _model_dump(plan)
 
@@ -244,12 +240,6 @@ def build_state_projection(
         if operation is not None:
             operations.append(_model_dump(operation))
 
-    chat_turns: list[Any] = []
-    for turn_id in sorted(turn_ids, key=_sort_key_uuid):
-        turn = store.get_chat_turn(UUID(turn_id))
-        if turn is not None:
-            chat_turns.append(_model_dump(turn))
-
     profile_payload = None
     if stored_profile is not None:
         profile_payload = _model_dump(stored_profile)
@@ -258,11 +248,11 @@ def build_state_projection(
         "app_state": _model_dump(app_state),
         "profile": profile_payload,
         "sessions": sessions,
+        "messages_by_session": messages_by_session,
         "plans": [
             plans_by_id[plan_id] for plan_id in sorted(plans_by_id, key=_sort_key_uuid)
         ],
         "operations": operations,
-        "chat_turns": chat_turns,
     }
 
 
@@ -333,22 +323,30 @@ def classify_unresolved_problems(
     if _trace_has_kind(events, "runtime.error"):
         problems.append("runtime.error present in trace")
 
-    for turn in state.get("chat_turns") or []:
-        if not isinstance(turn, Mapping):
-            continue
-        status = turn.get("status")
-        turn_id = turn.get("id")
-        if status == ChatTurnStatus.FAILED.value:
-            problems.append(
-                f"unresolved chat turn {turn_id} status=failed "
-                f"error_code={turn.get('error_code')}"
-            )
-        elif status in {
-            ChatTurnStatus.PENDING.value,
-        }:
-            problems.append(
-                f"incomplete/recoverable chat turn {turn_id} status={status}"
-            )
+    # Open session with trailing USER = unanswered conversational work.
+    sessions = {
+        session.get("id"): session
+        for session in (state.get("sessions") or [])
+        if isinstance(session, Mapping) and isinstance(session.get("id"), str)
+    }
+    messages_by_session = state.get("messages_by_session") or {}
+    if isinstance(messages_by_session, Mapping):
+        for session_id, messages in messages_by_session.items():
+            if not isinstance(session_id, str) or not isinstance(messages, list):
+                continue
+            session = sessions.get(session_id)
+            if session is None or session.get("ended_at") is not None:
+                continue
+            if not messages:
+                continue
+            latest = messages[-1]
+            if not isinstance(latest, Mapping):
+                continue
+            if latest.get("role") == MessageRole.USER.value:
+                problems.append(
+                    "unanswered user message on open session "
+                    f"{session_id} client_message_id={latest.get('client_message_id')}"
+                )
 
     for operation in state.get("operations") or []:
         if not isinstance(operation, Mapping):

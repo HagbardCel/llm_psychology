@@ -64,11 +64,13 @@ CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     sequence INTEGER NOT NULL CHECK (sequence >= 1),
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    client_message_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE RESTRICT,
-    UNIQUE (session_id, sequence)
+    UNIQUE (session_id, sequence),
+    UNIQUE (session_id, client_message_id, role)
 );
 
 CREATE TABLE IF NOT EXISTS operations (
@@ -100,36 +102,3 @@ CREATE TABLE IF NOT EXISTS operations (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_one_current
     ON operations((1))
     WHERE status IN ('pending', 'running', 'failed');
-
-CREATE TABLE IF NOT EXISTS chat_turns (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    client_message_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'complete', 'failed')),
-    user_message_id TEXT NOT NULL UNIQUE,
-    assistant_message_id TEXT NULL,
-    error_code TEXT NULL,
-    error_message TEXT NULL,
-    retryable INTEGER NOT NULL CHECK (retryable IN (0, 1)),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    completed_at TEXT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(id),
-    FOREIGN KEY (user_message_id) REFERENCES messages(id),
-    FOREIGN KEY (assistant_message_id) REFERENCES messages(id),
-    UNIQUE (session_id, client_message_id),
-    CHECK (status = 'complete' OR assistant_message_id IS NULL),
-    CHECK (status != 'complete' OR assistant_message_id IS NOT NULL),
-    CHECK (status = 'failed' OR error_code IS NULL),
-    CHECK (status != 'failed' OR error_code IS NOT NULL),
-    CHECK (status = 'failed' OR error_message IS NULL),
-    CHECK (status = 'failed' OR retryable = 0)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_one_pending
-    ON chat_turns((1))
-    WHERE status = 'pending';
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_assistant_message
-    ON chat_turns(assistant_message_id)
-    WHERE assistant_message_id IS NOT NULL;

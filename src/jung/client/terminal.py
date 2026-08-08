@@ -15,7 +15,6 @@ from jung.api.contracts import (
 from jung.client.api_client import ClientSettings, JungApiClient, JungClientError
 from jung.client.console import (
     ConsoleApp,
-    ConsoleChatFailed,
     ConsoleExitRequested,
     ConsoleOperationFailed,
     ConsoleUncertainDelivery,
@@ -152,7 +151,7 @@ async def _async_cli() -> int:
             ).run()
     except ConsoleExitRequested:
         return 0
-    except (ConsoleChatFailed, ConsoleOperationFailed):
+    except ConsoleOperationFailed:
         return 1
     except ConsoleUncertainDelivery:
         return 2

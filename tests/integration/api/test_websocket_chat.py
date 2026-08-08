@@ -6,13 +6,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
 from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import InvalidHandshake
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import (
@@ -40,39 +39,37 @@ async def _recv_json(ws, *, timeout: float = 15.0) -> dict:
     return json.loads(raw)
 
 
-async def receive_until_completion_snapshot(
+async def receive_until_terminal(
     ws,
     *,
     max_events: int = 25,
 ) -> list[dict]:
     events: list[dict] = []
-    saw_completion = False
-
     for _ in range(max_events):
         event = await _recv_json(ws)
         events.append(event)
-
-        if event["type"] == "message_completed":
-            saw_completion = True
-        elif saw_completion and event["type"] == "snapshot_changed":
+        if event["type"] in {"message_completed", "message_failed", "error"}:
             return events
+    pytest.fail("terminal websocket event was not observed")
 
-    pytest.fail("message_completed followed by snapshot_changed was not observed")
 
-
-def _assert_normal_chat_event_shape(events: list[dict]) -> None:
+def _assert_one_shot_chat_shape(events: list[dict]) -> None:
     types = [event["type"] for event in events]
-    assert len(types) >= 5
-    assert types[:2] == ["message_in_progress", "snapshot_changed"]
-    assert types[-2:] == ["message_completed", "snapshot_changed"]
-    assert all(event_type == "token" for event_type in types[2:-2])
-
-
-async def _warm_websocket(ws) -> None:
-    await ws.send("not-json")
-    event = await _recv_json(ws, timeout=5.0)
-    assert event["type"] == "error"
-    assert event["error"]["code"] == "validation_error"
+    assert types[-1] == "message_completed"
+    assert "message_in_progress" not in types
+    assert "snapshot_changed" not in types
+    assert "operation_changed" not in types
+    assert all(event_type == "token" for event_type in types[:-1])
+    tokens = [event for event in events if event["type"] == "token"]
+    completed = events[-1]
+    for token in tokens:
+        assert token["request_id"] == completed["request_id"]
+        assert token["session_id"] == completed["session_id"]
+        assert token["client_message_id"] == completed["client_message_id"]
+        assert "sequence" not in token
+        assert "turn_id" not in token
+    joined = "".join(token["text"] for token in tokens)
+    assert joined == completed["assistant_message"]["content"]
 
 
 async def _receive_until(
@@ -106,6 +103,23 @@ async def _setup_intake_http(http_base: str) -> str:
         return state["active_session"]["id"]
 
 
+async def _send_message(ws, *, session_id: str, content: str, client_message_id=None):
+    client_message_id = client_message_id or uuid4()
+    request_id = uuid4()
+    await ws.send(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": session_id,
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+                "content": content,
+            }
+        )
+    )
+    return client_message_id, request_id
+
+
 async def test_ready_websocket_handshake(uvicorn_api_urls) -> None:
     _http_base, ws_url = uvicorn_api_urls
     async with ws_connect(ws_url):
@@ -125,41 +139,20 @@ async def test_websocket_rejects_disallowed_browser_origin(uvicorn_api_urls) -> 
             pytest.fail("disallowed Origin was accepted")
 
 
-async def test_invalid_then_valid_command_on_same_socket(
+async def test_invalid_command_closes_socket(
     uvicorn_api_urls,
-    fake_llm: FakeLLM,
 ) -> None:
-    http_base, ws_url = uvicorn_api_urls
-    fake_llm._expectations = list(intake_message_expectations("assistant reply"))
-    session_id = await _setup_intake_http(http_base)
-
+    _http_base, ws_url = uvicorn_api_urls
     async with ws_connect(ws_url) as ws:
         await ws.send("not-json")
         err = await _recv_json(ws)
         assert err["type"] == "error"
         assert err["error"]["code"] == "validation_error"
-
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(uuid4()),
-                    "request_id": str(uuid4()),
-                    "content": "hello",
-                }
-            )
-        )
-        saw_progress = False
-        for _ in range(15):
-            event = await _recv_json(ws)
-            if event["type"] == "message_in_progress":
-                saw_progress = True
-                break
-        assert saw_progress
+        with pytest.raises(ConnectionClosed):
+            await _recv_json(ws, timeout=1.0)
 
 
-async def test_internal_error_then_validation_error_on_same_socket(
+async def test_internal_error_sanitized_and_closes(
     uvicorn_api_urls,
     runtime_probe: RuntimeProbe,
     caplog: pytest.LogCaptureFixture,
@@ -171,9 +164,13 @@ async def test_internal_error_then_validation_error_on_same_socket(
     secret = "secret-runtime-detail"
 
     assert runtime_probe.runtime is not None
-    runtime_probe.runtime.application.submit_message = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError(secret)
-    )
+
+    async def boom(_command):
+        raise RuntimeError(secret)
+        if False:  # pragma: no cover
+            yield
+
+    runtime_probe.runtime.application.stream_message = boom  # type: ignore[method-assign]
 
     async with ws_connect(ws_url) as ws:
         with caplog.at_level(logging.ERROR, logger="jung.api.websocket"):
@@ -201,7 +198,7 @@ async def test_internal_error_then_validation_error_on_same_socket(
         assert internal["session_id"] == session_id
         assert internal["client_message_id"] == str(client_message_id)
         assert internal["error"]["request_id"] == str(request_id)
-        assert internal.get("turn_id") is None
+        assert "turn_id" not in internal
         assert secret not in json.dumps(internal)
         assert secret not in caplog.text
 
@@ -213,14 +210,7 @@ async def test_internal_error_then_validation_error_on_same_socket(
             and getattr(record, "error_code", None) == "internal_error"
         ]
         assert len(records) == 1
-        record = records[0]
-        assert getattr(record, "exception_type", None) == "RuntimeError"
-        assert record.levelno == logging.ERROR
-
-        await ws.send("not-json")
-        validation = await _recv_json(ws)
-        assert validation["type"] == "error"
-        assert validation["error"]["code"] == "validation_error"
+        assert getattr(records[0], "exception_type", None) == "RuntimeError"
 
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         health = await client.get("/api/v1/health")
@@ -237,34 +227,9 @@ async def test_non_final_intake_streaming_order(
     session_id = await _setup_intake_http(http_base)
 
     async with ws_connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(uuid4()),
-                    "request_id": str(uuid4()),
-                    "content": "I feel anxious.",
-                }
-            )
-        )
-
-        events = await receive_until_completion_snapshot(ws, max_events=25)
-        types = [event["type"] for event in events]
-        tokens = [event for event in events if event["type"] == "token"]
-        completed = next(
-            event for event in events if event["type"] == "message_completed"
-        )
-
-        assert len(types) >= 5
-        assert types[:2] == ["message_in_progress", "snapshot_changed"]
-        assert types[-2:] == ["message_completed", "snapshot_changed"]
-        assert all(event_type == "token" for event_type in types[2:-2])
-        assert tokens
-        sequences = [token["sequence"] for token in tokens]
-        assert sequences == list(range(1, len(sequences) + 1))
-        joined = "".join(token["text"] for token in tokens)
-        assert joined == completed["message"]["content"]
+        await _send_message(ws, session_id=session_id, content="I feel anxious.")
+        events = await receive_until_terminal(ws, max_events=25)
+        _assert_one_shot_chat_shape(events)
 
 
 async def test_durable_chat_failure_sanitized_message(
@@ -288,135 +253,28 @@ async def test_durable_chat_failure_sanitized_message(
     client_message_id = uuid4()
 
     async with ws_connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(uuid4()),
-                    "content": "trigger failure",
-                }
-            )
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="trigger failure",
+            client_message_id=client_message_id,
         )
-        events: list[dict] = []
-        error_event = None
-        for _ in range(25):
-            event = await _recv_json(ws)
-            events.append(event)
-            if event["type"] == "error":
-                error_event = event
-                break
+        events = await receive_until_terminal(ws, max_events=25)
+        assert events[-1]["type"] == "message_failed"
+        failure = events[-1]
+        assert failure["session_id"] == session_id
+        assert failure["client_message_id"] == str(client_message_id)
+        assert "turn_id" not in failure
+        assert secret not in json.dumps(failure)
+        assert "language model" in failure["error"]["message"].lower()
 
-        assert error_event is not None
-        types = [event["type"] for event in events]
-        assert types[:2] == ["message_in_progress", "snapshot_changed"]
-        assert all(event_type == "token" for event_type in types[2:-1])
-        assert types[-1] == "error"
-
-        progress = events[0]
-        acceptance_snapshot = events[1]["snapshot"]
-
-        assert error_event["session_id"] == session_id
-        assert error_event["turn_id"] == progress["turn"]["id"]
-        assert error_event["client_message_id"] == str(client_message_id)
-
-        assert secret not in json.dumps(error_event)
-        assert "language model" in error_event["error"]["message"].lower()
-
-        trailing = await _recv_json(ws)
-        assert trailing["type"] == "snapshot_changed"
-        assert trailing["snapshot"]["active_chat_turn"] is None
-        assert trailing["snapshot"]["stage"] == "intake"
-        assert acceptance_snapshot["active_chat_turn"] is not None
+    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
+        history = await client.get(f"/api/v1/sessions/{session_id}")
+        roles = [message["role"] for message in history.json()["messages"]]
+        assert roles == ["user"]
 
 
-async def test_two_observers_receive_completion(
-    uvicorn_api_urls,
-    fake_llm: FakeLLM,
-) -> None:
-    http_base, ws_url = uvicorn_api_urls
-    fake_llm._expectations = list(intake_message_expectations("shared reply"))
-    session_id = await _setup_intake_http(http_base)
-    command = {
-        "type": "send_message",
-        "session_id": session_id,
-        "client_message_id": str(uuid4()),
-        "request_id": str(uuid4()),
-        "content": "hello both",
-    }
-
-    async with ws_connect(ws_url) as first, ws_connect(ws_url) as second:
-        await asyncio.gather(
-            _warm_websocket(first),
-            _warm_websocket(second),
-        )
-        await first.send(json.dumps(command))
-
-        async def wait_completed(ws) -> bool:
-            for _ in range(25):
-                event = await _recv_json(ws)
-                if event["type"] == "message_completed":
-                    return True
-            return False
-
-        first_done, second_done = await asyncio.gather(
-            wait_completed(first),
-            wait_completed(second),
-        )
-        assert first_done and second_done
-
-
-async def test_http_end_session_reaches_websocket_observer(
-    store: SQLiteStore,
-    uvicorn_api_urls,
-    fake_llm: FakeLLM,
-) -> None:
-    http_base, ws_url = uvicorn_api_urls
-    ready = advance_to_ready(store)
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        session_id=therapy_id,
-        now=ready.now,
-    )
-    fake_llm._expectations = list(post_session_expectations())
-
-    async with ws_connect(ws_url) as ws:
-        await ws.send("not-json")
-        warmup = await _recv_json(ws)
-        assert warmup["type"] == "error"
-
-        async with httpx.AsyncClient(base_url=http_base, timeout=15.0) as client:
-            state = (await client.get("/api/v1/state")).json()
-            assert state["active_session"]["id"] == str(therapy_id)
-            response = await client.post(f"/api/v1/sessions/{therapy_id}/end")
-            assert response.status_code == 202
-            assert response.json()["stage"] == "post_session"
-
-        events: list[dict] = []
-        for _ in range(25):
-            try:
-                events.append(await _recv_json(ws, timeout=2.0))
-            except TimeoutError:
-                break
-
-        operation_events = [
-            event
-            for event in events
-            if event.get("type") == "operation_changed"
-            and event.get("operation", {}).get("kind") == "post_session"
-            and event.get("operation", {}).get("status") == "pending"
-            and event.get("snapshot", {}).get("stage") == "post_session"
-        ]
-        assert len(operation_events) >= 1
-        event = operation_events[-1]
-        assert event["type"] == "operation_changed"
-        assert event["operation"]["kind"] == "post_session"
-        assert event["operation"]["status"] == "pending"
-        assert event["snapshot"]["stage"] == "post_session"
-
-
-async def test_busy_rejects_second_message_while_generating(
+async def test_busy_rejects_concurrent_retry_while_generating(
     uvicorn_api_urls,
     fake_llm: FakeLLM,
 ) -> None:
@@ -437,42 +295,38 @@ async def test_busy_rejects_second_message_while_generating(
     fake_llm.stream_text = holding.stream_text  # type: ignore[method-assign]
 
     session_id = await _setup_intake_http(http_base)
+    client_message_id = uuid4()
 
-    async with ws_connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(uuid4()),
-                    "request_id": str(uuid4()),
-                    "content": "first",
-                }
-            )
+    async with ws_connect(ws_url) as first:
+        await _send_message(
+            ws=first,
+            session_id=session_id,
+            content="first",
+            client_message_id=client_message_id,
         )
         await asyncio.wait_for(stream_started.wait(), timeout=5.0)
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(uuid4()),
-                    "request_id": str(uuid4()),
-                    "content": "second",
-                }
+
+        async with ws_connect(ws_url) as second:
+            await _send_message(
+                ws=second,
+                session_id=session_id,
+                content="first",
+                client_message_id=client_message_id,
             )
-        )
-        busy_event = None
-        for _ in range(15):
-            event = await _recv_json(ws)
-            if event["type"] == "error" and event["error"]["code"] == "busy":
-                busy_event = event
-                break
-        assert busy_event is not None
+            busy_event = await _receive_until(
+                second,
+                lambda event: (
+                    event["type"] == "error" and event["error"]["code"] == "busy"
+                ),
+            )
+            assert busy_event is not None
+
         stream_gate.set()
+        events = await receive_until_terminal(first)
+        assert events[-1]["type"] == "message_completed"
 
 
-async def test_disconnect_during_generation_worker_completes_over_http(
+async def test_disconnect_during_generation_leaves_unanswered_user(
     uvicorn_api_urls,
     fake_llm: FakeLLM,
 ) -> None:
@@ -496,26 +350,38 @@ async def test_disconnect_during_generation_worker_completes_over_http(
     client_message_id = uuid4()
 
     async with ws_connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(uuid4()),
-                    "content": "hello",
-                }
-            )
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
         )
         await asyncio.wait_for(stream_started.wait(), timeout=5.0)
 
     stream_gate.set()
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.2)
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         history = await client.get(f"/api/v1/sessions/{session_id}")
         assert history.status_code == 200
-        roles = [message["role"] for message in history.json()["messages"]]
-        assert "assistant" in roles
+        messages = history.json()["messages"]
+        assert [message["role"] for message in messages] == ["user"]
+        assert messages[0]["client_message_id"] == str(client_message_id)
+
+    fake_llm._expectations = list(intake_message_expectations("completed after retry"))
+    fake_llm.stream_text = FakeLLM.stream_text.__get__(fake_llm, FakeLLM)
+    fake_llm.generate_structured = FakeLLM.generate_structured.__get__(
+        fake_llm, FakeLLM
+    )
+    async with ws_connect(ws_url) as ws:
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+        )
+        events = await receive_until_terminal(ws)
+        assert events[-1]["type"] == "message_completed"
+        assert events[-1]["assistant_message"]["content"] == "completed after retry"
 
 
 async def test_final_intake_schedules_assessment_operation(
@@ -571,69 +437,24 @@ async def test_final_intake_schedules_assessment_operation(
     fake_llm._expectations = expectations
     session_id = await _setup_intake_http(http_base)
 
-    async with ws_connect(ws_url) as ws:
-        for content in turn_messages[:-1]:
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "send_message",
-                        "session_id": session_id,
-                        "client_message_id": str(uuid4()),
-                        "request_id": str(uuid4()),
-                        "content": content,
-                    }
-                )
-            )
-            turn_events = await receive_until_completion_snapshot(ws, max_events=25)
-            _assert_normal_chat_event_shape(turn_events)
+    for content in turn_messages:
+        async with ws_connect(ws_url) as ws:
+            await _send_message(ws, session_id=session_id, content=content)
+            events = await receive_until_terminal(ws)
+            _assert_one_shot_chat_shape(events)
 
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(uuid4()),
-                    "request_id": str(uuid4()),
-                    "content": turn_messages[-1],
-                }
-            )
-        )
-
-        final_events: list[dict] = []
-        saw_assessment_snapshot = False
-        for _ in range(40):
-            event = await _recv_json(ws)
-            final_events.append(event)
-            if (
-                event["type"] == "snapshot_changed"
-                and event["snapshot"]["stage"] == "assessment"
-            ):
-                saw_assessment_snapshot = True
-                break
-
-        types = [event["type"] for event in final_events]
-
-        assert len(types) >= 6
-        assert types[:2] == ["message_in_progress", "snapshot_changed"]
-        assert types[-3:] == [
-            "message_completed",
-            "operation_changed",
-            "snapshot_changed",
-        ]
-        assert types[2:-3]
-        assert all(event_type == "token" for event_type in types[2:-3])
-
-        operation_event = final_events[-2]
-        trailing = final_events[-1]
-
-        assert operation_event["operation"]["kind"] == "assessment"
-        assert operation_event["operation"]["status"] == "pending"
-        assert operation_event["snapshot"]["stage"] == "assessment"
-        assert trailing["snapshot"]["stage"] == "assessment"
-        assert saw_assessment_snapshot
+    async with httpx.AsyncClient(base_url=http_base, timeout=15.0) as client:
+        for _ in range(50):
+            state = (await client.get("/api/v1/state")).json()
+            if state["stage"] == "assessment":
+                assert state["operation"] is not None
+                assert state["operation"]["kind"] == "assessment"
+                return
+            await asyncio.sleep(0.1)
+    pytest.fail("assessment stage was not reached")
 
 
-async def test_duplicate_complete_submit_is_silent_on_websocket(
+async def test_duplicate_complete_submit_is_idempotent_on_new_socket(
     uvicorn_api_urls,
     fake_llm: FakeLLM,
 ) -> None:
@@ -641,30 +462,54 @@ async def test_duplicate_complete_submit_is_silent_on_websocket(
     fake_llm._expectations = list(intake_message_expectations("done once"))
     session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
-    command = {
-        "type": "send_message",
-        "session_id": session_id,
-        "client_message_id": str(client_message_id),
-        "request_id": str(uuid4()),
-        "content": "hello",
-    }
 
     async with ws_connect(ws_url) as ws:
-        await ws.send(json.dumps(command))
-        for _ in range(25):
-            event = await _recv_json(ws)
-            if event["type"] == "message_completed":
-                break
-        else:
-            pytest.fail("expected message_completed")
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+        )
+        events = await receive_until_terminal(ws)
+        assert events[-1]["type"] == "message_completed"
 
-        completed_count = 0
-        await ws.send(json.dumps({**command, "request_id": str(uuid4())}))
-        for _ in range(10):
-            try:
-                event = await _recv_json(ws, timeout=1.0)
-            except TimeoutError:
-                break
-            if event["type"] == "message_completed":
-                completed_count += 1
-        assert completed_count == 0
+    async with ws_connect(ws_url) as ws:
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+        )
+        events = await receive_until_terminal(ws)
+        assert events[-1]["type"] == "message_completed"
+        assert events[-1]["assistant_message"]["content"] == "done once"
+
+    fake_llm.assert_exhausted()
+
+
+async def test_http_end_session_still_works_without_ws_broadcast(
+    store: SQLiteStore,
+    uvicorn_api_urls,
+    fake_llm: FakeLLM,
+) -> None:
+    http_base, _ws_url = uvicorn_api_urls
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(
+        session_id=therapy_id,
+        now=ready.now,
+    )
+    fake_llm._expectations = list(post_session_expectations())
+
+    async with httpx.AsyncClient(base_url=http_base, timeout=15.0) as client:
+        state = (await client.get("/api/v1/state")).json()
+        assert state["active_session"]["id"] == str(therapy_id)
+        response = await client.post(f"/api/v1/sessions/{therapy_id}/end")
+        assert response.status_code == 202
+        assert response.json()["stage"] == "post_session"
+        for _ in range(50):
+            state = (await client.get("/api/v1/state")).json()
+            if state.get("operation") and state["operation"]["kind"] == "post_session":
+                return
+            await asyncio.sleep(0.1)
+    pytest.fail("post_session operation was not observed")

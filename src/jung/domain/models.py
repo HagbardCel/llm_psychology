@@ -51,7 +51,6 @@ class SessionKind(StrEnum):
 class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
-    SYSTEM = "system"
 
 
 class OperationKind(StrEnum):
@@ -62,12 +61,6 @@ class OperationKind(StrEnum):
 class OperationStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
-    COMPLETE = "complete"
-    FAILED = "failed"
-
-
-class ChatTurnStatus(StrEnum):
-    PENDING = "pending"
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -117,7 +110,7 @@ class Message(BaseModel):
     sequence: int
     role: MessageRole
     content: str
-    client_message_id: UUID | None = None
+    client_message_id: UUID
     created_at: UtcDateTime
 
     @field_validator("sequence")
@@ -227,23 +220,6 @@ class Operation(BaseModel):
     completed_at: UtcDateTime | None = None
 
 
-class ChatTurn(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: UUID
-    session_id: UUID
-    client_message_id: UUID
-    status: ChatTurnStatus
-    user_message_id: UUID
-    assistant_message_id: UUID | None = None
-    error_code: str | None = None
-    error_message: str | None = None
-    retryable: bool
-    created_at: UtcDateTime
-    updated_at: UtcDateTime
-    completed_at: UtcDateTime | None = None
-
-
 class AppState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -263,7 +239,6 @@ class WorkflowFacts(BaseModel):
     operation_kind: OperationKind | None = None
     operation_status: OperationStatus | None = None
     operation_retryable: bool | None = None
-    chat_turn_status: ChatTurnStatus | None = None
 
 
 class AppSnapshot(BaseModel):
@@ -276,5 +251,4 @@ class AppSnapshot(BaseModel):
     selected_style: str | None = None
     active_session: Session | None = None
     current_operation: Operation | None = None
-    active_chat_turn: ChatTurn | None = None
     available_commands: frozenset[CommandName] = Field(default_factory=frozenset)

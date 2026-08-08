@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from jung.domain.models import ChatTurnStatus, OperationStatus
+from jung.domain.models import OperationStatus
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.application.scenarios import (
     complete_intake_for_assessment,
@@ -30,23 +30,3 @@ def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
     operation = store.get_operation(operation_id)
     assert operation is not None
     assert operation.status == OperationStatus.PENDING
-
-
-def test_recover_stale_chat_turns_is_idempotent(store: SQLiteStore) -> None:
-    intake_id, now = open_intake(store)
-    turn_id = uuid4()
-    store.accept_chat_message(
-        session_id=intake_id,
-        client_message_id=uuid4(),
-        turn_id=turn_id,
-        user_message_id=uuid4(),
-        content="hello",
-        now=now,
-    )
-    recovered = store.recover_stale_chat_turns(now=now)
-    assert len(recovered) == 1
-    assert recovered[0].status == ChatTurnStatus.FAILED
-    assert recovered[0].retryable is True
-    again = store.recover_stale_chat_turns(now=now)
-    assert again == []
-    assert len(store.list_messages(intake_id)) == 1

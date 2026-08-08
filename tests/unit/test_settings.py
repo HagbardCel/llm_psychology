@@ -26,7 +26,6 @@ def test_load_application_settings_defaults() -> None:
     assert settings.llm.default_model == "local-model"
     assert settings.llm.base_url == "http://127.0.0.1:8080/v1"
     assert settings.shutdown_timeout_seconds == 30.0
-    assert settings.event_queue_size == 64
     assert settings.enable_llm_tracing is False
     assert settings.debug_run_dir is None
     assert settings.llm.extra_body is None
@@ -38,14 +37,12 @@ def test_load_application_settings_scalar_overrides() -> None:
     settings = load_application_settings(
         {
             "JUNG_SHUTDOWN_TIMEOUT": "45",
-            "JUNG_EVENT_QUEUE_SIZE": "128",
             "JUNG_ENABLE_LLM_TRACING": "true",
             "JUNG_DEBUG_RUN_DIR": "  /tmp/jung-debug-run  ",
         },
         database_path="data/jung.db",
     )
     assert settings.shutdown_timeout_seconds == 45.0
-    assert settings.event_queue_size == 128
     assert settings.enable_llm_tracing is True
     assert settings.debug_run_dir is not None
     assert str(settings.debug_run_dir) == "/tmp/jung-debug-run"
@@ -53,7 +50,7 @@ def test_load_application_settings_scalar_overrides() -> None:
 
 @pytest.mark.parametrize(
     "env_name",
-    ["JUNG_ENABLE_LLM_TRACING", "JUNG_SHUTDOWN_TIMEOUT", "JUNG_EVENT_QUEUE_SIZE"],
+    ["JUNG_ENABLE_LLM_TRACING", "JUNG_SHUTDOWN_TIMEOUT"],
 )
 def test_blank_scalar_raises(env_name: str) -> None:
     with pytest.raises(ValueError, match=env_name):
@@ -379,7 +376,6 @@ def test_task_numeric_huge_integer_raises_value_error() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"event_queue_size": 0}, "event_queue_size"),
         ({"shutdown_timeout_seconds": 0}, "shutdown_timeout_seconds"),
         ({"shutdown_timeout_seconds": 10**400}, "shutdown_timeout_seconds"),
     ],

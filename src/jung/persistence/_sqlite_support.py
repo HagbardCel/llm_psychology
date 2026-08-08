@@ -15,8 +15,6 @@ from uuid import UUID
 from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
 from jung.domain.models import (
     AppState,
-    ChatTurn,
-    ChatTurnStatus,
     Message,
     MessageRole,
     Operation,
@@ -30,7 +28,7 @@ from jung.domain.models import (
     StoredProfile,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -42,7 +40,6 @@ TARGET_TABLES = frozenset(
         "messages",
         "plans",
         "operations",
-        "chat_turns",
     }
 )
 
@@ -266,8 +263,8 @@ def row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> Message:
         sequence=int(row[2]),
         role=MessageRole(row[3]),
         content=row[4],
-        created_at=parse_dt(row[5]),
-        client_message_id=UUID(row[6]) if len(row) > 6 and row[6] else None,
+        client_message_id=UUID(row[5]),
+        created_at=parse_dt(row[6]),
     )
 
 
@@ -304,21 +301,4 @@ def row_to_operation(row: sqlite3.Row | tuple[Any, ...]) -> Operation:
         updated_at=parse_dt(row[10]),
         started_at=parse_dt(row[11]) if row[11] else None,
         completed_at=parse_dt(row[12]) if row[12] else None,
-    )
-
-
-def row_to_chat_turn(row: sqlite3.Row | tuple[Any, ...]) -> ChatTurn:
-    return ChatTurn(
-        id=UUID(row[0]),
-        session_id=UUID(row[1]),
-        client_message_id=UUID(row[2]),
-        status=ChatTurnStatus(row[3]),
-        user_message_id=UUID(row[4]),
-        assistant_message_id=UUID(row[5]) if row[5] else None,
-        error_code=row[6],
-        error_message=row[7],
-        retryable=bool(row[8]),
-        created_at=parse_dt(row[9]),
-        updated_at=parse_dt(row[10]),
-        completed_at=parse_dt(row[11]) if row[11] else None,
     )

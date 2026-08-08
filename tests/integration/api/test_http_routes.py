@@ -39,9 +39,9 @@ async def test_get_state_on_fresh_database(started_api_client: AsyncClient) -> N
         "selected_style",
         "active_session",
         "operation",
-        "active_chat_turn",
     ):
         assert optional_field not in payload
+    assert "active_chat_turn" not in payload
 
 
 @pytest.mark.asyncio

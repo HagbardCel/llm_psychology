@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -17,13 +18,13 @@ from jung.diagnostics import DiagnosticRun
 from jung.domain.commands import SelectStyle, SendMessage, UpdateProfile
 from jung.domain.errors import InvalidCommand, InvariantViolation
 from jung.domain.models import (
-    ChatTurnStatus,
+    MessageRole,
     OperationKind,
     OperationStatus,
     Profile,
     Stage,
 )
-from jung.events import EventStream
+from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import FailureExpectation, FakeLLM
 from jung.llm.gateway import LLMTask
@@ -32,8 +33,8 @@ from jung.supervisor import TaskSupervisor
 
 from .application_fixtures import (
     build_test_application,
+    collect_stream,
     intake_message_expectations,
-    wait_for_chat_turn,
 )
 from .assessment_test_data import assessment_result_data
 from .scenarios import complete_intake_for_assessment, open_intake
@@ -78,20 +79,16 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
             )
             session = (await runtime.application.get_snapshot()).active_session
             assert session is not None
-            turn = await runtime.application.submit_message(
+            items = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="I feel anxious.",
                     request_id=request_id,
-                )
+                ),
             )
-            completed = await wait_for_chat_turn(
-                runtime.application,
-                turn.id,
-                ChatTurnStatus.COMPLETE,
-            )
-            assert completed.status is ChatTurnStatus.COMPLETE
+            assert isinstance(items[-1], ChatCompleted)
 
     events = _load_trace(run_dir)
     kinds = _kinds(events)
@@ -101,8 +98,10 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
     assert "chat.turn.started" in kinds
     assert "llm.output.accepted" in kinds
     assert "chat.turn.completed" in kinds
-    assert "task.started" in kinds
-    assert "task.completed" in kinds
+    assert "workflow.command.started" in kinds
+    assert "workflow.command.completed" in kinds
+    assert "task.started" not in kinds
+    assert "task.completed" not in kinds
     assert "workflow.state" not in kinds
     assert "operation.status" not in kinds
     assert "application.event" not in kinds
@@ -110,27 +109,27 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
 
     accepted = next(e for e in events if e["kind"] == "chat.turn.accepted")
     assert accepted["context"]["session_id"] == str(session.id)
-    assert accepted["context"]["turn_id"] == str(turn.id)
+    assert "turn_id" not in accepted["context"]
     assert accepted["context"]["client_message_id"] == str(client_message_id)
     assert accepted["context"]["request_id"] == str(request_id)
     assert accepted["context"]["run_id"] == str(recorder.run_id)
+
+    completed_cmds = [
+        e
+        for e in events
+        if e["kind"] == "workflow.command.completed"
+        and e["data"].get("command") == "send_message"
+    ]
+    assert len(completed_cmds) == 1
+    assert completed_cmds[0]["data"]["outcome"] == "committed"
 
     llm_accepted = [e for e in events if e["kind"] == "llm.output.accepted"]
     assert llm_accepted
     for event in llm_accepted:
         ctx = event["context"]
-        assert ctx["session_id"] == str(session.id)
-        assert ctx["turn_id"] == str(turn.id)
-        assert ctx["client_message_id"] == str(client_message_id)
-        assert ctx["request_id"] == str(request_id)
-        assert ctx["task"].startswith("chat:")
-        assert ctx.get("llm_call_id")
         assert ctx["run_id"] == str(recorder.run_id)
-
-    task_events = [e for e in events if e["kind"] in {"task.started", "task.completed"}]
-    assert {e["context"]["task"] for e in task_events} == {
-        llm_accepted[0]["context"]["task"]
-    }
+        assert ctx.get("llm_call_id")
+        assert "turn_id" not in ctx
 
 
 async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
@@ -156,27 +155,25 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
             )
             session = (await runtime.application.get_snapshot()).active_session
             assert session is not None
-            turn = await runtime.application.submit_message(
+            items = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=session.id,
                     client_message_id=uuid4(),
                     content="I feel anxious.",
                     request_id=uuid4(),
-                )
+                ),
             )
-            failed = await wait_for_chat_turn(
-                runtime.application,
-                turn.id,
-                ChatTurnStatus.FAILED,
-            )
-            assert failed.status is ChatTurnStatus.FAILED
+            assert isinstance(items[-1], ChatFailed)
 
     events = _load_trace(run_dir)
     kinds = _kinds(events)
     assert "chat.turn.accepted" in kinds
     assert "chat.turn.started" in kinds
     assert "chat.turn.failed" in kinds
-    assert "task.completed" in kinds
+    assert "workflow.command.completed" in kinds
+    assert "task.started" not in kinds
+    assert "task.completed" not in kinds
     failed_event = next(e for e in events if e["kind"] == "chat.turn.failed")
     assert failed_event["data"]["error_code"]
     assert "retryable" in failed_event["data"]
@@ -203,10 +200,10 @@ async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
 
     events = _load_trace(run_dir)
     assert events[0]["schema_version"] == DIAGNOSTIC_SCHEMA_VERSION
-    assert DIAGNOSTIC_SCHEMA_VERSION == 3
+    assert DIAGNOSTIC_SCHEMA_VERSION == 4
     transitions = [e for e in events if e["kind"] == "workflow.transition"]
     assert len(transitions) == 1
-    assert transitions[0]["schema_version"] == 3
+    assert transitions[0]["schema_version"] == 4
     assert transitions[0]["data"] == {
         "from_stage": Stage.SETUP.value,
         "to_stage": Stage.INTAKE.value,
@@ -253,25 +250,6 @@ async def test_incomplete_intake_profile_update_is_rejected(tmp_path: Path) -> N
     assert len(rejected) == 1
     assert rejected[0]["data"]["error_type"] == "InvalidCommand"
     assert "runtime.error" not in kinds
-
-
-async def test_event_stream_no_longer_projects_diagnostics(tmp_path: Path) -> None:
-    run_dir = tmp_path / "debug-run"
-    with DiagnosticRun(run_dir) as recorder:
-        stream = EventStream()
-        await stream.publish(
-            __import__("jung.events", fromlist=["SnapshotChanged"]).SnapshotChanged(
-                __import__("jung.domain.models", fromlist=["AppSnapshot"]).AppSnapshot(
-                    stage=Stage.INTAKE,
-                    profile_complete=True,
-                )
-            )
-        )
-        recorder.record("workflow.command.started", {"command": "update_profile"})
-
-    kinds = _kinds(_load_trace(run_dir))
-    assert "workflow.state" not in kinds
-    assert "workflow.command.started" in kinds
 
 
 async def test_pre_running_ownership_failure_emits_task_failed(
@@ -371,31 +349,21 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
         session_id = session.id
 
     now = datetime.now(UTC)
-    turn_id = uuid4()
     client_message_id = uuid4()
     user_message_id = uuid4()
     op_id = uuid4()
     with store._connect() as conn:
         conn.execute(
             """
-            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
-            VALUES (?, ?, 1, 'user', 'stale', ?)
-            """,
-            (str(user_message_id), str(session_id), now.isoformat()),
-        )
-        conn.execute(
-            """
-            INSERT INTO chat_turns (
-                id, session_id, client_message_id, user_message_id, status,
-                retryable, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            )
+            VALUES (?, ?, 1, 'user', 'stale', ?, ?)
             """,
             (
-                str(turn_id),
+                str(user_message_id),
                 str(session_id),
                 str(client_message_id),
-                str(user_message_id),
-                now.isoformat(),
                 now.isoformat(),
             ),
         )
@@ -428,12 +396,16 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
     events = _load_trace(run_dir)
     kinds = _kinds(events)
     assert "operation.recovered" in kinds
-    failed = [e for e in events if e["kind"] == "chat.turn.failed"]
-    assert any(e["data"].get("source") == "startup_recovery" for e in failed)
+    assert "chat.turn.failed" not in kinds
     recovered = next(e for e in events if e["kind"] == "operation.recovered")
     assert recovered["data"]["from_status"] == OperationStatus.RUNNING.value
     assert recovered["data"]["to_status"] == OperationStatus.PENDING.value
     assert recovered["context"]["operation_id"] == str(op_id)
+
+    messages = store.list_messages(session_id)
+    assert messages
+    assert messages[-1].role is MessageRole.USER
+    assert messages[-1].client_message_id == client_message_id
 
 
 async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
@@ -459,49 +431,44 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
             )
             session = (await runtime.application.get_snapshot()).active_session
             assert session is not None
-            turn = await runtime.application.submit_message(
+            first = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
                     request_id=uuid4(),
-                )
+                ),
             )
-            failed = await wait_for_chat_turn(
-                runtime.application, turn.id, ChatTurnStatus.FAILED
-            )
-            assert failed.retryable
+            assert isinstance(first[-1], ChatFailed)
 
-        # Second DiagnosticRun segment continues same recorder? reopen store with
-        # new expectations for successful retry under same recorder by nesting.
         succeeding = FakeLLM(intake_message_expectations("Thanks for sharing more."))
         async with build_test_application(
             store, succeeding, recorder=recorder, recover=False
         ) as runtime:
-            retried = await runtime.application.submit_message(
+            retried = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
                     request_id=uuid4(),
-                )
+                ),
             )
-            assert retried.id == turn.id
-            completed = await wait_for_chat_turn(
-                runtime.application, turn.id, ChatTurnStatus.COMPLETE
-            )
-            assert completed.status is ChatTurnStatus.COMPLETE
+            assert isinstance(retried[-1], ChatCompleted)
 
             # Idempotent existing complete
-            again = await runtime.application.submit_message(
+            again = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
                     request_id=uuid4(),
-                )
+                ),
             )
-            assert again.id == turn.id
+            assert isinstance(again[-1], ChatCompleted)
+            assert again[-1].user_message.id == retried[-1].user_message.id
 
     events = _load_trace(run_dir)
     assert "chat.turn.retried" in _kinds(events)
@@ -517,6 +484,7 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
     # First accept + later retry both committed; accepted once, retried once
     assert _kinds(events).count("chat.turn.accepted") == 1
     assert _kinds(events).count("chat.turn.retried") == 1
+    assert "task.started" not in _kinds(events)
 
 
 async def test_select_style_invariant_records_runtime_error(
@@ -655,7 +623,7 @@ async def test_store_drained_failure_records_runtime_error(
 
     drain_entered = asyncio.Event()
 
-    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
+    async def observed_drain(task: asyncio.Future[Any]) -> BaseException | None:
         drain_entered.set()
         return await real_drain(task)
 

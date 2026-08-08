@@ -12,13 +12,12 @@ from types import MappingProxyType
 from uuid import UUID, uuid4
 
 from jung.application import TherapyApplication
+from jung.domain.commands import SendMessage
 from jung.domain.models import (
-    ChatTurn,
-    ChatTurnStatus,
     OperationStatus,
     Stage,
 )
-from jung.events import EventStream
+from jung.domain.results import ChatStreamResult
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.policies import build_model_policies
@@ -204,7 +203,6 @@ class ScriptedTaskSupervisor(TaskSupervisor):
 @dataclass
 class TestApplicationRuntime:
     application: TherapyApplication
-    events: EventStream
     supervisor: TaskSupervisor
     store: SQLiteStore
     fake_llm: FakeLLM
@@ -268,7 +266,7 @@ async def build_test_application(
     supervisor: TaskSupervisor | None = None,
     recorder: object | None = None,
 ) -> AsyncIterator[TestApplicationRuntime]:
-    """Wire TherapyApplication with real store, processors, events, and supervisor."""
+    """Wire TherapyApplication with real store, processors, and supervisor."""
     from jung.llm.tracing import ObservedLLMGateway
 
     gateway: object = fake_llm
@@ -279,7 +277,6 @@ async def build_test_application(
             recorder=recorder,  # type: ignore[arg-type]
         )
     intake, assessment, therapy, post_session = _build_processors(gateway)  # type: ignore[arg-type]
-    events = EventStream(max_queue_size=64)
     styles: MappingProxyType[str, object] = load_styles()
     clock = now or (lambda: datetime.now(UTC))
     ids = new_id or uuid4
@@ -293,7 +290,6 @@ async def build_test_application(
             therapy=therapy,
             post_session=post_session,
             styles=styles,
-            events=events,
             supervisor=active_supervisor,
             now=clock,
             new_id=ids,
@@ -303,7 +299,6 @@ async def build_test_application(
             await application.recover_on_startup()
         runtime = TestApplicationRuntime(
             application=application,
-            events=events,
             supervisor=active_supervisor,
             store=store,
             fake_llm=fake_llm,
@@ -333,23 +328,32 @@ async def wait_for_stage(
     )
 
 
-async def wait_for_chat_turn(
-    application: TherapyApplication,
-    turn_id: UUID,
-    status: ChatTurnStatus,
+async def wait_for_assistant_message(
+    store: SQLiteStore,
+    session_id: UUID,
+    client_message_id: UUID,
     *,
     timeout: float = 5.0,
-) -> ChatTurn:
+) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
-        turn = await application.get_chat_turn(turn_id)
-        if turn.status is status:
-            return turn
+        _user, assistant = store.get_messages_by_client_id(
+            session_id, client_message_id
+        )
+        if assistant is not None:
+            return
         await asyncio.sleep(0.01)
-    turn = await application.get_chat_turn(turn_id)
-    raise TimeoutError(
-        f"timed out waiting for chat turn {turn_id} status {status.value}, got {turn.status.value}"
-    )
+    raise TimeoutError(f"timed out waiting for assistant message {client_message_id}")
+
+
+async def collect_stream(
+    application: TherapyApplication,
+    command: SendMessage,
+) -> list[ChatStreamResult]:
+    items: list[ChatStreamResult] = []
+    async for item in application.stream_message(command):
+        items.append(item)
+    return items
 
 
 async def wait_for_operation_status(
@@ -383,11 +387,12 @@ __all__ = [
     "TestApplicationRuntime",
     "assessment_result",
     "build_test_application",
+    "collect_stream",
     "completing_intake_patch",
     "intake_message_expectations",
     "plan_content",
     "post_session_expectations",
-    "wait_for_chat_turn",
+    "wait_for_assistant_message",
     "wait_for_operation_status",
     "wait_for_stage",
 ]

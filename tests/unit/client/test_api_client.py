@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import math
 import traceback
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import get_args
@@ -12,15 +11,12 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from pydantic import ValidationError
 from websockets.exceptions import ConnectionClosed
 
 from jung.api.contracts import (
     AppSnapshotResponse,
-    ChatTurnSummaryResponse,
     ErrorCode,
     ErrorEnvelope,
-    ErrorEvent,
     HealthResponse,
     MessageResponse,
     OperationSummaryResponse,
@@ -29,9 +25,7 @@ from jung.api.contracts import (
     SessionHistoryResponse,
 )
 from jung.client.api_client import (
-    _ALLOWED_ERROR_STATUSES,
-    ChatReconciliationResult,
-    ChatReconciliationStatus,
+    _ALLOWED_HTTP_ERROR_STATUSES,
     ClientSettings,
     JungApiClient,
     JungApiError,
@@ -43,14 +37,10 @@ from jung.client.api_client import (
 )
 
 
-def _snapshot(
-    *,
-    pending: ChatTurnSummaryResponse | None = None,
-) -> AppSnapshotResponse:
+def _snapshot() -> AppSnapshotResponse:
     return AppSnapshotResponse(
         stage="intake",
         profile_complete=True,
-        active_chat_turn=pending,
         available_commands=["send_message"],
     )
 
@@ -67,7 +57,7 @@ def _message(
         id=uuid4(),
         session_id=session_id,
         sequence=sequence,
-        role=role,
+        role=role,  # type: ignore[arg-type]
         content=content,
         created_at=datetime.now(UTC),
         client_message_id=client_message_id,
@@ -126,6 +116,16 @@ def _client_with_handler(
     )
 
 
+def _command(*, content: str = "hello") -> SendMessageCommand:
+    return SendMessageCommand(
+        type="send_message",
+        request_id=uuid4(),
+        session_id=uuid4(),
+        client_message_id=uuid4(),
+        content=content,
+    )
+
+
 @pytest.mark.parametrize(
     "base_url",
     [
@@ -161,28 +161,28 @@ def test_client_settings_reject_non_string_origins(base_url: object) -> None:
 def test_client_settings_reject_invalid_timeouts(value: float) -> None:
     with pytest.raises(ValueError):
         ClientSettings("http://localhost:8000", transport_timeout=value)
-    with pytest.raises(ValueError):
-        ClientSettings("http://localhost:8000", acknowledgement_timeout=value)
 
 
 @pytest.mark.asyncio
-async def test_intent_and_attempt_ids_have_distinct_lifetimes() -> None:
+async def test_new_message_command_ids_have_distinct_lifetimes() -> None:
     async with JungApiClient(ClientSettings("https://localhost:8443")) as client:
         session_id = uuid4()
         retained_id = uuid4()
-        retained = client.new_chat_intent(
+        first = client.new_message_command(
             session_id,
             "hello",
             client_message_id=retained_id,
         )
-        generated = client.new_chat_intent(session_id, "hello")
-        first = client.new_message_command(retained)
-        second = client.new_message_command(retained)
+        second = client.new_message_command(
+            session_id,
+            "hello",
+            client_message_id=retained_id,
+        )
+        generated = client.new_message_command(session_id, "hello")
 
-        assert retained.client_message_id == retained_id
-        assert generated.client_message_id != retained_id
         assert first.client_message_id == second.client_message_id == retained_id
         assert first.request_id != second.request_id
+        assert generated.client_message_id != retained_id
         assert not hasattr(first, "expected" + "_revision")
 
 
@@ -401,16 +401,19 @@ async def test_invalid_websocket_frame_diagnostics_are_sanitized() -> None:
     secret = "private websocket disclosure"
 
     class FakeWebSocket:
+        async def send(self, _payload: str) -> None:
+            return None
+
         async def recv(self):
             return f'{{"type":"token","text":"{secret}"'
 
         async def close(self):
             return None
 
-    chat = JungChatConnection(FakeWebSocket())
-    events = chat.events()
+    chat = JungChatConnection(FakeWebSocket())  # type: ignore[arg-type]
+    stream = chat.stream(_command())
     with pytest.raises(JungProtocolError) as raised:
-        await anext(events)
+        await anext(stream)
     error = raised.value
     formatted = "".join(traceback.format_exception(error))
     assert error.kind is ProtocolErrorKind.INVALID_WEBSOCKET_FRAME
@@ -437,27 +440,20 @@ async def test_transport_failure_makes_chat_unusable_and_still_closes(
             raise OSError("transport failed")
 
     websocket = FailingWebSocket()
-    chat = JungChatConnection(websocket)
-    command = SendMessageCommand(
-        type="send_message",
-        request_id=uuid4(),
-        session_id=uuid4(),
-        client_message_id=uuid4(),
-        content="hello",
-    )
+    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+    command = _command()
 
-    if operation == "send":
-        with pytest.raises(JungTransportError):
-            await chat.send(command)
-    else:
-        events = chat.events()
-        with pytest.raises(JungTransportError):
-            await anext(events)
+    stream = chat.stream(command)
+    with pytest.raises(JungTransportError):
+        if operation == "send":
+            await anext(stream)
+        else:
+            # Force receive path after a successful send.
+            websocket.send = AsyncMock()  # type: ignore[method-assign]
+            await anext(stream)
 
     with pytest.raises(RuntimeError):
-        await chat.send(command)
-    with pytest.raises(RuntimeError):
-        await anext(chat.events())
+        await anext(chat.stream(command))
     await chat.aclose()
     await chat.aclose()
     websocket.close.assert_awaited_once_with()
@@ -479,27 +475,19 @@ async def test_remote_closure_makes_chat_unusable_and_still_closes(
             raise ConnectionClosed(None, None, None)
 
     websocket = RemoteClosedWebSocket()
-    chat = JungChatConnection(websocket)
-    command = SendMessageCommand(
-        type="send_message",
-        request_id=uuid4(),
-        session_id=uuid4(),
-        client_message_id=uuid4(),
-        content="hello",
-    )
+    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+    command = _command()
 
-    if operation == "send":
-        with pytest.raises(JungConnectionClosed):
-            await chat.send(command)
-    else:
-        events = chat.events()
-        with pytest.raises(JungConnectionClosed):
-            await anext(events)
+    stream = chat.stream(command)
+    with pytest.raises(JungConnectionClosed):
+        if operation == "send":
+            await anext(stream)
+        else:
+            websocket.send = AsyncMock()  # type: ignore[method-assign]
+            await anext(stream)
 
     with pytest.raises(RuntimeError):
-        await chat.send(command)
-    with pytest.raises(RuntimeError):
-        await anext(chat.events())
+        await anext(chat.stream(command))
     await chat.aclose()
     await chat.aclose()
     websocket.close.assert_awaited_once_with()
@@ -508,21 +496,13 @@ async def test_remote_closure_makes_chat_unusable_and_still_closes(
 @pytest.mark.asyncio
 async def test_explicit_chat_close_makes_connection_unusable() -> None:
     websocket = SimpleNamespace(close=AsyncMock())
-    chat = JungChatConnection(websocket)
-    command = SendMessageCommand(
-        type="send_message",
-        request_id=uuid4(),
-        session_id=uuid4(),
-        client_message_id=uuid4(),
-        content="hello",
-    )
+    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
+    command = _command()
 
     await chat.aclose()
     await chat.aclose()
     with pytest.raises(RuntimeError):
-        await chat.send(command)
-    with pytest.raises(RuntimeError):
-        await anext(chat.events())
+        await anext(chat.stream(command))
     websocket.close.assert_awaited_once_with()
 
 
@@ -539,19 +519,13 @@ async def test_chat_close_retries_after_cancellation() -> None:
 
     websocket = CancellingWebSocket()
     chat = JungChatConnection(websocket)  # type: ignore[arg-type]
-    command = SendMessageCommand(
-        type="send_message",
-        request_id=uuid4(),
-        session_id=uuid4(),
-        client_message_id=uuid4(),
-        content="hello",
-    )
+    command = _command()
 
     with pytest.raises(asyncio.CancelledError):
         await chat.aclose()
 
     with pytest.raises(RuntimeError, match="chat connection is unusable"):
-        await chat.send(command)
+        await anext(chat.stream(command))
 
     await chat.aclose()
     assert close_attempts == 2
@@ -561,363 +535,111 @@ async def test_chat_close_retries_after_cancellation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classification_complete_pending_conflict_and_unresolved() -> None:
-    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
-        session_id = uuid4()
-        client_message_id = uuid4()
-        intent = client.new_chat_intent(
-            session_id,
-            "original",
-            client_message_id=client_message_id,
-        )
-        complete = client._classify_chat_state(
-            intent,
-            _snapshot(),
-            _history(
-                session_id=session_id,
-                client_message_id=client_message_id,
-                user_contents=("original",),
-                assistant_contents=("reply",),
-            ),
-        )
-        assert complete is not None
-        assert complete.status is ChatReconciliationStatus.COMPLETE
+async def test_second_stream_on_same_connection_raises_runtime_error() -> None:
+    class ScriptedWebSocket:
+        def __init__(self) -> None:
+            self.close = AsyncMock()
+            self._sent = False
 
-        user_message_id = uuid4()
-        pending_turn = ChatTurnSummaryResponse(
-            id=uuid4(),
-            session_id=session_id,
-            client_message_id=client_message_id,
-            status="pending",
-            user_message_id=user_message_id,
-        )
-        pending = client._classify_chat_state(
-            intent,
-            _snapshot(pending=pending_turn),
-            _history(
-                session_id=session_id,
-                client_message_id=client_message_id,
-                user_contents=("original",),
-            ),
-        )
-        assert pending is not None
-        assert pending.status is ChatReconciliationStatus.IN_PROGRESS
+        async def send(self, _payload: str) -> None:
+            self._sent = True
 
-        conflict = client._classify_chat_state(
-            intent,
-            _snapshot(),
-            _history(
-                session_id=session_id,
-                client_message_id=client_message_id,
-                user_contents=("different",),
-                assistant_contents=("unrelated reply",),
-            ),
-        )
-        assert conflict is not None
-        assert conflict.status is ChatReconciliationStatus.IDENTITY_CONFLICT
-
-        unresolved = client._classify_chat_state(
-            intent,
-            _snapshot(),
-            _history(
-                session_id=session_id,
-                client_message_id=client_message_id,
-            ),
-        )
-        assert unresolved is None
-
-
-@pytest.mark.asyncio
-async def test_impossible_history_raises_protocol_error() -> None:
-    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
-        session_id = uuid4()
-        client_message_id = uuid4()
-        intent = client.new_chat_intent(
-            session_id,
-            "original",
-            client_message_id=client_message_id,
-        )
-        with pytest.raises(JungProtocolError) as raised:
-            client._classify_chat_state(
-                intent,
-                _snapshot(),
-                _history(
-                    session_id=session_id,
-                    client_message_id=client_message_id,
-                    user_contents=(),
-                    assistant_contents=("reply",),
-                ),
+        async def recv(self) -> str:
+            command = _command()
+            # unreachable; stream ends after terminal event below
+            return (
+                '{"type":"error","request_id":"'
+                + str(command.request_id)
+                + '","error":{"code":"validation_error","message":"bad",'
+                + '"request_id":"'
+                + str(command.request_id)
+                + '"}}'
             )
-        assert raised.value.kind is ProtocolErrorKind.IMPOSSIBLE_HISTORY
 
-
-@pytest.mark.asyncio
-async def test_match_decisive_event_translates_chat_event_violation() -> None:
-    async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
-        intent = client.new_chat_intent(uuid4(), "hello")
-        command = client.new_message_command(intent)
-        failure_request_id = uuid4()
-        malformed = ErrorEvent(
-            type="error",
-            error=ErrorEnvelope(
-                code="llm_timeout",
-                message="Generation failed",
-                request_id=failure_request_id,
-                retryable=True,
-            ),
-            request_id=failure_request_id,
-            session_id=None,
-            client_message_id=None,
-            turn_id=uuid4(),
-        )
-        with pytest.raises(JungProtocolError) as raised:
-            client._match_decisive_event(
-                malformed,
-                intent=intent,
-                command=command,
-            )
-        assert raised.value.kind is ProtocolErrorKind.INVALID_SERVER_EVENT
-
-
-async def _reconciliation_harness(monkeypatch, client: JungApiClient, chat) -> None:
-    @asynccontextmanager
-    async def open_chat():
-        yield chat
-
-    monkeypatch.setattr(client, "open_chat", open_chat)
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_cancellation_skips_final_refresh(monkeypatch) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
+    # Use a fixed command so the terminal error request_id matches if needed.
+    request_id = uuid4()
     session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    initial = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    refresh = AsyncMock(return_value=initial)
-    chat = SimpleNamespace(send=AsyncMock())
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-    monkeypatch.setattr(
-        client,
-        "_wait_for_decisive_event",
-        AsyncMock(side_effect=asyncio.CancelledError),
+    client_message_id = uuid4()
+    command = SendMessageCommand(
+        type="send_message",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        content="hello",
     )
 
+    class TerminalWebSocket:
+        def __init__(self) -> None:
+            self.close = AsyncMock()
+
+        async def send(self, _payload: str) -> None:
+            return None
+
+        async def recv(self) -> str:
+            return (
+                '{"type":"error","request_id":"'
+                + str(request_id)
+                + '","error":{"code":"validation_error","message":"bad",'
+                + '"request_id":"'
+                + str(request_id)
+                + '"}}'
+            )
+
+    chat = JungChatConnection(TerminalWebSocket())  # type: ignore[arg-type]
+    events = [event async for event in chat.stream(command)]
+    assert len(events) == 1
+
+    # Terminal event marks the connection unusable; a second stream must fail.
+    with pytest.raises(
+        RuntimeError, match="chat connection (already used|is unusable)"
+    ):
+        await anext(chat.stream(_command()))
+
+    # Fresh connection: mark used without consuming a terminal event.
+    class NeverRecvWebSocket:
+        def __init__(self) -> None:
+            self.close = AsyncMock()
+            self._sent = False
+
+        async def send(self, _payload: str) -> None:
+            self._sent = True
+
+        async def recv(self) -> str:
+            await asyncio.sleep(3600)
+            raise AssertionError("unreachable")
+
+    chat2 = JungChatConnection(NeverRecvWebSocket())  # type: ignore[arg-type]
+    stream1 = chat2.stream(command)
+    recv_task = asyncio.create_task(anext(stream1))
+    await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="chat connection already used"):
+        await anext(chat2.stream(_command()))
+    recv_task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await client.reconcile_chat_turn(intent)
-    assert refresh.await_count == 1
-    await client.aclose()
+        await recv_task
+    await chat.aclose()
+    await chat2.aclose()
 
 
-@pytest.mark.asyncio
-async def test_reconciliation_closure_uses_final_durable_completion(
-    monkeypatch,
-) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    initial = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    final = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-            user_contents=("hello",),
-            assistant_contents=("reply",),
-        ),
-    )
-    refresh = AsyncMock(side_effect=[initial, final])
-    chat = SimpleNamespace(
-        send=AsyncMock(side_effect=JungConnectionClosed(code=1006, reason="sensitive"))
-    )
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-
-    result = await client.reconcile_chat_turn(intent)
-
-    assert result.status is ChatReconciliationStatus.COMPLETE
-    assert refresh.await_count == 2
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_event_silent_retransmission_uses_final_durable_completion(
-    monkeypatch,
-) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    initial = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    final = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-            user_contents=("hello",),
-            assistant_contents=("reply",),
-        ),
-    )
-    refresh = AsyncMock(side_effect=[initial, final])
-    chat = SimpleNamespace(send=AsyncMock())
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-    monkeypatch.setattr(
-        client,
-        "_wait_for_decisive_event",
-        AsyncMock(return_value=None),
-    )
-
-    result = await client.reconcile_chat_turn(intent)
-
-    assert result.status is ChatReconciliationStatus.COMPLETE
-    chat.send.assert_awaited_once()
-    assert refresh.await_count == 2
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_closure_without_evidence_is_unresolved(
-    monkeypatch,
-) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    state = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    refresh = AsyncMock(side_effect=[state, state])
-    chat = SimpleNamespace(
-        send=AsyncMock(side_effect=JungConnectionClosed(code=1006, reason=None))
-    )
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-
-    result = await client.reconcile_chat_turn(intent)
-
-    assert result.status is ChatReconciliationStatus.UNRESOLVED
-    assert refresh.await_count == 2
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_protocol_failure_refreshes_then_reraises(
-    monkeypatch,
-) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    state = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    refresh = AsyncMock(side_effect=[state, state])
-    protocol_error = JungProtocolError(
-        kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-        expected_model="ServerEvent",
-    )
-    chat = SimpleNamespace(send=AsyncMock())
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-    monkeypatch.setattr(
-        client,
-        "_wait_for_decisive_event",
-        AsyncMock(side_effect=protocol_error),
-    )
-
-    with pytest.raises(JungProtocolError) as raised:
-        await client.reconcile_chat_turn(intent)
-    assert raised.value is protocol_error
-    assert refresh.await_count == 2
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_final_refresh_failure_supersedes_uncertain_connection(
-    monkeypatch,
-) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    session_id = uuid4()
-    intent = client.new_chat_intent(session_id, "hello")
-    initial = (
-        _snapshot(),
-        _history(
-            session_id=session_id,
-            client_message_id=intent.client_message_id,
-        ),
-    )
-    final_failure = JungTransportError("final refresh")
-    refresh = AsyncMock(side_effect=[initial, final_failure])
-    chat = SimpleNamespace(
-        send=AsyncMock(side_effect=JungConnectionClosed(code=1006, reason=None))
-    )
-    await _reconciliation_harness(monkeypatch, client, chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-
-    with pytest.raises(JungTransportError) as raised:
-        await client.reconcile_chat_turn(intent)
-    assert raised.value is final_failure
-    assert refresh.await_count == 2
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_handshake_failure_performs_no_refresh(monkeypatch) -> None:
-    client = JungApiClient(ClientSettings("http://localhost:8000"))
-    intent = client.new_chat_intent(uuid4(), "hello")
-    refresh = AsyncMock()
-
-    @asynccontextmanager
-    async def failing_open_chat():
-        raise JungTransportError("WebSocket handshake")
-        yield
-
-    monkeypatch.setattr(client, "open_chat", failing_open_chat)
-    monkeypatch.setattr(client, "_refresh_chat_state", refresh)
-
-    with pytest.raises(JungTransportError):
-        await client.reconcile_chat_turn(intent)
-    refresh.assert_not_awaited()
-    await client.aclose()
-
-
-def test_reconciliation_result_enforces_status_payload() -> None:
-    session_id = uuid4()
-    history = _history(session_id=session_id, client_message_id=uuid4())
-    with pytest.raises(ValidationError):
-        ChatReconciliationResult(
-            status=ChatReconciliationStatus.COMPLETE,
-            snapshot=_snapshot(),
-            history=history,
-        )
-
-
-def test_allowed_error_statuses_match_error_code_literals() -> None:
-    assert set(_ALLOWED_ERROR_STATUSES) == set(get_args(ErrorCode))
+def test_allowed_http_error_statuses_are_exact_subset() -> None:
+    assert _ALLOWED_HTTP_ERROR_STATUSES == {
+        "invalid_command": frozenset({409}),
+        "busy": frozenset({409}),
+        "not_found": frozenset({404}),
+        "validation_error": frozenset({422}),
+        "internal_error": frozenset({500}),
+        "not_ready": frozenset({503}),
+    }
+    wire_codes = set(get_args(ErrorCode))
+    assert set(_ALLOWED_HTTP_ERROR_STATUSES) <= wire_codes
+    for excluded in (
+        "llm_unavailable",
+        "llm_timeout",
+        "invalid_llm_output",
+        "operation_failed",
+    ):
+        assert excluded in wire_codes
+        assert excluded not in _ALLOWED_HTTP_ERROR_STATUSES
 
 
 @pytest.mark.asyncio
@@ -945,9 +667,9 @@ async def test_error_status_code_mismatch_raises_protocol_error() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_code",
-    ["llm_timeout", "operation_failed", "internal_error"],
+    ["llm_timeout", "operation_failed"],
 )
-async def test_stored_http_failures_accept_409_status(
+async def test_stored_llm_failure_codes_are_not_http_mapped(
     error_code: str,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -964,10 +686,9 @@ async def test_stored_http_failures_accept_409_status(
         )
 
     client = _client_with_handler(handler)
-    with pytest.raises(JungApiError) as raised:
+    with pytest.raises(JungProtocolError) as raised:
         await client.get_state()
-    assert raised.value.status == 409
-    assert raised.value.code == error_code
+    assert raised.value.kind is ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH
     await client.aclose()
 
 

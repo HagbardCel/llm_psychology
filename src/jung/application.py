@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
-from enum import Enum, auto
 from types import MappingProxyType
 from typing import Any, TypeVar
 from uuid import UUID
@@ -32,12 +30,9 @@ from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
     NotFound,
-    StoredWorkFailure,
 )
 from jung.domain.models import (
     AppSnapshot,
-    ChatTurn,
-    ChatTurnStatus,
     CommandName,
     Message,
     MessageRole,
@@ -52,21 +47,16 @@ from jung.domain.models import (
     is_profile_complete,
 )
 from jung.domain.results import (
+    ChatCompleted,
+    ChatFailed,
+    ChatStreamResult,
+    ChatToken,
     ProfileView,
     SessionHistory,
     StartedSession,
     StyleOptions,
     StyleRecommendationView,
     StyleSummary,
-)
-from jung.events import (
-    ChatTokenGenerated,
-    ChatTurnAccepted,
-    ChatTurnCompleted,
-    ChatTurnFailed,
-    EventStream,
-    OperationChanged,
-    SnapshotChanged,
 )
 from jung.llm.errors import InvalidLLMOutput, LLMError
 from jung.persistence.sqlite_store import SQLiteStore
@@ -94,17 +84,18 @@ _RECENT_SUMMARY_LIMIT = 5
 _T = TypeVar("_T")
 
 
-class ChatScheduleOutcomeKind(Enum):
-    STARTED = auto()
-    SUPERVISOR_CLOSED = auto()
-    DUPLICATE_ACTIVE = auto()
-    UNEXPECTED = auto()
+class _AcceptedDuringCancel(Exception):
+    def __init__(self, message: Message, cancellation: BaseException) -> None:
+        self.message = message
+        self.cancellation = cancellation
+        super().__init__("user message accepted during cancellation")
 
 
-@dataclass(frozen=True, slots=True)
-class ChatScheduleOutcome:
-    kind: ChatScheduleOutcomeKind
-    error: BaseException | None = None
+class _TerminalDuringCancel(Exception):
+    def __init__(self, result: ChatCompleted, cancellation: BaseException) -> None:
+        self.result = result
+        self.cancellation = cancellation
+        super().__init__("chat terminalized during cancellation")
 
 
 class TherapyApplication:
@@ -117,7 +108,6 @@ class TherapyApplication:
         therapy: TherapyProcessor,
         post_session: PostSessionProcessor,
         styles: MappingProxyType[str, StyleDefinition],
-        events: EventStream,
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
@@ -129,7 +119,6 @@ class TherapyApplication:
         self._therapy = therapy
         self._post_session = post_session
         self._styles = styles
-        self._events = events
         self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
@@ -208,7 +197,6 @@ class TherapyApplication:
         InvalidCommand,
         Busy,
         NotFound,
-        StoredWorkFailure,
     )
 
     async def _run_store(
@@ -245,24 +233,6 @@ class TherapyApplication:
                 self._store.recover_stale_operations,
                 now=self._now(),
             )
-            recovered_chats = await self._run_store(
-                self._store.recover_stale_chat_turns,
-                now=self._now(),
-            )
-            for turn in recovered_chats:
-                with diagnostic_context(
-                    session_id=str(turn.session_id),
-                    turn_id=str(turn.id),
-                    client_message_id=str(turn.client_message_id),
-                ):
-                    self._record(
-                        "chat.turn.failed",
-                        {
-                            "error_code": turn.error_code or "stale_pending",
-                            "retryable": turn.retryable,
-                            "source": "startup_recovery",
-                        },
-                    )
             snapshot = await self._assemble_snapshot_locked()
 
         recovered_by_id = {operation.id: operation for operation in recovered_ops}
@@ -403,18 +373,14 @@ class TherapyApplication:
                 plans=tuple(plans),
             )
 
-    async def get_chat_turn(self, turn_id: UUID) -> ChatTurn:
-        turn = await self._run_store(self._store.get_chat_turn, turn_id)
-        if turn is None:
-            raise NotFound(f"chat turn {turn_id}")
-        return turn
-
     async def update_profile(self, command: UpdateProfile) -> AppSnapshot:
         self._record_command_started("update_profile")
         try:
             self._reject_if_shutdown()
+            self._reject_if_generation_active()
             async with self._mutation_lock:
                 self._reject_if_shutdown()
+                self._reject_if_generation_active()
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
@@ -441,7 +407,6 @@ class TherapyApplication:
                 to_stage=snapshot.stage,
                 trigger="update_profile",
             )
-            await self._events.publish(SnapshotChanged(snapshot))
             return snapshot
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("update_profile", exc)
@@ -454,10 +419,12 @@ class TherapyApplication:
         self._record_command_started("select_style")
         try:
             self._reject_if_shutdown()
+            self._reject_if_generation_active()
             if command.style_id not in self._styles:
                 raise InvalidCommand(f"unknown style: {command.style_id}")
             async with self._mutation_lock:
                 self._reject_if_shutdown()
+                self._reject_if_generation_active()
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.SELECT_STYLE, facts)
@@ -489,7 +456,6 @@ class TherapyApplication:
                 to_stage=snapshot.stage,
                 trigger="select_style",
             )
-            await self._events.publish(SnapshotChanged(snapshot))
             return snapshot
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("select_style", exc)
@@ -502,9 +468,11 @@ class TherapyApplication:
         self._record_command_started("start_session")
         try:
             self._reject_if_shutdown()
+            self._reject_if_generation_active()
             session_id = self._new_id()
             async with self._mutation_lock:
                 self._reject_if_shutdown()
+                self._reject_if_generation_active()
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.START_SESSION, facts)
@@ -521,7 +489,6 @@ class TherapyApplication:
                 to_stage=started.snapshot.stage,
                 trigger="start_session",
             )
-            await self._events.publish(SnapshotChanged(started.snapshot))
             return started
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("start_session", exc)
@@ -537,10 +504,12 @@ class TherapyApplication:
         from_stage: Stage | None = None
         try:
             self._reject_if_shutdown()
+            self._reject_if_generation_active()
             operation_id = self._new_id()
             try:
                 async with self._mutation_lock:
                     self._reject_if_shutdown()
+                    self._reject_if_generation_active()
                     facts = await self._run_store(self._store.load_snapshot_facts)
                     from_stage = facts.stage
                     workflow.require_command_allowed(CommandName.END_SESSION, facts)
@@ -583,7 +552,6 @@ class TherapyApplication:
                         to_stage=snapshot.stage,
                         trigger="end_session",
                     )
-                await self._publish_pending_operation_changed(operation, snapshot)
                 return snapshot
             finally:
                 if operation is not None:
@@ -602,9 +570,11 @@ class TherapyApplication:
         from_stage: Stage | None = None
         try:
             self._reject_if_shutdown()
+            self._reject_if_generation_active()
             try:
                 async with self._mutation_lock:
                     self._reject_if_shutdown()
+                    self._reject_if_generation_active()
                     facts = await self._run_store(self._store.load_snapshot_facts)
                     from_stage = facts.stage
                     workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
@@ -645,7 +615,6 @@ class TherapyApplication:
                         to_stage=snapshot.stage,
                         trigger="retry_operation",
                     )
-                await self._publish_pending_operation_changed(operation, snapshot)
                 return snapshot
             finally:
                 if operation is not None:
@@ -657,213 +626,445 @@ class TherapyApplication:
             self._record_command_error("retry_operation", exc)
             raise
 
-    async def _require_generation_available_locked(
-        self,
-        *,
-        retrying_turn_id: UUID | None = None,
-    ) -> None:
-        facts = await self._run_store(self._store.load_snapshot_facts)
-        if facts.chat_turn_status is ChatTurnStatus.PENDING:
-            if retrying_turn_id is None:
-                raise Busy("another chat generation is active")
-            active = await self._run_store(self._store.get_active_chat_turn)
-            if active is not None and active.id != retrying_turn_id:
-                raise Busy("another chat generation is active")
+    def _reject_if_generation_active(self) -> None:
         if self._generation_lock.locked():
             raise Busy("another chat generation is active")
 
-    def _accepted_chat_events(
-        self,
-        turn: ChatTurn,
-        snapshot: AppSnapshot,
-        request_id: UUID | None,
-    ) -> list[Any]:
-        return [
-            ChatTurnAccepted(
-                session_id=turn.session_id,
-                turn_id=turn.id,
-                request_id=request_id,
-                turn=turn,
-            ),
-            SnapshotChanged(snapshot),
-        ]
+    async def _accept_chat_command_locked(
+        self, command: SendMessage
+    ) -> tuple[Message | None, ChatCompleted | None, bool]:
+        """Under mutation lock: reuse, retry, or persist USER.
 
-    async def _retry_existing_chat_turn_locked(
-        self,
-        existing: ChatTurn,
-        command: SendMessage,
-    ) -> tuple[ChatTurn, list[Any]]:
-        """Persist a retry after the generation lock has already been reserved."""
-        turn = await self._run_store(
-            self._store.retry_chat_turn,
-            existing.id,
-            now=self._now(),
+        Returns ``(user_message, reused_completion, generation_owned)``.
+        When ``reused_completion`` is set, ``user_message`` is None.
+        """
+        session_id = command.session_id
+        client_message_id = command.client_message_id
+        request_id = command.request_id
+        existing_user, existing_assistant = await self._run_store(
+            self._store.get_messages_by_client_id,
+            session_id,
+            client_message_id,
         )
-        snapshot = await self._assemble_snapshot_locked()
-        return turn, self._accepted_chat_events(turn, snapshot, command.request_id)
 
-    async def submit_message(self, command: SendMessage) -> ChatTurn:
-        self._record_command_started("send_message")
+        if existing_user is not None and existing_assistant is not None:
+            if existing_user.content != command.content:
+                raise InvalidCommand(
+                    "client_message_id already used with different content"
+                )
+            self._record_command_completed("send_message", "idempotent_existing")
+            with diagnostic_context(
+                session_id=str(session_id),
+                client_message_id=str(client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record("chat.turn.reused", {})
+            return (
+                None,
+                ChatCompleted(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                    user_message=existing_user,
+                    assistant_message=existing_assistant,
+                ),
+                False,
+            )
+
+        if existing_user is not None and existing_assistant is None:
+            if existing_user.content != command.content:
+                raise InvalidCommand(
+                    "client_message_id already used with different content"
+                )
+            if not await self._chat_retry_structurally_eligible(
+                session_id, existing_user
+            ):
+                raise InvalidCommand(
+                    "unanswered user message is not eligible for retry"
+                )
+            self._reject_if_generation_active()
+            await self._reserve_generation_lock()
+            with diagnostic_context(
+                session_id=str(session_id),
+                client_message_id=str(client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record_command_completed("send_message", "committed")
+                self._record("chat.turn.retried", {})
+                self._record("chat.turn.started", {})
+            return existing_user, None, True
+
+        if existing_user is None and existing_assistant is not None:
+            raise InvariantViolation(
+                "assistant message exists without matching user message"
+            )
+
+        facts = await self._run_store(self._store.load_snapshot_facts)
+        workflow.require_command_allowed(CommandName.SEND_MESSAGE, facts)
+        if not command.content.strip():
+            raise InvalidCommand("message content must be non-empty")
+        messages = await self._run_store(self._store.list_messages, session_id)
+        if messages and messages[-1].role is MessageRole.USER:
+            raise InvalidCommand("retry the unanswered message before sending another")
+        self._reject_if_generation_active()
+        await self._reserve_generation_lock()
         try:
-            return await self._submit_message_body(command)
-        except self._COMMAND_REJECT_TYPES as exc:
-            self._record_command_rejected("send_message", exc)
+            user_message = await self._persist_user_message_drained(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                content=command.content,
+            )
+        except _AcceptedDuringCancel:
+            with diagnostic_context(
+                session_id=str(session_id),
+                client_message_id=str(client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record_command_completed("send_message", "committed")
+                self._record("chat.turn.accepted", {})
             raise
-        except Exception as exc:
-            self._record_command_error("send_message", exc)
-            raise
+        with diagnostic_context(
+            session_id=str(session_id),
+            client_message_id=str(client_message_id),
+            request_id=str(request_id) if request_id is not None else None,
+        ):
+            self._record_command_completed("send_message", "committed")
+            self._record("chat.turn.accepted", {})
+            self._record("chat.turn.started", {})
+        return user_message, None, True
 
-    async def _submit_message_body(self, command: SendMessage) -> ChatTurn:
-        generation_reserved = False
-        pending_events: list[Any] = []
-        turn: ChatTurn | None = None
-        handoff_on_cancel: ChatTurn | None = None
-        chat_lifecycle: str | None = None  # accepted | retried
+    async def stream_message(
+        self, command: SendMessage
+    ) -> AsyncIterator[ChatStreamResult]:
+        self._record_command_started("send_message")
+        accepted = False
+        terminal = False
+        generation_owned = False
+        user_message: Message | None = None
+        session_id = command.session_id
+        client_message_id = command.client_message_id
+        request_id = command.request_id
+
         try:
             self._reject_if_shutdown()
             async with self._mutation_lock:
                 self._reject_if_shutdown()
-                existing = await self._run_store(
-                    self._store.get_chat_turn_by_client_id,
-                    command.session_id,
-                    command.client_message_id,
-                )
-                if existing is not None:
-                    if existing.status is ChatTurnStatus.PENDING:
-                        self._record_command_completed(
-                            "send_message",
-                            "idempotent_existing",
-                        )
-                        return existing
-                    if existing.status is ChatTurnStatus.COMPLETE:
-                        self._record_command_completed(
-                            "send_message",
-                            "idempotent_existing",
-                        )
-                        return existing
-                    if existing.status is ChatTurnStatus.FAILED:
-                        if not existing.retryable:
-                            raise StoredWorkFailure.from_chat_turn(existing)
-                        await self._require_generation_available_locked(
-                            retrying_turn_id=existing.id,
-                        )
-                        if not await self._chat_retry_structurally_eligible(existing):
-                            raise StoredWorkFailure(
-                                code=existing.error_code or "operation_failed",
-                                message=existing.error_message or "chat turn failed",
-                                retryable=False,
-                            )
-                        await self._reserve_generation_lock()
-                        generation_reserved = True
-                        (
-                            turn,
-                            pending_events,
-                        ) = await self._retry_existing_chat_turn_locked(
-                            existing,
-                            command,
-                        )
-                        chat_lifecycle = "retried"
+                (
+                    user_message,
+                    reused,
+                    generation_owned,
+                ) = await self._accept_chat_command_locked(command)
+                if reused is not None:
+                    terminal = True
+                    yield reused
+                    return
+                accepted = True
 
-                if turn is None:
-                    await self._require_generation_available_locked()
-                    facts = await self._run_store(self._store.load_snapshot_facts)
-                    workflow.require_command_allowed(CommandName.SEND_MESSAGE, facts)
-                    if not command.content.strip():
-                        raise InvalidCommand("message content must be non-empty")
-                    await self._reserve_generation_lock()
-                    generation_reserved = True
-                    turn_id = self._new_id()
-                    user_message_id = self._new_id()
-                    _, turn = await self._run_store(
-                        self._store.accept_chat_message,
-                        session_id=command.session_id,
-                        client_message_id=command.client_message_id,
-                        turn_id=turn_id,
-                        user_message_id=user_message_id,
-                        content=command.content,
-                        now=self._now(),
-                    )
-                    snapshot = await self._assemble_snapshot_locked()
-                    pending_events = self._accepted_chat_events(
-                        turn,
-                        snapshot,
-                        command.request_id,
-                    )
-                    chat_lifecycle = "accepted"
-        except asyncio.CancelledError:
-            if generation_reserved:
-                if turn is not None:
-                    handoff_on_cancel = turn
-                else:
-                    self._release_generation_lock()
+            assert user_message is not None
+            try:
+                async for item in self._generate_chat_stream(
+                    user_message=user_message,
+                    request_id=request_id,
+                ):
+                    if isinstance(item, (ChatCompleted, ChatFailed)):
+                        terminal = True
+                        if generation_owned:
+                            self._release_generation_lock()
+                            generation_owned = False
+                    yield item
+            except _TerminalDuringCancel as terminal_cancel:
+                terminal = True
+                raise terminal_cancel.cancellation from None
+        except _AcceptedDuringCancel as cancel_accept:
+            accepted = True
+            generation_owned = True
+            raise cancel_accept.cancellation from None
+        except self._COMMAND_REJECT_TYPES as exc:
+            if not accepted:
+                self._record_command_rejected("send_message", exc)
             raise
-        except Exception:
-            if generation_reserved:
-                self._release_generation_lock()
-            raise
-        finally:
-            if handoff_on_cancel is not None:
-                outcome = self._try_start_chat_worker(
-                    handoff_on_cancel,
-                    request_id=command.request_id,
-                )
-                if outcome.kind is not ChatScheduleOutcomeKind.STARTED:
-                    self._release_generation_lock()
-
-        assert turn is not None
-        with diagnostic_context(
-            session_id=str(turn.session_id),
-            turn_id=str(turn.id),
-            client_message_id=str(turn.client_message_id),
-            request_id=(
-                str(command.request_id) if command.request_id is not None else None
-            ),
-        ):
-            self._record_command_completed("send_message", "committed")
-            if chat_lifecycle == "retried":
-                self._record("chat.turn.retried", {})
-            elif chat_lifecycle == "accepted":
-                self._record("chat.turn.accepted", {})
-        if not pending_events:
-            return turn
-        return await self._handoff_accepted_chat_turn(
-            turn,
-            pending_events,
-            command.request_id,
-        )
-
-    async def _handoff_accepted_chat_turn(
-        self,
-        turn: ChatTurn,
-        pending_events: list[Any],
-        request_id: UUID | None,
-    ) -> ChatTurn:
-        try:
-            for event in pending_events:
-                await self._events.publish(event)
         except asyncio.CancelledError:
-            outcome = self._try_start_chat_worker(turn, request_id=request_id)
-            if outcome.kind is ChatScheduleOutcomeKind.STARTED:
-                raise
-            self._release_generation_lock()
             raise
         except Exception as exc:
-            logger.exception(
-                "failed to publish accepted chat events turn_id=%s",
-                turn.id,
+            if not accepted:
+                self._record_command_error("send_message", exc)
+                raise
+            code, message, retryable = _classify_worker_error(exc)
+            with diagnostic_context(
+                session_id=str(session_id),
+                client_message_id=str(client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record(
+                    "chat.turn.failed",
+                    {
+                        "error_code": code,
+                        "retryable": retryable,
+                        "source": "generation",
+                    },
+                )
+            terminal = True
+            if generation_owned:
+                self._release_generation_lock()
+                generation_owned = False
+            yield ChatFailed(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+                code=code,
+                message=message,
             )
-            self._record_runtime_error(
-                phase="event_publish",
-                exc=exc,
-                event_type="accepted_chat_events",
-                turn_id=str(turn.id),
+        finally:
+            if accepted and not terminal:
+                with diagnostic_context(
+                    session_id=str(session_id),
+                    client_message_id=str(client_message_id),
+                    request_id=str(request_id) if request_id is not None else None,
+                ):
+                    self._record(
+                        "chat.turn.cancelled",
+                        {"reason": "connection_cancelled"},
+                    )
+            if generation_owned:
+                self._release_generation_lock()
+
+    async def _persist_user_message_drained(
+        self,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
+        content: str,
+    ) -> Message:
+        user_message_id = self._new_id()
+
+        async def _persist() -> Message:
+            return await self._run_store(
+                self._store.append_user_message,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                user_message_id=user_message_id,
+                content=content,
+                now=self._now(),
             )
 
-        outcome = self._try_start_chat_worker(turn, request_id=request_id)
-        return await self._resolve_chat_schedule_outcome(turn, outcome)
+        task = asyncio.create_task(_persist())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            failure = await drain_cancelled_task(task)
+            if failure is None:
+                raise _AcceptedDuringCancel(task.result(), cancellation) from None
+            if isinstance(failure, asyncio.CancelledError):
+                raise cancellation
+            raise failure from None
+
+    async def _chat_retry_structurally_eligible(
+        self, session_id: UUID, user_message: Message
+    ) -> bool:
+        session = await self._run_store(self._store.get_session, session_id)
+        if session is None or session.ended_at is not None:
+            return False
+        active = await self._run_store(self._store.get_active_session)
+        if active is None or active.id != session_id:
+            return False
+        state = await self._run_store(self._store.get_app_state)
+        if state.stage is Stage.INTAKE and session.kind is not SessionKind.INTAKE:
+            return False
+        if state.stage is Stage.THERAPY and session.kind is not SessionKind.THERAPY:
+            return False
+        if state.stage not in {Stage.INTAKE, Stage.THERAPY}:
+            return False
+        messages = await self._run_store(self._store.list_messages, session_id)
+        if not messages:
+            return False
+        latest = messages[-1]
+        return (
+            latest.id == user_message.id
+            and latest.role is MessageRole.USER
+            and latest.client_message_id == user_message.client_message_id
+        )
+
+    async def _generate_chat_stream(
+        self,
+        *,
+        user_message: Message,
+        request_id: UUID | None,
+    ) -> AsyncIterator[ChatStreamResult]:
+        session_id = user_message.session_id
+        client_message_id = user_message.client_message_id
+        session = await self._run_store(self._store.get_session, session_id)
+        if session is None:
+            raise NotFound(f"session {session_id}")
+
+        intake_record: IntakeRecord | None = None
+        completeness_complete = False
+        if session.kind is SessionKind.INTAKE:
+            turn_input = await self._build_intake_turn_input(session_id)
+            plan = await self._intake.prepare_turn(turn_input)
+            intake_record = plan.merged_record
+            completeness_complete = plan.completeness_complete
+            chunk_source = self._intake.stream_response(plan)
+        elif session.kind is SessionKind.THERAPY:
+            turn_input = await self._build_therapy_turn_input(session_id)
+            chunk_source = self._therapy.stream_response(turn_input)
+        else:
+            raise InvariantViolation(f"unsupported session kind: {session.kind}")
+
+        buffer: list[str] = []
+        async for chunk in chunk_source:
+            if not chunk:
+                continue
+            buffer.append(chunk)
+            yield ChatToken(
+                text=chunk,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+            )
+
+        response_text = "".join(buffer)
+        if not _response_has_content(response_text):
+            raise InvalidLLMOutput(
+                "assistant response must contain non-whitespace text"
+            )
+
+        if completeness_complete:
+            assert intake_record is not None
+            completed = await self._terminalize_final_intake_drained(
+                user_message=user_message,
+                content=response_text,
+                intake_record=intake_record,
+                request_id=request_id,
+            )
+        else:
+            completed = await self._terminalize_ordinary_drained(
+                user_message=user_message,
+                content=response_text,
+                intake_record=intake_record,
+                request_id=request_id,
+            )
+        yield completed
+
+    async def _terminalize_ordinary_drained(
+        self,
+        *,
+        user_message: Message,
+        content: str,
+        intake_record: IntakeRecord | None,
+        request_id: UUID | None,
+    ) -> ChatCompleted:
+        async def _terminalize() -> ChatCompleted:
+            assistant_message_id = self._new_id()
+            intake_payload = (
+                intake_record.model_dump(mode="json")
+                if intake_record is not None
+                else None
+            )
+            async with self._mutation_lock:
+                assistant = await self._run_store(
+                    self._store.complete_chat_response,
+                    session_id=user_message.session_id,
+                    client_message_id=user_message.client_message_id,
+                    assistant_message_id=assistant_message_id,
+                    content=content,
+                    intake_record=intake_payload,
+                    now=self._now(),
+                )
+            with diagnostic_context(
+                session_id=str(user_message.session_id),
+                client_message_id=str(user_message.client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record("chat.turn.completed", {})
+            return ChatCompleted(
+                session_id=user_message.session_id,
+                client_message_id=user_message.client_message_id,
+                request_id=request_id,
+                user_message=user_message,
+                assistant_message=assistant,
+            )
+
+        return await self._await_owned_terminalization(_terminalize())
+
+    async def _terminalize_final_intake_drained(
+        self,
+        *,
+        user_message: Message,
+        content: str,
+        intake_record: IntakeRecord,
+        request_id: UUID | None,
+    ) -> ChatCompleted:
+        async def _terminalize() -> ChatCompleted:
+            assistant_message_id = self._new_id()
+            operation_id = self._new_id()
+            from_stage: Stage | None = None
+            async with self._mutation_lock:
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                from_stage = facts.stage
+                assistant, operation, _state = await self._run_store(
+                    self._store.complete_final_intake_response,
+                    session_id=user_message.session_id,
+                    client_message_id=user_message.client_message_id,
+                    assistant_message_id=assistant_message_id,
+                    content=content,
+                    intake_record=intake_record.model_dump(mode="json"),
+                    operation_id=operation_id,
+                    now=self._now(),
+                )
+            with diagnostic_context(
+                session_id=str(user_message.session_id),
+                client_message_id=str(user_message.client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            ):
+                self._record("chat.turn.completed", {})
+            assert from_stage is not None
+            self._record_transition_if_changed(
+                from_stage=from_stage,
+                to_stage=Stage.ASSESSMENT,
+                trigger="final_intake",
+            )
+            with diagnostic_context(
+                operation_id=str(operation.id),
+                session_id=str(operation.source_session_id),
+            ):
+                self._record(
+                    "operation.created",
+                    {
+                        "kind": operation.kind.value,
+                        "attempt": operation.attempt,
+                    },
+                )
+            # Assistant commit is irreversible; scheduling failure cannot ChatFailed.
+            self._schedule_operation(operation)
+            return ChatCompleted(
+                session_id=user_message.session_id,
+                client_message_id=user_message.client_message_id,
+                request_id=request_id,
+                user_message=user_message,
+                assistant_message=assistant,
+            )
+
+        return await self._await_owned_terminalization(_terminalize())
+
+    async def _await_owned_terminalization(
+        self, terminalize_coro: Any
+    ) -> ChatCompleted:
+        task = asyncio.create_task(terminalize_coro)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            failure = await drain_cancelled_task(task)
+            if failure is None:
+                raise _TerminalDuringCancel(task.result(), cancellation) from None
+            if isinstance(failure, asyncio.CancelledError):
+                raise cancellation
+            raise failure from None
 
     async def _assemble_snapshot_locked(self) -> AppSnapshot:
-        return await self._run_store(self._build_snapshot)
+        snapshot = await self._run_store(self._build_snapshot)
+        if self._generation_lock.locked():
+            snapshot = snapshot.model_copy(update={"available_commands": frozenset()})
+        return snapshot
 
     def _build_snapshot(self) -> AppSnapshot:
         state = self._store.get_app_state()
@@ -871,14 +1072,12 @@ class TherapyApplication:
         plan = self._store.get_current_plan()
         active_session = self._store.get_active_session()
         current_operation = self._store.get_current_operation()
-        active_chat_turn = self._store.get_active_chat_turn()
         snapshot = AppSnapshot(
             stage=state.stage,
             profile_complete=facts.profile_complete,
             selected_style=plan.selected_style if plan is not None else None,
             active_session=active_session,
             current_operation=current_operation,
-            active_chat_turn=active_chat_turn,
             available_commands=workflow.available_commands(facts),
         )
         _validate_snapshot_invariants(snapshot, plan, self._styles)
@@ -893,163 +1092,9 @@ class TherapyApplication:
             raise Busy("another chat generation is active")
         await self._generation_lock.acquire()
 
-    async def _chat_retry_structurally_eligible(self, turn: ChatTurn) -> bool:
-        session = await self._run_store(self._store.get_session, turn.session_id)
-        if session is None or session.ended_at is not None:
-            return False
-        active = await self._run_store(self._store.get_active_session)
-        if active is None or active.id != turn.session_id:
-            return False
-        state = await self._run_store(self._store.get_app_state)
-        if state.stage is Stage.INTAKE and session.kind is SessionKind.INTAKE:
-            pass
-        elif state.stage is Stage.THERAPY and session.kind is SessionKind.THERAPY:
-            pass
-        else:
-            return False
-        messages = await self._run_store(self._store.list_messages, turn.session_id)
-        if not messages or messages[-1].id != turn.user_message_id:
-            return False
-        return True
-
     def _release_generation_lock(self) -> None:
         if self._generation_lock.locked():
             self._generation_lock.release()
-
-    def _try_start_chat_worker(
-        self,
-        turn: ChatTurn,
-        *,
-        request_id: UUID | None,
-    ) -> ChatScheduleOutcome:
-        name = f"chat:{turn.id}"
-        try:
-            started = self._supervisor.start(
-                name=name,
-                run=lambda: self._run_chat_worker(
-                    turn.id,
-                    turn.session_id,
-                    turn.client_message_id,
-                    request_id,
-                ),
-            )
-        except SupervisorClosed:
-            return ChatScheduleOutcome(ChatScheduleOutcomeKind.SUPERVISOR_CLOSED)
-        except Exception as exc:
-            return ChatScheduleOutcome(ChatScheduleOutcomeKind.UNEXPECTED, exc)
-        if started:
-            return ChatScheduleOutcome(ChatScheduleOutcomeKind.STARTED)
-        return ChatScheduleOutcome(ChatScheduleOutcomeKind.DUPLICATE_ACTIVE)
-
-    async def _resolve_chat_schedule_outcome(
-        self,
-        turn: ChatTurn,
-        outcome: ChatScheduleOutcome,
-    ) -> ChatTurn:
-        if outcome.kind is ChatScheduleOutcomeKind.STARTED:
-            return turn
-        if outcome.kind is ChatScheduleOutcomeKind.SUPERVISOR_CLOSED:
-            self._release_generation_lock()
-            return turn
-        if outcome.kind is ChatScheduleOutcomeKind.UNEXPECTED:
-            logger.error(
-                "failed to schedule chat turn_id=%s",
-                turn.id,
-                exc_info=outcome.error,
-            )
-            if outcome.error is not None:
-                self._record_runtime_error(
-                    phase="chat_schedule",
-                    exc=outcome.error,
-                    turn_id=str(turn.id),
-                )
-        self._release_generation_lock()
-        return await self._persist_chat_schedule_failure(turn)
-
-    async def _persist_chat_schedule_failure(self, turn: ChatTurn) -> ChatTurn:
-        async with self._mutation_lock:
-            failed = await self._run_store(
-                self._store.fail_chat_turn,
-                turn.id,
-                error_code="internal_error",
-                error_message="Failed to schedule chat generation",
-                retryable=True,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        with diagnostic_context(
-            session_id=str(turn.session_id),
-            turn_id=str(turn.id),
-            client_message_id=str(turn.client_message_id),
-        ):
-            self._record(
-                "chat.turn.failed",
-                {
-                    "error_code": failed.error_code or "internal_error",
-                    "retryable": failed.retryable,
-                    "source": "schedule_failure",
-                },
-            )
-        try:
-            await self._events.publish(
-                ChatTurnFailed(
-                    session_id=turn.session_id,
-                    turn_id=turn.id,
-                    turn=failed,
-                )
-            )
-            await self._events.publish(SnapshotChanged(snapshot))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "failed to publish chat schedule failure turn_id=%s",
-                turn.id,
-            )
-            self._record_runtime_error(
-                phase="event_publish",
-                exc=exc,
-                event_type="ChatTurnFailed",
-                turn_id=str(turn.id),
-            )
-        return failed
-
-    async def _publish_non_authoritative(self, event: Any) -> None:
-        try:
-            await self._events.publish(event)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "failed to publish non-authoritative event event_type=%s",
-                type(event).__name__,
-            )
-            self._record_runtime_error(
-                phase="event_publish",
-                exc=exc,
-                event_type=type(event).__name__,
-            )
-
-    async def _publish_pending_operation_changed(
-        self,
-        operation: Operation,
-        snapshot: AppSnapshot,
-    ) -> None:
-        try:
-            await self._events.publish(OperationChanged(operation, snapshot))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "failed to publish pending operation event operation_id=%s",
-                operation.id,
-            )
-            self._record_runtime_error(
-                phase="event_publish",
-                exc=exc,
-                event_type="OperationChanged",
-                operation_id=str(operation.id),
-            )
 
     def _operation_task_name(self, operation: Operation) -> str:
         return f"operation:{operation.id}:attempt:{operation.attempt + 1}"
@@ -1080,269 +1125,6 @@ class TherapyApplication:
                 operation_id=str(operation.id),
             )
 
-    async def _run_chat_worker(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        client_message_id: UUID,
-        request_id: UUID | None,
-    ) -> None:
-        with diagnostic_context(
-            turn_id=str(turn_id),
-            session_id=str(session_id),
-            client_message_id=str(client_message_id),
-            request_id=str(request_id) if request_id is not None else None,
-        ):
-            self._record("chat.turn.started", {})
-            try:
-                session = await self._run_store(self._store.get_session, session_id)
-                if session is None:
-                    raise NotFound(f"session {session_id}")
-                if session.kind is SessionKind.INTAKE:
-                    await self._generate_intake_response(
-                        turn_id,
-                        session_id,
-                        request_id,
-                    )
-                elif session.kind is SessionKind.THERAPY:
-                    await self._generate_therapy_response(
-                        turn_id, session_id, request_id
-                    )
-                else:
-                    raise InvariantViolation(
-                        f"unsupported session kind: {session.kind}"
-                    )
-            except asyncio.CancelledError:
-                self._record(
-                    "chat.turn.cancelled",
-                    {"reason": "task_cancelled"},
-                )
-                raise
-            except Exception as exc:
-                logger.exception(
-                    "chat worker failed turn_id=%s session_id=%s",
-                    turn_id,
-                    session_id,
-                )
-                await self._persist_chat_failure_if_pending(turn_id, session_id, exc)
-            finally:
-                self._release_generation_lock()
-
-    async def _generate_intake_response(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        request_id: UUID | None,
-    ) -> None:
-        turn_input = await self._build_intake_turn_input(session_id)
-        plan = await self._intake.prepare_turn(turn_input)
-        response_text = await self._stream_chat_tokens(
-            self._intake.stream_response(plan),
-            session_id=session_id,
-            turn_id=turn_id,
-            request_id=request_id,
-        )
-        if not _response_has_content(response_text):
-            raise InvalidLLMOutput(
-                "assistant response must contain non-whitespace text"
-            )
-        if plan.completeness_complete:
-            await self._complete_final_intake(
-                turn_id,
-                session_id,
-                response_text,
-                plan.merged_record,
-            )
-        else:
-            await self._complete_ordinary_chat(
-                turn_id,
-                session_id,
-                response_text,
-                intake_record=plan.merged_record,
-            )
-
-    async def _generate_therapy_response(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        request_id: UUID | None,
-    ) -> None:
-        turn_input = await self._build_therapy_turn_input(session_id)
-        response_text = await self._stream_chat_tokens(
-            self._therapy.stream_response(turn_input),
-            session_id=session_id,
-            turn_id=turn_id,
-            request_id=request_id,
-        )
-        if not _response_has_content(response_text):
-            raise InvalidLLMOutput(
-                "assistant response must contain non-whitespace text"
-            )
-        await self._complete_ordinary_chat(turn_id, session_id, response_text)
-
-    async def _stream_chat_tokens(
-        self,
-        chunks: Any,
-        *,
-        session_id: UUID,
-        turn_id: UUID,
-        request_id: UUID | None,
-    ) -> str:
-        buffer: list[str] = []
-        sequence = 0
-        async for chunk in chunks:
-            if not chunk:
-                continue
-            buffer.append(chunk)
-            sequence += 1
-            await self._events.publish(
-                ChatTokenGenerated(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    request_id=request_id,
-                    sequence=sequence,
-                    text=chunk,
-                )
-            )
-        return "".join(buffer)
-
-    async def _complete_ordinary_chat(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        content: str,
-        *,
-        intake_record: IntakeRecord | None = None,
-    ) -> None:
-        assistant_message_id = self._new_id()
-        intake_payload = (
-            intake_record.model_dump(mode="json") if intake_record is not None else None
-        )
-        async with self._mutation_lock:
-            turn = await self._run_store(
-                self._store.complete_chat_turn,
-                turn_id,
-                assistant_message_id=assistant_message_id,
-                content=content,
-                intake_record=intake_payload,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        assistant_message = await self._load_message(session_id, assistant_message_id)
-        self._record("chat.turn.completed", {})
-        await self._events.publish(
-            ChatTurnCompleted(
-                session_id=session_id,
-                turn_id=turn_id,
-                turn=turn,
-                assistant_message=assistant_message,
-            )
-        )
-        await self._events.publish(SnapshotChanged(snapshot))
-
-    async def _complete_final_intake(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        content: str,
-        intake_record: IntakeRecord,
-    ) -> None:
-        assistant_message_id = self._new_id()
-        operation_id = self._new_id()
-        operation: Operation | None = None
-        from_stage: Stage | None = None
-        try:
-            async with self._mutation_lock:
-                facts = await self._run_store(self._store.load_snapshot_facts)
-                from_stage = facts.stage
-                turn, operation, _state = await self._run_store(
-                    self._store.complete_final_intake_turn,
-                    turn_id,
-                    assistant_message_id=assistant_message_id,
-                    content=content,
-                    intake_record=intake_record.model_dump(mode="json"),
-                    operation_id=operation_id,
-                    now=self._now(),
-                )
-                snapshot = await self._assemble_snapshot_locked()
-            assistant_message = await self._load_message(
-                session_id, assistant_message_id
-            )
-            self._record("chat.turn.completed", {})
-            with diagnostic_context(
-                operation_id=str(operation.id),
-                session_id=str(operation.source_session_id),
-            ):
-                self._record(
-                    "operation.created",
-                    {
-                        "kind": operation.kind.value,
-                        "attempt": operation.attempt,
-                    },
-                )
-            if from_stage is not None:
-                self._record_transition_if_changed(
-                    from_stage=from_stage,
-                    to_stage=snapshot.stage,
-                    trigger="intake_completed",
-                )
-            await self._publish_non_authoritative(
-                ChatTurnCompleted(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    turn=turn,
-                    assistant_message=assistant_message,
-                )
-            )
-            await self._publish_non_authoritative(OperationChanged(operation, snapshot))
-            await self._publish_non_authoritative(SnapshotChanged(snapshot))
-        finally:
-            if operation is not None:
-                self._schedule_operation(operation)
-
-    async def _persist_chat_failure_if_pending(
-        self,
-        turn_id: UUID,
-        session_id: UUID,
-        exc: Exception,
-    ) -> None:
-        code, message, retryable = _classify_worker_error(exc)
-        async with self._mutation_lock:
-            current = await self._run_store(self._store.get_chat_turn, turn_id)
-            if current is None or current.status is not ChatTurnStatus.PENDING:
-                logger.exception(
-                    "chat worker failed after turn left pending turn_id=%s",
-                    turn_id,
-                    exc_info=exc,
-                )
-                self._record_runtime_error(
-                    phase="chat_worker_late_failure",
-                    exc=exc,
-                    turn_id=str(turn_id),
-                )
-                return
-            turn = await self._run_store(
-                self._store.fail_chat_turn,
-                turn_id,
-                error_code=code,
-                error_message=message,
-                retryable=retryable,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        self._record(
-            "chat.turn.failed",
-            {
-                "error_code": turn.error_code or code,
-                "retryable": turn.retryable,
-                "source": "generation",
-            },
-        )
-        await self._events.publish(
-            ChatTurnFailed(session_id=session_id, turn_id=turn_id, turn=turn)
-        )
-        await self._events.publish(SnapshotChanged(snapshot))
-
     async def _run_operation_worker(self, operation_id: UUID) -> None:
         with diagnostic_context(operation_id=str(operation_id)):
             await self._run_operation_worker_body(operation_id)
@@ -1363,7 +1145,6 @@ class TherapyApplication:
                     now=self._now(),
                 )
                 running_owned = True
-                snapshot = await self._assemble_snapshot_locked()
             with diagnostic_context(
                 operation_id=str(operation_id),
                 session_id=str(operation.source_session_id),
@@ -1375,19 +1156,6 @@ class TherapyApplication:
                         "attempt": operation.attempt,
                     },
                 )
-                try:
-                    await self._events.publish(OperationChanged(operation, snapshot))
-                except Exception as exc:
-                    logger.exception(
-                        "failed to publish operation running event operation_id=%s",
-                        operation_id,
-                    )
-                    self._record_runtime_error(
-                        phase="event_publish",
-                        exc=exc,
-                        event_type="OperationChanged",
-                        operation_id=str(operation_id),
-                    )
 
                 if operation.kind is OperationKind.ASSESSMENT:
                     assessment_input = await self._build_assessment_input(operation)
@@ -1418,7 +1186,6 @@ class TherapyApplication:
                         to_stage=snapshot.stage,
                         trigger="assessment_completed",
                     )
-                    await self._events.publish(OperationChanged(completed, snapshot))
                 elif operation.kind is OperationKind.POST_SESSION:
                     post_input = await self._build_post_session_input(operation)
                     result = await self._post_session.process(post_input)
@@ -1476,7 +1243,6 @@ class TherapyApplication:
                         to_stage=snapshot.stage,
                         trigger="post_session_completed",
                     )
-                    await self._events.publish(OperationChanged(completed, snapshot))
                 else:
                     raise InvariantViolation(
                         f"unknown operation kind: {operation.kind}"
@@ -1525,7 +1291,6 @@ class TherapyApplication:
                 retryable=retryable,
                 now=self._now(),
             )
-            snapshot = await self._assemble_snapshot_locked()
         with diagnostic_context(
             operation_id=str(operation.id),
             session_id=str(operation.source_session_id),
@@ -1538,19 +1303,6 @@ class TherapyApplication:
                     "error_code": operation.error_code or code,
                     "retryable": operation.retryable,
                 },
-            )
-        try:
-            await self._events.publish(OperationChanged(operation, snapshot))
-        except Exception as publish_exc:
-            logger.exception(
-                "failed to publish operation failure event operation_id=%s",
-                operation_id,
-            )
-            self._record_runtime_error(
-                phase="event_publish",
-                exc=publish_exc,
-                event_type="OperationChanged",
-                operation_id=str(operation_id),
             )
 
     async def _build_intake_turn_input(self, session_id: UUID) -> IntakeTurnInput:
@@ -1778,13 +1530,6 @@ def _validate_snapshot_invariants(
             or snapshot.current_operation.kind is not OperationKind.POST_SESSION
         ):
             raise InvariantViolation("POST_SESSION requires a post-session operation")
-    if snapshot.active_chat_turn is not None and stage not in {
-        Stage.INTAKE,
-        Stage.THERAPY,
-    }:
-        raise InvariantViolation(
-            "pending chat turn is only allowed in INTAKE or THERAPY"
-        )
     if plan is not None and plan.selected_style not in styles:
         raise InvariantViolation(f"unknown style: {plan.selected_style}")
 

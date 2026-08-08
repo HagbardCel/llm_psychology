@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 import pytest
@@ -15,11 +14,10 @@ from jung.domain.commands import (
 )
 from jung.domain.errors import InvalidCommand, NotFound
 from jung.domain.models import (
-    ChatTurnStatus,
     Profile,
     Stage,
 )
-from jung.events import SnapshotChanged
+from jung.domain.results import ChatCompleted
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
@@ -29,9 +27,9 @@ from jung.phases.intake.models import IntakeRecordPatch
 from .application_fixtures import (
     assessment_result,
     build_test_application,
+    collect_stream,
     completing_intake_patch,
     post_session_expectations,
-    wait_for_chat_turn,
     wait_for_stage,
 )
 from .scenarios import advance_to_ready
@@ -39,27 +37,19 @@ from .scenarios import advance_to_ready
 pytestmark = pytest.mark.asyncio
 
 
-async def test_start_session_publishes_resulting_snapshot(store: SQLiteStore) -> None:
+async def test_start_session_returns_active_session_snapshot(
+    store: SQLiteStore,
+) -> None:
     advance_to_ready(store)
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
-        published: list[object] = []
-        async with runtime.events.subscribe() as events:
+        started = await runtime.application.start_session()
+        snapshot = await runtime.application.get_snapshot()
 
-            async def _collect() -> None:
-                event = await events.__anext__()
-                published.append(event)
-
-            collector = asyncio.create_task(_collect())
-            started = await runtime.application.start_session()
-            await asyncio.wait_for(collector, timeout=1.0)
-
-    assert len(published) == 1
-    event = published[0]
-    assert isinstance(event, SnapshotChanged)
-    assert event.snapshot == started.snapshot
-    assert event.snapshot.active_session is not None
-    assert event.snapshot.active_session.id == started.session.id
+    assert started.snapshot == snapshot
+    assert started.snapshot.active_session is not None
+    assert started.snapshot.active_session.id == started.session.id
+    assert started.snapshot.stage is Stage.THERAPY
 
 
 async def test_start_session_when_not_ready_raises_invalid_command(
@@ -158,21 +148,18 @@ async def test_full_intake_lifecycle_through_application(store: SQLiteStore) -> 
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
-        session_id = (await runtime.application.get_snapshot()).active_session
-        assert session_id is not None
+        session = (await runtime.application.get_snapshot()).active_session
+        assert session is not None
         for content in turn_messages:
-            turn = await runtime.application.submit_message(
+            items = await collect_stream(
+                runtime.application,
                 SendMessage(
-                    session_id=session_id.id,
+                    session_id=session.id,
                     client_message_id=uuid4(),
                     content=content,
-                )
+                ),
             )
-            await wait_for_chat_turn(
-                runtime.application,
-                turn.id,
-                ChatTurnStatus.COMPLETE,
-            )
+            assert isinstance(items[-1], ChatCompleted)
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
         snapshot = await runtime.application.select_style(SelectStyle(style_id="cbt"))
     assert snapshot.stage is Stage.READY
@@ -193,18 +180,15 @@ async def test_therapy_to_post_session_application_journey(store: SQLiteStore) -
     async with build_test_application(store, fake) as runtime:
         started = await runtime.application.start_session()
         session = started.session
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=session.id,
                 client_message_id=uuid4(),
                 content="I slept badly again.",
-            )
+            ),
         )
-        await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.COMPLETE,
-        )
+        assert isinstance(items[-1], ChatCompleted)
         snapshot = await runtime.application.end_session(
             EndSession(
                 session_id=session.id,

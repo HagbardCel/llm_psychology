@@ -162,7 +162,7 @@ def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     assert lines[-1]["kind"] == "diagnostics.end"
     assert lines[-1]["data"]["status"] == "success"
     event = lines[1]
-    assert event["schema_version"] == 3
+    assert event["schema_version"] == 4
     assert event["sequence"] == 2
     assert "timestamp" in event
     assert "elapsed_ms" in event

@@ -20,8 +20,8 @@ tests/
 │   ├── application/         # Application invariants and worker-error classification
 │   ├── phases/              # intake / assessment / therapy / post_session logic
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
-│   ├── client/              # Console rendering, reconciliation, correlation
-│   ├── api/                 # Contracts, error mapping, event mapping, WS adapter
+│   ├── client/              # Console rendering, one-shot chat stream, correlation
+│   ├── api/                 # Contracts, error mapping, one-shot WS adapter
 │   ├── tooling/             # Repo tooling (docs metadata validation)
 │   └── smoke/               # Unit tests for the smoke helpers themselves
 ├── integration/             # Real SQLite, real ASGI app, real client transport
@@ -62,7 +62,7 @@ boundary itself is the problem.
 
 | Invariant | Exhaustive owner | Higher layers |
 | --- | --- | --- |
-| Chat idempotency | `integration/store/test_store_chat.py` — duplicate keys, retries, ordering, recovery | one use-case case in `integration/application/test_application_chat.py`; one round-trip in `integration/api/test_websocket_chat.py` and `integration/client/`; one journey step in `e2e/` |
+| Chat message idempotency / unanswered retry | `integration/store/test_store_chat.py` — `(session_id, client_message_id, role)` uniqueness, unanswered-user guards, assistant attach | `stream_message` cases in `integration/application/test_application_chat.py`; one-shot WS round-trip in `integration/api/test_websocket_chat.py` and `JungChatConnection.stream` in `integration/client/`; one journey step in `e2e/` |
 | Error sanitization | `unit/application/test_invariants.py` (`_classify_worker_error`) and `unit/api/test_error_mapping.py` | `integration/api/test_http_errors.py` asserts the wire response carries the public code and no internals |
 | Generated HTTP schema and route surface | `integration/api/test_openapi.py` — operation inventory, common headers/error responses, snapshot response types, docs exposure | none; the generated schema is itself the boundary |
 | Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts a grounded result is persisted and read back intact |

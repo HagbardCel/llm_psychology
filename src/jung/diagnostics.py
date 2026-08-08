@@ -27,7 +27,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 _TOKEN_METRIC_KEYS: Final = frozenset(
     {
         "prompt_tokens",
@@ -62,7 +62,6 @@ _SENSITIVE_COLLAPSED_EXACT_KEYS: Final = frozenset(
 class DiagnosticContext:
     request_id: str | None = None
     session_id: str | None = None
-    turn_id: str | None = None
     client_message_id: str | None = None
     operation_id: str | None = None
     task: str | None = None
@@ -74,7 +73,6 @@ class DiagnosticContext:
             for key, value in (
                 ("request_id", self.request_id),
                 ("session_id", self.session_id),
-                ("turn_id", self.turn_id),
                 ("client_message_id", self.client_message_id),
                 ("operation_id", self.operation_id),
                 ("task", self.task),

@@ -34,7 +34,7 @@ Policy decisions:
 - `PlanDetailResponse.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text;
 - `PlanDetailResponse.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below;
 - `SessionDetailResponse.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetailResponse.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`;
-- `client_message_id` on `MessageResponse` is a derived read-model field joined from the owning chat turn on user and assistant messages (not stored on `messages`); it is `null` for system messages;
+- `client_message_id` on `MessageResponse` is stored on the message row (required for `user` and `assistant`); durable uniqueness is `(session_id, client_message_id, role)`;
 - Observable `intervention_evidence` item fields (when present inside a briefing document):
   - `intervention_description` (string): model-generated interpretive label
   - `therapist_sequence` (int): transcript sequence of the cited therapist turn
@@ -51,7 +51,7 @@ Policy decisions:
 - `GET /api/v1/health` reports **process readiness only** (`HealthResponse` with `status="healthy"`). Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
 - For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied;
 - During `INTAKE`, `PUT /profile` may edit profile fields but the profile must remain complete; an incomplete body returns `409 invalid_command`;
-- Embedded snapshots in live WebSocket notifications describe the state associated with that notification; they are not freshness tokens. When a client requires authoritative current state, it uses `GET /api/v1/state`.
+- `AppSnapshotResponse` carries stage, completeness, active session, current operation, and available commands. It does not include an active chat turn or revision field. While generation is active, `available_commands` may be empty even though stage policy would otherwise allow commands.
 
 ## 2. Endpoint matrix
 
@@ -68,18 +68,26 @@ Policy decisions:
 | `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | — (bodyless) | `202 AppSnapshotResponse` | `404 not_found`, `409 invalid_command`, `409 busy` | end session + post-session operation |
 | `POST /api/v1/operations/current/retry` | failed operation visible | — (bodyless) | `202 AppSnapshotResponse` | `409 invalid_command`, `409 busy` | requeue same operation |
 | `GET /api/v1/health` | all | — | `200 HealthResponse` (`status="healthy"`) | `503` when process not ready | read only |
-| `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | acceptance and completion persist durable chat state |
+| `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | one-shot event stream | `error` / `message_failed` | user/assistant messages persist on accept/complete |
 
-`AppSnapshotResponse` carries stage, completeness, active session/operation/chat turn, and available commands. It does not include a revision field. State-changing commands are serialized server-side and validated against authoritative state at execution time; clients do not send concurrency tokens. A retry after an uncertain response fetches the authoritative snapshot via `GET /api/v1/state`. Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
+State-changing commands are serialized server-side and validated against
+authoritative state at execution time; clients do not send concurrency tokens.
+A retry after an uncertain response fetches the authoritative snapshot via
+`GET /api/v1/state` and session history when needed. Assessment and post-session
+work are idempotent through their operation keys. Chat uses the durable
+`(session_id, client_message_id, role)` message key. V1 does not implement a
+generic HTTP idempotency-receipt subsystem.
 
 `PUT /profile` transitions `SETUP` → `INTAKE` when the stored profile becomes complete. Once `INTAKE` has begun, subsequent profile updates must keep the profile complete or the command returns `409 invalid_command`. Intake completion is processor-driven and creates/reuses the assessment operation. The assessment operation persists formulation, style recommendations, and style-neutral initial plan material. `select_style` requires a completed assessment containing initial plan material; it performs no new LLM call and atomically stores the selected style and materializes the first immutable plan.
 
 ## 3. WebSocket messages
 
-Application-owned generation publishes through the in-process event stream
-described in [Architecture](architecture.md#application-event-distribution);
-API adapters translate to the wire union below. Disconnect unsubscribes one
-client only; accepted generation continues.
+`WS /api/v1/chat` is a **one-shot** connection: accept handshake → receive exactly
+one `send_message` frame → stream zero or more `token` events → emit one
+terminal event (`message_completed`, `message_failed`, or `error`) → close.
+The connection owns generation through `TherapyApplication.stream_message`.
+Disconnect cancels that attempt. There is no multi-subscriber fan-out, no
+`snapshot_changed` / `operation_changed` stream, and no event replay.
 
 Browser WebSocket handshakes containing an `Origin` header are accepted only when
 that exact HTTP(S) Origin is present in `JUNG_API_ALLOWED_ORIGINS`. Native clients
@@ -88,8 +96,7 @@ always rejected. This is browser cross-origin protection, not authentication. Us
 complete HTTP(S) origins including the port where applicable; paths, WebSocket
 URLs, and the string `null` are not valid trusted origins.
 
-Where a WebSocket event embeds a shared DTO such as `ChatTurnSummaryResponse`,
-`MessageResponse`, `AppSnapshotResponse`, `OperationSummaryResponse`, or
+Where a WebSocket event embeds a shared DTO such as `MessageResponse` or
 `ErrorEnvelope`, use the same generated/shared schema (OpenAPI / contract
 types) rather than duplicating nested fields here.
 
@@ -97,51 +104,51 @@ types) rather than duplicating nested fields here.
 
 | Type | Body | Semantics |
 |---|---|---|
-| `send_message` | `SendMessageCommand` | Accept a chat turn for the active intake or therapy session |
+| `send_message` | `SendMessageCommand` | Accept or retry a chat message for the active intake or therapy session |
+
+`SendMessageCommand` fields: `type`, `session_id`, `client_message_id`,
+`request_id`, `content`. The typed client builds these via
+`JungApiClient.new_message_command(session_id, content, ...)`.
 
 ### Server
 
 | Event | Required identifiers | Ordering | Persistence point | Durable effect |
 |---|---|---|---|---|
-| `token` | `session_id`, `turn_id`, `request_id`, `sequence`, `text` | strictly increasing `sequence` per turn | none (ephemeral) | none |
-| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummaryResponse`) | after acceptance | user message + pending turn stored | acceptance persisted |
-| `message_completed` | `session_id`, `turn` (`ChatTurnSummaryResponse`), `message` (`MessageResponse`) | after final token | assistant message + complete turn stored | completion persisted |
-| `snapshot_changed` | `snapshot` (`AppSnapshotResponse`) | after durable mutation | snapshot reread | notification-associated snapshot |
-| `operation_changed` | `operation` (`OperationSummaryResponse`), `snapshot` (`AppSnapshotResponse`) | when operation status changes | operation row updated | notification-associated snapshot |
-| `error` | `error` (`ErrorEnvelope`), optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
+| `token` | `session_id`, `client_message_id`, `request_id`, `text` | after acceptance; ephemeral | none | none |
+| `message_completed` | `session_id`, `client_message_id`, `request_id`, `user_message`, `assistant_message` | terminal | assistant message stored (or both already present) | completion persisted / idempotent reuse |
+| `message_failed` | `session_id`, `client_message_id`, `request_id`, `error` (`ErrorEnvelope`) | terminal after acceptance | user message remains; no assistant | generation failed |
+| `error` | `error` (`ErrorEnvelope`), `request_id`; optional `session_id`, optional `client_message_id` | terminal (typically pre-acceptance or protocol) | none unless noted | command/protocol rejection |
 
 Chat error durable semantics:
 
 | Error point | Durable change |
 |---|---|
-| Before command acceptance | none |
-| After accepted generation fails | `ChatTurn → FAILED` |
-| Ephemeral token delivery failure for one subscriber | none |
+| Before command acceptance (`error`) | none |
+| After accepted generation fails (`message_failed`) | user message remains unanswered; no assistant row |
+| Disconnect / cancel mid-generation | user message may remain unanswered on an open session |
 
-A durable post-acceptance failure emits `snapshot_changed` after the turn is marked `FAILED`. Embedded snapshots in these notifications describe the state associated with that notification; they are not freshness tokens. Authoritative current state is read via `GET /api/v1/state`.
+`error` correlation fields:
 
-`error` correlation requirements:
-
-| Error category | Required correlation fields |
+| Error category | Required / optional identifiers |
 |---|---|
-| Command rejected before acceptance | current `request_id`; `session_id` and `client_message_id` when the command parsed successfully |
-| Durable chat failure after acceptance | `session_id`, `turn_id`, `client_message_id`, and a transport `request_id` |
-| Unrelated protocol or connection error | `request_id`; chat identifiers only when known |
+| Command rejected before acceptance | `request_id`; `session_id` and `client_message_id` when the command parsed successfully |
+| Protocol / validation failure | `request_id`; chat identifiers only when known |
+| Unrelated connection error | `request_id`; chat identifiers only when known |
 
-Duplicate `(session_id, client_message_id)` retransmission of an existing `PENDING` or `COMPLETE` turn may produce **no new application event**. Clients must not rely on event replay for duplicate-success acknowledgement. When the same ID is retransmitted with different content, the original persisted user message remains authoritative.
+Duplicate `(session_id, client_message_id)` resolution (message-native):
 
-Absence from `active_chat_turn` is not evidence that the durable turn row is absent. Completed and failed turns disappear from the snapshot; reconcile through session history and duplicate submission semantics.
+1. matching user **and** assistant with the same content → `message_completed` with durable pair;
+2. same ID, different content → `invalid_command` via `error`;
+3. unanswered user only, structurally eligible → regenerate (retry);
+4. unanswered user only, not eligible (closed session, wrong stage, not latest) → `invalid_command` via `error`;
+5. open session already ends with a different unanswered user → `invalid_command` (must retry that ID first);
+6. conflicting active generation → `busy` via `error`.
 
-Duplicate `(session_id, client_message_id)` resolution precedence:
-
-1. resolve duplicate durable state by `(session_id, client_message_id)`;
-2. `PENDING` and `COMPLETE`: return durable state;
-3. permanent `FAILED`: return stored non-retryable error;
-4. retryable `FAILED`: reject conflicting active generation as `busy` before structural checks;
-5. retryable `FAILED` that is structurally obsolete (session closed, wrong stage, or a later durable message exists): return non-retryable stored-work error carrying the original failure code/message;
-6. retryable `FAILED` that remains the latest conversational turn: reset the same row to `PENDING` and schedule generation.
-
-`busy` rejects a second distinct active generation.
+There is **no** client reconciliation protocol, acknowledgement timeout, or
+event-wait loop in the supported client. After uncertain delivery, refresh
+authoritative HTTP state (`GET /state`, `GET /sessions/{session_id}` as needed)
+and decide whether to open a new one-shot WebSocket with the same
+`client_message_id` (retry) or a new ID.
 
 ## 4. Errors and reconnect rules
 
@@ -149,53 +156,58 @@ Duplicate `(session_id, client_message_id)` resolution precedence:
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `invalid_command` | 409 | Command not permitted in current stage or violates stage invariants (including incomplete profile during `INTAKE`) |
+| `invalid_command` | 409 | Command not permitted in current stage or violates stage invariants (including incomplete profile during `INTAKE`, unanswered-message retry rules) |
 | `busy` | 409 | Conflicting session, mutation, operation, or generation |
 | `not_found` | 404 | Unknown session or resource |
 | `validation_error` | 422 | Request body failed validation |
-| `llm_unavailable` | n/a — durable/WS | Provider was unavailable |
-| `llm_timeout` | n/a — durable/WS | Provider request timed out |
-| `invalid_llm_output` | n/a — durable/WS | Provider output failed validation |
-| `operation_failed` | 409 | Durable operation already failed or cannot be accepted in current state |
+| `llm_unavailable` | n/a — WS / nested envelopes | Provider was unavailable |
+| `llm_timeout` | n/a — WS / nested envelopes | Provider request timed out |
+| `invalid_llm_output` | n/a — WS / nested envelopes | Provider output failed validation |
+| `operation_failed` | n/a — WS / nested envelopes | Durable operation failure surfaced outside the HTTP command status map |
 | `internal_error` | 500 | Unexpected server failure |
 | `not_ready` | 503 | API process not initialized or shutting down |
 
-These codes primarily describe durable operation/chat failures and WebSocket error envelopes. V1 exposes no ordinary synchronous HTTP provider invocation. When an existing durable failure is surfaced as `StoredWorkFailure` through an HTTP command boundary, the response status is `409`; the stored public code, sanitized message, and retryability are preserved.
+`ErrorCode` still includes `llm_*` and `operation_failed` for WebSocket
+`message_failed` / nested envelopes. The HTTP status map for command exceptions
+is the command subset only (`invalid_command`, `busy`, `not_found`,
+`validation_error`, `internal_error`, `not_ready`). V1 exposes no ordinary
+synchronous HTTP provider invocation.
 
-Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider details are not exposed through API responses or public durable error fields. Server-side ordinary logs contain bounded/sanitized operational diagnostics; opt-in `JUNG_DEBUG_RUN_DIR` traces may contain sensitive provider traffic, including exact prompts or responses. See [Safety and Data Handling](safety-and-data.md).
+Public error messages are server-controlled and sanitized. Provider details are
+not exposed through API responses or public durable operation error fields.
+Server-side ordinary logs contain bounded/sanitized operational diagnostics;
+opt-in `JUNG_DEBUG_RUN_DIR` traces may contain sensitive provider traffic,
+including exact prompts or responses. See
+[Safety and Data Handling](safety-and-data.md).
 
-Durable internal failure codes that are not part of the public API vocabulary are exposed as `operation_failed`. Their sanitized message and retryability are preserved.
+Durable internal failure codes that are not part of the public API vocabulary
+are exposed as `operation_failed` (or classified LLM codes where applicable).
+Their sanitized message and retryability are preserved on operation rows.
 
-Malformed `X-Request-ID` request header values produce `422 validation_error` with a newly generated correlation ID in both the response header and error envelope. The malformed header value is never echoed.
+Malformed `X-Request-ID` request header values produce `422 validation_error`
+with a newly generated correlation ID in both the response header and error
+envelope. The malformed header value is never echoed.
 
 LLM failure never advances workflow stage.
 
-### Reconnect and uncertain delivery
+### After disconnect or uncertain delivery
 
-After any disconnect or uncertain delivery, the client preserves the original `session_id`, `client_message_id`, and message content. Each transmission attempt uses a fresh `request_id`. Clients do not carry or refresh a concurrency revision.
+After any disconnect or uncertain delivery, the client preserves the original
+`session_id`, `client_message_id`, and message content when a retry is intended.
+Each new WebSocket attempt uses a fresh connection; `request_id` should be
+fresh per attempt. Clients do not carry or refresh a concurrency revision.
 
-One reconciliation invocation performs at most:
+Canonical recovery steps (manual / console policy — not a built-in client
+reconciler):
 
-1. one initial authoritative HTTP refresh (`GET /state` and `GET /sessions/{session_id}` when needed);
-2. zero or one retransmission of the same logical message;
-3. one bounded wait for a matching `message_in_progress`, `message_completed`, or correlated `error`;
-4. one final authoritative HTTP refresh;
-5. return of a typed outcome to the caller.
+1. `GET /api/v1/state`;
+2. `GET /api/v1/sessions/{session_id}` when history is needed;
+3. decide from durable messages:
+   - matching user and assistant with the same `client_message_id` → complete;
+   - matching unanswered user on an open eligible session → open a new one-shot
+     `WS /api/v1/chat` and retransmit the same ID/content;
+   - no matching user → send a new message (new or retained ID as appropriate);
+4. never reconstruct a completed assistant message from missed `token` events.
 
-A reconciliation call never loops or retransmits indefinitely. The caller decides whether to begin another explicit attempt. No generic retry of state-changing HTTP commands is allowed; chat retransmission is the narrow exception because it reuses the same durable `(session_id, client_message_id)` identity.
-
-Canonical sequence:
-
-1. establish `WS /api/v1/chat` (before authoritative reconciliation, or refresh again after connect);
-2. `GET /api/v1/state`;
-3. `GET /api/v1/sessions/{session_id}` when history is needed (for uncertain delivery, fetch the original command's `session_id`, even if that session is no longer active; a separate active-session read may be used for current UI rendering);
-4. reconcile by `client_message_id`:
-   - matching user and assistant with the same ID → complete;
-   - matching user plus pending turn in snapshot → in progress;
-   - matching user, no assistant, no pending turn → retransmit same ID;
-   - no matching user message → retransmit same ID;
-5. when retransmitting, wait for matching `message_in_progress`, `message_completed`, or an error matching the current `request_id` before acceptance or the retained `client_message_id` after durable acceptance;
-6. if no matching event within the bounded acknowledgement interval, fetch state and history again and treat refreshed durable HTTP state as authoritative;
-7. never reconstruct a completed message from missed `token` events.
-
-On reconnect the client resubscribes for live notifications only; there is no event replay buffer.
+Tokens are best-effort on the single streaming connection; there is no replay
+buffer.

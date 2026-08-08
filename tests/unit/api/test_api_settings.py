@@ -30,7 +30,6 @@ API_ENV_NAMES = (
     "JUNG_WS_SEND_TIMEOUT",
     "JUNG_WS_CLOSE_TIMEOUT",
     "JUNG_SHUTDOWN_TIMEOUT",
-    "JUNG_EVENT_QUEUE_SIZE",
     "JUNG_ENABLE_LLM_TRACING",
     "JUNG_DEBUG_RUN_DIR",
     "JUNG_LLM_EXTRA_BODY_JSON",
@@ -222,10 +221,8 @@ def test_load_api_settings_delegates_composition_settings(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("JUNG_EVENT_QUEUE_SIZE", "96")
     monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
     settings = load_api_settings()
-    assert settings.application.event_queue_size == 96
     assert settings.application.shutdown_timeout_seconds == 42.0
 
 

@@ -15,12 +15,13 @@ from jung.composition import application_context
 from jung.config import ApplicationSettings
 from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import SendMessage, UpdateProfile
-from jung.domain.models import ChatTurnStatus, MessageRole, Profile
+from jung.domain.models import MessageRole, Profile
+from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.gateway import AdapterConfig, LLMSettings
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.phases.intake.models import IntakeRecordPatch
 
-from .application_fixtures import wait_for_chat_turn
+from .application_fixtures import collect_stream
 
 pytestmark = pytest.mark.asyncio
 
@@ -110,6 +111,7 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
         return _completion_response("not-json")
 
     settings = _settings(tmp_path, run_dir=run_dir)
+    client_message_id = uuid4()
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
     ) as runtime:
@@ -120,21 +122,16 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
         )
         session = (await runtime.application.get_snapshot()).active_session
         assert session is not None
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=session.id,
-                client_message_id=uuid4(),
+                client_message_id=client_message_id,
                 content="I feel anxious.",
-            )
+            ),
         )
-        terminal = await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.FAILED,
-        )
-        assert terminal.status is ChatTurnStatus.FAILED
-        assert terminal.error_code == "invalid_llm_output"
-        assert terminal.retryable is False
+        assert isinstance(items[-1], ChatFailed)
+        assert items[-1].code == "invalid_llm_output"
 
     assert len(requests) == 2
     assert all(body.get("stream") is not True for body in requests)
@@ -162,6 +159,8 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
     assert "chat.turn.accepted" in kinds
     assert "chat.turn.started" in kinds
     assert "chat.turn.failed" in kinds
+    assert "task.started" not in kinds
+    assert "task.completed" not in kinds
 
     structured_started = [
         e
@@ -186,18 +185,19 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
     assert "revision" not in state["app_state"]
     assert set(state["app_state"]) >= {"stage", "created_at", "updated_at"}
     assert any(s["id"] == str(session.id) for s in state["sessions"])
-    turn_rows = [t for t in state["chat_turns"] if t["id"] == str(turn.id)]
-    assert len(turn_rows) == 1
-    assert turn_rows[0]["status"] == ChatTurnStatus.FAILED.value
-    assert turn_rows[0]["error_code"] == "invalid_llm_output"
-    assert turn_rows[0]["retryable"] is False
+    assert "chat_turns" not in state
+    session_messages = state["messages_by_session"][str(session.id)]
+    assert session_messages[-1]["role"] == MessageRole.USER.value
+    assert session_messages[-1]["client_message_id"] == str(client_message_id)
 
     transcript = (run_dir / "transcript.md").read_text(encoding="utf-8")
     assert "I feel anxious." in transcript
     assert f"] {MessageRole.ASSISTANT.value}" not in transcript
 
     summary = (run_dir / "failure_summary.md").read_text(encoding="utf-8")
-    assert str(turn.id) in summary
+    assert str(session.id) in summary
+    assert str(client_message_id) in summary
+    assert "unanswered user message on open session" in summary
 
 
 async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
@@ -219,6 +219,7 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
         return _completion_response(valid_patch)
 
     settings = _settings(tmp_path, run_dir=run_dir)
+    client_message_id = uuid4()
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
     ) as runtime:
@@ -229,19 +230,15 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
         )
         session = (await runtime.application.get_snapshot()).active_session
         assert session is not None
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=session.id,
-                client_message_id=uuid4(),
+                client_message_id=client_message_id,
                 content="I feel anxious.",
-            )
+            ),
         )
-        terminal = await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.COMPLETE,
-        )
-        assert terminal.status is ChatTurnStatus.COMPLETE
+        assert isinstance(items[-1], ChatCompleted)
 
     non_stream = [body for body in requests if body.get("stream") is not True]
     stream = [body for body in requests if body.get("stream") is True]
@@ -287,12 +284,18 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
         for e in events
     )
     assert "chat.turn.completed" in kinds
+    assert "task.started" not in kinds
 
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     assert "revision" not in state["app_state"]
-    turn_rows = [t for t in state["chat_turns"] if t["id"] == str(turn.id)]
-    assert len(turn_rows) == 1
-    assert turn_rows[0]["status"] == ChatTurnStatus.COMPLETE.value
+    assert "chat_turns" not in state
+    session_messages = state["messages_by_session"][str(session.id)]
+    assert [m["role"] for m in session_messages[-2:]] == [
+        MessageRole.USER.value,
+        MessageRole.ASSISTANT.value,
+    ]
+    assert session_messages[-2]["client_message_id"] == str(client_message_id)
+    assert session_messages[-1]["client_message_id"] == str(client_message_id)
 
     transcript = (run_dir / "transcript.md").read_text(encoding="utf-8")
     assert "I feel anxious." in transcript

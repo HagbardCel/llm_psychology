@@ -13,7 +13,6 @@ from jung._env import (
     parse_bool,
     parse_optional_json_object,
     parse_positive_finite_float,
-    parse_positive_int,
     require_non_empty_string,
 )
 from jung.llm.gateway import LLMSettings, LLMTask, StructuredOutputMode
@@ -46,7 +45,6 @@ class ApplicationSettings:
     shutdown_timeout_seconds: float = 30.0
     enable_llm_tracing: bool = False
     debug_run_dir: Path | None = None
-    event_queue_size: int = 64
 
     def __post_init__(self) -> None:
         timeout = self.shutdown_timeout_seconds
@@ -62,14 +60,6 @@ class ApplicationSettings:
             finite_timeout = False
         if not finite_timeout:
             raise ValueError("shutdown_timeout_seconds must be finite and positive")
-
-        queue_size = self.event_queue_size
-        if (
-            isinstance(queue_size, bool)
-            or not isinstance(queue_size, int)
-            or queue_size <= 0
-        ):
-            raise ValueError("event_queue_size must be a positive integer")
 
 
 def _parse_default_headers(
@@ -257,11 +247,6 @@ def load_application_settings(
         environ.get("JUNG_SHUTDOWN_TIMEOUT"),
         default=30.0,
     )
-    event_queue_size = parse_positive_int(
-        "JUNG_EVENT_QUEUE_SIZE",
-        environ.get("JUNG_EVENT_QUEUE_SIZE"),
-        default=64,
-    )
     enable_llm_tracing = parse_bool(
         "JUNG_ENABLE_LLM_TRACING",
         environ.get("JUNG_ENABLE_LLM_TRACING"),
@@ -316,7 +301,6 @@ def load_application_settings(
         shutdown_timeout_seconds=shutdown_timeout,
         enable_llm_tracing=enable_llm_tracing,
         debug_run_dir=debug_run_dir,
-        event_queue_size=event_queue_size,
     )
 
 

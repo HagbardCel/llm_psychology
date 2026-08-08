@@ -44,19 +44,6 @@ def count_assessment_operations(
     return int(row[0])
 
 
-def count_chat_turns_for_session(store: SQLiteStore, session_id: UUID) -> int:
-    with sqlite3.connect(
-        f"file:{store.database_path}?mode=ro",
-        uri=True,
-    ) as connection:
-        row = connection.execute(
-            "SELECT COUNT(*) FROM chat_turns WHERE session_id = ?",
-            (str(session_id),),
-        ).fetchone()
-    assert row is not None
-    return int(row[0])
-
-
 def style_selection_projection(
     snapshot: AppSnapshotResponse,
 ) -> tuple[str, bool, frozenset[str]]:
