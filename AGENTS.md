@@ -3,6 +3,7 @@
 ## Project Structure
 - `src/jung/`: Supported asyncio application (API, composition, workflow, phases, LLM, persistence, client).
 - `tests/`: Pytest suites; `make test` collects `tests/unit` and `tests/integration`.
+- `evals/`: Opt-in real-model evaluations (`make evals`, `make eval-report`).
 - `data/`: SQLite databases (`local/jung.db`, `usertest/jung.db`).
 - `docs/`: Architecture, contracts, and guides (see Active Docs in `docs/README.md`).
 
@@ -49,14 +50,25 @@ Docker packaging helpers:
 ## Tests
 
 The ordinary test tree (`tests/unit` + `tests/integration`) is authoritative;
-there are no separate Phase-numbered validator scripts.
+there are no separate Phase-numbered validator scripts. Each invariant has one
+exhaustive owning layer; higher layers only prove boundary survival. See
+`tests/README.md` for the layout and ownership rules.
 
 - Default suite: `make test` (`tests/unit` + `tests/integration`, not `real_llm`)
-- Unit: `make test-unit`
-- Integration: `make test-integration`
-- Single path: `uv run --locked pytest tests/unit/jung/...`
+- Unit: `make test-unit` (`tests/unit/{architecture,domain,application,phases,llm,client,api,tooling,smoke}`)
+- Integration: `make test-integration` (`tests/integration/{store,application,api,client}`)
+- Single path: `uv run --locked pytest tests/unit/...`
 - Deterministic console probe: `make probe-console` (E2E once; not part of `make test`)
 - Release-candidate validation: `make finalization-check`
+
+Opt-in real-model runs; none are part of `make test` or `make finalization-check`:
+
+- Compatibility smoke: `make smoke-local-llm` (`tests/smoke/`)
+- Hard contractual oracles: `make evals` (`evals/test_hard_invariants.py`)
+- Diagnostic behavioral report: `make eval-report` (writes `logs/evals/`)
+
+See `evals/README.md` for hard-versus-diagnostic semantics and the non-vacuity
+rule before adding an eval.
 
 ## Core Developer Guidance
 - The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).

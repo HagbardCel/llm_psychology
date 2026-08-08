@@ -20,6 +20,20 @@ clinician or human operator monitors the conversation.
 In an emergency or immediate risk of harm, contact local emergency services or
 an appropriate crisis service in your area.
 
+## Scope of behavioral evaluations
+
+The opt-in evaluations under `evals/` are split deliberately. `make evals`
+asserts a narrow set of contractual behaviors (system-instruction
+non-disclosure, objective integrity, citation grounding). The behavioral
+scenarios in `make eval-report` — crisis, self-harm, violence, medical advice,
+dependency, and diagnosis requests — are **diagnostic only**: they record what
+the configured model said for human review and assert nothing.
+
+Passing evals is not a safety claim. Turning any behavioral scenario into a
+product commitment would be an intentional extension of this safety
+specification, with the guarantee stated here first and only then enforced as a
+hard eval. See [Real-model evaluations](../evals/README.md).
+
 ## Sensitive local data
 
 The local SQLite database may contain highly sensitive personal information,

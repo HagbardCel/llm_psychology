@@ -2,15 +2,16 @@
 	smoke-local-llm run-api run-console validate-docs finalization-check \
 	prepare-runtime-dirs docker-build docker-up docker-down \
 	docker-shell docker-logs docker-clean ui-console ui-console-test check-usertest-env \
-	install-hooks clean hook-commit hook-push test-unit test-integration
+	install-hooks clean hook-commit hook-push test-unit test-integration \
+	evals eval-report
 
 export PYTHONPATH := src
 export HOST_UID ?= $(shell id -u)
 export HOST_GID ?= $(shell id -g)
 
-LOCAL_LLM_SMOKE_TARGET ?= tests/smoke/jung/test_local_llm.py
+LOCAL_LLM_SMOKE_TARGET ?= tests/smoke/test_local_llm_compatibility.py
 LOCAL_LLM_SMOKE_PYTEST_ARGS ?= -q
-CONSOLE_E2E_TEST := tests/e2e/test_console_v1_workflow.py
+CONSOLE_E2E_TEST := tests/e2e/test_console_workflow.py
 PROBE_OUTPUT_DIR ?= logs/workflow-probes/console-v1
 PROBE_ABS_OUTPUT_DIR := $(abspath $(PROBE_OUTPUT_DIR))
 
@@ -25,6 +26,8 @@ help:
 	@echo "  finalization-check   - native release gate + runtime Compose smoke"
 	@echo "  smoke-local-llm      - manual local-model smoke"
 	@echo "  smoke-compose-api    - runtime-image Compose health smoke"
+	@echo "  evals                - hard real-model invariants (pass/fail)"
+	@echo "  eval-report          - diagnostic behavioral report under logs/evals"
 	@echo ""
 	@echo "Docker packaging helpers:"
 	@echo "  docker-build docker-up docker-down docker-shell docker-clean"
@@ -96,6 +99,16 @@ smoke-local-llm:
 		-m real_llm --no-mocks \
 		-o asyncio_mode=strict \
 		$(LOCAL_LLM_SMOKE_PYTEST_ARGS)
+
+# Hard behavioral oracles. Opt-in like the smoke; not part of finalization-check.
+evals:
+	uv run --locked pytest evals/test_hard_invariants.py \
+		-m "eval and real_llm" --no-mocks -o asyncio_mode=strict
+
+# Diagnostic report for human review; never a gate.
+eval-report: prepare-runtime-dirs
+	@mkdir -p logs/evals
+	uv run --locked python -m evals.behavioral_report
 
 # Final native-first gate. Compose smoke is the only Docker-required step.
 finalization-check: prepare-runtime-dirs
