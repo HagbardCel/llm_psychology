@@ -2,7 +2,8 @@
 
 Opt-in suites that run against a configured local (or otherwise
 OpenAI-compatible) model. Neither surface runs in `make test` or
-`make finalization-check`.
+`make finalization-check`. Comprehensive developer commands live in
+[`docs/development.md`](../docs/development.md).
 
 ```
 evals/

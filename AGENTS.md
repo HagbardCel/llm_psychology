@@ -5,15 +5,21 @@
 - `tests/`: Pytest suites; `make test` collects `tests/unit` and `tests/integration`.
 - `evals/`: Opt-in real-model evaluations (`make evals`, `make eval-report`).
 - `data/`: SQLite databases (`local/jung.db`, `usertest/jung.db`).
-- `docs/`: Architecture, contracts, and guides (see Active Docs in `docs/README.md`).
+- `docs/`: Canonical documentation (see Active Docs in `docs/README.md`).
 
 ## Documentation Map (Read First)
 - `docs/README.md`: Doc index and canonical navigation.
 - `docs/safety-and-data.md`: Product safety, data handling, and network exposure.
-- `docs/ui-scope.md`: Supported frontend policy (`jung-console`).
-- `docs/refactor/target-architecture.md`: Current runtime architecture.
-- `docs/refactor/api-v1-contract.md`: Supported external HTTP/WebSocket API.
-- `docs/refactor/workflow-specification.md`: Supported Jung workflow.
+- `docs/development.md`: Setup, commands, and configuration guidance.
+- `docs/architecture.md`: Runtime architecture, tech stack, and source layout.
+- `docs/workflow.md`: Workflow, recovery, and command-conflict semantics.
+- `docs/database.md`: Persistence model and invariants.
+- `docs/api-v1.md`: Supported external HTTP/WebSocket API.
+
+Canonical documentation governs product architecture, runtime behavior, and
+contracts. `AGENTS.md` contains agent-specific workflow constraints. If this
+file restates a product fact inconsistently with canonical documentation, the
+canonical documentation wins and `AGENTS.md` must be corrected.
 
 ## Key Entry Points (Code)
 - `src/jung/api/app.py`: FastAPI server factory and `jung-api` CLI.
@@ -22,61 +28,28 @@
 - `src/jung/client/terminal.py`: Supported `jung-console` client.
 - `src/jung/application.py`: Application use cases.
 
-## Command Execution
+## Commands
 
-Native `uv` is the canonical local workflow. Docker is used for packaging and
+Native `uv` is the normal local workflow. Docker is used for packaging and
 runtime smoke, not as a requirement for day-to-day development.
 
-Canonical native workflow:
-
-```bash
-uv sync --locked
-uv run --locked jung-api
-uv run --locked jung-console --api-url http://127.0.0.1:8000
-uv run --locked pytest -m "not real_llm" tests/unit tests/integration
-```
-
-Equivalent `make` targets: `make sync`, `make run-api`, `make run-console`,
-`make test`.
-
-Docker packaging helpers:
-
-- Build runtime image: `make docker-build`
-- Start backend: `make docker-up`
-- Backend shell: `make docker-shell`
-- Supported frontend: `make ui-console` (`jung-console`)
-- Manual usertest: `make ui-console-test` (parameterized `api` service)
+See [docs/development.md](docs/development.md) for the comprehensive command
+reference (`make sync`, `make run-api`, `make run-console`, `make test`,
+optional Docker targets, and the release gate).
 
 ## Tests
 
-The ordinary test tree (`tests/unit` + `tests/integration`) is authoritative;
-there are no separate Phase-numbered validator scripts. Each invariant has one
-exhaustive owning layer; higher layers only prove boundary survival. See
-`tests/README.md` for the layout and ownership rules.
-
-- Default suite: `make test` (`tests/unit` + `tests/integration`, not `real_llm`)
-- Unit: `make test-unit` (`tests/unit/{architecture,domain,application,phases,llm,client,api,tooling,smoke}`)
-- Integration: `make test-integration` (`tests/integration/{store,application,api,client}`)
-- Single path: `uv run --locked pytest tests/unit/...`
-- Deterministic console probe: `make probe-console` (E2E once; not part of `make test`)
-- Release-candidate validation: `make finalization-check`
-
-Opt-in real-model runs; none are part of `make test` or `make finalization-check`:
-
-- Compatibility smoke: `make smoke-local-llm` (`tests/smoke/`)
-- Hard contractual oracles: `make evals` (`evals/test_hard_invariants.py`)
-- Diagnostic behavioral report: `make eval-report` (writes `logs/evals/`)
-
-See `evals/README.md` for hard-versus-diagnostic semantics and the non-vacuity
-rule before adding an eval.
+The ordinary test tree (`tests/unit` + `tests/integration`) is authoritative.
+Each invariant has one exhaustive owning layer; higher layers only prove
+boundary survival. See `tests/README.md` for the layout and ownership rules.
+See `evals/README.md` before adding a real-model eval.
 
 ## Core Developer Guidance
-- The supported runtime is asyncio FastAPI under `src/jung` (ADR 0002).
+- The supported runtime is asyncio FastAPI under `src/jung`.
 - Clients use `/api/v1` only; do not import application internals from clients.
-- Do not add Trio/asyncio compatibility adapters to target code.
+- Do not add Trio/asyncio compatibility adapters to runtime code.
 - Prefer existing utilities and services before adding new ones.
-- If docs conflict with this guide, follow this guide and update the docs you touched.
-- If HTTP/WS contracts or API-facing models change, update the active API v1 contract docs.
+- If HTTP/WS contracts or API-facing models change, update `docs/api-v1.md`.
 - Add deterministic tests for new behavior.
 
 ## Active Scope

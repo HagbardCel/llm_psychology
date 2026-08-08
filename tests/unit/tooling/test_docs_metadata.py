@@ -39,11 +39,15 @@ def _expected_active_targets() -> list[str]:
     return [path.removeprefix("docs/") for path in VALIDATOR.ACTIVE_DOCS]
 
 
+def _expected_last_active_target() -> str:
+    return _expected_active_targets()[-1]
+
+
 @pytest.mark.parametrize(
     ("targets_factory", "expect_error_substring"),
     [
         (lambda paths: paths, None),
-        (lambda paths: paths[:-1], "workflow-specification.md"),
+        (lambda paths: paths[:-1], "LAST_ACTIVE"),
         (
             lambda paths: [paths[0], "ARCHITECTURE.md", *paths[1:]],
             "ARCHITECTURE.md",
@@ -55,7 +59,8 @@ def test_active_readme_index_consistency(
     targets_factory,
     expect_error_substring: str | None,
 ) -> None:
-    _write_active_index(tmp_path, targets_factory(_expected_active_targets()))
+    expected = _expected_active_targets()
+    _write_active_index(tmp_path, targets_factory(expected))
     errors: list[str] = []
 
     _validate_active_readme_index(tmp_path, errors)
@@ -64,7 +69,12 @@ def test_active_readme_index_consistency(
         assert errors == []
     else:
         assert len(errors) == 1
-        assert expect_error_substring in errors[0]
+        needle = (
+            _expected_last_active_target()
+            if expect_error_substring == "LAST_ACTIVE"
+            else expect_error_substring
+        )
+        assert needle in errors[0]
 
 
 @pytest.mark.parametrize(
@@ -153,7 +163,7 @@ def test_markdown_link_extraction_excludes_code_fences() -> None:
         (
             {
                 "sibling.md": "# Sibling\n",
-                "refactor/nested.md": "Back up: [sibling](../sibling.md).\n",
+                "nested/nested.md": "Back up: [sibling](../sibling.md).\n",
             },
             None,
         ),
@@ -178,3 +188,35 @@ def test_local_link_resolution(
     else:
         assert len(errors) == 1
         assert expect_error_substring in errors[0]
+
+
+@pytest.mark.parametrize(
+    ("broken_relative", "missing_target"),
+    [
+        ("tests/README.md", "does-not-exist-tests.md"),
+        ("evals/README.md", "does-not-exist-evals.md"),
+    ],
+)
+def test_local_link_validation_scans_specialist_readmes(
+    tmp_path: Path,
+    broken_relative: str,
+    missing_target: str,
+) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "README.md").write_text("# Docs\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Root\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "evals").mkdir()
+    (tmp_path / "tests" / "README.md").write_text("# Tests\n", encoding="utf-8")
+    (tmp_path / "evals" / "README.md").write_text("# Evals\n", encoding="utf-8")
+
+    broken = tmp_path / broken_relative
+    broken.write_text(f"See [missing]({missing_target}).\n", encoding="utf-8")
+
+    errors: list[str] = []
+    _validate_local_links(tmp_path, errors)
+
+    assert len(errors) == 1
+    assert broken_relative in errors[0]
+    assert missing_target in errors[0]

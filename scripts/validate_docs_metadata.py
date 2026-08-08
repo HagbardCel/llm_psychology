@@ -10,10 +10,11 @@ from pathlib import Path
 ACTIVE_DOCS = [
     "docs/README.md",
     "docs/safety-and-data.md",
-    "docs/ui-scope.md",
-    "docs/refactor/target-architecture.md",
-    "docs/refactor/api-v1-contract.md",
-    "docs/refactor/workflow-specification.md",
+    "docs/development.md",
+    "docs/architecture.md",
+    "docs/workflow.md",
+    "docs/database.md",
+    "docs/api-v1.md",
 ]
 
 REQUIRED_KEYS = {
@@ -24,7 +25,13 @@ REQUIRED_KEYS = {
     "source_of_truth_for",
 }
 
-LINKED_DOC_GLOBS = ["README.md", "AGENTS.md", "docs/**/*.md"]
+LINKED_DOC_GLOBS = [
+    "README.md",
+    "AGENTS.md",
+    "docs/**/*.md",
+    "tests/README.md",
+    "evals/README.md",
+]
 
 FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})")
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")

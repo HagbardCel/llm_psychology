@@ -1,7 +1,8 @@
-# Jung Target Test Suite
+# Jung Test Suite
 
-Supported tests for the asyncio Jung runtime. Native `uv` is the canonical
+Supported tests for the asyncio Jung runtime. Native `uv` is the normal
 developer workflow; Docker remains available for reproducible CI/runtime images.
+Comprehensive command reference: [`docs/development.md`](../docs/development.md).
 
 ## Layout
 
@@ -96,23 +97,10 @@ make test                                   # unit + integration (not real_llm)
 make test-unit
 make test-integration
 make probe-console                          # Deterministic jung-console E2E once
-make finalization-check                     # Release gate (format/lint/docs/test/probe/compose)
 ```
 
-Opt-in real-model runs (require `LOCAL_LLM_SMOKE_*` and a reachable server):
-
-```bash
-make smoke-local-llm                        # compatibility
-make evals                                  # hard contractual oracles
-make eval-report                            # diagnostic report under logs/evals/
-```
-
-Native equivalent:
-
-```bash
-uv run --locked pytest -m "not real_llm" tests/unit tests/integration
-uv run --locked pytest tests/unit/...
-```
+Opt-in real-model entry points and the full release gate are documented in
+[`docs/development.md`](../docs/development.md).
 
 ## Conventions
 

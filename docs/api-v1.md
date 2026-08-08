@@ -1,145 +1,56 @@
 ---
 owner: engineering
 status: active
-last_reviewed: 2026-07-20
+last_reviewed: 2026-08-08
 review_cycle_days: 30
-source_of_truth_for: Supported /api/v1 external semantics
+source_of_truth_for: Supported /api/v1 HTTP semantics and WebSocket wire contract
 ---
 
 # API v1 Contract
 
 > This document governs the supported `/api/v1` runtime contract.
+>
+> OpenAPI (`/api/v1/openapi.json`) owns the mechanically generated HTTP
+> request/response schema. Swagger UI and ReDoc are disabled. This document owns
+> HTTP semantics and the complete WebSocket wire contract and semantics.
 
 All routes are rooted at `/api/v1`. No endpoint accepts `user_id`. There is no generic workflow mutation route.
 
-## 1. Shared schemas
+## 1. HTTP semantics
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| **Profile** | | | |
-| `name` | string | yes | Display name |
-| `primary_language` | string | yes | Preferred conversation language |
-| `date_of_birth` | date \| null | no | Optional demographic field |
-| `notes` | string \| null | no | Free-form profile notes |
-| **ProfileUpdate** | | | |
-| `expected_revision` | int | yes | Optimistic concurrency token |
-| `profile` | Profile | yes | Replacement profile payload |
-| **StyleSummary** | | | |
-| `id` | string | yes | Stable style identifier |
-| `name` | string | yes | Human-readable label |
-| `description` | string | yes | Short style summary |
-| **StyleRecommendationSummary** | | | |
-| `style_id` | string | yes | Recommended style identifier |
-| `score` | float | yes | Normalized fit score in `[0, 1]` |
-| `rationale` | string | yes | Short recommendation rationale |
-| `key_topics` | list[string] | yes | Topics supporting the recommendation |
-| **StyleOptionsResponse** | | | |
-| `styles` | list[StyleSummary] | yes | Static style catalog |
-| `recommendations` | list[StyleRecommendationSummary] | yes | Ranked recommendations from the latest completed assessment; empty before assessment completion |
-| **SessionSummary** | | | |
-| `id` | UUID | yes | Session identifier |
-| `kind` | `"intake"` \| `"therapy"` | yes | Session type; do not infer from `plan_id` alone |
-| `started_at` | datetime | yes | Session start timestamp |
-| `ended_at` | datetime \| null | no | End timestamp when closed |
-| `plan_id` | UUID \| null | no | Plan revision effective at session start |
-| **SessionDetail** | | | |
-| (all `SessionSummary` fields) | | | |
-| `summary` | string \| null | no | Post-session reflection summary when closed |
-| `briefing` | opaque JSON \| null | no | Session-scoped briefing artifact when present |
-| **Message** | | | |
-| `id` | UUID | yes | Message identifier |
-| `session_id` | UUID | yes | Owning session |
-| `sequence` | int | yes | Monotonic order within session |
-| `role` | `"user"` \| `"assistant"` \| `"system"` | yes | Speaker role |
-| `content` | string | yes | Message body |
-| `created_at` | datetime | yes | Persistence timestamp |
-| `client_message_id` | UUID \| null | no | Derived idempotency key from the owning chat turn on user and assistant messages (not stored on `messages`); `null` for system messages |
-| **PlanSummary** | | | |
-| `id` | UUID | yes | Immutable plan revision identifier |
-| `version` | int | yes | Monotonic plan version |
-| `source_session_id` | UUID \| null | no | Session that produced the revision |
-| `supersedes_plan_id` | UUID \| null | no | Previous revision link |
-| `created_at` | datetime | yes | Creation timestamp |
-| **PlanDetail** | | | |
-| `id` | UUID | yes | Immutable plan revision identifier |
-| `version` | int | yes | Monotonic plan version |
-| `selected_style` | string | yes | Selected therapy style |
-| `focus` | string | yes | Current therapeutic focus |
-| `themes` | list[string] | yes | Themes tracked by the plan |
-| `goals` | list[string] | yes | Therapeutic goals |
-| `current_progress` | string | yes | Qualitative progress assessment |
-| `planned_interventions` | list[string] | yes | Planned interventions or directions |
-| `revision_recommendations` | list[string] | yes | Recommendations from the latest revision |
-| `session_briefing` | opaque validated JSON \| null | no | Server-validated resumption briefing; client display-only in v1 |
-| `source_session_id` | UUID \| null | no | Session that produced the revision |
-| `supersedes_plan_id` | UUID \| null | no | Previous revision link |
-| `created_at` | datetime | yes | Creation timestamp |
-| **OperationSummary** | | | |
-| `id` | UUID | yes | Operation identifier |
-| `kind` | `"assessment"` \| `"post_session"` | yes | Operation type |
-| `status` | `"pending"` \| `"running"` \| `"complete"` \| `"failed"` | yes | Durable operation status |
-| `source_session_id` | UUID \| null | no | Source session for the operation |
-| `error` | ErrorEnvelope \| null | no | Last failure when `failed` |
-| **ChatTurnSummary** | | | |
-| `id` | UUID | yes | Turn identifier |
-| `session_id` | UUID | yes | Active chat session |
-| `client_message_id` | UUID | yes | Client idempotency key |
-| `status` | `"pending"` \| `"complete"` \| `"failed"` | yes | Turn lifecycle status |
-| `user_message_id` | UUID | yes | Persisted user message |
-| `assistant_message_id` | UUID \| null | no | Persisted assistant message when complete |
-| `error` | ErrorEnvelope \| null | no | Failure details when `failed` |
-| **AppSnapshot** | | | |
-| `revision` | int | yes | Monotonic snapshot revision |
-| `stage` | Stage | yes | Current workflow stage |
-| `profile_complete` | bool | yes | Whether profile satisfies completeness policy |
-| `selected_style` | string \| null | no | Selected therapy style |
-| `active_session` | SessionSummary \| null | no | Current open session |
-| `operation` | OperationSummary \| null | no | Current background operation |
-| `active_chat_turn` | ChatTurnSummary \| null | no | The currently pending durable chat turn, or `null` when no turn is pending. Completed and failed turns are resolved through durable session history and duplicate submission semantics |
-| `available_commands` | list[Command] | yes | Backend-derived permitted commands |
-| **ProfileResponse** | | | |
-| `profile` | Profile | yes | Current profile |
-| `current_plan` | PlanDetail \| null | no | Active plan revision referenced by profile lifecycle |
-| `snapshot` | AppSnapshot | yes | Authoritative snapshot |
-| **SessionHistoryResponse** | | | |
-| `session` | SessionDetail | yes | Requested session with closed-session artifacts when available |
-| `messages` | list[Message] | yes | Ordered durable messages |
-| `plans` | list[PlanSummary] | yes | Plan revisions linked to the session |
-| **ErrorResponse / ErrorEnvelope** | | | |
-| `code` | error code literal | yes | Stable machine-readable code |
-| `message` | string | yes | Human-readable summary |
-| `request_id` | UUID | yes | Correlation identifier |
-| `current_snapshot` | AppSnapshot \| null | no | Present for `state_conflict` |
-| `retryable` | bool | no | Whether the client may retry |
-
-For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied.
+Mechanical HTTP DTO field inventories live in the generated OpenAPI schema.
+This section records contract semantics that OpenAPI alone does not adequately
+express.
 
 Policy decisions:
 
 - session listing is non-paginated and ordered by `started_at` descending;
 - `PUT /profile` is allowed only in `SETUP` and `INTAKE`;
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
-- most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`.
-- `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for v1 clients.
-- `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read.
-- `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available.
-- `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text.
-- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below.
-- `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`.
+- most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`;
+- `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for v1 clients;
+- `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read;
+- `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available;
+- `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text;
+- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below;
+- `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`;
+- `client_message_id` on `Message` is a derived read-model field joined from the owning chat turn on user and assistant messages (not stored on `messages`); it is `null` for system messages;
 - Observable `intervention_evidence` item fields (when present inside a briefing document):
   - `intervention_description` (string): model-generated interpretive label
   - `therapist_sequence` (int): transcript sequence of the cited therapist turn
   - `therapist_content` (string): server-resolved full whitespace-normalized content of that assistant turn
   - `patient_sequence` (int \| null): later patient turn when a response is cited
   - `patient_content` (string \| null): server-resolved full whitespace-normalized content of that user turn
-  - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response.
-- Removed legacy intervention status values such as `"proposed"`, `"accepted"`, `"completed"`, and `"responded"` are not emitted.
-- Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1.
-- API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`.
-- v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store.
-- `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`.
-- Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`.
-- `GET /api/v1/health` reports **process readiness only**. Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health.
+  - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response;
+- Intervention evidence statuses are `"delivered"` and `"response_cited"` only;
+- Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1;
+- API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
+- v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store;
+- `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`;
+- Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;
+- `GET /api/v1/health` reports **process readiness only**. Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
+- For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied;
+- `state_conflict` responses include `current_snapshot` with the authoritative revision.
 
 ## 2. Endpoint matrix
 
@@ -164,10 +75,10 @@ State-changing HTTP requests require `expected_revision`. Non-chat commands are 
 
 ## 3. WebSocket messages
 
-Application-owned generation publishes through
-[`EventStream`](target-architecture.md#application-event-distribution); API adapters
-translate to the wire union below. Disconnect unsubscribes one client only;
-accepted generation continues.
+Application-owned generation publishes through the in-process event stream
+described in [Architecture](architecture.md#application-event-distribution);
+API adapters translate to the wire union below. Disconnect unsubscribes one
+client only; accepted generation continues.
 
 Browser WebSocket handshakes containing an `Origin` header are accepted only when
 that exact HTTP(S) Origin is present in `JUNG_API_ALLOWED_ORIGINS`. Native clients
@@ -175,6 +86,11 @@ without an `Origin` header remain accepted. The literal `Origin: null` value is
 always rejected. This is browser cross-origin protection, not authentication. Use
 complete HTTP(S) origins including the port where applicable; paths, WebSocket
 URLs, and the string `null` are not valid trusted origins.
+
+Where a WebSocket event embeds a shared DTO such as `ChatTurnSummary`,
+`Message`, `AppSnapshot`, `OperationSummary`, or `ErrorEnvelope`, use the same
+generated/shared schema (OpenAPI / contract types) rather than duplicating
+nested fields here.
 
 ### Client
 
@@ -187,11 +103,11 @@ URLs, and the string `null` are not valid trusted origins.
 | Event | Required identifiers | Ordering | Persistence point | Revision |
 |---|---|---|---|---|
 | `token` | `session_id`, `turn_id`, `request_id`, `sequence`, `text` | strictly increasing `sequence` per turn | none (ephemeral) | none |
-| `message_in_progress` | `session_id`, `turn` | after acceptance | user message + pending turn stored | incremented at acceptance |
-| `message_completed` | `session_id`, `turn`, `message` | after final token | assistant message + complete turn stored | incremented at completion |
-| `snapshot_changed` | `snapshot` | after durable mutation | snapshot reread | matches stored revision |
-| `operation_changed` | `operation`, `snapshot` | when operation status changes | operation row updated | matches stored revision |
-| `error` | `error`, optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
+| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummary`) | after acceptance | user message + pending turn stored | incremented at acceptance |
+| `message_completed` | `session_id`, `turn` (`ChatTurnSummary`), `message` (`Message`) | after final token | assistant message + complete turn stored | incremented at completion |
+| `snapshot_changed` | `snapshot` (`AppSnapshot`) | after durable mutation | snapshot reread | matches stored revision |
+| `operation_changed` | `operation` (`OperationSummary`), `snapshot` (`AppSnapshot`) | when operation status changes | operation row updated | matches stored revision |
+| `error` | `error` (`ErrorEnvelope`), optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
 
 Chat error revision semantics:
 
