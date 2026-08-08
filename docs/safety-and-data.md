@@ -117,6 +117,10 @@ successful correction is not treated as an unresolved failure.
 After a successful diagnostic startup (directory created, `diagnostics.start`
 and `manifest.json` written), later supplementary-artifact write failures are
 best-effort: they warn once to stderr and never change application outcome.
+A failure while finalizing supplementary bundle artifacts may prevent
+`state.json`, `transcript.md`, or `failure_summary.md` from being completed;
+when possible it is recorded as `runtime.error` with
+`phase=debug_bundle_finalize` in `trace.jsonl`.
 
 Export a database snapshot into an existing run directory:
 

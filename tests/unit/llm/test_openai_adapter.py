@@ -2046,7 +2046,9 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
     ) == state_after_exit
 
 
-async def test_structured_validation_failure_then_correction_success(tmp_path: Path) -> None:
+async def test_structured_validation_failure_then_correction_success(
+    tmp_path: Path,
+) -> None:
     from jung.diagnostics import DiagnosticRun
     from jung.llm.tracing import ObservedLLMGateway
 
@@ -2143,7 +2145,9 @@ async def test_structured_double_validation_failure(tmp_path: Path) -> None:
     assert "llm.output.accepted" not in kinds
 
 
-async def test_stream_aclose_records_consumer_closed_cancellation(tmp_path: Path) -> None:
+async def test_stream_aclose_records_consumer_closed_cancellation(
+    tmp_path: Path,
+) -> None:
     from jung.diagnostics import DiagnosticRun
     from jung.llm.tracing import ObservedLLMGateway
 

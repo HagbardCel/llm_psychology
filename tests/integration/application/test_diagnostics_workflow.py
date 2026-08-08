@@ -13,7 +13,8 @@ import pytest
 
 from jung.composition import _record_cleanup_failure
 from jung.diagnostics import DiagnosticRun
-from jung.domain.commands import SendMessage, UpdateProfile
+from jung.domain.commands import RetryOperation, SelectStyle, SendMessage, UpdateProfile
+from jung.domain.errors import InvariantViolation
 from jung.domain.models import (
     ChatTurnStatus,
     OperationKind,
@@ -33,6 +34,8 @@ from .application_fixtures import (
     intake_message_expectations,
     wait_for_chat_turn,
 )
+from .assessment_test_data import assessment_result_data
+from .scenarios import complete_intake_for_assessment, open_intake
 
 pytestmark = pytest.mark.asyncio
 
@@ -441,9 +444,7 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
 
         # Second DiagnosticRun segment continues same recorder? reopen store with
         # new expectations for successful retry under same recorder by nesting.
-        succeeding = FakeLLM(
-            intake_message_expectations("Thanks for sharing more.")
-        )
+        succeeding = FakeLLM(intake_message_expectations("Thanks for sharing more."))
         async with build_test_application(
             store, succeeding, recorder=recorder, recover=False
         ) as runtime:
@@ -492,3 +493,174 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
     # First accept + later retry both committed; accepted once, retried once
     assert _kinds(events).count("chat.turn.accepted") == 1
     assert _kinds(events).count("chat.turn.retried") == 1
+
+
+async def test_select_style_invariant_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.complete_assessment(
+        operation_id,
+        result=assessment_result_data(),
+        now=now,
+    )
+    assert store.get_app_state().stage == Stage.STYLE_SELECTION
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+
+            async def missing_assessment() -> None:
+                return None
+
+            monkeypatch.setattr(
+                runtime.application,
+                "_load_completed_assessment_locked",
+                missing_assessment,
+            )
+            with pytest.raises(
+                InvariantViolation, match="completed assessment result is required"
+            ):
+                await runtime.application.select_style(
+                    SelectStyle(
+                        expected_revision=store.get_app_state().revision,
+                        style_id="cbt",
+                    )
+                )
+
+    events = _load_trace(run_dir)
+    runtime_errors = [e for e in events if e["kind"] == "runtime.error"]
+    assert len(runtime_errors) == 1
+    assert runtime_errors[0]["data"]["phase"] == "workflow_command"
+    assert runtime_errors[0]["data"]["command"] == "select_style"
+    assert runtime_errors[0]["data"]["error_type"] == "InvariantViolation"
+    assert "workflow.command.rejected" not in _kinds(events)
+
+
+async def test_retry_operation_invariant_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.fail_operation(
+        operation_id,
+        error_code="llm_timeout",
+        error_message="timeout",
+        retryable=True,
+        now=now,
+    )
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+            revision = store.get_app_state().revision
+            monkeypatch.setattr(store, "get_current_operation", lambda: None)
+            with pytest.raises(
+                InvariantViolation,
+                match="retry command available without current operation",
+            ):
+                await runtime.application.retry_operation(
+                    RetryOperation(expected_revision=revision)
+                )
+
+    events = _load_trace(run_dir)
+    runtime_errors = [
+        e
+        for e in events
+        if e["kind"] == "runtime.error" and e["data"].get("phase") == "workflow_command"
+    ]
+    assert len(runtime_errors) == 1
+    assert runtime_errors[0]["data"]["command"] == "retry_operation"
+    assert runtime_errors[0]["data"]["error_type"] == "InvariantViolation"
+    rejected = [
+        e
+        for e in events
+        if e["kind"] == "workflow.command.rejected"
+        and e["data"].get("command") == "retry_operation"
+    ]
+    assert rejected == []
+
+
+async def test_store_drained_failure_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    import jung.application as application_module
+    from jung._async_cleanup import drain_cancelled_task as real_drain
+
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    open_intake(store)
+
+    gate = threading.Event()
+    release = threading.Event()
+
+    def failing_get_profile(*args, **kwargs):
+        gate.set()
+        release.wait()
+        raise RuntimeError("owned store failed after cancel")
+
+    failing_get_profile.__name__ = "get_profile"
+
+    drain_entered = asyncio.Event()
+
+    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
+        drain_entered.set()
+        return await real_drain(task)
+
+    monkeypatch.setattr(application_module, "drain_cancelled_task", observed_drain)
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+            monkeypatch.setattr(store, "get_profile", failing_get_profile)
+
+            read_task = asyncio.create_task(runtime.application.get_profile())
+            assert await asyncio.to_thread(gate.wait, 2.0)
+            read_task.cancel()
+            await asyncio.wait_for(drain_entered.wait(), timeout=2.0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await read_task
+
+    events = _load_trace(run_dir)
+    drained = [
+        e
+        for e in events
+        if e["kind"] == "runtime.error" and e["data"].get("phase") == "store_drained"
+    ]
+    assert len(drained) == 1
+    assert drained[0]["data"]["error_type"] == "RuntimeError"
+    assert drained[0]["data"]["function"] == "get_profile"

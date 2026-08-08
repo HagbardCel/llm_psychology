@@ -16,7 +16,11 @@ from pydantic import ValidationError
 
 from jung import workflow
 from jung._async_cleanup import drain_cancelled_task
-from jung.diagnostics import DiagnosticRecorder, diagnostic_context
+from jung.diagnostics import (
+    DiagnosticRecorder,
+    _safe_exception_message,
+    diagnostic_context,
+)
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -158,10 +162,17 @@ class TherapyApplication:
         payload: dict[str, Any] = {
             "phase": phase,
             "error_type": type(exc).__name__,
-            "error_message": str(exc),
+            "error_message": _safe_exception_message(exc),
         }
         payload.update(extra)
         self._record("runtime.error", payload)
+
+    def _record_command_error(self, command: str, exc: BaseException) -> None:
+        self._record_runtime_error(
+            phase="workflow_command",
+            exc=exc,
+            command=command,
+        )
 
     def _record_command_started(self, command: str) -> None:
         self._record("workflow.command.started", {"command": command})
@@ -225,6 +236,11 @@ class TherapyApplication:
                     method_name,
                     type(failure).__name__,
                     exc_info=failure,
+                )
+                self._record_runtime_error(
+                    phase="store_drained",
+                    exc=failure,
+                    function=method_name,
                 )
 
             raise cancellation
@@ -434,6 +450,9 @@ class TherapyApplication:
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("update_profile", exc)
             raise
+        except Exception as exc:
+            self._record_command_error("update_profile", exc)
+            raise
 
     async def select_style(self, command: SelectStyle) -> AppSnapshot:
         self._record_command_started("select_style")
@@ -481,6 +500,9 @@ class TherapyApplication:
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("select_style", exc)
             raise
+        except Exception as exc:
+            self._record_command_error("select_style", exc)
+            raise
 
     async def start_session(self, command: StartSession) -> StartedSession:
         self._record_command_started("start_session")
@@ -511,6 +533,9 @@ class TherapyApplication:
             return started
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("start_session", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("start_session", exc)
             raise
 
     async def end_session(self, command: EndSession) -> AppSnapshot:
@@ -576,6 +601,9 @@ class TherapyApplication:
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("end_session", exc)
             raise
+        except Exception as exc:
+            self._record_command_error("end_session", exc)
+            raise
 
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
         self._record_command_started("retry_operation")
@@ -637,6 +665,9 @@ class TherapyApplication:
         except self._COMMAND_REJECT_TYPES as exc:
             self._record_command_rejected("retry_operation", exc)
             raise
+        except Exception as exc:
+            self._record_command_error("retry_operation", exc)
+            raise
 
     async def _require_generation_available_locked(
         self,
@@ -686,133 +717,134 @@ class TherapyApplication:
 
     async def submit_message(self, command: SendMessage) -> ChatTurn:
         self._record_command_started("send_message")
+        try:
+            return await self._submit_message_body(command)
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("send_message", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("send_message", exc)
+            raise
+
+    async def _submit_message_body(self, command: SendMessage) -> ChatTurn:
         generation_reserved = False
         pending_events: list[Any] = []
         turn: ChatTurn | None = None
         handoff_on_cancel: ChatTurn | None = None
         chat_lifecycle: str | None = None  # accepted | retried
         try:
-            try:
+            self._reject_if_shutdown()
+            async with self._mutation_lock:
                 self._reject_if_shutdown()
-                async with self._mutation_lock:
-                    self._reject_if_shutdown()
-                    existing = await self._run_store(
-                        self._store.get_chat_turn_by_client_id,
-                        command.session_id,
-                        command.client_message_id,
-                    )
-                    if existing is not None:
-                        if existing.status is ChatTurnStatus.PENDING:
-                            self._record_command_completed(
-                                "send_message",
-                                "idempotent_existing",
-                            )
-                            return existing
-                        if existing.status is ChatTurnStatus.COMPLETE:
-                            self._record_command_completed(
-                                "send_message",
-                                "idempotent_existing",
-                            )
-                            return existing
-                        if existing.status is ChatTurnStatus.FAILED:
-                            if not existing.retryable:
-                                raise StoredWorkFailure.from_chat_turn(existing)
-                            await self._require_generation_available_locked(
-                                retrying_turn_id=existing.id,
-                            )
-                            if not await self._chat_retry_structurally_eligible(
-                                existing
-                            ):
-                                raise StoredWorkFailure(
-                                    code=existing.error_code or "operation_failed",
-                                    message=existing.error_message
-                                    or "chat turn failed",
-                                    retryable=False,
-                                )
-                            await self._reserve_generation_lock()
-                            generation_reserved = True
-                            (
-                                turn,
-                                pending_events,
-                            ) = await self._retry_existing_chat_turn_locked(
-                                existing,
-                                command,
-                            )
-                            chat_lifecycle = "retried"
-
-                    if turn is None:
-                        await self._require_generation_available_locked()
-                        facts = await self._run_store(self._store.load_snapshot_facts)
-                        workflow.require_command_allowed(
-                            CommandName.SEND_MESSAGE, facts
+                existing = await self._run_store(
+                    self._store.get_chat_turn_by_client_id,
+                    command.session_id,
+                    command.client_message_id,
+                )
+                if existing is not None:
+                    if existing.status is ChatTurnStatus.PENDING:
+                        self._record_command_completed(
+                            "send_message",
+                            "idempotent_existing",
                         )
-                        if not command.content.strip():
-                            raise InvalidCommand("message content must be non-empty")
+                        return existing
+                    if existing.status is ChatTurnStatus.COMPLETE:
+                        self._record_command_completed(
+                            "send_message",
+                            "idempotent_existing",
+                        )
+                        return existing
+                    if existing.status is ChatTurnStatus.FAILED:
+                        if not existing.retryable:
+                            raise StoredWorkFailure.from_chat_turn(existing)
+                        await self._require_generation_available_locked(
+                            retrying_turn_id=existing.id,
+                        )
+                        if not await self._chat_retry_structurally_eligible(existing):
+                            raise StoredWorkFailure(
+                                code=existing.error_code or "operation_failed",
+                                message=existing.error_message or "chat turn failed",
+                                retryable=False,
+                            )
                         await self._reserve_generation_lock()
                         generation_reserved = True
-                        turn_id = self._new_id()
-                        user_message_id = self._new_id()
-                        _, turn = await self._run_store(
-                            self._store.accept_chat_message,
-                            expected_revision=command.expected_revision,
-                            session_id=command.session_id,
-                            client_message_id=command.client_message_id,
-                            turn_id=turn_id,
-                            user_message_id=user_message_id,
-                            content=command.content,
-                            now=self._now(),
-                        )
-                        snapshot = await self._assemble_snapshot_locked()
-                        pending_events = self._accepted_chat_events(
+                        (
                             turn,
-                            snapshot,
-                            command.request_id,
+                            pending_events,
+                        ) = await self._retry_existing_chat_turn_locked(
+                            existing,
+                            command,
                         )
-                        chat_lifecycle = "accepted"
-            except asyncio.CancelledError:
-                if generation_reserved:
-                    if turn is not None:
-                        handoff_on_cancel = turn
-                    else:
-                        self._release_generation_lock()
-                raise
-            except Exception:
-                if generation_reserved:
-                    self._release_generation_lock()
-                raise
-            finally:
-                if handoff_on_cancel is not None:
-                    outcome = self._try_start_chat_worker(
-                        handoff_on_cancel,
-                        request_id=command.request_id,
-                    )
-                    if outcome.kind is not ChatScheduleOutcomeKind.STARTED:
-                        self._release_generation_lock()
+                        chat_lifecycle = "retried"
 
-            assert turn is not None
-            with diagnostic_context(
-                session_id=str(turn.session_id),
-                turn_id=str(turn.id),
-                client_message_id=str(turn.client_message_id),
-                request_id=(
-                    str(command.request_id) if command.request_id is not None else None
-                ),
-            ):
-                self._record_command_completed("send_message", "committed")
-                if chat_lifecycle == "retried":
-                    self._record("chat.turn.retried", {})
-                elif chat_lifecycle == "accepted":
-                    self._record("chat.turn.accepted", {})
-            if not pending_events:
-                return turn
-            return await self._handoff_accepted_chat_turn(
-                turn,
-                pending_events,
-                command.request_id,
-            )
-        except self._COMMAND_REJECT_TYPES as exc:
-            self._record_command_rejected("send_message", exc)
+                if turn is None:
+                    await self._require_generation_available_locked()
+                    facts = await self._run_store(self._store.load_snapshot_facts)
+                    workflow.require_command_allowed(CommandName.SEND_MESSAGE, facts)
+                    if not command.content.strip():
+                        raise InvalidCommand("message content must be non-empty")
+                    await self._reserve_generation_lock()
+                    generation_reserved = True
+                    turn_id = self._new_id()
+                    user_message_id = self._new_id()
+                    _, turn = await self._run_store(
+                        self._store.accept_chat_message,
+                        expected_revision=command.expected_revision,
+                        session_id=command.session_id,
+                        client_message_id=command.client_message_id,
+                        turn_id=turn_id,
+                        user_message_id=user_message_id,
+                        content=command.content,
+                        now=self._now(),
+                    )
+                    snapshot = await self._assemble_snapshot_locked()
+                    pending_events = self._accepted_chat_events(
+                        turn,
+                        snapshot,
+                        command.request_id,
+                    )
+                    chat_lifecycle = "accepted"
+        except asyncio.CancelledError:
+            if generation_reserved:
+                if turn is not None:
+                    handoff_on_cancel = turn
+                else:
+                    self._release_generation_lock()
             raise
+        except Exception:
+            if generation_reserved:
+                self._release_generation_lock()
+            raise
+        finally:
+            if handoff_on_cancel is not None:
+                outcome = self._try_start_chat_worker(
+                    handoff_on_cancel,
+                    request_id=command.request_id,
+                )
+                if outcome.kind is not ChatScheduleOutcomeKind.STARTED:
+                    self._release_generation_lock()
+
+        assert turn is not None
+        with diagnostic_context(
+            session_id=str(turn.session_id),
+            turn_id=str(turn.id),
+            client_message_id=str(turn.client_message_id),
+            request_id=(
+                str(command.request_id) if command.request_id is not None else None
+            ),
+        ):
+            self._record_command_completed("send_message", "committed")
+            if chat_lifecycle == "retried":
+                self._record("chat.turn.retried", {})
+            elif chat_lifecycle == "accepted":
+                self._record("chat.turn.accepted", {})
+        if not pending_events:
+            return turn
+        return await self._handoff_accepted_chat_turn(
+            turn,
+            pending_events,
+            command.request_id,
+        )
 
     async def _handoff_accepted_chat_turn(
         self,

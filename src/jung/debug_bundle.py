@@ -23,6 +23,7 @@ from uuid import UUID
 from jung.diagnostics import (
     SCHEMA_VERSION,
     DiagnosticRecorder,
+    _safe_exception_message,
     sanitize_url,
     sanitize_value,
     write_private_text,
@@ -79,10 +80,30 @@ def package_version() -> str | None:
         return None
 
 
+def _matching_git_root(source: Path) -> Path | None:
+    """Return the Jung source checkout root for ``source``, if any.
+
+    Prefer ``None`` over a wrong SHA: only accept a Git root when this module
+    resolves to ``<root>/src/jung/debug_bundle.py``.
+    """
+    for candidate in source.parents:
+        if not (candidate / ".git").exists():
+            continue
+        expected = candidate / "src" / "jung" / "debug_bundle.py"
+        if expected.exists() and expected.resolve() == source:
+            return candidate
+        return None
+    return None
+
+
 def git_commit() -> str | None:
+    source = Path(__file__).resolve()
+    root = _matching_git_root(source)
+    if root is None:
+        return None
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
             check=False,
             capture_output=True,
             text=True,
@@ -211,18 +232,11 @@ def build_state_projection(
         if session is None:
             continue
         sessions.append(_model_dump(session))
-        try:
-            for plan in store.list_plans_for_session(UUID(session_id)):
-                plans_by_id[str(plan.id)] = _model_dump(plan)
-        except Exception:
-            continue
+        for plan in store.list_plans_for_session(UUID(session_id)):
+            plans_by_id[str(plan.id)] = _model_dump(plan)
 
     if current_plan is not None:
         plans_by_id[str(current_plan.id)] = _model_dump(current_plan)
-    for plan_id in sorted(touched.get("plan_id", set()), key=_sort_key_uuid):
-        if plan_id in plans_by_id:
-            continue
-        # Touched plan ids may only appear via session linkage; skip orphans.
 
     operations: list[Any] = []
     for operation_id in sorted(operation_ids, key=_sort_key_uuid):
@@ -299,12 +313,14 @@ def classify_unresolved_problems(
     if primary_exception is not None:
         problems.append(
             "primary exception: "
-            f"{type(primary_exception).__name__}: {primary_exception}"
+            f"{type(primary_exception).__name__}: "
+            f"{_safe_exception_message(primary_exception)}"
         )
     if cleanup_exception is not None:
         problems.append(
             "cleanup exception: "
-            f"{type(cleanup_exception).__name__}: {cleanup_exception}"
+            f"{type(cleanup_exception).__name__}: "
+            f"{_safe_exception_message(cleanup_exception)}"
         )
     if recorder.run_failed:
         problems.append("recorder.run_failed is set")
@@ -452,8 +468,17 @@ def finalize_debug_bundle(
                     summary = summary.replace(secret, "[REDACTED]")
             write_private_text(recorder.run_dir / "failure_summary.md", summary)
     except Exception as exc:
+        recorder.record(
+            "runtime.error",
+            {
+                "phase": "debug_bundle_finalize",
+                "error_type": type(exc).__name__,
+                "error_message": _safe_exception_message(exc),
+            },
+        )
         sys.stderr.write(
-            f"jung diagnostics: bundle finalize failed: {type(exc).__name__}: {exc}\n"
+            "jung diagnostics: bundle finalize failed: "
+            f"{type(exc).__name__}: {_safe_exception_message(exc)}\n"
         )
 
 
@@ -468,23 +493,34 @@ def export_db_snapshot(*, run_dir: Path, database: Path) -> Path:
     if destination.exists():
         raise FileExistsError(f"destination already exists: {destination}")
 
-    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    os.close(fd)
+    destination_created = False
+    try:
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        destination_created = True
 
-    source = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    try:
-        dest = sqlite3.connect(destination)
+        uri = database.resolve().as_uri() + "?mode=ro"
+        source = sqlite3.connect(uri, uri=True)
         try:
-            source.backup(dest)
+            dest = sqlite3.connect(destination)
+            try:
+                source.backup(dest)
+            finally:
+                dest.close()
         finally:
-            dest.close()
-    finally:
-        source.close()
-    try:
-        os.chmod(destination, 0o600)
-    except OSError:
-        pass
-    return destination
+            source.close()
+        try:
+            os.chmod(destination, 0o600)
+        except OSError:
+            pass
+        return destination
+    except BaseException:
+        if destination_created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
 
 
 def cli(argv: Sequence[str] | None = None) -> int:
