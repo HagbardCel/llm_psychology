@@ -80,7 +80,7 @@ PENDING → COMPLETE
 2. **Generation**: supervisor streams tokens through `EventStream`; tokens are ephemeral.
 3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; increment revision; emit completion notifications.
 4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged; increment revision when failure occurs after acceptance.
-5. **Duplicate client message**: same ID never creates a second user message; pending/complete/failed paths return the stored outcome.
+5. **Duplicate client message**: same ID never creates a second user message. `PENDING` and `COMPLETE` return the durable turn; a non-retryable `FAILED` turn raises its stored failure; a retryable `FAILED` turn may, after generation availability, structural eligibility, and revision checks, reset the **same** durable turn to `PENDING` and regenerate. See [API v1](api-v1.md) for the full precedence list.
 6. **During active generation**: conflicting distinct `send_message` returns `busy`; same idempotent resubmit returns in-progress or stored completion.
 
 A pending turn cannot resume token generation exactly after crash; startup converts stale pending turns to retryable `FAILED` while preserving the user message.

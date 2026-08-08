@@ -8,9 +8,10 @@ source_of_truth_for: Developer onboarding, workflow commands, and configuration 
 
 # Development
 
-> The `Makefile` is executable truth for repository commands. This page explains
-> the human developer workflow. Package layout inside `src/jung/` is documented
-> in [Architecture](architecture.md). Test-suite ownership lives in
+> This page is the primary workflow guide. Run `make help` for common commands;
+> inspect the `Makefile` for the exhaustive executable command inventory.
+> Package layout inside `src/jung/` is documented in
+> [Architecture](architecture.md). Test-suite ownership lives in
 > [`tests/README.md`](../tests/README.md). Real-model evaluation philosophy
 > lives in [`evals/README.md`](../evals/README.md).
 
@@ -30,27 +31,42 @@ logs/     generated diagnostics
 
 - Python ≥3.11
 - [uv](https://docs.astral.sh/uv/) for package management
+- `make`
 - An OpenAI-compatible local model server (llama.cpp, LM Studio, Ollama, …) when exercising real LLM paths
 - Docker only when using Compose packaging or `make finalization-check` (which includes `smoke-compose-api`)
 
 ## Native setup
 
 ```bash
-uv sync --locked
 cp .env.example .env
+uv sync --locked
 ```
 
-For native `jung-api` talking to a model server on the same laptop, change
-`LLM_BASE_URL` in `.env` (port depends on the model server):
+Edit `.env` to set (port depends on the model server):
 
-```bash
+```dotenv
 LLM_BASE_URL=http://127.0.0.1:8080/v1
 MODEL_NAME=<your-server-model-name>
 ```
 
-`.env.example` defaults to `host.docker.internal` because Compose loads that
-file into the API container. Leave the template unchanged; adjust the copied
-`.env` for the execution mode you are using.
+`.env.example` defaults to `host.docker.internal` for Compose-friendly values.
+Leave the template unchanged; adjust the copied `.env` for the execution mode
+you are using. Ordinary Compose loads `${ENV_FILE:-.env}` into the API
+container (`smoke-compose-api` may point `ENV_FILE` at `.env.example`).
+
+Run the API and console in separate terminals (`make run-api` is blocking):
+
+**Terminal 1:**
+
+```bash
+make run-api
+```
+
+**Terminal 2:**
+
+```bash
+make run-console
+```
 
 ## Configuration guidance
 
@@ -81,9 +97,11 @@ container itself, not the host model server.
 
 ```bash
 make sync
-make run-api
-make run-console
 ```
+
+**Terminal 1:** `make run-api`
+
+**Terminal 2:** `make run-console`
 
 Native equivalents:
 

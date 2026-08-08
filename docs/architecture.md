@@ -120,7 +120,7 @@ The application:
 
 - validates commands against current stage and revision;
 - coordinates phase processors;
-- owns transactions and workflow transitions;
+- orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transactions and durable revision enforcement live in `SQLiteStore`);
 - enforces concurrency and idempotency;
 - starts and recovers long-running operations;
 - returns domain results, not HTTP/WebSocket payloads.
@@ -212,7 +212,8 @@ two capabilities: `stream_text` for token streaming and `generate_structured`
 for typed structured output. `generate_structured` may take an optional
 result-validation hook. Only the `llm/` infrastructure package imports provider
 and structured-output libraries. Provider-specific types must not leak into
-processors, application code, API contracts, or tests.
+production `src/jung` domain, application, phase, API, or client code.
+Adapter-focused tests may use provider test types.
 
 Structured-output capability is configuration-driven (`json_schema`,
 `json_object`, or `prompt`), not inferred from provider identity. The adapter

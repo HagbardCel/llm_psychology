@@ -29,18 +29,6 @@ These docs are the only canonical, actively governed set.
 - [Database](database.md)
 - [API v1 Contract](api-v1.md)
 
-## Historical Documentation
-Do not keep completed plans, stale assessments, migration notes, or superseded
-guides in the working tree. Delete historical documentation after its durable
-guidance has been incorporated into active docs; use Git history when old
-context is needed.
-
-## Documentation Commands
-
-```bash
-make validate-docs
-```
-
 ## Governance
 Documentation policy, ownership matrix, metadata requirements, and review cadence:
 

@@ -77,7 +77,7 @@ application rather than claimed as pure SQL guarantees:
 - valid workflow stage transitions and command acceptance are application/workflow policy;
 - store APIs create turn-owned user/assistant messages with the owning turn's session and expected roles; these cross-table semantic relationships are application/store invariants rather than SQL constraints (foreign keys only guarantee that the referenced message exists);
 - multi-table use cases such as assessment completion and post-session completion commit atomically in store methods;
-- transaction orchestration and revision increments are application-owned.
+- `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`), the optimistic revision check where applicable (internal/background writes may omit `expected_revision`), revision increments, and commit/rollback.
 
 ## JSON-owned documents
 
@@ -90,7 +90,7 @@ JSON TEXT columns hold validated documents owned by specific subsystems:
 | `plans.themes_json`, `goals_json`, `planned_interventions_json`, `revision_recommendations_json` | Plan revision material |
 | `plans.session_briefing_json` | Immutable copy of source-session briefing at plan creation |
 | `profile.derived_profile_json` | Post-session derived profile merge |
-| `operations.result_json` | Assessment or post-session structured result |
+| `operations.result_json` | Assessment: structured assessment result. Post-session: compact completion metadata (`plan_id`, `plan_version`, `profile_changed`); summary/briefing/profile/plan artifacts are persisted elsewhere |
 
 ## Connection and transaction policy
 

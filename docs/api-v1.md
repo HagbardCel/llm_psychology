@@ -27,14 +27,14 @@ Policy decisions:
 - session listing is non-paginated and ordered by `started_at` descending;
 - `PUT /profile` is allowed only in `SETUP` and `INTAKE`;
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
-- most mutations return `AppSnapshot`; exceptions are `GET /profile` → `ProfileResponse` and `POST /sessions` → `{session, snapshot}`;
+- most state-changing HTTP endpoints return `AppSnapshotResponse`; `POST /sessions` returns `StartSessionResponse`;
 - `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for v1 clients;
-- `PlanSummary` is the session-history list view; `PlanDetail` is the full immutable revision returned on profile read;
-- `GET /api/v1/sessions` returns `SessionSummary` rows; `GET /api/v1/sessions/{session_id}` returns `SessionDetail` with messages, linked plans, and closed-session artifacts when available;
-- `PlanDetail.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text;
-- `PlanDetail.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below;
-- `SessionDetail.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetail.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`;
-- `client_message_id` on `Message` is a derived read-model field joined from the owning chat turn on user and assistant messages (not stored on `messages`); it is `null` for system messages;
+- `PlanSummaryResponse` is the session-history list view; `PlanDetailResponse` is the full immutable revision returned on profile read;
+- `GET /api/v1/sessions` returns `SessionListResponse`; `GET /api/v1/sessions/{session_id}` returns `SessionHistoryResponse` with messages, linked plans, and closed-session artifacts when available;
+- `PlanDetailResponse.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text;
+- `PlanDetailResponse.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below;
+- `SessionDetailResponse.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetailResponse.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`;
+- `client_message_id` on `MessageResponse` is a derived read-model field joined from the owning chat turn on user and assistant messages (not stored on `messages`); it is `null` for system messages;
 - Observable `intervention_evidence` item fields (when present inside a briefing document):
   - `intervention_description` (string): model-generated interpretive label
   - `therapist_sequence` (int): transcript sequence of the cited therapist turn
@@ -44,11 +44,11 @@ Policy decisions:
   - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response;
 - Intervention evidence statuses are `"delivered"` and `"response_cited"` only;
 - Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1;
-- API `Profile` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
+- `ProfileWire` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store;
 - `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`;
 - Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;
-- `GET /api/v1/health` reports **process readiness only**. Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
+- `GET /api/v1/health` reports **process readiness only** (`HealthResponse` with `status="healthy"`). Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
 - For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied;
 - `state_conflict` responses include `current_snapshot` with the authoritative revision.
 
@@ -56,17 +56,17 @@ Policy decisions:
 
 | Method/path | Allowed stage | Request | Response | Errors | Revision effect |
 |---|---|---|---|---|---|
-| `GET /api/v1/state` | all | — | `200 AppSnapshot` | — | read only |
+| `GET /api/v1/state` | all | — | `200 AppSnapshotResponse` | — | read only |
 | `GET /api/v1/profile` | all | — | `200 ProfileResponse` | `404 not_found` if the required profile singleton row is unexpectedly absent | read only |
-| `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdate` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
+| `PUT /api/v1/profile` | `SETUP`, `INTAKE` | `ProfileUpdateRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | profile + revision |
 | `GET /api/v1/styles` | all | — | `200 StyleOptionsResponse` | — | read only |
-| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyle { expected_revision, style_id }` | `200 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
-| `GET /api/v1/sessions` | all | — | `200 {sessions: list[SessionSummary]}` | — | read only |
+| `PUT /api/v1/style` | `STYLE_SELECTION` | `SelectStyleRequest` | `200 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `422 validation_error` | selected style + initial immutable plan + revision |
+| `GET /api/v1/sessions` | all | — | `200 SessionListResponse` | — | read only |
 | `GET /api/v1/sessions/{session_id}` | all | — | `200 SessionHistoryResponse` | `404 not_found` | read only |
-| `POST /api/v1/sessions` | `READY` | `StartSession { expected_revision }` | `201 {session, snapshot}` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
-| `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | `EndSession { expected_revision }` | `202 AppSnapshot` | `404 not_found`, `409 invalid_command`, `409 state_conflict`, `409 busy` | end session + post-session operation + revision |
-| `POST /api/v1/operations/current/retry` | failed operation visible | `RetryOperation { expected_revision }` | `202 AppSnapshot` | `409 invalid_command`, `409 state_conflict`, `409 busy` | requeue same operation |
-| `GET /api/v1/health` | all | — | `200 {status: "healthy"}` | `503` when process not ready | read only |
+| `POST /api/v1/sessions` | `READY` | `StartSessionRequest` | `201 StartSessionResponse` | `409 invalid_command`, `409 state_conflict`, `409 busy` | new session + revision |
+| `POST /api/v1/sessions/{session_id}/end` | `THERAPY` (active id) | `EndSessionRequest` | `202 AppSnapshotResponse` | `404 not_found`, `409 invalid_command`, `409 state_conflict`, `409 busy` | end session + post-session operation + revision |
+| `POST /api/v1/operations/current/retry` | failed operation visible | `RetryOperationRequest` | `202 AppSnapshotResponse` | `409 invalid_command`, `409 state_conflict`, `409 busy` | requeue same operation |
+| `GET /api/v1/health` | all | — | `200 HealthResponse` (`status="healthy"`) | `503` when process not ready | read only |
 | `WS /api/v1/chat` | `INTAKE`, `THERAPY` for chat | see §3 | event stream | `error` events | chat acceptance increments revision; completion increments again |
 
 State-changing HTTP requests require `expected_revision`. Non-chat commands are serialized through `expected_revision` and application invariants. A retry after an uncertain response fetches the authoritative snapshot (`GET /api/v1/state` or the conflict envelope's `current_snapshot`). Assessment and post-session work are idempotent through their operation keys. Chat uses the durable `(session_id, client_message_id)` key. V1 does not implement a generic HTTP idempotency-receipt subsystem.
@@ -87,26 +87,26 @@ always rejected. This is browser cross-origin protection, not authentication. Us
 complete HTTP(S) origins including the port where applicable; paths, WebSocket
 URLs, and the string `null` are not valid trusted origins.
 
-Where a WebSocket event embeds a shared DTO such as `ChatTurnSummary`,
-`Message`, `AppSnapshot`, `OperationSummary`, or `ErrorEnvelope`, use the same
-generated/shared schema (OpenAPI / contract types) rather than duplicating
-nested fields here.
+Where a WebSocket event embeds a shared DTO such as `ChatTurnSummaryResponse`,
+`MessageResponse`, `AppSnapshotResponse`, `OperationSummaryResponse`, or
+`ErrorEnvelope`, use the same generated/shared schema (OpenAPI / contract
+types) rather than duplicating nested fields here.
 
 ### Client
 
-| Message | Fields | Semantics |
+| Type | Body | Semantics |
 |---|---|---|
-| `send_message` | `type`, `session_id`, `client_message_id`, `request_id`, `expected_revision`, `content` | Accept a chat turn for the active intake or therapy session |
+| `send_message` | `SendMessageCommand` | Accept a chat turn for the active intake or therapy session |
 
 ### Server
 
 | Event | Required identifiers | Ordering | Persistence point | Revision |
 |---|---|---|---|---|
 | `token` | `session_id`, `turn_id`, `request_id`, `sequence`, `text` | strictly increasing `sequence` per turn | none (ephemeral) | none |
-| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummary`) | after acceptance | user message + pending turn stored | incremented at acceptance |
-| `message_completed` | `session_id`, `turn` (`ChatTurnSummary`), `message` (`Message`) | after final token | assistant message + complete turn stored | incremented at completion |
-| `snapshot_changed` | `snapshot` (`AppSnapshot`) | after durable mutation | snapshot reread | matches stored revision |
-| `operation_changed` | `operation` (`OperationSummary`), `snapshot` (`AppSnapshot`) | when operation status changes | operation row updated | matches stored revision |
+| `message_in_progress` | `session_id`, `turn` (`ChatTurnSummaryResponse`) | after acceptance | user message + pending turn stored | incremented at acceptance |
+| `message_completed` | `session_id`, `turn` (`ChatTurnSummaryResponse`), `message` (`MessageResponse`) | after final token | assistant message + complete turn stored | incremented at completion |
+| `snapshot_changed` | `snapshot` (`AppSnapshotResponse`) | after durable mutation | snapshot reread | matches stored revision |
+| `operation_changed` | `operation` (`OperationSummaryResponse`), `snapshot` (`AppSnapshotResponse`) | when operation status changes | operation row updated | matches stored revision |
 | `error` | `error` (`ErrorEnvelope`), optional `session_id`, optional `turn_id`, optional `client_message_id`, `request_id` | any time | failure recorded when applicable | see chat error table below |
 
 Chat error revision semantics:
@@ -162,13 +162,13 @@ Duplicate `(session_id, client_message_id)` resolution happens before revision v
 
 These codes primarily describe durable operation/chat failures and WebSocket error envelopes. V1 exposes no ordinary synchronous HTTP provider invocation. When an existing durable failure is surfaced as `StoredWorkFailure` through an HTTP command boundary, the response status is `409`; the stored public code, sanitized message, and retryability are preserved.
 
-Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider exception text remains in server logs only and is not persisted in `error_message`.
+Stored public error messages on durable chat turns and operations are server-controlled and sanitized. Provider details are not exposed through API responses or public durable error fields. Server-side ordinary logs contain bounded/sanitized operational diagnostics; opt-in `JUNG_DEBUG_RUN_DIR` traces may contain sensitive provider traffic, including exact prompts or responses. See [Safety and Data Handling](safety-and-data.md).
 
 Durable internal failure codes that are not part of the public API vocabulary are exposed as `operation_failed`. Their sanitized message and retryability are preserved.
 
 Malformed `X-Request-ID` request header values produce `422 validation_error` with a newly generated correlation ID in both the response header and error envelope. The malformed header value is never echoed.
 
-Provider diagnostics remain in server logs only. LLM failure never advances workflow stage.
+LLM failure never advances workflow stage.
 
 ### Reconnect and uncertain delivery
 

@@ -63,7 +63,7 @@ All active docs must include this metadata block at the top:
 owner: engineering
 status: active
 last_reviewed: YYYY-MM-DD
-review_cycle_days: 90
+review_cycle_days: <positive integer>
 source_of_truth_for: <short scope statement>
 ---
 ```

@@ -2,7 +2,8 @@
 
 Supported tests for the asyncio Jung runtime. Native `uv` is the normal
 developer workflow; Docker remains available for reproducible CI/runtime images.
-Comprehensive command reference: [`docs/development.md`](../docs/development.md).
+General developer workflow and release commands are documented in
+[`docs/development.md`](../docs/development.md).
 
 ## Layout
 
