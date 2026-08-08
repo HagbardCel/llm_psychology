@@ -568,11 +568,27 @@ class OpenAICompatibleLLM:
                 correction_trigger = first_error.trigger
             else:
                 correction_trigger = "syntactic_or_schema_validation"
+            self._record_provider(
+                "llm.validation.failed",
+                {
+                    "output_type": output_type.__name__,
+                    "attempt": "initial",
+                    "trigger": correction_trigger,
+                    "reason": str(first_error),
+                },
+            )
             logger.info(
                 "llm structured correction task=%s model=%s output=%s",
                 policy.task.value,
                 policy.model,
                 output_type.__name__,
+            )
+            self._record_provider(
+                "llm.correction.started",
+                {
+                    "output_type": output_type.__name__,
+                    "correction_trigger": correction_trigger,
+                },
             )
             correction_messages = build_correction_messages(
                 original_messages=prepared,
@@ -594,6 +610,15 @@ class OpenAICompatibleLLM:
                     validate_result,
                 )
             except _StructuredValidationFailure as exc:
+                self._record_provider(
+                    "llm.validation.failed",
+                    {
+                        "output_type": output_type.__name__,
+                        "attempt": "correction",
+                        "trigger": exc.trigger,
+                        "reason": str(exc),
+                    },
+                )
                 raise InvalidLLMOutput(str(exc)) from exc
 
     def _validate_result(

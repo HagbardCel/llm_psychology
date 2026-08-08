@@ -1105,7 +1105,7 @@ async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
     kinds = [entry["kind"] for entry in lines]
     assert "llm.provider.request" in kinds
     assert "llm.provider.response" in kinds
-    assert "llm.accepted" not in kinds
+    assert "llm.output.accepted" not in kinds
     response = next(
         entry for entry in lines if entry["kind"] == "llm.provider.response"
     )
@@ -1161,7 +1161,7 @@ async def test_structured_diagnostics_capture_request_and_validated_result(
     kinds = [entry["kind"] for entry in lines]
     assert "llm.provider.request" in kinds
     assert "llm.provider.response" in kinds
-    assert "llm.accepted" in kinds
+    assert "llm.output.accepted" in kinds
     request = next(entry for entry in lines if entry["kind"] == "llm.provider.request")
     assert request["data"]["messages"][0]["content"] == "give json"
     assert "api_key" not in json.dumps(request)
@@ -1172,7 +1172,7 @@ async def test_structured_diagnostics_capture_request_and_validated_result(
     assert response["data"]["prompt_tokens"] == 3
     assert response["data"]["completion_tokens"] == 2
     assert request["data"]["max_completion_tokens"] is None
-    accepted = next(entry for entry in lines if entry["kind"] == "llm.accepted")
+    accepted = next(entry for entry in lines if entry["kind"] == "llm.output.accepted")
     assert accepted["data"]["result"]["value"] == "ok"
     assert accepted["data"]["output_type"] == "_Answer"
     assert "llm_call_id" in accepted["context"]
@@ -1240,7 +1240,11 @@ async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
     error = next(entry for entry in lines if entry["kind"] == "llm.provider.error")
     assert error["data"]["error_type"] == "_UnexpectedProviderBug"
     assert "sdk defect" in error["data"]["error_message"]
-    assert not any(e["kind"].startswith("llm.call.") for e in lines)
+    started = [e for e in lines if e["kind"] == "llm.call.started"]
+    failed = [e for e in lines if e["kind"] == "llm.call.failed"]
+    assert len(started) == 1
+    assert len(failed) == 1
+    assert failed[0]["data"]["error_type"] == "_UnexpectedProviderBug"
 
 
 async def test_hostile_str_provider_error_records_safe_message_structured(
@@ -2040,3 +2044,146 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
         trace_path.stat().st_mtime_ns,
         len(reparsed),
     ) == state_after_exit
+
+
+async def test_structured_validation_failure_then_correction_success(tmp_path: Path) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        content = "not-json" if calls["n"] == 1 else '{"value":"ok"}'
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    with DiagnosticRun(tmp_path / "correction-ok") as recorder:
+        gateway = ObservedLLMGateway(
+            _client(httpx.MockTransport(handler), recorder=recorder),
+            recorder=recorder,
+        )
+        result = await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+        assert result.value == "ok"
+
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (tmp_path / "correction-ok" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert "llm.call.started" in kinds
+    assert "llm.validation.failed" in kinds
+    assert "llm.correction.started" in kinds
+    assert "llm.output.accepted" in kinds
+    assert "llm.call.completed" in kinds
+    assert "llm.call.failed" not in kinds
+
+
+async def test_structured_double_validation_failure(tmp_path: Path) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "not-json"},
+                        "finish_reason": "stop",
+                        "index": 0,
+                    }
+                ],
+            },
+        )
+
+    with DiagnosticRun(tmp_path / "correction-fail") as recorder:
+        gateway = ObservedLLMGateway(
+            _client(httpx.MockTransport(handler), recorder=recorder),
+            recorder=recorder,
+        )
+        with pytest.raises(InvalidLLMOutput):
+            await gateway.generate_structured(
+                [ChatMessage(role=ChatRole.USER, content="give json")],
+                _Answer,
+                _policy(),
+            )
+
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (tmp_path / "correction-fail" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert kinds.count("llm.validation.failed") == 2
+    assert "llm.correction.started" in kinds
+    assert "llm.call.failed" in kinds
+    assert "llm.call.completed" not in kinds
+    assert "llm.output.accepted" not in kinds
+
+
+async def test_stream_aclose_records_consumer_closed_cancellation(tmp_path: Path) -> None:
+    from jung.diagnostics import DiagnosticRun
+    from jung.llm.tracing import ObservedLLMGateway
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"id":"1","object":"chat.completion.chunk","choices":'
+                b'[{"delta":{"content":"he"},"index":0}]}\n\n'
+                b'data: {"id":"1","object":"chat.completion.chunk","choices":'
+                b'[{"delta":{"content":"llo"},"index":0}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+
+    with DiagnosticRun(tmp_path / "stream-aclose") as recorder:
+        gateway = ObservedLLMGateway(
+            _client(httpx.MockTransport(handler), recorder=recorder),
+            recorder=recorder,
+        )
+        stream = gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hi")],
+            _policy(),
+        )
+        first = await stream.__anext__()
+        assert first
+        await stream.aclose()
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "stream-aclose" / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    started = [e for e in events if e["kind"] == "llm.call.started"]
+    cancelled = [e for e in events if e["kind"] == "llm.call.cancelled"]
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert cancelled[0]["data"]["reason"] == "consumer_closed"
+    assert not any(e["kind"] == "llm.call.completed" for e in events)
+    assert not any(e["kind"] == "llm.call.failed" for e in events)

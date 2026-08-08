@@ -34,6 +34,10 @@ class ObservedLLMGateway:
         self._log_metadata = log_metadata
         self._recorder = recorder
 
+    def _record(self, kind: str, data: dict[str, object]) -> None:
+        if self._recorder is not None:
+            self._recorder.record(kind, data)
+
     async def stream_text(
         self,
         messages: Sequence[ChatMessage],
@@ -45,9 +49,19 @@ class ObservedLLMGateway:
         chunk_count = 0
         char_count = 0
         status = "started"
+        terminal_recorded = False
+        preserve_close_cancellation = False
 
         with diagnostic_context(llm_call_id=call_id):
             self._log_call_start(policy, "stream_text", messages)
+            self._record(
+                "llm.call.started",
+                {
+                    "call_type": "stream_text",
+                    "task": policy.task.value,
+                    "model": policy.model,
+                },
+            )
             inner_stream = self._inner.stream_text(messages, policy)
             try:
                 try:
@@ -59,6 +73,7 @@ class ObservedLLMGateway:
                         yield chunk
                 except asyncio.CancelledError as exc:
                     status = "cancelled"
+                    preserve_close_cancellation = True
                     if self._log_metadata:
                         logger.error(
                             "llm stream failed task=%s model=%s status=cancelled "
@@ -68,6 +83,11 @@ class ObservedLLMGateway:
                             time.perf_counter() - started,
                             type(exc).__name__,
                         )
+                    self._record(
+                        "llm.call.cancelled",
+                        {"reason": "task_cancelled"},
+                    )
+                    terminal_recorded = True
                     raise
                 except Exception as exc:
                     status = "timeout" if isinstance(exc, LLMTimeout) else "error"
@@ -81,6 +101,11 @@ class ObservedLLMGateway:
                             time.perf_counter() - started,
                             type(exc).__name__,
                         )
+                    self._record(
+                        "llm.call.failed",
+                        {"error_type": type(exc).__name__},
+                    )
+                    terminal_recorded = True
                     raise
                 else:
                     status = "success"
@@ -101,7 +126,18 @@ class ObservedLLMGateway:
                             chunk_count,
                             char_count,
                         )
+                    self._record("llm.call.completed", {})
+                    terminal_recorded = True
             finally:
+                # GeneratorExit (consumer aclose) is a BaseException, so it skips the
+                # handlers above and lands here with status still "started".
+                if not terminal_recorded and status == "started":
+                    self._record(
+                        "llm.call.cancelled",
+                        {"reason": "consumer_closed"},
+                    )
+                    terminal_recorded = True
+                    status = "cancelled"
                 try:
                     close = getattr(inner_stream, "aclose", None)
                     if close is not None:
@@ -118,7 +154,7 @@ class ObservedLLMGateway:
                         await close_awaitable_safely(
                             close,
                             record_failure=_record_close_failure,
-                            preserve_existing_cancellation=status == "cancelled",
+                            preserve_existing_cancellation=preserve_close_cancellation,
                         )
                 finally:
                     pass
@@ -141,6 +177,14 @@ class ObservedLLMGateway:
                 messages,
                 output_type.__name__,
             )
+            self._record(
+                "llm.call.started",
+                {
+                    "call_type": "generate_structured",
+                    "task": policy.task.value,
+                    "model": policy.model,
+                },
+            )
             try:
                 result = await self._inner.generate_structured(
                     messages,
@@ -160,6 +204,10 @@ class ObservedLLMGateway:
                         time.perf_counter() - started,
                         type(exc).__name__,
                     )
+                self._record(
+                    "llm.call.cancelled",
+                    {"reason": "task_cancelled"},
+                )
                 raise
             except Exception as exc:
                 status = "timeout" if isinstance(exc, LLMTimeout) else "error"
@@ -174,6 +222,10 @@ class ObservedLLMGateway:
                         time.perf_counter() - started,
                         type(exc).__name__,
                     )
+                self._record(
+                    "llm.call.failed",
+                    {"error_type": type(exc).__name__},
+                )
                 raise
             else:
                 elapsed = time.perf_counter() - started
@@ -186,14 +238,14 @@ class ObservedLLMGateway:
                         output_type.__name__,
                         elapsed,
                     )
-                if self._recorder is not None:
-                    self._recorder.record(
-                        "llm.accepted",
-                        {
-                            "output_type": output_type.__name__,
-                            "result": result,
-                        },
-                    )
+                self._record(
+                    "llm.output.accepted",
+                    {
+                        "output_type": output_type.__name__,
+                        "result": result,
+                    },
+                )
+                self._record("llm.call.completed", {})
                 return result
 
     def _log_call_start(

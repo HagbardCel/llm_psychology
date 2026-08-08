@@ -279,7 +279,7 @@ async def build_test_application(
             recorder=recorder,  # type: ignore[arg-type]
         )
     intake, assessment, therapy, post_session = _build_processors(gateway)  # type: ignore[arg-type]
-    events = EventStream(max_queue_size=64, recorder=recorder)
+    events = EventStream(max_queue_size=64)
     styles: MappingProxyType[str, object] = load_styles()
     clock = now or (lambda: datetime.now(UTC))
     ids = new_id or uuid4
@@ -297,6 +297,7 @@ async def build_test_application(
             supervisor=active_supervisor,
             now=clock,
             new_id=ids,
+            recorder=recorder,  # type: ignore[arg-type]
         )
         if recover:
             await application.recover_on_startup()
