@@ -105,9 +105,15 @@ make sync
 
 Native equivalents:
 
+**Terminal 1:**
+
 ```bash
-uv sync --locked
 uv run --locked jung-api
+```
+
+**Terminal 2:**
+
+```bash
 uv run --locked jung-console --api-url http://127.0.0.1:8000
 ```
 
@@ -136,13 +142,11 @@ for suite ownership and hard-versus-diagnostic semantics.
 
 ## Optional Docker workflow
 
-```bash
-make docker-build
-make docker-up
-make ui-console           # jung-console against packaged API
-make ui-console-test      # isolated Compose project + data directory
-make docker-shell
-```
+- `make docker-build` — build the packaged API image
+- `make docker-up` — run the packaged API in the foreground
+- `make ui-console` — start the packaged API detached and launch `jung-console`
+- `make ui-console-test` — isolated manual-test environment
+- `make docker-shell` — shell into an already running API container
 
 Docker is packaging and smoke infrastructure, not a requirement for day-to-day
 native development.

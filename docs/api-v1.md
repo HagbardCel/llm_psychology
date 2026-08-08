@@ -47,7 +47,7 @@ Policy decisions:
 - `ProfileWire` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store;
 - `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`;
-- Once assessment completes, `GET /api/v1/styles` recommendations remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;
+- `GET /api/v1/styles` always returns the style catalog. Recommendations are empty before assessment completion; afterward they contain the completed assessment recommendations and remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;
 - `GET /api/v1/health` reports **process readiness only** (`HealthResponse` with `status="healthy"`). Healthy means lifespan initialization and startup recovery completed, the application is accepting commands, and shutdown has not begun. The check does not call the LLM provider, mutate or probe SQLite per request, or claim provider health;
 - For HTTP requests, the server generates `request_id` unless a supported correlation header is supplied;
 - `state_conflict` responses include `current_snapshot` with the authoritative revision.

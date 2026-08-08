@@ -60,10 +60,11 @@ Optional packaged Docker path (see [development.md](docs/development.md) for
 
 ```bash
 make docker-build
-make docker-up
+make docker-up            # packaged API in the foreground
 ```
 
-Or start the supported client against a packaged API with `make ui-console`.
+Or start the supported client against a packaged API with `make ui-console`
+(starts the API detached, then launches the console).
 
 ## Next steps
 
