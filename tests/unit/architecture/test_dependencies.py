@@ -349,8 +349,7 @@ def test_client_uses_contract_only_import_allow_list() -> None:
 
 def test_chat_events_does_not_import_api_client() -> None:
     path = CLIENT_SRC / "_chat_events.py"
-    if not path.exists():
-        pytest.skip("jung.client._chat_events not present yet")
+    assert path.is_file(), "jung.client._chat_events correlation boundary is missing"
 
     modules = _resolved_imported_modules(path)
     assert "jung.client.api_client" not in modules
