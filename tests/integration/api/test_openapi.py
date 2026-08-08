@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from starlette.routing import Route
 
+OPENAPI_OPERATION_METHODS = frozenset(
+    {
+        "get",
+        "put",
+        "post",
+        "delete",
+        "patch",
+        "options",
+        "head",
+        "trace",
+    }
+)
+
 EXPECTED_OPERATIONS = {
     ("get", "/api/v1/state"),
     ("get", "/api/v1/profile"),
@@ -37,7 +50,7 @@ def test_openapi_operation_inventory(api_app) -> None:
         (method, path)
         for path, methods in schema["paths"].items()
         for method in methods
-        if method in {"get", "put", "post"}
+        if method in OPENAPI_OPERATION_METHODS
     }
     assert operations == EXPECTED_OPERATIONS
 

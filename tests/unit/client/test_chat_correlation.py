@@ -88,6 +88,7 @@ def _completion_event(
     session_id: UUID,
     client_message_id: UUID,
     turn_id: UUID | None = None,
+    event_session_id: UUID | None = None,
     message_session_id: UUID | None = None,
     message_client_message_id: UUID | None = None,
 ) -> MessageCompletedEvent:
@@ -100,7 +101,7 @@ def _completion_event(
     )
     return MessageCompletedEvent(
         type="message_completed",
-        session_id=session_id,
+        session_id=event_session_id if event_session_id is not None else session_id,
         turn=turn,
         message=MessageResponse(
             id=uuid4(),
@@ -246,6 +247,11 @@ def test_matches_completion_requires_internal_consistency() -> None:
         session_id=session_id, client_message_id=uuid4()
     )
     other_session = _completion_event(session_id=uuid4(), client_message_id=uuid4())
+    wrong_turn_session = _completion_event(
+        session_id=session_id,
+        client_message_id=client_message_id,
+        event_session_id=uuid4(),
+    )
     wrong_message_session = _completion_event(
         session_id=session_id,
         client_message_id=client_message_id,
@@ -260,6 +266,8 @@ def test_matches_completion_requires_internal_consistency() -> None:
     assert matches_completion(exact, identity) is True
     assert matches_completion(same_session_other, identity) is False
     assert matches_completion(other_session, identity) is False
+    with pytest.raises(ChatEventViolation):
+        matches_completion(wrong_turn_session, identity)
     with pytest.raises(ChatEventViolation):
         matches_completion(wrong_message_session, identity)
     with pytest.raises(ChatEventViolation):
@@ -361,6 +369,27 @@ def test_classify_error_different_request_id_without_turn_is_unrelated(
         code="state_conflict",
     )
     assert classify_error(event, identity) is ErrorCorrelation.UNRELATED
+
+
+def test_classify_error_durable_respects_captured_turn_id() -> None:
+    turn_id = uuid4()
+    identity = _identity(turn_id=turn_id)
+
+    matching = _error_event(
+        request_id=uuid4(),
+        session_id=identity.session_id,
+        client_message_id=identity.client_message_id,
+        turn_id=turn_id,
+    )
+    assert classify_error(matching, identity) is ErrorCorrelation.DURABLE_FAILURE
+
+    mismatched = matching.model_copy(update={"turn_id": uuid4()})
+    with pytest.raises(ChatEventViolation) as exc_info:
+        classify_error(mismatched, identity)
+
+    assert exc_info.value.expected_model == (
+        "durable ErrorEvent matching captured turn_id"
+    )
 
 
 # --- matches_token ---

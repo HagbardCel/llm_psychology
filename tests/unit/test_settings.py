@@ -241,11 +241,7 @@ def test_typed_null_task_field_rejected() -> None:
             "max_completion_tokens",
         ),
         (
-            {
-                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                    {"assessment": "not-an-object"}
-                )
-            },
+            {"JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"assessment": "not-an-object"})},
             "must be a JSON object",
         ),
         (
