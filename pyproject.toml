@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 jung-api = "jung.api.app:cli"
 jung-console = "jung.client.terminal:cli"
+jung-debug-export = "jung.debug_bundle:cli"
 
 [dependency-groups]
 dev = [

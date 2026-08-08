@@ -259,18 +259,22 @@ Native development remains the normal path; see [development.md](development.md)
 
 ## Observability
 
-Retain structured command, operation, and LLM call tracing through boundary decorators/middleware. Diagnostics observe the system and must not become workflow state or API contract fields.
+Diagnostics observe the system and must not become workflow state or API
+contract fields. Application command, chat, operation, and recovery paths
+record schema-v2 events directly into an opt-in `DiagnosticRecorder`.
+`EventStream` remains an in-process fan-out for connected WebSocket observers
+and does not project diagnostic events.
 
 Ordinary logs may include safe LLM metadata when enabled. Opt-in
-`JUNG_DEBUG_RUN_DIR` writes a sensitive correlated `trace.jsonl` for local
-debugging (provider LLM traffic, accepted structured outputs, domain
-outcomes, workflow state, and task lifecycle)—not a forensic completeness
-guarantee. See [safety-and-data.md](safety-and-data.md).
+`JUNG_DEBUG_RUN_DIR` writes a sensitive correlated debug bundle (`manifest.json`,
+`trace.jsonl`, durable `state.json` / `transcript.md`, and conditional
+`failure_summary.md`) for local AI-agent debugging. See
+[safety-and-data.md](safety-and-data.md).
 
 Minimum useful ordinary-log records:
 
 - command accepted/completed/failed;
-- stage before/after and state revision;
+- stage before/after when a transition occurs;
 - operation lifecycle;
 - LLM task, model, latency, token usage when available, validation attempts, and status;
 - correlation/request/session identifiers without unnecessary prompt content.

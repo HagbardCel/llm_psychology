@@ -16,7 +16,11 @@ from pydantic import ValidationError
 
 from jung import workflow
 from jung._async_cleanup import drain_cancelled_task
-from jung.diagnostics import diagnostic_context
+from jung.diagnostics import (
+    DiagnosticRecorder,
+    _safe_exception_message,
+    diagnostic_context,
+)
 from jung.domain.commands import (
     EndSession,
     RetryOperation,
@@ -30,6 +34,7 @@ from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
     NotFound,
+    RevisionConflict,
     StoredWorkFailure,
 )
 from jung.domain.models import (
@@ -119,6 +124,7 @@ class TherapyApplication:
         supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
+        recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._store = store
         self._intake = intake
@@ -130,6 +136,7 @@ class TherapyApplication:
         self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
+        self._recorder = recorder
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
@@ -140,6 +147,75 @@ class TherapyApplication:
 
     def begin_shutdown(self) -> None:
         self._shutdown = True
+
+    def _record(self, kind: str, data: dict[str, Any] | None = None) -> None:
+        if self._recorder is not None:
+            self._recorder.record(kind, data)
+
+    def _record_runtime_error(
+        self,
+        *,
+        phase: str,
+        exc: BaseException,
+        **extra: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "phase": phase,
+            "error_type": type(exc).__name__,
+            "error_message": _safe_exception_message(exc),
+        }
+        payload.update(extra)
+        self._record("runtime.error", payload)
+
+    def _record_command_error(self, command: str, exc: BaseException) -> None:
+        self._record_runtime_error(
+            phase="workflow_command",
+            exc=exc,
+            command=command,
+        )
+
+    def _record_command_started(self, command: str) -> None:
+        self._record("workflow.command.started", {"command": command})
+
+    def _record_command_completed(self, command: str, outcome: str) -> None:
+        self._record(
+            "workflow.command.completed",
+            {"command": command, "outcome": outcome},
+        )
+
+    def _record_command_rejected(self, command: str, exc: BaseException) -> None:
+        self._record(
+            "workflow.command.rejected",
+            {"command": command, "error_type": type(exc).__name__},
+        )
+
+    def _record_transition_if_changed(
+        self,
+        *,
+        from_stage: Stage,
+        to_stage: Stage,
+        trigger: str,
+        revision: int,
+    ) -> None:
+        if from_stage is to_stage:
+            return
+        self._record(
+            "workflow.transition",
+            {
+                "from_stage": from_stage.value,
+                "to_stage": to_stage.value,
+                "trigger": trigger,
+                "revision": revision,
+            },
+        )
+
+    _COMMAND_REJECT_TYPES = (
+        InvalidCommand,
+        RevisionConflict,
+        Busy,
+        NotFound,
+        StoredWorkFailure,
+    )
 
     async def _run_store(
         self, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
@@ -161,23 +237,85 @@ class TherapyApplication:
                     type(failure).__name__,
                     exc_info=failure,
                 )
+                self._record_runtime_error(
+                    phase="store_drained",
+                    exc=failure,
+                    function=method_name,
+                )
 
             raise cancellation
 
     async def recover_on_startup(self) -> AppSnapshot:
         async with self._mutation_lock:
-            await self._run_store(
+            recovered_ops = await self._run_store(
                 self._store.recover_stale_operations,
                 now=self._now(),
             )
-            await self._run_store(
+            recovered_chats = await self._run_store(
                 self._store.recover_stale_chat_turns,
                 now=self._now(),
             )
+            for turn in recovered_chats:
+                with diagnostic_context(
+                    session_id=str(turn.session_id),
+                    turn_id=str(turn.id),
+                    client_message_id=str(turn.client_message_id),
+                ):
+                    self._record(
+                        "chat.turn.failed",
+                        {
+                            "error_code": turn.error_code or "stale_pending",
+                            "retryable": turn.retryable,
+                            "source": "startup_recovery",
+                        },
+                    )
             snapshot = await self._assemble_snapshot_locked()
-        if snapshot.current_operation is not None:
-            if snapshot.current_operation.status is OperationStatus.PENDING:
-                self._schedule_operation(snapshot.current_operation)
+
+        recovered_by_id = {operation.id: operation for operation in recovered_ops}
+        scheduled_id: UUID | None = None
+        if (
+            snapshot.current_operation is not None
+            and snapshot.current_operation.status is OperationStatus.PENDING
+        ):
+            scheduled_id = snapshot.current_operation.id
+            self._schedule_operation(snapshot.current_operation)
+
+        for operation in recovered_ops:
+            with diagnostic_context(
+                operation_id=str(operation.id),
+                session_id=str(operation.source_session_id),
+            ):
+                self._record(
+                    "operation.recovered",
+                    {
+                        "kind": operation.kind.value,
+                        "attempt": operation.attempt,
+                        "from_status": OperationStatus.RUNNING.value,
+                        "to_status": OperationStatus.PENDING.value,
+                        "scheduled": operation.id == scheduled_id,
+                    },
+                )
+
+        if (
+            scheduled_id is not None
+            and scheduled_id not in recovered_by_id
+            and snapshot.current_operation is not None
+        ):
+            operation = snapshot.current_operation
+            with diagnostic_context(
+                operation_id=str(operation.id),
+                session_id=str(operation.source_session_id),
+            ):
+                self._record(
+                    "operation.recovered",
+                    {
+                        "kind": operation.kind.value,
+                        "attempt": operation.attempt,
+                        "from_status": OperationStatus.PENDING.value,
+                        "to_status": OperationStatus.PENDING.value,
+                        "scheduled": True,
+                    },
+                )
         return snapshot
 
     async def get_snapshot(self) -> AppSnapshot:
@@ -278,147 +416,258 @@ class TherapyApplication:
         return turn
 
     async def update_profile(self, command: UpdateProfile) -> AppSnapshot:
-        self._reject_if_shutdown()
-        async with self._mutation_lock:
+        self._record_command_started("update_profile")
+        try:
             self._reject_if_shutdown()
-            facts = await self._run_store(self._store.load_snapshot_facts)
-            workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
-            intake_session_id = (
-                self._new_id()
-                if facts.stage is Stage.SETUP and is_profile_complete(command.profile)
-                else None
+            async with self._mutation_lock:
+                self._reject_if_shutdown()
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                from_stage = facts.stage
+                workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
+                intake_session_id = (
+                    self._new_id()
+                    if facts.stage is Stage.SETUP
+                    and is_profile_complete(command.profile)
+                    else None
+                )
+                await self._run_store(
+                    self._store.update_profile,
+                    command.profile,
+                    expected_revision=command.expected_revision,
+                    intake_session_id=intake_session_id,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+            self._record_command_completed("update_profile", "committed")
+            self._record_transition_if_changed(
+                from_stage=from_stage,
+                to_stage=snapshot.stage,
+                trigger="update_profile",
+                revision=snapshot.revision,
             )
-            await self._run_store(
-                self._store.update_profile,
-                command.profile,
-                expected_revision=command.expected_revision,
-                intake_session_id=intake_session_id,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(SnapshotChanged(snapshot))
-        return snapshot
+            await self._events.publish(SnapshotChanged(snapshot))
+            return snapshot
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("update_profile", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("update_profile", exc)
+            raise
 
     async def select_style(self, command: SelectStyle) -> AppSnapshot:
-        self._reject_if_shutdown()
-        if command.style_id not in self._styles:
-            raise InvalidCommand(f"unknown style: {command.style_id}")
-        async with self._mutation_lock:
+        self._record_command_started("select_style")
+        try:
             self._reject_if_shutdown()
-            facts = await self._run_store(self._store.load_snapshot_facts)
-            workflow.require_command_allowed(CommandName.SELECT_STYLE, facts)
-            assessment = await self._load_completed_assessment_locked()
-            if assessment is None:
-                raise InvariantViolation("completed assessment result is required")
-            recommendation = _select_style_recommendation(
-                assessment,
-                command.style_id,
+            if command.style_id not in self._styles:
+                raise InvalidCommand(f"unknown style: {command.style_id}")
+            async with self._mutation_lock:
+                self._reject_if_shutdown()
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                from_stage = facts.stage
+                workflow.require_command_allowed(CommandName.SELECT_STYLE, facts)
+                assessment = await self._load_completed_assessment_locked()
+                if assessment is None:
+                    raise InvariantViolation("completed assessment result is required")
+                recommendation = _select_style_recommendation(
+                    assessment,
+                    command.style_id,
+                )
+                operation = await self._run_store(
+                    self._store.get_latest_completed_operation,
+                    OperationKind.ASSESSMENT,
+                )
+                assert operation is not None
+                plan_id = self._new_id()
+                await self._run_store(
+                    self._store.select_style_and_create_initial_plan,
+                    expected_revision=command.expected_revision,
+                    style_id=command.style_id,
+                    plan_id=plan_id,
+                    content=recommendation.initial_plan,
+                    intake_session_id=operation.source_session_id,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+            self._record_command_completed("select_style", "committed")
+            self._record_transition_if_changed(
+                from_stage=from_stage,
+                to_stage=snapshot.stage,
+                trigger="select_style",
+                revision=snapshot.revision,
             )
-            operation = await self._run_store(
-                self._store.get_latest_completed_operation,
-                OperationKind.ASSESSMENT,
-            )
-            assert operation is not None
-            plan_id = self._new_id()
-            await self._run_store(
-                self._store.select_style_and_create_initial_plan,
-                expected_revision=command.expected_revision,
-                style_id=command.style_id,
-                plan_id=plan_id,
-                content=recommendation.initial_plan,
-                intake_session_id=operation.source_session_id,
-                now=self._now(),
-            )
-            snapshot = await self._assemble_snapshot_locked()
-        await self._events.publish(SnapshotChanged(snapshot))
-        return snapshot
+            await self._events.publish(SnapshotChanged(snapshot))
+            return snapshot
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("select_style", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("select_style", exc)
+            raise
 
     async def start_session(self, command: StartSession) -> StartedSession:
-        self._reject_if_shutdown()
-        session_id = self._new_id()
-        async with self._mutation_lock:
+        self._record_command_started("start_session")
+        try:
             self._reject_if_shutdown()
-            facts = await self._run_store(self._store.load_snapshot_facts)
-            workflow.require_command_allowed(CommandName.START_SESSION, facts)
-            _, session = await self._run_store(
-                self._store.start_therapy_session,
-                expected_revision=command.expected_revision,
-                session_id=session_id,
-                now=self._now(),
+            session_id = self._new_id()
+            async with self._mutation_lock:
+                self._reject_if_shutdown()
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                from_stage = facts.stage
+                workflow.require_command_allowed(CommandName.START_SESSION, facts)
+                _, session = await self._run_store(
+                    self._store.start_therapy_session,
+                    expected_revision=command.expected_revision,
+                    session_id=session_id,
+                    now=self._now(),
+                )
+                snapshot = await self._assemble_snapshot_locked()
+                started = StartedSession(session=session, snapshot=snapshot)
+            self._record_command_completed("start_session", "committed")
+            self._record_transition_if_changed(
+                from_stage=from_stage,
+                to_stage=started.snapshot.stage,
+                trigger="start_session",
+                revision=started.snapshot.revision,
             )
-            snapshot = await self._assemble_snapshot_locked()
-            started = StartedSession(session=session, snapshot=snapshot)
-        await self._events.publish(SnapshotChanged(started.snapshot))
-        return started
+            await self._events.publish(SnapshotChanged(started.snapshot))
+            return started
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("start_session", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("start_session", exc)
+            raise
 
     async def end_session(self, command: EndSession) -> AppSnapshot:
-        self._reject_if_shutdown()
-        operation_id = self._new_id()
+        self._record_command_started("end_session")
         operation: Operation | None = None
         snapshot: AppSnapshot | None = None
+        from_stage: Stage | None = None
         try:
-            async with self._mutation_lock:
-                self._reject_if_shutdown()
-                facts = await self._run_store(self._store.load_snapshot_facts)
-                workflow.require_command_allowed(CommandName.END_SESSION, facts)
-                session = await self._run_store(
-                    self._store.get_session,
-                    command.session_id,
-                )
-                if session is None:
-                    raise NotFound("session")
-                active = await self._run_store(self._store.get_active_session)
-                if active is None or active.id != command.session_id:
-                    raise InvalidCommand("session_id does not match the active session")
-                if active.kind is not SessionKind.THERAPY:
-                    raise InvalidCommand("active session is not therapy")
-                _, operation = await self._run_store(
-                    self._store.end_therapy_session,
-                    expected_revision=command.expected_revision,
-                    session_id=command.session_id,
-                    operation_id=operation_id,
-                    now=self._now(),
-                )
-                snapshot = await self._assemble_snapshot_locked()
-            await self._publish_pending_operation_changed(operation, snapshot)
-            return snapshot
-        finally:
-            if operation is not None:
-                self._schedule_operation(operation)
+            self._reject_if_shutdown()
+            operation_id = self._new_id()
+            try:
+                async with self._mutation_lock:
+                    self._reject_if_shutdown()
+                    facts = await self._run_store(self._store.load_snapshot_facts)
+                    from_stage = facts.stage
+                    workflow.require_command_allowed(CommandName.END_SESSION, facts)
+                    session = await self._run_store(
+                        self._store.get_session,
+                        command.session_id,
+                    )
+                    if session is None:
+                        raise NotFound("session")
+                    active = await self._run_store(self._store.get_active_session)
+                    if active is None or active.id != command.session_id:
+                        raise InvalidCommand(
+                            "session_id does not match the active session"
+                        )
+                    if active.kind is not SessionKind.THERAPY:
+                        raise InvalidCommand("active session is not therapy")
+                    _, operation = await self._run_store(
+                        self._store.end_therapy_session,
+                        expected_revision=command.expected_revision,
+                        session_id=command.session_id,
+                        operation_id=operation_id,
+                        now=self._now(),
+                    )
+                    snapshot = await self._assemble_snapshot_locked()
+                assert operation is not None and snapshot is not None
+                with diagnostic_context(
+                    operation_id=str(operation.id),
+                    session_id=str(operation.source_session_id),
+                ):
+                    self._record(
+                        "operation.created",
+                        {
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
+                        },
+                    )
+                self._record_command_completed("end_session", "committed")
+                if from_stage is not None:
+                    self._record_transition_if_changed(
+                        from_stage=from_stage,
+                        to_stage=snapshot.stage,
+                        trigger="end_session",
+                        revision=snapshot.revision,
+                    )
+                await self._publish_pending_operation_changed(operation, snapshot)
+                return snapshot
+            finally:
+                if operation is not None:
+                    self._schedule_operation(operation)
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("end_session", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("end_session", exc)
+            raise
 
     async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
-        self._reject_if_shutdown()
+        self._record_command_started("retry_operation")
         operation: Operation | None = None
         snapshot: AppSnapshot | None = None
+        from_stage: Stage | None = None
         try:
-            async with self._mutation_lock:
-                self._reject_if_shutdown()
-                facts = await self._run_store(self._store.load_snapshot_facts)
-                workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
-                current = await self._run_store(self._store.get_current_operation)
-                if current is None:
-                    raise InvariantViolation(
-                        "retry command available without current operation"
+            self._reject_if_shutdown()
+            try:
+                async with self._mutation_lock:
+                    self._reject_if_shutdown()
+                    facts = await self._run_store(self._store.load_snapshot_facts)
+                    from_stage = facts.stage
+                    workflow.require_command_allowed(CommandName.RETRY_OPERATION, facts)
+                    current = await self._run_store(self._store.get_current_operation)
+                    if current is None:
+                        raise InvariantViolation(
+                            "retry command available without current operation"
+                        )
+                    if (
+                        current.status is not OperationStatus.FAILED
+                        or not current.retryable
+                    ):
+                        raise InvariantViolation(
+                            "retry command available for ineligible operation"
+                        )
+                    operation = await self._run_store(
+                        self._store.retry_operation,
+                        current.id,
+                        expected_revision=command.expected_revision,
+                        now=self._now(),
                     )
-                if (
-                    current.status is not OperationStatus.FAILED
-                    or not current.retryable
+                    snapshot = await self._assemble_snapshot_locked()
+                assert operation is not None and snapshot is not None
+                with diagnostic_context(
+                    operation_id=str(operation.id),
+                    session_id=str(operation.source_session_id),
                 ):
-                    raise InvariantViolation(
-                        "retry command available for ineligible operation"
+                    self._record(
+                        "operation.retried",
+                        {
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
+                        },
                     )
-                operation = await self._run_store(
-                    self._store.retry_operation,
-                    current.id,
-                    expected_revision=command.expected_revision,
-                    now=self._now(),
-                )
-                snapshot = await self._assemble_snapshot_locked()
-            await self._publish_pending_operation_changed(operation, snapshot)
-            return snapshot
-        finally:
-            if operation is not None:
-                self._schedule_operation(operation)
+                self._record_command_completed("retry_operation", "committed")
+                if from_stage is not None:
+                    self._record_transition_if_changed(
+                        from_stage=from_stage,
+                        to_stage=snapshot.stage,
+                        trigger="retry_operation",
+                        revision=snapshot.revision,
+                    )
+                await self._publish_pending_operation_changed(operation, snapshot)
+                return snapshot
+            finally:
+                if operation is not None:
+                    self._schedule_operation(operation)
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("retry_operation", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("retry_operation", exc)
+            raise
 
     async def _require_generation_available_locked(
         self,
@@ -467,12 +716,24 @@ class TherapyApplication:
         return turn, self._accepted_chat_events(turn, snapshot, command.request_id)
 
     async def submit_message(self, command: SendMessage) -> ChatTurn:
-        self._reject_if_shutdown()
+        self._record_command_started("send_message")
+        try:
+            return await self._submit_message_body(command)
+        except self._COMMAND_REJECT_TYPES as exc:
+            self._record_command_rejected("send_message", exc)
+            raise
+        except Exception as exc:
+            self._record_command_error("send_message", exc)
+            raise
+
+    async def _submit_message_body(self, command: SendMessage) -> ChatTurn:
         generation_reserved = False
         pending_events: list[Any] = []
         turn: ChatTurn | None = None
         handoff_on_cancel: ChatTurn | None = None
+        chat_lifecycle: str | None = None  # accepted | retried
         try:
+            self._reject_if_shutdown()
             async with self._mutation_lock:
                 self._reject_if_shutdown()
                 existing = await self._run_store(
@@ -482,8 +743,16 @@ class TherapyApplication:
                 )
                 if existing is not None:
                     if existing.status is ChatTurnStatus.PENDING:
+                        self._record_command_completed(
+                            "send_message",
+                            "idempotent_existing",
+                        )
                         return existing
                     if existing.status is ChatTurnStatus.COMPLETE:
+                        self._record_command_completed(
+                            "send_message",
+                            "idempotent_existing",
+                        )
                         return existing
                     if existing.status is ChatTurnStatus.FAILED:
                         if not existing.retryable:
@@ -506,6 +775,7 @@ class TherapyApplication:
                             existing,
                             command,
                         )
+                        chat_lifecycle = "retried"
 
                 if turn is None:
                     await self._require_generation_available_locked()
@@ -533,6 +803,7 @@ class TherapyApplication:
                         snapshot,
                         command.request_id,
                     )
+                    chat_lifecycle = "accepted"
         except asyncio.CancelledError:
             if generation_reserved:
                 if turn is not None:
@@ -554,6 +825,19 @@ class TherapyApplication:
                     self._release_generation_lock()
 
         assert turn is not None
+        with diagnostic_context(
+            session_id=str(turn.session_id),
+            turn_id=str(turn.id),
+            client_message_id=str(turn.client_message_id),
+            request_id=(
+                str(command.request_id) if command.request_id is not None else None
+            ),
+        ):
+            self._record_command_completed("send_message", "committed")
+            if chat_lifecycle == "retried":
+                self._record("chat.turn.retried", {})
+            elif chat_lifecycle == "accepted":
+                self._record("chat.turn.accepted", {})
         if not pending_events:
             return turn
         return await self._handoff_accepted_chat_turn(
@@ -577,10 +861,16 @@ class TherapyApplication:
                 raise
             self._release_generation_lock()
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "failed to publish accepted chat events turn_id=%s",
                 turn.id,
+            )
+            self._record_runtime_error(
+                phase="event_publish",
+                exc=exc,
+                event_type="accepted_chat_events",
+                turn_id=str(turn.id),
             )
 
         outcome = self._try_start_chat_worker(turn, request_id=request_id)
@@ -682,6 +972,12 @@ class TherapyApplication:
                 turn.id,
                 exc_info=outcome.error,
             )
+            if outcome.error is not None:
+                self._record_runtime_error(
+                    phase="chat_schedule",
+                    exc=outcome.error,
+                    turn_id=str(turn.id),
+                )
         self._release_generation_lock()
         return await self._persist_chat_schedule_failure(turn)
 
@@ -696,6 +992,19 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
+        with diagnostic_context(
+            session_id=str(turn.session_id),
+            turn_id=str(turn.id),
+            client_message_id=str(turn.client_message_id),
+        ):
+            self._record(
+                "chat.turn.failed",
+                {
+                    "error_code": failed.error_code or "internal_error",
+                    "retryable": failed.retryable,
+                    "source": "schedule_failure",
+                },
+            )
         try:
             await self._events.publish(
                 ChatTurnFailed(
@@ -707,10 +1016,16 @@ class TherapyApplication:
             await self._events.publish(SnapshotChanged(snapshot))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "failed to publish chat schedule failure turn_id=%s",
                 turn.id,
+            )
+            self._record_runtime_error(
+                phase="event_publish",
+                exc=exc,
+                event_type="ChatTurnFailed",
+                turn_id=str(turn.id),
             )
         return failed
 
@@ -719,10 +1034,15 @@ class TherapyApplication:
             await self._events.publish(event)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "failed to publish non-authoritative event event_type=%s",
                 type(event).__name__,
+            )
+            self._record_runtime_error(
+                phase="event_publish",
+                exc=exc,
+                event_type=type(event).__name__,
             )
 
     async def _publish_pending_operation_changed(
@@ -734,10 +1054,16 @@ class TherapyApplication:
             await self._events.publish(OperationChanged(operation, snapshot))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "failed to publish pending operation event operation_id=%s",
                 operation.id,
+            )
+            self._record_runtime_error(
+                phase="event_publish",
+                exc=exc,
+                event_type="OperationChanged",
+                operation_id=str(operation.id),
             )
 
     def _operation_task_name(self, operation: Operation) -> str:
@@ -758,10 +1084,15 @@ class TherapyApplication:
                 )
         except SupervisorClosed:
             return
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "failed to schedule operation operation_id=%s",
                 operation.id,
+            )
+            self._record_runtime_error(
+                phase="operation_schedule",
+                exc=exc,
+                operation_id=str(operation.id),
             )
 
     async def _run_chat_worker(
@@ -777,6 +1108,7 @@ class TherapyApplication:
             client_message_id=str(client_message_id),
             request_id=str(request_id) if request_id is not None else None,
         ):
+            self._record("chat.turn.started", {})
             try:
                 session = await self._run_store(self._store.get_session, session_id)
                 if session is None:
@@ -796,6 +1128,10 @@ class TherapyApplication:
                         f"unsupported session kind: {session.kind}"
                     )
             except asyncio.CancelledError:
+                self._record(
+                    "chat.turn.cancelled",
+                    {"reason": "task_cancelled"},
+                )
                 raise
             except Exception as exc:
                 logger.exception(
@@ -908,6 +1244,7 @@ class TherapyApplication:
             )
             snapshot = await self._assemble_snapshot_locked()
         assistant_message = await self._load_message(session_id, assistant_message_id)
+        self._record("chat.turn.completed", {})
         await self._events.publish(
             ChatTurnCompleted(
                 session_id=session_id,
@@ -928,8 +1265,11 @@ class TherapyApplication:
         assistant_message_id = self._new_id()
         operation_id = self._new_id()
         operation: Operation | None = None
+        from_stage: Stage | None = None
         try:
             async with self._mutation_lock:
+                facts = await self._run_store(self._store.load_snapshot_facts)
+                from_stage = facts.stage
                 turn, operation, _state = await self._run_store(
                     self._store.complete_final_intake_turn,
                     turn_id,
@@ -943,6 +1283,25 @@ class TherapyApplication:
             assistant_message = await self._load_message(
                 session_id, assistant_message_id
             )
+            self._record("chat.turn.completed", {})
+            with diagnostic_context(
+                operation_id=str(operation.id),
+                session_id=str(operation.source_session_id),
+            ):
+                self._record(
+                    "operation.created",
+                    {
+                        "kind": operation.kind.value,
+                        "attempt": operation.attempt,
+                    },
+                )
+            if from_stage is not None:
+                self._record_transition_if_changed(
+                    from_stage=from_stage,
+                    to_stage=snapshot.stage,
+                    trigger="intake_completed",
+                    revision=snapshot.revision,
+                )
             await self._publish_non_authoritative(
                 ChatTurnCompleted(
                     session_id=session_id,
@@ -972,6 +1331,11 @@ class TherapyApplication:
                     turn_id,
                     exc_info=exc,
                 )
+                self._record_runtime_error(
+                    phase="chat_worker_late_failure",
+                    exc=exc,
+                    turn_id=str(turn_id),
+                )
                 return
             turn = await self._run_store(
                 self._store.fail_chat_turn,
@@ -982,6 +1346,14 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
+        self._record(
+            "chat.turn.failed",
+            {
+                "error_code": turn.error_code or code,
+                "retryable": turn.retryable,
+                "source": "generation",
+            },
+        )
         await self._events.publish(
             ChatTurnFailed(session_id=session_id, turn_id=turn_id, turn=turn)
         )
@@ -1012,18 +1384,32 @@ class TherapyApplication:
                 operation_id=str(operation_id),
                 session_id=str(operation.source_session_id),
             ):
+                self._record(
+                    "operation.started",
+                    {
+                        "kind": operation.kind.value,
+                        "attempt": operation.attempt,
+                    },
+                )
                 try:
                     await self._events.publish(OperationChanged(operation, snapshot))
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         "failed to publish operation running event operation_id=%s",
                         operation_id,
+                    )
+                    self._record_runtime_error(
+                        phase="event_publish",
+                        exc=exc,
+                        event_type="OperationChanged",
+                        operation_id=str(operation_id),
                     )
 
                 if operation.kind is OperationKind.ASSESSMENT:
                     assessment_input = await self._build_assessment_input(operation)
                     result = await self._assessment.assess(assessment_input)
                     async with self._mutation_lock:
+                        before = await self._run_store(self._store.get_app_state)
                         await self._run_store(
                             self._store.complete_assessment,
                             operation_id,
@@ -1036,6 +1422,19 @@ class TherapyApplication:
                         operation_id,
                     )
                     assert completed is not None
+                    self._record(
+                        "operation.completed",
+                        {
+                            "kind": completed.kind.value,
+                            "attempt": completed.attempt,
+                        },
+                    )
+                    self._record_transition_if_changed(
+                        from_stage=before.stage,
+                        to_stage=snapshot.stage,
+                        trigger="assessment_completed",
+                        revision=snapshot.revision,
+                    )
                     await self._events.publish(OperationChanged(completed, snapshot))
                 elif operation.kind is OperationKind.POST_SESSION:
                     post_input = await self._build_post_session_input(operation)
@@ -1066,6 +1465,7 @@ class TherapyApplication:
                         else None
                     )
                     async with self._mutation_lock:
+                        before = await self._run_store(self._store.get_app_state)
                         await self._run_store(
                             self._store.complete_post_session,
                             operation_id,
@@ -1081,6 +1481,19 @@ class TherapyApplication:
                         operation_id,
                     )
                     assert completed is not None
+                    self._record(
+                        "operation.completed",
+                        {
+                            "kind": completed.kind.value,
+                            "attempt": completed.attempt,
+                        },
+                    )
+                    self._record_transition_if_changed(
+                        from_stage=before.stage,
+                        to_stage=snapshot.stage,
+                        trigger="post_session_completed",
+                        revision=snapshot.revision,
+                    )
                     await self._events.publish(OperationChanged(completed, snapshot))
                 else:
                     raise InvariantViolation(
@@ -1116,6 +1529,11 @@ class TherapyApplication:
                     operation_id,
                     exc_info=exc,
                 )
+                self._record_runtime_error(
+                    phase="operation_worker_late_failure",
+                    exc=exc,
+                    operation_id=str(operation_id),
+                )
                 return
             operation = await self._run_store(
                 self._store.fail_operation,
@@ -1126,12 +1544,31 @@ class TherapyApplication:
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
+        with diagnostic_context(
+            operation_id=str(operation.id),
+            session_id=str(operation.source_session_id),
+        ):
+            self._record(
+                "operation.failed",
+                {
+                    "kind": operation.kind.value,
+                    "attempt": operation.attempt,
+                    "error_code": operation.error_code or code,
+                    "retryable": operation.retryable,
+                },
+            )
         try:
             await self._events.publish(OperationChanged(operation, snapshot))
-        except Exception:
+        except Exception as publish_exc:
             logger.exception(
                 "failed to publish operation failure event operation_id=%s",
                 operation_id,
+            )
+            self._record_runtime_error(
+                phase="event_publish",
+                exc=publish_exc,
+                event_type="OperationChanged",
+                operation_id=str(operation_id),
             )
 
     async def _build_intake_turn_input(self, session_id: UUID) -> IntakeTurnInput:

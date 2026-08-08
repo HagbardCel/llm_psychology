@@ -100,11 +100,11 @@ def test_recorder_redacts_short_configured_secrets(tmp_path: Path) -> None:
     secret = "abc123"
     with DiagnosticRun(tmp_path / "run", secret_values=[secret]) as recorder:
         recorder.record(
-            "operation.status",
+            "operation.failed",
             {"error_message": f"authentication failed for {secret}"},
         )
     lines = _trace_lines(tmp_path / "run")
-    status = next(e for e in lines if e["kind"] == "operation.status")
+    status = next(e for e in lines if e["kind"] == "operation.failed")
     assert status["data"]["error_message"] == "authentication failed for [REDACTED]"
 
 
@@ -162,14 +162,15 @@ def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     assert lines[-1]["kind"] == "diagnostics.end"
     assert lines[-1]["data"]["status"] == "success"
     event = lines[1]
-    assert event["schema_version"] == 1
+    assert event["schema_version"] == 2
     assert event["sequence"] == 2
     assert "timestamp" in event
     assert "elapsed_ms" in event
     assert event["kind"] == "llm.provider.request"
-    assert event["context"] == {"session_id": "s1", "task": "chat:1"}
+    assert event["context"]["session_id"] == "s1"
+    assert event["context"]["task"] == "chat:1"
+    assert "run_id" in event["context"]
     assert event["data"]["attempt"] == "initial"
-    assert not (run_dir / "manifest.json").exists()
 
 
 def test_mark_run_failed_sets_end_status_without_raising(tmp_path: Path) -> None:
@@ -185,7 +186,7 @@ def test_top_level_exception_records_error_and_propagates(tmp_path: Path) -> Non
     run_dir = tmp_path / "run"
     with pytest.raises(RuntimeError, match="boom"):
         with DiagnosticRun(run_dir) as recorder:
-            recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
+            recorder.record("workflow.transition", {"revision": 1, "stage": "intake"})
             raise RuntimeError("boom")
     end = _trace_lines(run_dir)[-1]
     assert end["data"]["status"] == "failed"
@@ -219,14 +220,14 @@ def test_write_failure_latches_and_warns_once(
         real_write = recorder._trace_file.write
 
         def flaky_write(text: str) -> int:
-            if '"kind":"workflow.state"' in text.replace(" ", ""):
+            if '"kind":"workflow.transition"' in text.replace(" ", ""):
                 raise OSError("disk full")
             return real_write(text)
 
         monkeypatch.setattr(recorder._trace_file, "write", flaky_write)
-        recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
-        recorder.record("workflow.state", {"revision": 2, "stage": "therapy"})
-        recorder.record("workflow.state", {"revision": 3, "stage": "ready"})
+        recorder.record("workflow.transition", {"revision": 1, "stage": "intake"})
+        recorder.record("workflow.transition", {"revision": 2, "stage": "therapy"})
+        recorder.record("workflow.transition", {"revision": 3, "stage": "ready"})
     err = capsys.readouterr().err
     assert err.count("jung diagnostics:") == 1
 
@@ -237,7 +238,7 @@ def test_thread_safe_sequence(tmp_path: Path) -> None:
 
         def worker(n: int) -> None:
             for i in range(20):
-                recorder.record("workflow.state", {"n": n, "i": i})
+                recorder.record("workflow.transition", {"n": n, "i": i})
 
         threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
         for thread in threads:
@@ -296,7 +297,7 @@ def test_concurrent_record_cannot_append_after_diagnostics_end(
 
     def record_worker() -> None:
         try:
-            recorder.record("workflow.state", {"marker": "after-admit"})
+            recorder.record("workflow.transition", {"marker": "after-admit"})
         except BaseException as exc:  # noqa: BLE001 - collect for main thread
             errors.append(exc)
 

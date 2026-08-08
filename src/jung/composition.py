@@ -15,6 +15,11 @@ from uuid import UUID, uuid4
 from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
 from jung.config import ApplicationSettings
+from jung.debug_bundle import (
+    build_manifest_llm_info,
+    finalize_debug_bundle,
+    write_manifest,
+)
 from jung.diagnostics import (
     DiagnosticRecorder,
     DiagnosticRun,
@@ -63,9 +68,9 @@ def _record_cleanup_failure(
     )
     if recorder is not None:
         recorder.record(
-            "runtime.cleanup.error",
+            "runtime.error",
             {
-                "step": step,
+                "phase": f"cleanup:{step}",
                 "error_type": type(exc).__name__,
                 "error_message": _safe_exception_message(exc),
                 "selected_as_cleanup_error": selected_as_cleanup_error,
@@ -301,9 +306,7 @@ async def application_context(
         run_cm = nullcontext(None)
 
     with run_cm as recorder:
-        store = SQLiteStore(settings.database_path)
-        await asyncio.to_thread(store.initialize)
-
+        store: SQLiteStore | None = None
         llm: OpenAICompatibleLLM | None = None
         supervisor: TaskSupervisor | None = None
         supervisor_entered = False
@@ -313,7 +316,17 @@ async def application_context(
 
         try:
             policies = build_model_policies(settings.llm)
+            if recorder is not None:
+                write_manifest(
+                    recorder,
+                    llm=build_manifest_llm_info(
+                        provider_url=settings.llm.base_url,
+                        policies=policies,
+                    ),
+                )
             _preflight_json_schema_policies(policies)
+            store = SQLiteStore(settings.database_path)
+            await asyncio.to_thread(store.initialize)
             adapter_config = AdapterConfig(
                 base_url=settings.llm.base_url,
                 api_key=settings.llm.api_key,
@@ -335,10 +348,7 @@ async def application_context(
                 )
 
             styles = load_styles()
-            events = EventStream(
-                max_queue_size=settings.event_queue_size,
-                recorder=recorder,
-            )
+            events = EventStream(max_queue_size=settings.event_queue_size)
             supervisor = TaskSupervisor(recorder=recorder)
             await supervisor.__aenter__()
             supervisor_entered = True
@@ -367,6 +377,7 @@ async def application_context(
                 supervisor=supervisor,
                 now=now or _default_now,
                 new_id=new_id or _default_new_id,
+                recorder=recorder,
             )
             await application.recover_on_startup()
             runtime = ApplicationRuntime(
@@ -393,6 +404,15 @@ async def application_context(
                 cleanup_error=cleanup_error,
                 shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
             )
+            if recorder is not None and store is not None:
+                finalize_debug_bundle(
+                    recorder,
+                    store,
+                    primary_exception=primary[0] if primary is not None else None,
+                    cleanup_exception=(
+                        cleanup_error[0] if cleanup_error is not None else None
+                    ),
+                )
 
         if primary is not None:
             exc, tb = primary

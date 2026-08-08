@@ -23,11 +23,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 _TOKEN_METRIC_KEYS: Final = frozenset(
     {
         "prompt_tokens",
@@ -242,6 +242,46 @@ def sanitize_value(
     return convert(value)
 
 
+def open_private_file(path: Path, *, mode: str = "w") -> Any:
+    """Create or open a file with mode ``0600`` from the outset when creating."""
+    path = Path(path)
+    creating = not path.exists()
+    if creating:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if "a" in mode:
+            flags |= os.O_APPEND
+        fd = os.open(path, flags, 0o600)
+        try:
+            # Binary-safe text wrapper; callers use text modes ("w"/"a").
+            text_mode = mode.replace("b", "")
+            return os.fdopen(fd, text_mode, encoding="utf-8", buffering=1)
+        except Exception:
+            os.close(fd)
+            raise
+    handle = open(path, mode, encoding="utf-8", buffering=1)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return handle
+
+
+def write_private_text(path: Path, text: str) -> None:
+    """Create a new ``0600`` text file (fails if it already exists)."""
+    path = Path(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+    except Exception:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 class DiagnosticRecorder:
     """Append-only JSONL timeline writer for one diagnostic run."""
 
@@ -251,8 +291,10 @@ class DiagnosticRecorder:
         *,
         metadata: Mapping[str, Any] | None = None,
         secret_values: Sequence[str] = (),
+        run_id: UUID | None = None,
     ) -> None:
         self._run_dir = Path(run_dir)
+        self._run_id = run_id or uuid4()
         self._secret_values = tuple(
             value for value in secret_values if isinstance(value, str) and value
         )
@@ -273,11 +315,7 @@ class DiagnosticRecorder:
             pass
 
         trace_path = self._run_dir / "trace.jsonl"
-        self._trace_file = open(trace_path, "a", encoding="utf-8", buffering=1)
-        try:
-            os.chmod(trace_path, 0o600)
-        except OSError:
-            pass
+        self._trace_file = open_private_file(trace_path, mode="a")
 
         start_data: dict[str, Any] = {}
         if metadata:
@@ -289,8 +327,20 @@ class DiagnosticRecorder:
         return self._run_dir
 
     @property
+    def run_id(self) -> UUID:
+        return self._run_id
+
+    @property
     def run_failed(self) -> bool:
         return self._run_failed
+
+    @property
+    def write_failed(self) -> bool:
+        return self._write_failed
+
+    @property
+    def secret_values(self) -> tuple[str, ...]:
+        return self._secret_values
 
     def next_id(self, prefix: str) -> str:
         with self._lock:
@@ -354,7 +404,7 @@ class DiagnosticRecorder:
         raise_on_error: bool,
     ) -> None:
         payload = sanitize_value(data, secret_values=self._secret_values)
-        context = current_diagnostic_context().as_dict()
+        context = self._event_context()
         now = datetime.now(UTC)
         with self._lock:
             if self._closed:
@@ -368,6 +418,12 @@ class DiagnosticRecorder:
                 now=now,
                 raise_on_error=raise_on_error,
             )
+
+    def _event_context(self) -> dict[str, str]:
+        return {
+            "run_id": str(self._run_id),
+            **current_diagnostic_context().as_dict(),
+        }
 
     def _write_line_locked(
         self,
@@ -383,7 +439,7 @@ class DiagnosticRecorder:
         self._persist_line_locked(
             kind,
             payload,
-            context=current_diagnostic_context().as_dict(),
+            context=self._event_context(),
             now=datetime.now(UTC),
             raise_on_error=raise_on_error,
         )
@@ -452,10 +508,12 @@ class DiagnosticRun:
         *,
         metadata: Mapping[str, Any] | None = None,
         secret_values: Sequence[str] = (),
+        run_id: UUID | None = None,
     ) -> None:
         self._run_dir = Path(run_dir)
         self._metadata = metadata
         self._secret_values = secret_values
+        self._run_id = run_id
         self._recorder: DiagnosticRecorder | None = None
 
     def __enter__(self) -> DiagnosticRecorder:
@@ -463,6 +521,7 @@ class DiagnosticRun:
             self._run_dir,
             metadata=self._metadata,
             secret_values=self._secret_values,
+            run_id=self._run_id,
         )
         return self._recorder
 

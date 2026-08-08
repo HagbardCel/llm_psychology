@@ -13,17 +13,16 @@ import pytest
 
 from jung.composition import _record_cleanup_failure
 from jung.diagnostics import DiagnosticRun
-from jung.domain.commands import SendMessage, UpdateProfile
+from jung.domain.commands import RetryOperation, SelectStyle, SendMessage, UpdateProfile
+from jung.domain.errors import InvariantViolation
 from jung.domain.models import (
-    AppSnapshot,
     ChatTurnStatus,
-    Operation,
     OperationKind,
     OperationStatus,
     Profile,
     Stage,
 )
-from jung.events import EventStream, OperationChanged, SnapshotChanged
+from jung.events import EventStream
 from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import FailureExpectation, FakeLLM
 from jung.llm.gateway import LLMTask
@@ -35,6 +34,8 @@ from .application_fixtures import (
     intake_message_expectations,
     wait_for_chat_turn,
 )
+from .assessment_test_data import assessment_result_data
+from .scenarios import complete_intake_for_assessment, open_intake
 
 pytestmark = pytest.mark.asyncio
 
@@ -100,21 +101,24 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
     assert kinds[0] == "diagnostics.start"
     assert kinds[-1] == "diagnostics.end"
     assert "chat.turn.accepted" in kinds
-    assert "llm.accepted" in kinds
+    assert "chat.turn.started" in kinds
+    assert "llm.output.accepted" in kinds
     assert "chat.turn.completed" in kinds
     assert "task.started" in kinds
     assert "task.completed" in kinds
-    assert "llm.call.start" not in kinds
+    assert "workflow.state" not in kinds
+    assert "operation.status" not in kinds
     assert "application.event" not in kinds
     assert "store.call.start" not in kinds
 
     accepted = next(e for e in events if e["kind"] == "chat.turn.accepted")
-    assert accepted["data"]["session_id"] == str(session.id)
-    assert accepted["data"]["turn_id"] == str(turn.id)
-    assert accepted["data"]["client_message_id"] == str(client_message_id)
-    assert accepted["data"]["request_id"] == str(request_id)
+    assert accepted["context"]["session_id"] == str(session.id)
+    assert accepted["context"]["turn_id"] == str(turn.id)
+    assert accepted["context"]["client_message_id"] == str(client_message_id)
+    assert accepted["context"]["request_id"] == str(request_id)
+    assert accepted["context"]["run_id"] == str(recorder.run_id)
 
-    llm_accepted = [e for e in events if e["kind"] == "llm.accepted"]
+    llm_accepted = [e for e in events if e["kind"] == "llm.output.accepted"]
     assert llm_accepted
     for event in llm_accepted:
         ctx = event["context"]
@@ -124,6 +128,7 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
         assert ctx["request_id"] == str(request_id)
         assert ctx["task"].startswith("chat:")
         assert ctx.get("llm_call_id")
+        assert ctx["run_id"] == str(recorder.run_id)
 
     task_events = [e for e in events if e["kind"] in {"task.started", "task.completed"}]
     assert {e["context"]["task"] for e in task_events} == {
@@ -176,67 +181,61 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
     events = _load_trace(run_dir)
     kinds = _kinds(events)
     assert "chat.turn.accepted" in kinds
+    assert "chat.turn.started" in kinds
     assert "chat.turn.failed" in kinds
     assert "task.completed" in kinds
     failed_event = next(e for e in events if e["kind"] == "chat.turn.failed")
     assert failed_event["data"]["error_code"]
     assert "retryable" in failed_event["data"]
+    assert failed_event["data"]["source"] == "generation"
 
 
-async def test_snapshot_changed_emits_workflow_state(tmp_path: Path) -> None:
+async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
     with DiagnosticRun(run_dir) as recorder:
-        stream = EventStream(recorder=recorder)
-        snapshot = AppSnapshot(
-            revision=2,
-            stage=Stage.INTAKE,
-            profile_complete=True,
-        )
-        await stream.publish(SnapshotChanged(snapshot))
+        store = SQLiteStore(db_path)
+        store.initialize()
+        fake = FakeLLM([])
+        async with build_test_application(store, fake, recorder=recorder) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+            # Same-stage profile update should not emit workflow.transition again
+            # beyond SETUP→INTAKE from the first complete profile.
+            snapshot = await runtime.application.get_snapshot()
+            assert snapshot.stage is Stage.INTAKE
 
     events = _load_trace(run_dir)
-    workflow = next(e for e in events if e["kind"] == "workflow.state")
-    assert workflow["data"] == {"revision": 2, "stage": Stage.INTAKE.value}
+    transitions = [e for e in events if e["kind"] == "workflow.transition"]
+    assert len(transitions) == 1
+    assert transitions[0]["data"]["from_stage"] == Stage.SETUP.value
+    assert transitions[0]["data"]["to_stage"] == Stage.INTAKE.value
+    assert transitions[0]["data"]["trigger"] == "update_profile"
+    assert "revision" in transitions[0]["data"]
 
 
-async def test_operation_changed_emits_status_and_workflow_state(
-    tmp_path: Path,
-) -> None:
+async def test_event_stream_no_longer_projects_diagnostics(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     with DiagnosticRun(run_dir) as recorder:
-        stream = EventStream(recorder=recorder)
-        now = datetime.now(UTC)
-        operation = Operation(
-            id=uuid4(),
-            kind=OperationKind.ASSESSMENT,
-            status=OperationStatus.FAILED,
-            attempt=1,
-            source_session_id=uuid4(),
-            created_at=now,
-            updated_at=now,
-            error_code="llm_unavailable",
-            error_message="down",
-            retryable=True,
+        stream = EventStream()
+        await stream.publish(
+            __import__("jung.events", fromlist=["SnapshotChanged"]).SnapshotChanged(
+                __import__("jung.domain.models", fromlist=["AppSnapshot"]).AppSnapshot(
+                    revision=2,
+                    stage=Stage.INTAKE,
+                    profile_complete=True,
+                )
+            )
         )
-        snapshot = AppSnapshot(
-            revision=3,
-            stage=Stage.ASSESSMENT,
-            profile_complete=True,
-        )
-        await stream.publish(OperationChanged(operation, snapshot))
+        recorder.record("workflow.command.started", {"command": "update_profile"})
 
-    events = _load_trace(run_dir)
-    kinds = _kinds(events)
-    assert kinds.count("operation.status") == 1
-    assert kinds.count("workflow.state") == 1
-    status = next(e for e in events if e["kind"] == "operation.status")
-    assert status["data"]["status"] == OperationStatus.FAILED.value
-    assert status["data"]["error_code"] == "llm_unavailable"
-    assert status["data"]["retryable"] is True
-    assert status["data"]["revision"] == 3
-    assert status["data"]["source_session_id"] == str(operation.source_session_id)
-    workflow = next(e for e in events if e["kind"] == "workflow.state")
-    assert workflow["data"] == {"revision": 3, "stage": Stage.ASSESSMENT.value}
+    kinds = _kinds(_load_trace(run_dir))
+    assert "workflow.state" not in kinds
+    assert "workflow.command.started" in kinds
 
 
 async def test_pre_running_ownership_failure_emits_task_failed(
@@ -247,7 +246,6 @@ async def test_pre_running_ownership_failure_emits_task_failed(
         supervisor = TaskSupervisor(recorder=recorder)
 
         async def failing_run() -> None:
-            # Mimic worker body before running_owned: re-raise.
             raise RuntimeError("ownership failed")
 
         async with supervisor:
@@ -274,12 +272,20 @@ async def test_dead_trace_cleanup_still_logs(
         real_write = recorder._trace_file.write
 
         def flaky(text: str) -> int:
-            if '"kind":"workflow.state"' in text.replace(" ", ""):
+            if '"kind":"workflow.transition"' in text.replace(" ", ""):
                 raise OSError("disk full")
             return real_write(text)
 
         monkeypatch.setattr(recorder._trace_file, "write", flaky)
-        recorder.record("workflow.state", {"revision": 1, "stage": "intake"})
+        recorder.record(
+            "workflow.transition",
+            {
+                "from_stage": "intake",
+                "to_stage": "assessment",
+                "trigger": "x",
+                "revision": 1,
+            },
+        )
         with caplog.at_level(logging.WARNING):
             _record_cleanup_failure(
                 recorder,
@@ -288,6 +294,10 @@ async def test_dead_trace_cleanup_still_logs(
                 selected_as_cleanup_error=False,
             )
         assert any("runtime cleanup failed" in r.message for r in caplog.records)
+    assert recorder.write_failed is True
+    kinds = _kinds(_load_trace(run_dir))
+    # After a latched write failure, later records (including runtime.error) are dropped.
+    assert "diagnostics.start" in kinds
 
 
 async def test_shutdown_timeout_recorded(tmp_path: Path) -> None:
@@ -308,3 +318,349 @@ async def test_shutdown_timeout_recorded(tmp_path: Path) -> None:
     kinds = _kinds(_load_trace(run_dir))
     assert "task.shutdown_timeout" in kinds
     assert "task.cancelled" in kinds
+
+
+async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    fake = FakeLLM([])
+    async with build_test_application(store, fake, recover=False) as runtime:
+        await runtime.application.update_profile(
+            UpdateProfile(
+                expected_revision=0,
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session = (await runtime.application.get_snapshot()).active_session
+        assert session is not None
+        session_id = session.id
+
+    now = datetime.now(UTC)
+    turn_id = uuid4()
+    client_message_id = uuid4()
+    user_message_id = uuid4()
+    op_id = uuid4()
+    with store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO messages (id, session_id, sequence, role, content, created_at)
+            VALUES (?, ?, 1, 'user', 'stale', ?)
+            """,
+            (str(user_message_id), str(session_id), now.isoformat()),
+        )
+        conn.execute(
+            """
+            INSERT INTO chat_turns (
+                id, session_id, client_message_id, user_message_id, status,
+                retryable, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+            """,
+            (
+                str(turn_id),
+                str(session_id),
+                str(client_message_id),
+                str(user_message_id),
+                now.isoformat(),
+                now.isoformat(),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO operations (
+                id, kind, status, attempt, source_session_id,
+                created_at, updated_at, started_at, retryable
+            ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0)
+            """,
+            (
+                str(op_id),
+                OperationKind.ASSESSMENT.value,
+                OperationStatus.RUNNING.value,
+                str(session_id),
+                now.isoformat(),
+                now.isoformat(),
+                now.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    run_dir = tmp_path / "debug-run"
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=True
+        ) as runtime:
+            await runtime.application.get_snapshot()
+
+    events = _load_trace(run_dir)
+    kinds = _kinds(events)
+    assert "operation.recovered" in kinds
+    failed = [e for e in events if e["kind"] == "chat.turn.failed"]
+    assert any(e["data"].get("source") == "startup_recovery" for e in failed)
+    recovered = next(e for e in events if e["kind"] == "operation.recovered")
+    assert recovered["data"]["from_status"] == OperationStatus.RUNNING.value
+    assert recovered["data"]["to_status"] == OperationStatus.PENDING.value
+    assert recovered["context"]["operation_id"] == str(op_id)
+
+
+async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    client_message_id = uuid4()
+    with DiagnosticRun(run_dir) as recorder:
+        store = SQLiteStore(db_path)
+        store.initialize()
+        failing = FakeLLM(
+            [
+                FailureExpectation(
+                    task=LLMTask.INTAKE_PATCH,
+                    error=LLMUnavailable("provider down"),
+                )
+            ]
+        )
+        async with build_test_application(store, failing, recorder=recorder) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    expected_revision=0,
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            turn = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content="retry me",
+                    request_id=uuid4(),
+                )
+            )
+            failed = await wait_for_chat_turn(
+                runtime.application, turn.id, ChatTurnStatus.FAILED
+            )
+            assert failed.retryable
+
+        # Second DiagnosticRun segment continues same recorder? reopen store with
+        # new expectations for successful retry under same recorder by nesting.
+        succeeding = FakeLLM(intake_message_expectations("Thanks for sharing more."))
+        async with build_test_application(
+            store, succeeding, recorder=recorder, recover=False
+        ) as runtime:
+            retried = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content="retry me",
+                    request_id=uuid4(),
+                )
+            )
+            assert retried.id == turn.id
+            completed = await wait_for_chat_turn(
+                runtime.application, turn.id, ChatTurnStatus.COMPLETE
+            )
+            assert completed.status is ChatTurnStatus.COMPLETE
+
+            # Idempotent existing complete
+            again = await runtime.application.submit_message(
+                SendMessage(
+                    expected_revision=(
+                        await runtime.application.get_snapshot()
+                    ).revision,
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content="retry me",
+                    request_id=uuid4(),
+                )
+            )
+            assert again.id == turn.id
+
+    events = _load_trace(run_dir)
+    assert "chat.turn.retried" in _kinds(events)
+    completed_cmds = [
+        e
+        for e in events
+        if e["kind"] == "workflow.command.completed"
+        and e["data"].get("command") == "send_message"
+    ]
+    outcomes = [e["data"]["outcome"] for e in completed_cmds]
+    assert "committed" in outcomes
+    assert "idempotent_existing" in outcomes
+    # First accept + later retry both committed; accepted once, retried once
+    assert _kinds(events).count("chat.turn.accepted") == 1
+    assert _kinds(events).count("chat.turn.retried") == 1
+
+
+async def test_select_style_invariant_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.complete_assessment(
+        operation_id,
+        result=assessment_result_data(),
+        now=now,
+    )
+    assert store.get_app_state().stage == Stage.STYLE_SELECTION
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+
+            async def missing_assessment() -> None:
+                return None
+
+            monkeypatch.setattr(
+                runtime.application,
+                "_load_completed_assessment_locked",
+                missing_assessment,
+            )
+            with pytest.raises(
+                InvariantViolation, match="completed assessment result is required"
+            ):
+                await runtime.application.select_style(
+                    SelectStyle(
+                        expected_revision=store.get_app_state().revision,
+                        style_id="cbt",
+                    )
+                )
+
+    events = _load_trace(run_dir)
+    runtime_errors = [e for e in events if e["kind"] == "runtime.error"]
+    assert len(runtime_errors) == 1
+    assert runtime_errors[0]["data"]["phase"] == "workflow_command"
+    assert runtime_errors[0]["data"]["command"] == "select_style"
+    assert runtime_errors[0]["data"]["error_type"] == "InvariantViolation"
+    assert "workflow.command.rejected" not in _kinds(events)
+
+
+async def test_retry_operation_invariant_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    store.mark_operation_running(operation_id, now=now)
+    store.fail_operation(
+        operation_id,
+        error_code="llm_timeout",
+        error_message="timeout",
+        retryable=True,
+        now=now,
+    )
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+            revision = store.get_app_state().revision
+            monkeypatch.setattr(store, "get_current_operation", lambda: None)
+            with pytest.raises(
+                InvariantViolation,
+                match="retry command available without current operation",
+            ):
+                await runtime.application.retry_operation(
+                    RetryOperation(expected_revision=revision)
+                )
+
+    events = _load_trace(run_dir)
+    runtime_errors = [
+        e
+        for e in events
+        if e["kind"] == "runtime.error" and e["data"].get("phase") == "workflow_command"
+    ]
+    assert len(runtime_errors) == 1
+    assert runtime_errors[0]["data"]["command"] == "retry_operation"
+    assert runtime_errors[0]["data"]["error_type"] == "InvariantViolation"
+    rejected = [
+        e
+        for e in events
+        if e["kind"] == "workflow.command.rejected"
+        and e["data"].get("command") == "retry_operation"
+    ]
+    assert rejected == []
+
+
+async def test_store_drained_failure_records_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    import jung.application as application_module
+    from jung._async_cleanup import drain_cancelled_task as real_drain
+
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    open_intake(store)
+
+    gate = threading.Event()
+    release = threading.Event()
+
+    def failing_get_profile(*args, **kwargs):
+        gate.set()
+        release.wait()
+        raise RuntimeError("owned store failed after cancel")
+
+    failing_get_profile.__name__ = "get_profile"
+
+    drain_entered = asyncio.Event()
+
+    async def observed_drain(task: asyncio.Future[object]) -> BaseException | None:
+        drain_entered.set()
+        return await real_drain(task)
+
+    monkeypatch.setattr(application_module, "drain_cancelled_task", observed_drain)
+
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store, FakeLLM([]), recorder=recorder, recover=False
+        ) as runtime:
+            monkeypatch.setattr(store, "get_profile", failing_get_profile)
+
+            read_task = asyncio.create_task(runtime.application.get_profile())
+            assert await asyncio.to_thread(gate.wait, 2.0)
+            read_task.cancel()
+            await asyncio.wait_for(drain_entered.wait(), timeout=2.0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await read_task
+
+    events = _load_trace(run_dir)
+    drained = [
+        e
+        for e in events
+        if e["kind"] == "runtime.error" and e["data"].get("phase") == "store_drained"
+    ]
+    assert len(drained) == 1
+    assert drained[0]["data"]["error_type"] == "RuntimeError"
+    assert drained[0]["data"]["function"] == "get_profile"

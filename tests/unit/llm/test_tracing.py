@@ -264,7 +264,14 @@ async def test_observed_gateway_swallow_close_method_cancellederror_and_records_
 
     lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
     events = [json.loads(line) for line in lines if line.strip()]  # type: ignore[name-defined]
-    assert not any(e["kind"].startswith("llm.call.") for e in events)
+    started = [e for e in events if e["kind"] == "llm.call.started"]
+    terminals = [
+        e
+        for e in events
+        if e["kind"] in {"llm.call.completed", "llm.call.failed", "llm.call.cancelled"}
+    ]
+    assert len(started) == 1
+    assert len(terminals) == 1
     assert not any(e["kind"] == "llm.stream.cleanup.error" for e in events)
 
 
@@ -329,7 +336,14 @@ async def test_observed_gateway_ambient_cancel_during_close_drains_then_propagat
 
     lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
     events = [json.loads(line) for line in lines if line.strip()]  # type: ignore[name-defined]
-    assert not any(e["kind"].startswith("llm.call.") for e in events)
+    started = [e for e in events if e["kind"] == "llm.call.started"]
+    terminals = [
+        e
+        for e in events
+        if e["kind"] in {"llm.call.completed", "llm.call.failed", "llm.call.cancelled"}
+    ]
+    assert len(started) == 1
+    assert len(terminals) == 1
     assert not any(e["kind"] == "llm.stream.cleanup.error" for e in events)
 
 
@@ -401,7 +415,14 @@ async def test_observed_gateway_preserves_stream_cancel_message_over_close_cance
         for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert not any(e["kind"].startswith("llm.call.") for e in events)
+    started = [e for e in events if e["kind"] == "llm.call.started"]
+    terminals = [
+        e
+        for e in events
+        if e["kind"] in {"llm.call.completed", "llm.call.failed", "llm.call.cancelled"}
+    ]
+    assert len(started) == 1
+    assert len(terminals) == 1
     assert not any(e["kind"] == "llm.stream.cleanup.error" for e in events)
 
 
@@ -459,7 +480,14 @@ async def test_observed_gateway_preserves_cancel_when_close_also_raises_cancelle
         for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert not any(e["kind"].startswith("llm.call.") for e in events)
+    started = [e for e in events if e["kind"] == "llm.call.started"]
+    terminals = [
+        e
+        for e in events
+        if e["kind"] in {"llm.call.completed", "llm.call.failed", "llm.call.cancelled"}
+    ]
+    assert len(started) == 1
+    assert len(terminals) == 1
     assert not any(e["kind"] == "llm.stream.cleanup.error" for e in events)
 
 
