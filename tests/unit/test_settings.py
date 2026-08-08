@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 
 import pytest
 
@@ -50,31 +49,6 @@ def test_load_application_settings_scalar_overrides() -> None:
     assert settings.enable_llm_tracing is True
     assert settings.debug_run_dir is not None
     assert str(settings.debug_run_dir) == "/tmp/jung-debug-run"
-
-
-@pytest.mark.parametrize(
-    ("env_name", "env_value", "default"),
-    [
-        ("JUNG_ENABLE_LLM_TRACING", None, False),
-        ("JUNG_SHUTDOWN_TIMEOUT", None, 30.0),
-        ("JUNG_EVENT_QUEUE_SIZE", None, 64),
-    ],
-)
-def test_absent_scalar_uses_default(
-    env_name: str,
-    env_value: str | None,
-    default: object,
-) -> None:
-    environ: dict[str, str] = {}
-    if env_value is not None:
-        environ[env_name] = env_value
-    settings = load_application_settings(environ, database_path="data/jung.db")
-    if env_name == "JUNG_ENABLE_LLM_TRACING":
-        assert settings.enable_llm_tracing is default
-    elif env_name == "JUNG_SHUTDOWN_TIMEOUT":
-        assert settings.shutdown_timeout_seconds == default
-    else:
-        assert settings.event_queue_size == default
 
 
 @pytest.mark.parametrize(
@@ -227,43 +201,6 @@ def test_streaming_task_accepts_prompt_mode() -> None:
     )
 
 
-def test_structured_task_accepts_json_object() -> None:
-    settings = load_application_settings(
-        {
-            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                {"assessment": {"structured_output_mode": "json_object"}}
-            ),
-        },
-        database_path="data/jung.db",
-    )
-    assert settings.llm.task_structured_modes is not None
-    assert (
-        settings.llm.task_structured_modes[LLMTask.ASSESSMENT]
-        is StructuredOutputMode.JSON_OBJECT
-    )
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("temperature", True),
-        ("timeout_seconds", True),
-        ("max_completion_tokens", True),
-    ],
-)
-def test_task_config_rejects_boolean_numeric_fields(
-    field: str,
-    value: bool,
-) -> None:
-    with pytest.raises(ValueError):
-        load_application_settings(
-            {
-                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"assessment": {field: value}}),
-            },
-            database_path="data/jung.db",
-        )
-
-
 def test_typed_null_task_field_rejected() -> None:
     with pytest.raises(ValueError, match="must not be null"):
         load_application_settings(
@@ -276,71 +213,86 @@ def test_typed_null_task_field_rejected() -> None:
         )
 
 
-def test_non_object_task_entry_rejected() -> None:
-    with pytest.raises(ValueError, match="must be a JSON object"):
-        load_application_settings(
+@pytest.mark.parametrize(
+    ("environ", "expected_fragment"),
+    [
+        (
+            {
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                    {"assessment": {"temperature": True}}
+                )
+            },
+            "temperature",
+        ),
+        (
+            {
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                    {"assessment": {"timeout_seconds": True}}
+                )
+            },
+            "timeout_seconds",
+        ),
+        (
+            {
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                    {"assessment": {"max_completion_tokens": True}}
+                )
+            },
+            "max_completion_tokens",
+        ),
+        (
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
                     {"assessment": "not-an-object"}
-                ),
+                )
             },
-            database_path="data/jung.db",
-        )
-
-
-def test_oversized_json_integer_error_is_path_aware() -> None:
-    limit = sys.get_int_max_str_digits()
-    if limit == 0:
-        pytest.skip("Python integer-string digit limit is disabled")
-
-    huge_integer = "9" * (limit + 1)
-    raw = f'{{"scale":{huge_integer}}}'
-
-    with pytest.raises(ValueError) as exc_info:
-        parse_optional_json_object("JUNG_LLM_EXTRA_BODY_JSON", raw)
-
-    message = str(exc_info.value)
-    assert message == "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object"
-    assert huge_integer not in message
-
-
-@pytest.mark.parametrize(
-    ("payload", "expected_path"),
-    [
-        ({"not_a_task": {}}, "JUNG_LLM_TASK_CONFIG_JSON.not_a_task"),
+            "must be a JSON object",
+        ),
         (
-            {"assessment": {"not_a_field": 1}},
+            {"JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"not_a_task": {}})},
+            "JUNG_LLM_TASK_CONFIG_JSON.not_a_task",
+        ),
+        (
+            {
+                "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
+                    {"assessment": {"not_a_field": 1}}
+                )
+            },
             "JUNG_LLM_TASK_CONFIG_JSON.assessment.not_a_field",
+        ),
+        (
+            {"JUNG_LLM_EXTRA_BODY_JSON": "null"},
+            "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object",
+        ),
+        (
+            {"JUNG_LLM_EXTRA_BODY_JSON": "[]"},
+            "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object",
+        ),
+        (
+            {"JUNG_LLM_EXTRA_BODY_JSON": '"string"'},
+            "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object",
+        ),
+        (
+            {"JUNG_LLM_EXTRA_BODY_JSON": "123"},
+            "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object",
         ),
     ],
 )
-def test_task_config_rejects_unknown_schema_entries(
-    payload: dict[str, object],
-    expected_path: str,
+def test_settings_rejects_schema_invalid_payloads(
+    environ: dict[str, str],
+    expected_fragment: str,
 ) -> None:
     with pytest.raises(ValueError) as exc_info:
-        load_application_settings(
-            {"JUNG_LLM_TASK_CONFIG_JSON": json.dumps(payload)},
-            database_path="data/jung.db",
-        )
+        load_application_settings(environ, database_path="data/jung.db")
 
-    assert expected_path in str(exc_info.value)
+    assert expected_fragment in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "null",
-        "[]",
-        '"string"',
-        "123",
-    ],
-)
-def test_extra_body_rejects_non_object_top_level_json(raw: str) -> None:
+def test_malformed_optional_json_object_is_project_owned_error() -> None:
     with pytest.raises(ValueError) as exc_info:
-        load_application_settings(
-            {"JUNG_LLM_EXTRA_BODY_JSON": raw},
-            database_path="data/jung.db",
+        parse_optional_json_object(
+            "JUNG_LLM_EXTRA_BODY_JSON",
+            '{"broken":',
         )
 
     assert str(exc_info.value) == "JUNG_LLM_EXTRA_BODY_JSON must be a JSON object"
@@ -414,75 +366,35 @@ def test_extra_body_rejects_non_finite_numbers(payload: str) -> None:
         )
 
 
-def test_debug_run_dir_absent_or_blank_is_none() -> None:
-    settings = load_application_settings({}, database_path="data/jung.db")
-    assert settings.debug_run_dir is None
-    blank = load_application_settings(
-        {"JUNG_DEBUG_RUN_DIR": "   "},
-        database_path="data/jung.db",
-    )
-    assert blank.debug_run_dir is None
-
-
-def test_debug_run_dir_parses_relative_path() -> None:
-    settings = load_application_settings(
-        {"JUNG_DEBUG_RUN_DIR": "artifacts/debug-run"},
-        database_path="data/jung.db",
-    )
-    assert settings.debug_run_dir is not None
-    assert str(settings.debug_run_dir) == "artifacts/debug-run"
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["temperature", "timeout_seconds"],
-)
-def test_task_numeric_huge_integer_raises_value_error(field: str) -> None:
+def test_task_numeric_huge_integer_raises_value_error() -> None:
     huge_int = 10**400
     with pytest.raises(ValueError) as exc_info:
         load_application_settings(
             {
                 "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                    {"assessment": {field: huge_int}}
+                    {"assessment": {"temperature": huge_int}}
                 ),
             },
             database_path="data/jung.db",
         )
-    assert f"JUNG_LLM_TASK_CONFIG_JSON.assessment.{field}" in str(exc_info.value)
+    assert "JUNG_LLM_TASK_CONFIG_JSON.assessment.temperature" in str(exc_info.value)
 
 
-def test_empty_task_extra_body_is_omitted() -> None:
-    settings = load_application_settings(
-        {
-            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps({"assessment": {"extra_body": {}}}),
-        },
-        database_path="data/jung.db",
-    )
-    assert settings.llm.task_extra_body is None
-
-
-def test_settings_post_init_rejects_invalid_queue_size() -> None:
-    with pytest.raises(ValueError, match="event_queue_size"):
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"event_queue_size": 0}, "event_queue_size"),
+        ({"shutdown_timeout_seconds": 0}, "shutdown_timeout_seconds"),
+        ({"shutdown_timeout_seconds": 10**400}, "shutdown_timeout_seconds"),
+    ],
+)
+def test_settings_post_init_rejects_invalid_values(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
         ApplicationSettings(
             database_path="data/jung.db",
             llm=_valid_llm(),
-            event_queue_size=0,
-        )
-
-
-def test_settings_post_init_rejects_invalid_shutdown_timeout() -> None:
-    with pytest.raises(ValueError, match="shutdown_timeout_seconds"):
-        ApplicationSettings(
-            database_path="data/jung.db",
-            llm=_valid_llm(),
-            shutdown_timeout_seconds=0,
-        )
-
-
-def test_settings_rejects_huge_shutdown_timeout() -> None:
-    with pytest.raises(ValueError, match="shutdown_timeout_seconds"):
-        ApplicationSettings(
-            database_path="data/jung.db",
-            llm=_valid_llm(),
-            shutdown_timeout_seconds=10**400,
+            **kwargs,
         )

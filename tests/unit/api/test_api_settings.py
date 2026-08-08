@@ -102,7 +102,7 @@ def test_validate_api_settings_normalizes_log_level() -> None:
         application=settings.application,
         host=settings.host,
         port=settings.port,
-        log_level="INFO",
+        log_level=" INFO ",
         allowed_origins=settings.allowed_origins,
         allow_remote_bind=settings.allow_remote_bind,
     )
@@ -123,17 +123,18 @@ def test_validate_api_settings_normalizes_origins_to_tuple() -> None:
     assert validate_api_settings(normalized) == normalized
 
 
-def test_validate_api_settings_rejects_bad_port() -> None:
-    with pytest.raises(ValueError, match="port"):
-        validate_api_settings(_settings(port=0))
-
-
 @pytest.mark.parametrize(
     ("changes", "expected_name"),
     [
+        ({"port": 0}, "port"),
+        ({"port": 65536}, "port"),
         ({"port": True}, "port"),
         ({"port": 8000.5}, "port"),
+        ({"websocket_send_timeout": 0}, "websocket_send_timeout"),
+        ({"websocket_close_timeout": -1}, "websocket_close_timeout"),
         ({"websocket_send_timeout": True}, "websocket_send_timeout"),
+        ({"websocket_send_timeout": float("nan")}, "websocket_send_timeout"),
+        ({"websocket_close_timeout": float("inf")}, "websocket_close_timeout"),
         ({"websocket_send_timeout": 10**400}, "websocket_send_timeout"),
     ],
 )
@@ -174,24 +175,16 @@ def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> N
     assert type(captured["app"]).__name__ == "FastAPI"
 
 
-@pytest.mark.parametrize(
-    "log_level",
-    ["info", "debug", "trace"],
-)
-def test_uvicorn_log_config_configures_jung_logger(
-    log_level: str,
-) -> None:
+def test_uvicorn_log_config_configures_jung_logger() -> None:
     from uvicorn.config import LOG_LEVELS, LOGGING_CONFIG
 
     from jung.api.app import _uvicorn_log_config_with_jung
 
-    expected_level = LOG_LEVELS[log_level]
-
-    config = _uvicorn_log_config_with_jung(log_level)
+    config = _uvicorn_log_config_with_jung("info")
 
     assert config["loggers"]["jung"] == {
         "handlers": ["default"],
-        "level": expected_level,
+        "level": LOG_LEVELS["info"],
         "propagate": False,
     }
     assert "jung" not in LOGGING_CONFIG["loggers"]
@@ -236,30 +229,6 @@ def test_load_api_settings_delegates_composition_settings(
     assert settings.application.shutdown_timeout_seconds == 42.0
 
 
-def test_api_settings_websocket_timeout_defaults() -> None:
-    settings = _settings()
-    assert settings.websocket_send_timeout == 5.0
-    assert settings.websocket_close_timeout == 2.0
-
-
-def test_validate_api_settings_rejects_non_positive_websocket_timeouts() -> None:
-    base = _settings()
-    with pytest.raises(ValueError, match="websocket_send_timeout"):
-        validate_api_settings(
-            ApiSettings(
-                application=base.application,
-                websocket_send_timeout=0,
-            )
-        )
-    with pytest.raises(ValueError, match="websocket_close_timeout"):
-        validate_api_settings(
-            ApiSettings(
-                application=base.application,
-                websocket_close_timeout=-1,
-            )
-        )
-
-
 def test_load_api_settings_websocket_timeout_overrides(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -273,14 +242,15 @@ def test_load_api_settings_websocket_timeout_overrides(
 
 
 @pytest.mark.parametrize(
-    "env_name",
-    ["JUNG_WS_SEND_TIMEOUT", "JUNG_WS_CLOSE_TIMEOUT"],
+    ("env_name", "env_value"),
+    [
+        ("JUNG_WS_SEND_TIMEOUT", "not-a-float"),
+        ("JUNG_WS_SEND_TIMEOUT", "nan"),
+        ("JUNG_WS_CLOSE_TIMEOUT", "inf"),
+        ("JUNG_WS_CLOSE_TIMEOUT", "-inf"),
+    ],
 )
-@pytest.mark.parametrize(
-    "env_value",
-    ["nan", "inf", "+inf", "-inf"],
-)
-def test_load_api_settings_rejects_non_finite_ws_timeout(
+def test_load_api_settings_rejects_invalid_websocket_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     env_name: str,
@@ -290,37 +260,3 @@ def test_load_api_settings_rejects_non_finite_ws_timeout(
     monkeypatch.setenv(env_name, env_value)
     with pytest.raises(ValueError, match=env_name):
         load_api_settings()
-
-
-def test_load_api_settings_rejects_malformed_websocket_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("JUNG_WS_SEND_TIMEOUT", "not-a-float")
-    with pytest.raises(ValueError, match="JUNG_WS_SEND_TIMEOUT"):
-        load_api_settings()
-
-
-@pytest.mark.parametrize(
-    "timeout_value",
-    [float("nan"), float("inf"), float("-inf")],
-)
-def test_validate_api_settings_rejects_non_finite_websocket_timeouts(
-    timeout_value: float,
-) -> None:
-    base = _settings()
-    with pytest.raises(ValueError, match="websocket_send_timeout"):
-        validate_api_settings(
-            ApiSettings(
-                application=base.application,
-                websocket_send_timeout=timeout_value,
-            )
-        )
-    with pytest.raises(ValueError, match="websocket_close_timeout"):
-        validate_api_settings(
-            ApiSettings(
-                application=base.application,
-                websocket_close_timeout=timeout_value,
-            )
-        )

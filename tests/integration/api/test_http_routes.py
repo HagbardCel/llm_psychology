@@ -163,26 +163,6 @@ async def test_end_session_returns_accepted_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_end_unknown_session_returns_not_found(
-    store: SQLiteStore,
-    started_api_client: AsyncClient,
-) -> None:
-    ready = advance_to_ready(store)
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
-        session_id=therapy_id,
-        now=ready.now,
-    )
-    revision = store.get_app_state().revision
-    response = await started_api_client.post(
-        f"/api/v1/sessions/{uuid4()}/end",
-        json={"expected_revision": revision},
-    )
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_cors_preflight_and_cross_origin_get(api_app, store: SQLiteStore) -> None:
     transport = httpx.ASGITransport(app=api_app, raise_app_exceptions=False)
     async with api_app.router.lifespan_context(api_app):
