@@ -98,16 +98,16 @@ class FakeWebSocket:
             self.sent.append(data)
             self._sent_condition.notify_all()
 
-    async def wait_for_snapshot_revision(
+    async def wait_for_snapshot_marker(
         self,
-        revision: int,
+        marker: str,
         *,
         timeout: float = 1.0,
     ) -> None:
         def was_received() -> bool:
             return any(
                 item.get("type") == "snapshot_changed"
-                and item.get("snapshot", {}).get("revision") == revision
+                and item.get("snapshot", {}).get("selected_style") == marker
                 for item in self.sent
             )
 
@@ -167,20 +167,20 @@ class TrackingEventStream(EventStream):
                 )
 
 
-def _snapshot_event(*, revision: int) -> SnapshotChanged:
+def _snapshot_event(*, marker: str) -> SnapshotChanged:
     return SnapshotChanged(
         AppSnapshot(
-            revision=revision,
             stage=Stage.SETUP,
             profile_complete=False,
+            selected_style=marker,
             available_commands=frozenset(),
         )
     )
 
 
-def snapshot_revisions(fake: FakeWebSocket) -> list[int]:
+def snapshot_markers(fake: FakeWebSocket) -> list[str]:
     return [
-        event["snapshot"]["revision"]
+        event["snapshot"]["selected_style"]
         for event in fake.sent
         if event.get("type") == "snapshot_changed"
     ]
@@ -221,7 +221,6 @@ FIXED_INVALID_REQUEST_ID = uuid4()
                     "request_id": str(FIXED_INVALID_REQUEST_ID),
                     "session_id": str(uuid4()),
                     "client_message_id": str(uuid4()),
-                    "expected_revision": 0,
                     "content": "secret-content",
                 }
             ),
@@ -278,7 +277,6 @@ async def test_sentinel_error_propagates_and_drains_tasks() -> None:
     await events.publish(
         SnapshotChanged(
             AppSnapshot(
-                revision=0,
                 stage=Stage.SETUP,
                 profile_complete=False,
                 available_commands=frozenset(),
@@ -307,7 +305,6 @@ async def test_parent_cancel_drains_tasks() -> None:
     await events.publish(
         SnapshotChanged(
             AppSnapshot(
-                revision=0,
                 stage=Stage.SETUP,
                 profile_complete=False,
                 available_commands=frozenset(),
@@ -339,7 +336,6 @@ async def test_domain_error_uses_command_request_id() -> None:
                 "session_id": str(session_id),
                 "client_message_id": str(client_message_id),
                 "request_id": str(command_id),
-                "expected_revision": 0,
                 "content": "hello",
             }
         )
@@ -385,19 +381,20 @@ async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
     try:
         await events.wait_for_subscriptions(2)
 
-        await events.publish(_snapshot_event(revision=1))
+        await events.publish(_snapshot_event(marker="1"))
         await asyncio.wait_for(slow.first_send_started.wait(), timeout=1.0)
-        await healthy.wait_for_snapshot_revision(1)
+        await healthy.wait_for_snapshot_marker("1")
 
-        for revision in range(2, 7):
-            await events.publish(_snapshot_event(revision=revision))
-            await healthy.wait_for_snapshot_revision(revision)
+        for index in range(2, 7):
+            marker = str(index)
+            await events.publish(_snapshot_event(marker=marker))
+            await healthy.wait_for_snapshot_marker(marker)
 
         slow.unblock_sends()
         await asyncio.wait_for(slow_task, timeout=1.0)
 
-        assert snapshot_revisions(slow) == [1]
-        assert snapshot_revisions(healthy) == [1, 2, 3, 4, 5, 6]
+        assert snapshot_markers(slow) == ["1"]
+        assert snapshot_markers(healthy) == ["1", "2", "3", "4", "5", "6"]
         assert slow.closed
         assert slow.close_code == 1011
     finally:
@@ -436,7 +433,7 @@ async def test_outbound_send_disconnect_terminates_without_propagation() -> None
 
     try:
         await events.wait_for_subscriptions(1)
-        await events.publish(_snapshot_event(revision=1))
+        await events.publish(_snapshot_event(marker="1"))
 
         await asyncio.wait_for(fake.send_attempted.wait(), timeout=1.0)
         await asyncio.wait_for(handler, timeout=1.0)

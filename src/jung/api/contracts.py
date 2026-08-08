@@ -57,7 +57,6 @@ Command = Literal[
 
 ErrorCode = Literal[
     "invalid_command",
-    "state_conflict",
     "busy",
     "not_found",
     "validation_error",
@@ -117,33 +116,13 @@ class ProfileWire(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    expected_revision: int
     profile: ProfileWire
 
 
 class SelectStyleRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    expected_revision: int
     style_id: str
-
-
-class StartSessionRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    expected_revision: int
-
-
-class EndSessionRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    expected_revision: int
-
-
-class RetryOperationRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    expected_revision: int
 
 
 class SendMessageCommand(BaseModel):
@@ -153,7 +132,6 @@ class SendMessageCommand(BaseModel):
     session_id: UUID
     client_message_id: UUID
     request_id: UUID
-    expected_revision: int
     content: str
 
 
@@ -244,7 +222,6 @@ class ErrorEnvelope(BaseModel):
     code: ErrorCode
     message: str
     request_id: UUID
-    current_snapshot: AppSnapshotResponse | None = None
     retryable: bool | None = None
 
 
@@ -273,7 +250,6 @@ class ChatTurnSummaryResponse(BaseModel):
 class AppSnapshotResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    revision: int
     stage: StageWire
     profile_complete: bool
     selected_style: str | None = None
@@ -330,7 +306,7 @@ COMMON_ERROR_RESPONSES = {
 
 CONFLICT_RESPONSES = {
     **COMMON_ERROR_RESPONSES,
-    409: {"model": ErrorResponse, "description": "Command rejected or stale revision"},
+    409: {"model": ErrorResponse, "description": "Command rejected"},
 }
 
 NOT_FOUND_RESPONSES = {
@@ -443,7 +419,6 @@ def stored_error_envelope(
         message=message or "Request failed",
         request_id=context.request_id,
         retryable=retryable,
-        current_snapshot=None,
     )
 
 
@@ -575,7 +550,6 @@ def to_snapshot_response(
     context: MappingContext,
 ) -> AppSnapshotResponse:
     return AppSnapshotResponse(
-        revision=snapshot.revision,
         stage=snapshot.stage.value,
         profile_complete=snapshot.profile_complete,
         selected_style=snapshot.selected_style,
@@ -772,12 +746,3 @@ def map_application_event(
             )
         case _ as unreachable:
             assert_never(unreachable)
-
-
-ErrorEnvelope.model_rebuild()
-AppSnapshotResponse.model_rebuild()
-OperationSummaryResponse.model_rebuild()
-ChatTurnSummaryResponse.model_rebuild()
-ErrorResponse.model_rebuild()
-ProfileResponse.model_rebuild()
-OperationChangedEvent.model_rebuild()

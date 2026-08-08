@@ -51,10 +51,9 @@ async def test_disconnect_during_generation_reconciles_without_duplicate_user_me
     async with run_uvicorn_api(test_app.app) as (http_base, _ws_url):
         async with JungApiClient(ClientSettings(http_base)) as client:
             await wait_for_health(client)
-            initial = await client.get_state()
+            await client.get_state()
             state = await client.update_profile(
                 ProfileUpdateRequest(
-                    expected_revision=initial.revision,
                     profile=ProfileWire(
                         name="Alex",
                         primary_language="English",
@@ -68,7 +67,6 @@ async def test_disconnect_during_generation_reconciles_without_duplicate_user_me
             )
             command = client.new_message_command(
                 intent,
-                expected_revision=state.revision,
             )
             accepted_snapshot = state
 
@@ -140,7 +138,6 @@ async def test_disconnect_during_generation_reconciles_without_duplicate_user_me
 
                 final_snapshot = await client.get_state()
                 assert final_snapshot.active_chat_turn is None
-                assert final_snapshot.revision > accepted_snapshot.revision
             finally:
                 holding_fake.release()
 

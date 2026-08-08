@@ -116,12 +116,15 @@ src/jung/
 ## Application boundary
 
 All use cases enter through one explicitly constructed application service.
+The backend is the sole writer of workflow state. Clients do not participate in
+concurrency control.
+
 The application:
 
-- validates commands against current stage and revision;
+- serializes state-changing commands through a process-level mutation lock and validates each command against authoritative state at execution time;
 - coordinates phase processors;
-- orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transactions and durable revision enforcement live in `SQLiteStore`);
-- enforces concurrency and idempotency;
+- orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transaction boundaries live in `SQLiteStore`);
+- enforces server-side concurrency and idempotency;
 - starts and recovers long-running operations;
 - returns domain results, not HTTP/WebSocket payloads.
 
@@ -150,15 +153,15 @@ Semantics:
 - slow-subscriber eviction;
 - no replay — token delivery is best-effort to currently connected observers only;
 - accepted generation continues after disconnect;
-- token events are ephemeral and never advance revision;
+- token events are ephemeral;
 - completed messages and snapshot changes are durable.
 
-`submit_message` validates stage, revision, session, and idempotency; persists
-the user message and pending `ChatTurn`; increments snapshot revision; schedules
-generation through the application task supervisor; and returns the accepted
-`ChatTurn`. Token events are published through `EventStream`; API adapters map
-them to WebSocket `token` events. See [workflow.md](workflow.md) for ChatTurn
-lifecycle and recovery, and [api-v1.md](api-v1.md) for wire events.
+`submit_message` validates stage, session, and idempotency against authoritative
+state; persists the user message and pending `ChatTurn`; schedules generation
+through the application task supervisor; and returns the accepted `ChatTurn`.
+Token events are published through `EventStream`; API adapters map them to
+WebSocket `token` events. See [workflow.md](workflow.md) for ChatTurn lifecycle
+and recovery, and [api-v1.md](api-v1.md) for wire events.
 
 No generic service locator or runtime string-based dependency lookup remains.
 
@@ -228,7 +231,9 @@ rather than application code.
 
 Explicit server-side structure:
 
-- one process-level mutation lock for state-changing commands;
+- one process-level mutation lock for state-changing commands (`TherapyApplication`);
+- `SQLiteStore` owns `BEGIN IMMEDIATE` transaction boundaries for durable writes;
+- clients observe state and issue commands; they do not send concurrency tokens or otherwise participate in concurrency control;
 - one generation lock / one active generation at a time;
 - FastAPI lifespan owns a failure-isolating application `TaskSupervisor` backed by an `asyncio.TaskGroup`;
 - independent chat and operation failures are persisted locally and must not cancel siblings or API lifespan;
@@ -261,7 +266,7 @@ Native development remains the normal path; see [development.md](development.md)
 
 Diagnostics observe the system and must not become workflow state or API
 contract fields. Application command, chat, operation, and recovery paths
-record schema-v2 events directly into an opt-in `DiagnosticRecorder`.
+record schema-v3 events directly into an opt-in `DiagnosticRecorder`.
 `EventStream` remains an in-process fan-out for connected WebSocket observers
 and does not project diagnostic events.
 

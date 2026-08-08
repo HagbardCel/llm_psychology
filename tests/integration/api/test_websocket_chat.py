@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import Callable
 from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -68,52 +68,6 @@ def _assert_normal_chat_event_shape(events: list[dict]) -> None:
     assert all(event_type == "token" for event_type in types[2:-2])
 
 
-async def _recv_matching_progress(
-    ws,
-    *,
-    session_id: str,
-    client_message_id: UUID,
-    timeout: float = 5.0,
-) -> dict:
-    try:
-        async with asyncio.timeout(timeout):
-            for _ in range(15):
-                event = await _recv_json(ws, timeout=timeout)
-                if (
-                    event["type"] == "message_in_progress"
-                    and event["session_id"] == session_id
-                    and event["turn"]["client_message_id"] == str(client_message_id)
-                ):
-                    return event
-    except TimeoutError:
-        pytest.fail(
-            "timed out waiting for matching message_in_progress "
-            f"for client_message_id={client_message_id}"
-        )
-
-    pytest.fail("matching message_in_progress was not observed within the event limit")
-
-
-async def _recv_matching_token(
-    ws,
-    *,
-    request_id: UUID,
-    timeout: float = 5.0,
-) -> dict:
-    try:
-        async with asyncio.timeout(timeout):
-            for _ in range(15):
-                event = await _recv_json(ws, timeout=timeout)
-                if event["type"] == "token" and event["request_id"] == str(request_id):
-                    return event
-    except TimeoutError:
-        pytest.fail(
-            f"timed out waiting for token correlated to request_id={request_id}"
-        )
-
-    pytest.fail("matching token was not observed within the event limit")
-
-
 async def _warm_websocket(ws) -> None:
     await ws.send("not-json")
     event = await _recv_json(ws, timeout=5.0)
@@ -135,13 +89,11 @@ async def _receive_until(
     pytest.fail("matching websocket event was not observed")
 
 
-async def _setup_intake_http(http_base: str) -> tuple[str, int]:
+async def _setup_intake_http(http_base: str) -> str:
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
-        revision = (await client.get("/api/v1/state")).json()["revision"]
         await client.put(
             "/api/v1/profile",
             json={
-                "expected_revision": revision,
                 "profile": {
                     "name": "Alex",
                     "primary_language": "English",
@@ -151,8 +103,7 @@ async def _setup_intake_http(http_base: str) -> tuple[str, int]:
             },
         )
         state = (await client.get("/api/v1/state")).json()
-        session_id = state["active_session"]["id"]
-        return session_id, state["revision"]
+        return state["active_session"]["id"]
 
 
 async def test_ready_websocket_handshake(uvicorn_api_urls) -> None:
@@ -180,7 +131,7 @@ async def test_invalid_then_valid_command_on_same_socket(
 ) -> None:
     http_base, ws_url = uvicorn_api_urls
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
 
     async with ws_connect(ws_url) as ws:
         await ws.send("not-json")
@@ -195,7 +146,6 @@ async def test_invalid_then_valid_command_on_same_socket(
                     "session_id": session_id,
                     "client_message_id": str(uuid4()),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "hello",
                 }
             )
@@ -215,7 +165,7 @@ async def test_internal_error_then_validation_error_on_same_socket(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     http_base, ws_url = uvicorn_api_urls
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
     request_id = uuid4()
     client_message_id = uuid4()
     secret = "secret-runtime-detail"
@@ -234,7 +184,6 @@ async def test_internal_error_then_validation_error_on_same_socket(
                         "session_id": session_id,
                         "client_message_id": str(client_message_id),
                         "request_id": str(request_id),
-                        "expected_revision": revision,
                         "content": "hello",
                     }
                 )
@@ -285,7 +234,7 @@ async def test_non_final_intake_streaming_order(
 ) -> None:
     http_base, ws_url = uvicorn_api_urls
     fake_llm._expectations = list(intake_message_expectations("Hello there"))
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
 
     async with ws_connect(ws_url) as ws:
         await ws.send(
@@ -295,7 +244,6 @@ async def test_non_final_intake_streaming_order(
                     "session_id": session_id,
                     "client_message_id": str(uuid4()),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "I feel anxious.",
                 }
             )
@@ -336,7 +284,7 @@ async def test_durable_chat_failure_sanitized_message(
             error=LLMUnavailable(secret),
         ),
     ]
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
 
     async with ws_connect(ws_url) as ws:
@@ -347,7 +295,6 @@ async def test_durable_chat_failure_sanitized_message(
                     "session_id": session_id,
                     "client_message_id": str(client_message_id),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "trigger failure",
                 }
             )
@@ -379,9 +326,9 @@ async def test_durable_chat_failure_sanitized_message(
 
         trailing = await _recv_json(ws)
         assert trailing["type"] == "snapshot_changed"
-        assert trailing["snapshot"]["revision"] > acceptance_snapshot["revision"]
         assert trailing["snapshot"]["active_chat_turn"] is None
         assert trailing["snapshot"]["stage"] == "intake"
+        assert acceptance_snapshot["active_chat_turn"] is not None
 
 
 async def test_two_observers_receive_completion(
@@ -390,13 +337,12 @@ async def test_two_observers_receive_completion(
 ) -> None:
     http_base, ws_url = uvicorn_api_urls
     fake_llm._expectations = list(intake_message_expectations("shared reply"))
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
     command = {
         "type": "send_message",
         "session_id": session_id,
         "client_message_id": str(uuid4()),
         "request_id": str(uuid4()),
-        "expected_revision": revision,
         "content": "hello both",
     }
 
@@ -430,11 +376,9 @@ async def test_http_end_session_reaches_websocket_observer(
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
-    revision = store.get_app_state().revision
     fake_llm._expectations = list(post_session_expectations())
 
     async with ws_connect(ws_url) as ws:
@@ -445,10 +389,7 @@ async def test_http_end_session_reaches_websocket_observer(
         async with httpx.AsyncClient(base_url=http_base, timeout=15.0) as client:
             state = (await client.get("/api/v1/state")).json()
             assert state["active_session"]["id"] == str(therapy_id)
-            response = await client.post(
-                f"/api/v1/sessions/{therapy_id}/end",
-                json={"expected_revision": revision},
-            )
+            response = await client.post(f"/api/v1/sessions/{therapy_id}/end")
             assert response.status_code == 202
             assert response.json()["stage"] == "post_session"
 
@@ -495,7 +436,7 @@ async def test_busy_rejects_second_message_while_generating(
     fake_llm.generate_structured = holding.generate_structured  # type: ignore[method-assign]
     fake_llm.stream_text = holding.stream_text  # type: ignore[method-assign]
 
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
 
     async with ws_connect(ws_url) as ws:
         await ws.send(
@@ -505,7 +446,6 @@ async def test_busy_rejects_second_message_while_generating(
                     "session_id": session_id,
                     "client_message_id": str(uuid4()),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "first",
                 }
             )
@@ -518,7 +458,6 @@ async def test_busy_rejects_second_message_while_generating(
                     "session_id": session_id,
                     "client_message_id": str(uuid4()),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "second",
                 }
             )
@@ -553,7 +492,7 @@ async def test_disconnect_during_generation_worker_completes_over_http(
     fake_llm.generate_structured = holding.generate_structured  # type: ignore[method-assign]
     fake_llm.stream_text = holding.stream_text  # type: ignore[method-assign]
 
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
 
     async with ws_connect(ws_url) as ws:
@@ -564,7 +503,6 @@ async def test_disconnect_during_generation_worker_completes_over_http(
                     "session_id": session_id,
                     "client_message_id": str(client_message_id),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": "hello",
                 }
             )
@@ -631,7 +569,7 @@ async def test_final_intake_schedules_assessment_operation(
         )
     )
     fake_llm._expectations = expectations
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
 
     async with ws_connect(ws_url) as ws:
         for content in turn_messages[:-1]:
@@ -642,15 +580,12 @@ async def test_final_intake_schedules_assessment_operation(
                         "session_id": session_id,
                         "client_message_id": str(uuid4()),
                         "request_id": str(uuid4()),
-                        "expected_revision": revision,
                         "content": content,
                     }
                 )
             )
             turn_events = await receive_until_completion_snapshot(ws, max_events=25)
             _assert_normal_chat_event_shape(turn_events)
-            async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
-                revision = (await client.get("/api/v1/state")).json()["revision"]
 
         await ws.send(
             json.dumps(
@@ -659,7 +594,6 @@ async def test_final_intake_schedules_assessment_operation(
                     "session_id": session_id,
                     "client_message_id": str(uuid4()),
                     "request_id": str(uuid4()),
-                    "expected_revision": revision,
                     "content": turn_messages[-1],
                 }
             )
@@ -696,9 +630,6 @@ async def test_final_intake_schedules_assessment_operation(
         assert operation_event["operation"]["status"] == "pending"
         assert operation_event["snapshot"]["stage"] == "assessment"
         assert trailing["snapshot"]["stage"] == "assessment"
-        assert (
-            trailing["snapshot"]["revision"] == operation_event["snapshot"]["revision"]
-        )
         assert saw_assessment_snapshot
 
 
@@ -708,14 +639,13 @@ async def test_duplicate_complete_submit_is_silent_on_websocket(
 ) -> None:
     http_base, ws_url = uvicorn_api_urls
     fake_llm._expectations = list(intake_message_expectations("done once"))
-    session_id, revision = await _setup_intake_http(http_base)
+    session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
     command = {
         "type": "send_message",
         "session_id": session_id,
         "client_message_id": str(client_message_id),
         "request_id": str(uuid4()),
-        "expected_revision": revision,
         "content": "hello",
     }
 
@@ -738,97 +668,3 @@ async def test_duplicate_complete_submit_is_silent_on_websocket(
             if event["type"] == "message_completed":
                 completed_count += 1
         assert completed_count == 0
-
-
-async def test_revision_conflict_includes_snapshot_and_retransmit_succeeds(
-    uvicorn_api_urls,
-    fake_llm: FakeLLM,
-) -> None:
-    http_base, ws_url = uvicorn_api_urls
-    fake_llm._expectations = list(
-        intake_message_expectations("corrected request response")
-    )
-    session_id, revision = await _setup_intake_http(http_base)
-
-    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
-        authoritative_revision = revision
-        await client.put(
-            "/api/v1/profile",
-            json={
-                "expected_revision": authoritative_revision,
-                "profile": {
-                    "name": "Alex",
-                    "primary_language": "English",
-                    "date_of_birth": None,
-                    "notes": "revision bump",
-                },
-            },
-        )
-        state = (await client.get("/api/v1/state")).json()
-        authoritative_revision = state["revision"]
-        assert authoritative_revision > revision
-
-    stale_request_id = uuid4()
-    client_message_id = uuid4()
-    content = "stale revision attempt"
-
-    async with ws_connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(stale_request_id),
-                    "expected_revision": revision,
-                    "content": content,
-                }
-            )
-        )
-        error_event = await _recv_json(ws)
-        assert error_event["request_id"] == str(stale_request_id)
-        assert error_event["error"]["request_id"] == str(stale_request_id)
-        assert error_event["session_id"] == session_id
-        assert error_event["client_message_id"] == str(client_message_id)
-        assert error_event["turn_id"] is None
-        assert error_event["error"]["code"] == "state_conflict"
-        assert (
-            error_event["error"]["current_snapshot"]["revision"]
-            == authoritative_revision
-        )
-
-        async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
-            history = await client.get(f"/api/v1/sessions/{session_id}")
-            assert not any(
-                message["client_message_id"] == str(client_message_id)
-                for message in history.json()["messages"]
-            )
-
-        corrected_request_id = uuid4()
-        assert corrected_request_id != stale_request_id
-
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "send_message",
-                    "session_id": session_id,
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(corrected_request_id),
-                    "expected_revision": authoritative_revision,
-                    "content": content,
-                }
-            )
-        )
-        progress = await _recv_matching_progress(
-            ws,
-            session_id=session_id,
-            client_message_id=client_message_id,
-        )
-        assert progress["session_id"] == session_id
-        assert progress["turn"]["client_message_id"] == str(client_message_id)
-        assert progress["turn"]["session_id"] == session_id
-
-        await _recv_matching_token(
-            ws,
-            request_id=corrected_request_id,
-        )

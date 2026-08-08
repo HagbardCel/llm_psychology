@@ -23,10 +23,8 @@ from jung.diagnostics import (
 )
 from jung.domain.commands import (
     EndSession,
-    RetryOperation,
     SelectStyle,
     SendMessage,
-    StartSession,
     UpdateProfile,
 )
 from jung.domain.errors import (
@@ -34,7 +32,6 @@ from jung.domain.errors import (
     InvalidCommand,
     InvariantViolation,
     NotFound,
-    RevisionConflict,
     StoredWorkFailure,
 )
 from jung.domain.models import (
@@ -195,7 +192,6 @@ class TherapyApplication:
         from_stage: Stage,
         to_stage: Stage,
         trigger: str,
-        revision: int,
     ) -> None:
         if from_stage is to_stage:
             return
@@ -205,13 +201,11 @@ class TherapyApplication:
                 "from_stage": from_stage.value,
                 "to_stage": to_stage.value,
                 "trigger": trigger,
-                "revision": revision,
             },
         )
 
     _COMMAND_REJECT_TYPES = (
         InvalidCommand,
-        RevisionConflict,
         Busy,
         NotFound,
         StoredWorkFailure,
@@ -424,16 +418,19 @@ class TherapyApplication:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.UPDATE_PROFILE, facts)
+                profile_complete = is_profile_complete(command.profile)
+
+                if facts.stage is Stage.INTAKE and not profile_complete:
+                    raise InvalidCommand("profile must remain complete during intake")
+
                 intake_session_id = (
                     self._new_id()
-                    if facts.stage is Stage.SETUP
-                    and is_profile_complete(command.profile)
+                    if facts.stage is Stage.SETUP and profile_complete
                     else None
                 )
                 await self._run_store(
                     self._store.update_profile,
                     command.profile,
-                    expected_revision=command.expected_revision,
                     intake_session_id=intake_session_id,
                     now=self._now(),
                 )
@@ -443,7 +440,6 @@ class TherapyApplication:
                 from_stage=from_stage,
                 to_stage=snapshot.stage,
                 trigger="update_profile",
-                revision=snapshot.revision,
             )
             await self._events.publish(SnapshotChanged(snapshot))
             return snapshot
@@ -480,7 +476,6 @@ class TherapyApplication:
                 plan_id = self._new_id()
                 await self._run_store(
                     self._store.select_style_and_create_initial_plan,
-                    expected_revision=command.expected_revision,
                     style_id=command.style_id,
                     plan_id=plan_id,
                     content=recommendation.initial_plan,
@@ -493,7 +488,6 @@ class TherapyApplication:
                 from_stage=from_stage,
                 to_stage=snapshot.stage,
                 trigger="select_style",
-                revision=snapshot.revision,
             )
             await self._events.publish(SnapshotChanged(snapshot))
             return snapshot
@@ -504,7 +498,7 @@ class TherapyApplication:
             self._record_command_error("select_style", exc)
             raise
 
-    async def start_session(self, command: StartSession) -> StartedSession:
+    async def start_session(self) -> StartedSession:
         self._record_command_started("start_session")
         try:
             self._reject_if_shutdown()
@@ -516,7 +510,6 @@ class TherapyApplication:
                 workflow.require_command_allowed(CommandName.START_SESSION, facts)
                 _, session = await self._run_store(
                     self._store.start_therapy_session,
-                    expected_revision=command.expected_revision,
                     session_id=session_id,
                     now=self._now(),
                 )
@@ -527,7 +520,6 @@ class TherapyApplication:
                 from_stage=from_stage,
                 to_stage=started.snapshot.stage,
                 trigger="start_session",
-                revision=started.snapshot.revision,
             )
             await self._events.publish(SnapshotChanged(started.snapshot))
             return started
@@ -567,7 +559,6 @@ class TherapyApplication:
                         raise InvalidCommand("active session is not therapy")
                     _, operation = await self._run_store(
                         self._store.end_therapy_session,
-                        expected_revision=command.expected_revision,
                         session_id=command.session_id,
                         operation_id=operation_id,
                         now=self._now(),
@@ -591,7 +582,6 @@ class TherapyApplication:
                         from_stage=from_stage,
                         to_stage=snapshot.stage,
                         trigger="end_session",
-                        revision=snapshot.revision,
                     )
                 await self._publish_pending_operation_changed(operation, snapshot)
                 return snapshot
@@ -605,7 +595,7 @@ class TherapyApplication:
             self._record_command_error("end_session", exc)
             raise
 
-    async def retry_operation(self, command: RetryOperation) -> AppSnapshot:
+    async def retry_operation(self) -> AppSnapshot:
         self._record_command_started("retry_operation")
         operation: Operation | None = None
         snapshot: AppSnapshot | None = None
@@ -633,7 +623,6 @@ class TherapyApplication:
                     operation = await self._run_store(
                         self._store.retry_operation,
                         current.id,
-                        expected_revision=command.expected_revision,
                         now=self._now(),
                     )
                     snapshot = await self._assemble_snapshot_locked()
@@ -655,7 +644,6 @@ class TherapyApplication:
                         from_stage=from_stage,
                         to_stage=snapshot.stage,
                         trigger="retry_operation",
-                        revision=snapshot.revision,
                     )
                 await self._publish_pending_operation_changed(operation, snapshot)
                 return snapshot
@@ -709,7 +697,6 @@ class TherapyApplication:
         turn = await self._run_store(
             self._store.retry_chat_turn,
             existing.id,
-            expected_revision=command.expected_revision,
             now=self._now(),
         )
         snapshot = await self._assemble_snapshot_locked()
@@ -789,7 +776,6 @@ class TherapyApplication:
                     user_message_id = self._new_id()
                     _, turn = await self._run_store(
                         self._store.accept_chat_message,
-                        expected_revision=command.expected_revision,
                         session_id=command.session_id,
                         client_message_id=command.client_message_id,
                         turn_id=turn_id,
@@ -887,7 +873,6 @@ class TherapyApplication:
         current_operation = self._store.get_current_operation()
         active_chat_turn = self._store.get_active_chat_turn()
         snapshot = AppSnapshot(
-            revision=state.revision,
             stage=state.stage,
             profile_complete=facts.profile_complete,
             selected_style=plan.selected_style if plan is not None else None,
@@ -1300,7 +1285,6 @@ class TherapyApplication:
                     from_stage=from_stage,
                     to_stage=snapshot.stage,
                     trigger="intake_completed",
-                    revision=snapshot.revision,
                 )
             await self._publish_non_authoritative(
                 ChatTurnCompleted(
@@ -1433,7 +1417,6 @@ class TherapyApplication:
                         from_stage=before.stage,
                         to_stage=snapshot.stage,
                         trigger="assessment_completed",
-                        revision=snapshot.revision,
                     )
                     await self._events.publish(OperationChanged(completed, snapshot))
                 elif operation.kind is OperationKind.POST_SESSION:
@@ -1492,7 +1475,6 @@ class TherapyApplication:
                         from_stage=before.stage,
                         to_stage=snapshot.stage,
                         trigger="post_session_completed",
-                        revision=snapshot.revision,
                     )
                     await self._events.publish(OperationChanged(completed, snapshot))
                 else:

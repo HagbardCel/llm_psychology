@@ -46,10 +46,8 @@ from jung.client.api_client import (
 def _snapshot(
     *,
     pending: ChatTurnSummaryResponse | None = None,
-    revision: int = 1,
 ) -> AppSnapshotResponse:
     return AppSnapshotResponse(
-        revision=revision,
         stage="intake",
         profile_complete=True,
         active_chat_turn=pending,
@@ -178,15 +176,77 @@ async def test_intent_and_attempt_ids_have_distinct_lifetimes() -> None:
             client_message_id=retained_id,
         )
         generated = client.new_chat_intent(session_id, "hello")
-        first = client.new_message_command(retained, expected_revision=7)
-        second = client.new_message_command(retained, expected_revision=8)
+        first = client.new_message_command(retained)
+        second = client.new_message_command(retained)
 
         assert retained.client_message_id == retained_id
         assert generated.client_message_id != retained_id
         assert first.client_message_id == second.client_message_id == retained_id
         assert first.request_id != second.request_id
-        assert first.expected_revision == 7
-        assert second.expected_revision == 8
+        assert not hasattr(first, "expected" + "_revision")
+
+
+@pytest.mark.asyncio
+async def test_start_end_retry_send_no_http_body() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        request_id = request.headers["X-Request-ID"]
+        if request.url.path.endswith("/sessions") and request.method == "POST":
+            session_id = str(uuid4())
+            return httpx.Response(
+                201,
+                headers={"X-Request-ID": request_id},
+                json={
+                    "session": {
+                        "id": session_id,
+                        "kind": "therapy",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    },
+                    "snapshot": {
+                        "stage": "therapy",
+                        "profile_complete": True,
+                        "active_session": {
+                            "id": session_id,
+                            "kind": "therapy",
+                            "started_at": "2026-01-01T00:00:00Z",
+                        },
+                        "available_commands": ["end_session", "send_message"],
+                    },
+                },
+            )
+        if "/end" in request.url.path:
+            return httpx.Response(
+                202,
+                headers={"X-Request-ID": request_id},
+                json={
+                    "stage": "post_session",
+                    "profile_complete": True,
+                    "available_commands": [],
+                },
+            )
+        if request.url.path.endswith("/operations/current/retry"):
+            return httpx.Response(
+                202,
+                headers={"X-Request-ID": request_id},
+                json={
+                    "stage": "assessment",
+                    "profile_complete": True,
+                    "available_commands": [],
+                },
+            )
+        raise AssertionError(f"unexpected request {request.method} {request.url.path}")
+
+    client = _client_with_handler(handler)
+    started = await client.start_session()
+    await client.end_session(started.session.id)
+    await client.retry_current_operation()
+    await client.aclose()
+
+    assert len(captured) == 3
+    for request in captured:
+        assert request.content == b""
 
 
 @pytest.mark.asyncio
@@ -381,7 +441,6 @@ async def test_transport_failure_makes_chat_unusable_and_still_closes(
     command = SendMessageCommand(
         type="send_message",
         request_id=uuid4(),
-        expected_revision=1,
         session_id=uuid4(),
         client_message_id=uuid4(),
         content="hello",
@@ -424,7 +483,6 @@ async def test_remote_closure_makes_chat_unusable_and_still_closes(
     command = SendMessageCommand(
         type="send_message",
         request_id=uuid4(),
-        expected_revision=1,
         session_id=uuid4(),
         client_message_id=uuid4(),
         content="hello",
@@ -454,7 +512,6 @@ async def test_explicit_chat_close_makes_connection_unusable() -> None:
     command = SendMessageCommand(
         type="send_message",
         request_id=uuid4(),
-        expected_revision=1,
         session_id=uuid4(),
         client_message_id=uuid4(),
         content="hello",
@@ -485,7 +542,6 @@ async def test_chat_close_retries_after_cancellation() -> None:
     command = SendMessageCommand(
         type="send_message",
         request_id=uuid4(),
-        expected_revision=1,
         session_id=uuid4(),
         client_message_id=uuid4(),
         content="hello",
@@ -599,7 +655,7 @@ async def test_impossible_history_raises_protocol_error() -> None:
 async def test_match_decisive_event_translates_chat_event_violation() -> None:
     async with JungApiClient(ClientSettings("http://localhost:8000")) as client:
         intent = client.new_chat_intent(uuid4(), "hello")
-        command = client.new_message_command(intent, expected_revision=1)
+        command = client.new_message_command(intent)
         failure_request_id = uuid4()
         malformed = ErrorEvent(
             type="error",
@@ -667,14 +723,14 @@ async def test_reconciliation_closure_uses_final_durable_completion(
     session_id = uuid4()
     intent = client.new_chat_intent(session_id, "hello")
     initial = (
-        _snapshot(revision=3),
+        _snapshot(),
         _history(
             session_id=session_id,
             client_message_id=intent.client_message_id,
         ),
     )
     final = (
-        _snapshot(revision=5),
+        _snapshot(),
         _history(
             session_id=session_id,
             client_message_id=intent.client_message_id,
@@ -704,14 +760,14 @@ async def test_event_silent_retransmission_uses_final_durable_completion(
     session_id = uuid4()
     intent = client.new_chat_intent(session_id, "hello")
     initial = (
-        _snapshot(revision=3),
+        _snapshot(),
         _history(
             session_id=session_id,
             client_message_id=intent.client_message_id,
         ),
     )
     final = (
-        _snapshot(revision=5),
+        _snapshot(),
         _history(
             session_id=session_id,
             client_message_id=intent.client_message_id,

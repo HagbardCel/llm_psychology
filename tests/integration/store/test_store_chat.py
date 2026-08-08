@@ -18,7 +18,6 @@ def _therapy_ready(store: SQLiteStore):
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
@@ -38,9 +37,7 @@ def test_chat_turn_acceptance_and_completion(
     turn_id = uuid4()
     user_message_id = uuid4()
     client_message_id = uuid4()
-    revision = store.get_app_state().revision
     state, turn = store.accept_chat_message(
-        expected_revision=revision,
         session_id=session_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -67,16 +64,14 @@ def test_chat_turn_acceptance_and_completion(
     assert messages[1].client_message_id == client_message_id
 
 
-def test_duplicate_client_message_id_returns_existing_before_revision_check(
+def test_duplicate_client_message_id_returns_existing(
     store: SQLiteStore,
 ) -> None:
     intake_id, now = open_intake(store)
     client_message_id = uuid4()
     turn_id = uuid4()
     user_message_id = uuid4()
-    revision = store.get_app_state().revision
     store.accept_chat_message(
-        expected_revision=revision,
         session_id=intake_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -85,7 +80,6 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
         now=now,
     )
     state, duplicate = store.accept_chat_message(
-        expected_revision=99,
         session_id=intake_id,
         client_message_id=client_message_id,
         turn_id=uuid4(),
@@ -95,7 +89,6 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
     )
     assert state is None
     assert duplicate.id == turn_id
-    assert store.get_app_state().revision == revision + 1
     messages = store.list_messages(intake_id)
     assert len(messages) == 1
     assert messages[0].content == "hello"
@@ -105,7 +98,6 @@ def test_duplicate_client_message_id_returns_existing_before_revision_check(
 def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=uuid4(),
@@ -115,7 +107,6 @@ def test_one_pending_turn_blocks_second_acceptance(store: SQLiteStore) -> None:
     )
     with pytest.raises(Busy):
         store.accept_chat_message(
-            expected_revision=store.get_app_state().revision,
             session_id=intake_id,
             client_message_id=uuid4(),
             turn_id=uuid4(),
@@ -131,7 +122,6 @@ def test_failed_chat_turn_preserves_user_message(store: SQLiteStore) -> None:
     user_message_id = uuid4()
     client_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=client_message_id,
         turn_id=turn_id,
@@ -159,7 +149,6 @@ def test_failed_non_retryable_u1_does_not_associate_later_assistant_with_u1(
     intake_id, now = open_intake(store)
     u1_client_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=u1_client_id,
         turn_id=uuid4(),
@@ -177,7 +166,6 @@ def test_failed_non_retryable_u1_does_not_associate_later_assistant_with_u1(
     u2_client_id = uuid4()
     turn_two = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=u2_client_id,
         turn_id=turn_two,
@@ -205,7 +193,6 @@ def test_duplicate_user_message_id_rejected_on_second_accept(
     intake_id, now = open_intake(store)
     user_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=uuid4(),
@@ -222,7 +209,6 @@ def test_duplicate_user_message_id_rejected_on_second_accept(
     )
     with pytest.raises(PersistenceFailure):
         store.accept_chat_message(
-            expected_revision=store.get_app_state().revision,
             session_id=intake_id,
             client_message_id=uuid4(),
             turn_id=uuid4(),
@@ -239,7 +225,6 @@ def test_duplicate_assistant_message_id_rejected_on_complete(
     turn_one = uuid4()
     assistant_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=turn_one,
@@ -254,7 +239,6 @@ def test_duplicate_assistant_message_id_rejected_on_complete(
         now=now,
     )
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=uuid4(),
@@ -276,7 +260,6 @@ def test_late_chat_callback_rejected(store: SQLiteStore, action: str) -> None:
     intake_id, now = open_intake(store)
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=turn_id,
@@ -315,7 +298,6 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
     store_a = SQLiteStore(store_path)
     store_a.initialize()
     intake_id, now = open_intake(store_a)
-    revision = store_a.get_app_state().revision
     client_message_id = uuid4()
     turn_a_id = uuid4()
     turn_b_id = uuid4()
@@ -332,7 +314,6 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
         try:
             results.append(
                 store.accept_chat_message(
-                    expected_revision=revision,
                     session_id=intake_id,
                     client_message_id=client_message_id,
                     turn_id=turn,
@@ -365,7 +346,6 @@ def test_concurrent_duplicate_client_message_id_is_idempotent(
     assert sum(state is not None for state in states) == 1
     assert turns[0].id == turns[1].id
     assert turns[0].id in {turn_a_id, turn_b_id}
-    assert store_a.get_app_state().revision == revision + 1
     messages = store_a.list_messages(intake_id)
     assert len(messages) == 1
     assert messages[0].id in {user_message_a_id, user_message_b_id}
@@ -378,7 +358,6 @@ def test_complete_chat_turn_persists_intake_record_atomically(
     turn_id = uuid4()
     user_message_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=turn_id,
@@ -405,7 +384,6 @@ def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
     intake_id, now = open_intake(store)
     first_turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=first_turn_id,
@@ -424,7 +402,6 @@ def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
 
     retry_turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_id,
         client_message_id=uuid4(),
         turn_id=retry_turn_id,
@@ -445,7 +422,6 @@ def test_failed_chat_turn_preserves_intake_record_then_retry_updates(
 
     store.retry_chat_turn(
         retry_turn_id,
-        expected_revision=store.get_app_state().revision,
         now=now,
     )
     store.complete_chat_turn(
@@ -472,7 +448,6 @@ def test_intake_record_on_therapy_session_raises_invariant(
     therapy_id, now = _therapy_ready(store)
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         client_message_id=uuid4(),
         turn_id=turn_id,

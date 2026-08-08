@@ -190,7 +190,6 @@ def test_profile_requests_reject_top_level_and_nested_extras() -> None:
     with pytest.raises(ValidationError):
         ProfileUpdateRequest.model_validate(
             {
-                "expected_revision": 0,
                 "profile": {
                     "name": "Alex",
                     "primary_language": "English",
@@ -225,7 +224,6 @@ def test_send_message_command_validates_complete_payload() -> None:
             "session_id": str(uuid4()),
             "client_message_id": str(uuid4()),
             "request_id": str(uuid4()),
-            "expected_revision": 1,
             "content": "hello",
         }
     )
@@ -283,7 +281,6 @@ def test_start_session_response_maps_atomic_result() -> None:
     )
     context = MappingContext(request_id=uuid4())
     snapshot = AppSnapshot(
-        revision=2,
         stage=Stage.THERAPY,
         profile_complete=True,
         active_session=session,
@@ -302,7 +299,6 @@ def test_snapshot_maps_current_operation_and_command_order() -> None:
     operation = _make_failed_operation(session_id=session.id, now=now)
     context = MappingContext(request_id=uuid4())
     snapshot = AppSnapshot(
-        revision=3,
         stage=Stage.ASSESSMENT,
         profile_complete=True,
         current_operation=operation,
@@ -361,7 +357,6 @@ def test_profile_history_and_style_mapping_redacts_internals() -> None:
     operation = _make_failed_operation(session_id=session.id, now=now)
     context = MappingContext(request_id=uuid4())
     snapshot = AppSnapshot(
-        revision=3,
         stage=Stage.ASSESSMENT,
         profile_complete=True,
         current_operation=operation,
@@ -468,7 +463,6 @@ def test_operation_changed_event_shares_mapping_context_request_id() -> None:
     request_id = uuid4()
     context = MappingContext(request_id=request_id)
     snapshot = AppSnapshot(
-        revision=2,
         stage=Stage.ASSESSMENT,
         profile_complete=True,
         current_operation=operation,
@@ -516,7 +510,6 @@ def test_pending_chat_turn_maps_to_snapshot_active_chat_turn() -> None:
         status=ChatTurnStatus.PENDING,
     )
     snapshot = AppSnapshot(
-        revision=2,
         stage=Stage.THERAPY,
         profile_complete=True,
         active_chat_turn=turn,
@@ -535,6 +528,28 @@ def test_pending_chat_turn_maps_to_snapshot_active_chat_turn() -> None:
 def test_contract_schema_does_not_expose_user_id(model: type[BaseModel]) -> None:
     schema = model.model_json_schema()
     assert not _contains_property(schema, "user_id"), model.__name__
+
+
+@pytest.mark.parametrize("model", _contract_wire_models())
+def test_contract_schema_has_no_optimistic_revision_fields(
+    model: type[BaseModel],
+) -> None:
+    schema = model.model_json_schema()
+    for forbidden in (
+        "expected" + "_revision",
+        "current" + "_snapshot",
+        "state" + "_conflict",
+    ):
+        assert not _contains_property(schema, forbidden), (
+            f"{model.__name__} exposes {forbidden}"
+        )
+
+
+def test_app_snapshot_response_schema_has_no_revision() -> None:
+    from jung.api.contracts import AppSnapshotResponse
+
+    properties = AppSnapshotResponse.model_json_schema()["properties"]
+    assert "revision" not in properties
 
 
 def test_error_response_inherits_error_envelope_fields() -> None:

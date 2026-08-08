@@ -41,7 +41,7 @@ derived from the owning turn.
 
 | Table | Purpose | Key relationships | Important constraints |
 |---|---|---|---|
-| `app_state` | Singleton workflow stage and snapshot revision | — | `singleton_id = 1` |
+| `app_state` | Singleton workflow stage | — | `singleton_id = 1` |
 | `profile` | Singleton user-editable profile plus optional derived JSON and current plan pointer | `current_plan_id` → `plans` | `singleton_id = 1` |
 | `sessions` | Intake and therapy sessions | `plan_id` → `plans` | at most one open session globally; therapy sessions must not carry intake JSON |
 | `plans` | Immutable plan revisions | `source_session_id` → `sessions`; `supersedes_plan_id` → `plans` | unique `version`; unique `source_session_id`; at most one successor per superseded plan |
@@ -77,7 +77,9 @@ application rather than claimed as pure SQL guarantees:
 - valid workflow stage transitions and command acceptance are application/workflow policy;
 - store APIs create turn-owned user/assistant messages with the owning turn's session and expected roles; these cross-table semantic relationships are application/store invariants rather than SQL constraints (foreign keys only guarantee that the referenced message exists);
 - multi-table use cases such as assessment completion and post-session completion commit atomically in store methods;
-- `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`), the optimistic revision check where applicable (internal/background writes may omit `expected_revision`), revision increments, and commit/rollback.
+- `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`) and commit/rollback; it does not own optimistic concurrency checks or snapshot-revision increments;
+- `TherapyApplication` serializes mutations and validates commands against authoritative state before calling the store;
+- `app_state.updated_at` means the last persisted workflow-stage change.
 
 ## JSON-owned documents
 
@@ -103,7 +105,7 @@ JSON TEXT columns hold validated documents owned by specific subsystems:
 ## Initialization and schema compatibility
 
 Schema compatibility is guarded by `PRAGMA user_version` against the code-owned
-`SCHEMA_VERSION`. Migrations are not supported.
+`SCHEMA_VERSION` (schema v4). Migrations are not supported.
 
 Initialization behavior:
 

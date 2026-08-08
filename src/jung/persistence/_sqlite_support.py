@@ -30,7 +30,7 @@ from jung.domain.models import (
     StoredProfile,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -74,8 +74,8 @@ def seed_initial_state(conn: sqlite3.Connection) -> None:
     now = dt(datetime.now(UTC))
     conn.execute(
         """
-        INSERT INTO app_state (singleton_id, stage, revision, created_at, updated_at)
-        VALUES (1, ?, 0, ?, ?)
+        INSERT INTO app_state (singleton_id, stage, created_at, updated_at)
+        VALUES (1, ?, ?, ?)
         """,
         (Stage.SETUP.value, now, now),
     )
@@ -225,9 +225,8 @@ def parse_date(value: str | None) -> date | None:
 def row_to_app_state(row: sqlite3.Row | tuple[Any, ...]) -> AppState:
     return AppState(
         stage=Stage(row[0]),
-        revision=int(row[1]),
-        created_at=parse_dt(row[2]),
-        updated_at=parse_dt(row[3]),
+        created_at=parse_dt(row[1]),
+        updated_at=parse_dt(row[2]),
     )
 
 

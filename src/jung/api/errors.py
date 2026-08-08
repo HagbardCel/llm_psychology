@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from jung.api.contracts import (
-    AppSnapshotResponse,
     ErrorCode,
     ErrorEnvelope,
     ErrorResponse,
@@ -19,7 +18,6 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    RevisionConflict,
     StoredWorkFailure,
 )
 
@@ -51,15 +49,6 @@ _ERROR_SPECS: tuple[tuple[type[Exception], _ErrorSpec], ...] = (
         _ErrorSpec(
             "invalid_command",
             "Command is not permitted in the current workflow state.",
-            409,
-            False,
-        ),
-    ),
-    (
-        RevisionConflict,
-        _ErrorSpec(
-            "state_conflict",
-            "The request used a stale revision.",
             409,
             False,
         ),
@@ -147,7 +136,6 @@ def to_error_envelope(
     exc: Exception,
     *,
     request_id: UUID,
-    current_snapshot: AppSnapshotResponse | None = None,
 ) -> ErrorEnvelope:
     if isinstance(exc, StoredWorkFailure):
         return ErrorEnvelope(
@@ -155,16 +143,13 @@ def to_error_envelope(
             message=str(exc),
             request_id=request_id,
             retryable=exc.retryable,
-            current_snapshot=None,
         )
     spec = _error_spec(exc)
-    snapshot = current_snapshot if isinstance(exc, RevisionConflict) else None
     return ErrorEnvelope(
         code=spec.code,
         message=spec.message,
         request_id=request_id,
         retryable=spec.retryable,
-        current_snapshot=snapshot,
     )
 
 
@@ -178,12 +163,10 @@ def to_error_response(
     exc: Exception,
     *,
     request_id: UUID,
-    current_snapshot: AppSnapshotResponse | None = None,
 ) -> ErrorResponse:
     envelope = to_error_envelope(
         exc,
         request_id=request_id,
-        current_snapshot=current_snapshot,
     )
     return ErrorResponse.model_validate(envelope.model_dump())
 
@@ -194,7 +177,6 @@ def validation_error_response(*, request_id: UUID) -> ErrorResponse:
         message="Request validation failed.",
         request_id=request_id,
         retryable=False,
-        current_snapshot=None,
     )
 
 
@@ -204,5 +186,4 @@ def not_ready_error_response(*, request_id: UUID) -> ErrorResponse:
         message="Service is not ready",
         request_id=request_id,
         retryable=True,
-        current_snapshot=None,
     )

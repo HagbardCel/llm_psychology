@@ -158,7 +158,6 @@ def test_operation_changed_shares_request_id_in_nested_errors() -> None:
         updated_at=now,
     )
     snapshot = AppSnapshot(
-        revision=2,
         stage=Stage.ASSESSMENT,
         profile_complete=True,
         current_operation=operation,

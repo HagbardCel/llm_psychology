@@ -16,12 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-from jung.api.contracts import MappingContext, to_snapshot_response
 from jung.api.deps import (
     ApiNotReady,
     ApiRuntime,
     build_error_response,
-    get_runtime_from_state,
 )
 from jung.api.errors import (
     RequestIdError,
@@ -38,7 +36,7 @@ from jung.api.websocket import router as websocket_router
 from jung.composition import application_context
 from jung.config import ApplicationSettings
 from jung.diagnostics import diagnostic_context
-from jung.domain.errors import DomainError, RevisionConflict
+from jung.domain.errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -94,31 +92,6 @@ def _register_exception_handlers(app: FastAPI) -> None:
         request_id = _request_id_from_request(request)
         body = validation_error_response(request_id=request_id)
         return build_error_response(status=422, body=body)
-
-    @app.exception_handler(RevisionConflict)
-    async def revision_conflict_handler(request: Request, exc: RevisionConflict):
-        request_id = _request_id_from_request(request)
-        context = MappingContext(request_id=request_id)
-        wire_snapshot = None
-        try:
-            runtime = get_runtime_from_state(request.app.state.api)
-            snapshot = await runtime.application.get_snapshot()
-            wire_snapshot = to_snapshot_response(snapshot, context=context)
-        except Exception as enrichment_exc:
-            _log_safe_exception(
-                "failed to enrich revision conflict snapshot",
-                request_id=request_id,
-                exc=enrichment_exc,
-            )
-        body = to_error_response(
-            exc,
-            request_id=request_id,
-            current_snapshot=wire_snapshot,
-        )
-        return build_error_response(
-            status=http_status_for_exception(exc),
-            body=body,
-        )
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError):

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.errors import PersistenceFailure, RevisionConflict
+from jung.domain.errors import PersistenceFailure
 from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
@@ -18,12 +18,12 @@ from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:
     state = store.get_app_state()
     assert state.stage == Stage.SETUP
-    assert state.revision == 0
+    assert not hasattr(state, "revision")
 
 
 def test_initialize_is_idempotent(store: SQLiteStore) -> None:
     store.initialize()
-    assert store.get_app_state().revision == 0
+    assert store.get_app_state().stage == Stage.SETUP
 
 
 def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
@@ -38,6 +38,22 @@ def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
     assert busy == 5000
 
 
+def test_fresh_schema_is_version_four_without_revision_column(
+    store_path: Path,
+) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    with sqlite3.connect(store_path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(app_state)").fetchall()
+        }
+    assert version == 4
+    assert version == SCHEMA_VERSION
+    assert "revision" not in columns
+    assert columns == {"singleton_id", "stage", "created_at", "updated_at"}
+
+
 def test_user_version_is_set(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -46,14 +62,17 @@ def test_user_version_is_set(store_path: Path) -> None:
     assert version == SCHEMA_VERSION
 
 
-@pytest.mark.parametrize("version", [1, 99])
+@pytest.mark.parametrize("version", [1, 3, 99])
 def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     with sqlite3.connect(store_path) as conn:
         conn.execute(f"PRAGMA user_version = {version}")
         conn.commit()
-    with pytest.raises(PersistenceFailure):
+    with pytest.raises(
+        PersistenceFailure,
+        match=f"unsupported schema version {version}; reset the database",
+    ):
         store.initialize()
 
 
@@ -62,7 +81,6 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     now = datetime.now(UTC)
     store.update_profile(
         profile,
-        expected_revision=0,
         intake_session_id=uuid4(),
         now=now,
     )
@@ -70,17 +88,6 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     reopened.initialize()
     assert reopened.get_app_state().stage == Stage.INTAKE
     assert reopened.get_active_session() is not None
-
-
-def test_stale_revision_rejected(store: SQLiteStore) -> None:
-    with pytest.raises(RevisionConflict):
-        store.update_profile(
-            Profile(name="Alex", primary_language="English"),
-            expected_revision=99,
-            intake_session_id=uuid4(),
-            now=datetime.now(UTC),
-        )
-    assert store.get_app_state().revision == 0
 
 
 @pytest.mark.parametrize("table_name", sorted(sql.TARGET_TABLES))

@@ -28,7 +28,6 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from jung.api.contracts import (
     AppSnapshotResponse,
     ChatTurnSummaryResponse,
-    EndSessionRequest,
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
@@ -37,14 +36,12 @@ from jung.api.contracts import (
     MessageResponse,
     ProfileResponse,
     ProfileUpdateRequest,
-    RetryOperationRequest,
     SelectStyleRequest,
     SendMessageCommand,
     ServerEvent,
     SessionHistoryResponse,
     SessionListResponse,
     SessionSummaryResponse,
-    StartSessionRequest,
     StartSessionResponse,
     StyleOptionsResponse,
 )
@@ -63,7 +60,6 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 _ALLOWED_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
     "invalid_command": frozenset({409}),
-    "state_conflict": frozenset({409}),
     "busy": frozenset({409}),
     "not_found": frozenset({404}),
     "validation_error": frozenset({422}),
@@ -198,7 +194,6 @@ class JungApiError(JungClientError):
         self.message = error.message
         self.request_id = error.request_id
         self.retryable = error.retryable
-        self.current_snapshot = error.current_snapshot
         super().__init__(self._safe_summary())
 
     def _safe_summary(self) -> str:
@@ -466,7 +461,6 @@ class JungApiClient:
         self,
         intent: ChatSendIntent,
         *,
-        expected_revision: int,
         request_id: UUID | None = None,
     ) -> SendMessageCommand:
         return SendMessageCommand(
@@ -474,7 +468,6 @@ class JungApiClient:
             session_id=intent.session_id,
             client_message_id=intent.client_message_id,
             request_id=request_id or uuid4(),
-            expected_revision=expected_revision,
             content=intent.content,
         )
 
@@ -688,41 +681,28 @@ class JungApiClient:
             response_model=SessionHistoryResponse,
         )
 
-    async def start_session(
-        self,
-        request: StartSessionRequest,
-    ) -> StartSessionResponse:
+    async def start_session(self) -> StartSessionResponse:
         return await self._request(
             "POST",
             "/api/v1/sessions",
             expected_status=201,
             response_model=StartSessionResponse,
-            body=request,
         )
 
-    async def end_session(
-        self,
-        session_id: UUID,
-        request: EndSessionRequest,
-    ) -> AppSnapshotResponse:
+    async def end_session(self, session_id: UUID) -> AppSnapshotResponse:
         return await self._request(
             "POST",
             f"/api/v1/sessions/{session_id}/end",
             expected_status=202,
             response_model=AppSnapshotResponse,
-            body=request,
         )
 
-    async def retry_current_operation(
-        self,
-        request: RetryOperationRequest,
-    ) -> AppSnapshotResponse:
+    async def retry_current_operation(self) -> AppSnapshotResponse:
         return await self._request(
             "POST",
             "/api/v1/operations/current/retry",
             expected_status=202,
             response_model=AppSnapshotResponse,
-            body=request,
         )
 
     async def get_health(self) -> HealthResponse:
@@ -884,10 +864,7 @@ class JungApiClient:
             if initial is not None:
                 return initial
 
-            command = self.new_message_command(
-                intent,
-                expected_revision=snapshot.revision,
-            )
+            command = self.new_message_command(intent)
             matched_error: ErrorEvent | None = None
             protocol_failure: JungProtocolError | None = None
             try:

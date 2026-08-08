@@ -11,7 +11,6 @@ from uuid import UUID
 
 from jung.api.contracts import (
     AppSnapshotResponse,
-    EndSessionRequest,
     ErrorEnvelope,
     ErrorEvent,
     MessageCompletedEvent,
@@ -20,12 +19,10 @@ from jung.api.contracts import (
     OperationChangedEvent,
     ProfileUpdateRequest,
     ProfileWire,
-    RetryOperationRequest,
     SelectStyleRequest,
     ServerEvent,
     SessionHistoryResponse,
     SnapshotChangedEvent,
-    StartSessionRequest,
     StyleOptionsResponse,
     TokenEvent,
 )
@@ -187,7 +184,6 @@ def _envelope_from_api_error(exc: JungApiError) -> ErrorEnvelope:
         message=exc.message,
         request_id=exc.request_id,
         retryable=exc.retryable,
-        current_snapshot=exc.current_snapshot,
     )
 
 
@@ -224,12 +220,9 @@ class ConsoleApp:
         try:
             result = await mutation
         except JungApiError as exc:
-            if exc.code == "state_conflict" and exc.current_snapshot is not None:
-                self._output.render_command_rejection(_envelope_from_api_error(exc))
-                return exc.current_snapshot
             if exc.code == "invalid_command":
                 self._output.render_command_rejection(_envelope_from_api_error(exc))
-                return exc.current_snapshot or await self._client.get_state()
+                return await self._client.get_state()
             raise
         return snapshot_of(result)
 
@@ -240,7 +233,6 @@ class ConsoleApp:
             self._observer.record(
                 "snapshot",
                 stage=snapshot.stage,
-                revision=snapshot.revision,
                 commands=list(snapshot.available_commands),
             )
 
@@ -287,11 +279,7 @@ class ConsoleApp:
                         continue
                     require_command(commands, "start_session")
                     snapshot = await self._apply_mutation(
-                        self._client.start_session(
-                            StartSessionRequest(
-                                expected_revision=snapshot.revision,
-                            )
-                        ),
+                        self._client.start_session(),
                         snapshot_of=lambda response: response.snapshot,
                     )
                 case "therapy":
@@ -335,7 +323,6 @@ class ConsoleApp:
         return await self._apply_mutation(
             self._client.update_profile(
                 ProfileUpdateRequest(
-                    expected_revision=profile_snapshot.revision,
                     profile=updated,
                 )
             ),
@@ -352,7 +339,6 @@ class ConsoleApp:
         return await self._apply_mutation(
             self._client.select_style(
                 SelectStyleRequest(
-                    expected_revision=snapshot.revision,
                     style_id=style_id.strip(),
                 )
             ),
@@ -370,10 +356,7 @@ class ConsoleApp:
                 expected_model="active therapy session",
             )
         return await self._apply_mutation(
-            self._client.end_session(
-                session.id,
-                EndSessionRequest(expected_revision=snapshot.revision),
-            ),
+            self._client.end_session(session.id),
             snapshot_of=lambda adopted: adopted,
         )
 
@@ -408,11 +391,7 @@ class ConsoleApp:
                 ).strip()
                 if action == "/retry":
                     return await self._apply_mutation(
-                        self._client.retry_current_operation(
-                            RetryOperationRequest(
-                                expected_revision=snapshot.revision,
-                            )
-                        ),
+                        self._client.retry_current_operation(),
                         snapshot_of=lambda adopted: adopted,
                     )
                 if action == "/exit":
@@ -656,10 +635,7 @@ class ConsoleApp:
             )
         self._observer.record("user_message", content=content)
         intent = self._client.new_chat_intent(session.id, content)
-        command = self._client.new_message_command(
-            intent,
-            expected_revision=snapshot.revision,
-        )
+        command = self._client.new_message_command(intent)
         self._observer.record(
             "chat_send",
             session_id=str(intent.session_id),
@@ -906,7 +882,6 @@ class ConsoleApp:
                     type=event.type,
                     operation_kind=event.operation.kind,
                     operation_status=event.operation.status,
-                    revision=event.snapshot.revision,
                     stage=event.snapshot.stage,
                 )
                 return None
@@ -915,7 +890,6 @@ class ConsoleApp:
                 self._observer.record(
                     "ws_event",
                     type=event.type,
-                    revision=event.snapshot.revision,
                     stage=event.snapshot.stage,
                 )
                 return None
@@ -967,5 +941,4 @@ class ConsoleApp:
     ) -> AppSnapshotResponse:
         self._locally_submitted_client_ids.discard(intent.client_message_id)
         self._output.render_command_rejection(error_event.error)
-        snapshot = error_event.error.current_snapshot or await self._client.get_state()
-        return snapshot
+        return await self._client.get_state()

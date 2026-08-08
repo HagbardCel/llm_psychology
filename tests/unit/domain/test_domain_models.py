@@ -87,7 +87,6 @@ def test_domain_timestamp_rejects_naive_datetime() -> None:
     with pytest.raises(ValidationError):
         AppState(
             stage=Stage.SETUP,
-            revision=0,
             created_at=datetime.now(),
             updated_at=datetime.now(UTC),
         )
@@ -97,7 +96,6 @@ def test_domain_timestamp_normalizes_offset_to_utc() -> None:
     source = datetime(2026, 7, 12, 12, tzinfo=timezone(timedelta(hours=2)))
     state = AppState(
         stage=Stage.SETUP,
-        revision=0,
         created_at=source,
         updated_at=source,
     )

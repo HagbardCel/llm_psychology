@@ -1,7 +1,6 @@
 CREATE TABLE IF NOT EXISTS app_state (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
     stage TEXT NOT NULL,
-    revision INTEGER NOT NULL CHECK (revision >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

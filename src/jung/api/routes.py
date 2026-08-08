@@ -12,16 +12,13 @@ from jung.api.contracts import (
     CONFLICT_RESPONSES,
     NOT_FOUND_RESPONSES,
     AppSnapshotResponse,
-    EndSessionRequest,
     HealthResponse,
     MappingContext,
     ProfileResponse,
     ProfileUpdateRequest,
-    RetryOperationRequest,
     SelectStyleRequest,
     SessionHistoryResponse,
     SessionListResponse,
-    StartSessionRequest,
     StartSessionResponse,
     StyleOptionsResponse,
     to_profile_response,
@@ -35,9 +32,7 @@ from jung.api.deps import ApiRuntime, build_error_response, get_runtime
 from jung.api.errors import not_ready_error_response
 from jung.domain.commands import (
     EndSession,
-    RetryOperation,
     SelectStyle,
-    StartSession,
     UpdateProfile,
 )
 from jung.domain.models import Profile
@@ -111,9 +106,7 @@ async def update_profile(
         date_of_birth=body.profile.date_of_birth,
         notes=body.profile.notes,
     )
-    snapshot = await runtime.application.update_profile(
-        UpdateProfile(expected_revision=body.expected_revision, profile=profile)
-    )
+    snapshot = await runtime.application.update_profile(UpdateProfile(profile=profile))
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -142,7 +135,7 @@ async def select_style(
 ) -> AppSnapshotResponse:
     context = _context(request)
     snapshot = await runtime.application.select_style(
-        SelectStyle(expected_revision=body.expected_revision, style_id=body.style_id)
+        SelectStyle(style_id=body.style_id)
     )
     return to_snapshot_response(snapshot, context=context)
 
@@ -181,14 +174,11 @@ async def get_session(
     responses=CONFLICT_RESPONSES,
 )
 async def start_session(
-    body: StartSessionRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> StartSessionResponse:
     context = _context(request)
-    started = await runtime.application.start_session(
-        StartSession(expected_revision=body.expected_revision)
-    )
+    started = await runtime.application.start_session()
     return to_start_session_response(started, context=context)
 
 
@@ -201,14 +191,11 @@ async def start_session(
 )
 async def end_session(
     session_id: UUID,
-    body: EndSessionRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.end_session(
-        EndSession(expected_revision=body.expected_revision, session_id=session_id)
-    )
+    snapshot = await runtime.application.end_session(EndSession(session_id=session_id))
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -220,14 +207,11 @@ async def end_session(
     responses=CONFLICT_RESPONSES,
 )
 async def retry_operation(
-    body: RetryOperationRequest,
     request: Request,
     runtime: ApiRuntime = Depends(get_runtime),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.retry_operation(
-        RetryOperation(expected_revision=body.expected_revision)
-    )
+    snapshot = await runtime.application.retry_operation()
     return to_snapshot_response(snapshot, context=context)
 
 

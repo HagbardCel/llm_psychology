@@ -41,7 +41,6 @@ def open_intake(store: SQLiteStore) -> tuple[UUID, datetime]:
     intake_session_id = uuid4()
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
-        expected_revision=store.get_app_state().revision,
         intake_session_id=intake_session_id,
         now=now,
     )
@@ -63,7 +62,6 @@ def complete_intake_for_assessment(
     operation_id = operation_id or uuid4()
     turn_id = uuid4()
     store.accept_chat_message(
-        expected_revision=store.get_app_state().revision,
         session_id=intake_session_id,
         client_message_id=uuid4(),
         turn_id=turn_id,
@@ -102,7 +100,6 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
 
     plan_id = uuid4()
     store.select_style_and_create_initial_plan(
-        expected_revision=store.get_app_state().revision,
         style_id="cbt",
         plan_id=plan_id,
         content=PlanContent(
@@ -128,7 +125,6 @@ def advance_to_post_session(store: SQLiteStore) -> PostSessionScenario:
     ready = advance_to_ready(store)
     therapy_id = uuid4()
     store.start_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         now=ready.now,
     )
@@ -136,7 +132,6 @@ def advance_to_post_session(store: SQLiteStore) -> PostSessionScenario:
 
     post_op_id = uuid4()
     store.end_therapy_session(
-        expected_revision=store.get_app_state().revision,
         session_id=therapy_id,
         operation_id=post_op_id,
         now=ready.now,

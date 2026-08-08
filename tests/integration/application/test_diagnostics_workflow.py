@@ -12,9 +12,10 @@ from uuid import uuid4
 import pytest
 
 from jung.composition import _record_cleanup_failure
+from jung.diagnostics import SCHEMA_VERSION as DIAGNOSTIC_SCHEMA_VERSION
 from jung.diagnostics import DiagnosticRun
-from jung.domain.commands import RetryOperation, SelectStyle, SendMessage, UpdateProfile
-from jung.domain.errors import InvariantViolation
+from jung.domain.commands import SelectStyle, SendMessage, UpdateProfile
+from jung.domain.errors import InvalidCommand, InvariantViolation
 from jung.domain.models import (
     ChatTurnStatus,
     OperationKind,
@@ -72,7 +73,6 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
         async with build_test_application(store, fake, recorder=recorder) as runtime:
             await runtime.application.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -80,9 +80,6 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
             assert session is not None
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="I feel anxious.",
@@ -154,7 +151,6 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
         async with build_test_application(store, fake, recorder=recorder) as runtime:
             await runtime.application.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -162,9 +158,6 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
             assert session is not None
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=uuid4(),
                     content="I feel anxious.",
@@ -200,7 +193,6 @@ async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
         async with build_test_application(store, fake, recorder=recorder) as runtime:
             await runtime.application.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -210,12 +202,57 @@ async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
             assert snapshot.stage is Stage.INTAKE
 
     events = _load_trace(run_dir)
+    assert events[0]["schema_version"] == DIAGNOSTIC_SCHEMA_VERSION
+    assert DIAGNOSTIC_SCHEMA_VERSION == 3
     transitions = [e for e in events if e["kind"] == "workflow.transition"]
     assert len(transitions) == 1
-    assert transitions[0]["data"]["from_stage"] == Stage.SETUP.value
-    assert transitions[0]["data"]["to_stage"] == Stage.INTAKE.value
-    assert transitions[0]["data"]["trigger"] == "update_profile"
-    assert "revision" in transitions[0]["data"]
+    assert transitions[0]["schema_version"] == 3
+    assert transitions[0]["data"] == {
+        "from_stage": Stage.SETUP.value,
+        "to_stage": Stage.INTAKE.value,
+        "trigger": "update_profile",
+    }
+    assert set(transitions[0]["data"]) == {"from_stage", "to_stage", "trigger"}
+
+
+async def test_incomplete_intake_profile_update_is_rejected(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    with DiagnosticRun(run_dir) as recorder:
+        store = SQLiteStore(db_path)
+        store.initialize()
+        fake = FakeLLM([])
+        async with build_test_application(store, fake, recorder=recorder) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+            profile_before = await runtime.application.get_profile()
+            with pytest.raises(
+                InvalidCommand,
+                match="profile must remain complete during intake",
+            ):
+                await runtime.application.update_profile(
+                    UpdateProfile(
+                        profile=Profile(name=" ", primary_language="English"),
+                    )
+                )
+            profile_after = await runtime.application.get_profile()
+
+    assert profile_after.profile == profile_before.profile
+    events = _load_trace(run_dir)
+    kinds = _kinds(events)
+    assert "workflow.command.rejected" in kinds
+    rejected = [
+        e
+        for e in events
+        if e["kind"] == "workflow.command.rejected"
+        and e["data"].get("command") == "update_profile"
+    ]
+    assert len(rejected) == 1
+    assert rejected[0]["data"]["error_type"] == "InvalidCommand"
+    assert "runtime.error" not in kinds
 
 
 async def test_event_stream_no_longer_projects_diagnostics(tmp_path: Path) -> None:
@@ -225,7 +262,6 @@ async def test_event_stream_no_longer_projects_diagnostics(tmp_path: Path) -> No
         await stream.publish(
             __import__("jung.events", fromlist=["SnapshotChanged"]).SnapshotChanged(
                 __import__("jung.domain.models", fromlist=["AppSnapshot"]).AppSnapshot(
-                    revision=2,
                     stage=Stage.INTAKE,
                     profile_complete=True,
                 )
@@ -283,7 +319,6 @@ async def test_dead_trace_cleanup_still_logs(
                 "from_stage": "intake",
                 "to_stage": "assessment",
                 "trigger": "x",
-                "revision": 1,
             },
         )
         with caplog.at_level(logging.WARNING):
@@ -328,7 +363,6 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
     async with build_test_application(store, fake, recover=False) as runtime:
         await runtime.application.update_profile(
             UpdateProfile(
-                expected_revision=0,
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
@@ -420,7 +454,6 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
         async with build_test_application(store, failing, recorder=recorder) as runtime:
             await runtime.application.update_profile(
                 UpdateProfile(
-                    expected_revision=0,
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
@@ -428,9 +461,6 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
             assert session is not None
             turn = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
@@ -450,9 +480,6 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
         ) as runtime:
             retried = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
@@ -468,9 +495,6 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
             # Idempotent existing complete
             again = await runtime.application.submit_message(
                 SendMessage(
-                    expected_revision=(
-                        await runtime.application.get_snapshot()
-                    ).revision,
                     session_id=session.id,
                     client_message_id=client_message_id,
                     content="retry me",
@@ -537,7 +561,6 @@ async def test_select_style_invariant_records_runtime_error(
             ):
                 await runtime.application.select_style(
                     SelectStyle(
-                        expected_revision=store.get_app_state().revision,
                         style_id="cbt",
                     )
                 )
@@ -580,15 +603,12 @@ async def test_retry_operation_invariant_records_runtime_error(
         async with build_test_application(
             store, FakeLLM([]), recorder=recorder, recover=False
         ) as runtime:
-            revision = store.get_app_state().revision
             monkeypatch.setattr(store, "get_current_operation", lambda: None)
             with pytest.raises(
                 InvariantViolation,
                 match="retry command available without current operation",
             ):
-                await runtime.application.retry_operation(
-                    RetryOperation(expected_revision=revision)
-                )
+                await runtime.application.retry_operation()
 
     events = _load_trace(run_dir)
     runtime_errors = [

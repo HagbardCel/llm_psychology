@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from jung.api.contracts import MappingContext, to_snapshot_response
 from jung.api.errors import (
     RequestIdError,
     http_status_for_exception,
@@ -23,10 +22,8 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    RevisionConflict,
     StoredWorkFailure,
 )
-from jung.domain.models import AppSnapshot, Stage
 
 _SECRET_MARKER = "secret-marker"
 _INTERNAL_MESSAGE = "An unexpected error occurred."
@@ -57,22 +54,14 @@ def test_parse_request_id_header_rejects_malformed() -> None:
         parse_request_id_header("not-a-uuid")
 
 
-def test_invalid_command_ignores_current_snapshot() -> None:
+def test_invalid_command_maps_without_snapshot_fields() -> None:
     request_id = uuid4()
-    snapshot = AppSnapshot(
-        revision=4,
-        stage=Stage.SETUP,
-        profile_complete=False,
-        available_commands=frozenset(),
-    )
-    context = MappingContext(request_id=request_id)
-    wire_snapshot = to_snapshot_response(snapshot, context=context)
-    envelope = to_error_envelope(
-        InvalidCommand(),
-        request_id=request_id,
-        current_snapshot=wire_snapshot,
-    )
-    assert envelope.current_snapshot is None
+    envelope = to_error_envelope(InvalidCommand(), request_id=request_id)
+    assert envelope.code == "invalid_command"
+    assert envelope.request_id == request_id
+    dumped = envelope.model_dump()
+    assert "current" + "_snapshot" not in dumped
+    assert "revision" not in dumped
 
 
 def test_stored_work_failure_preserves_safe_message() -> None:
@@ -100,26 +89,6 @@ def test_stored_work_failure_normalizes_internal_code() -> None:
     assert envelope.code == "operation_failed"
     assert envelope.message == "A pending operation was interrupted."
     assert envelope.retryable is True
-
-
-def test_revision_conflict_can_include_snapshot() -> None:
-    request_id = uuid4()
-    snapshot = AppSnapshot(
-        revision=4,
-        stage=Stage.SETUP,
-        profile_complete=False,
-        available_commands=frozenset(),
-    )
-    context = MappingContext(request_id=request_id)
-    wire_snapshot = to_snapshot_response(snapshot, context=context)
-    envelope = to_error_envelope(
-        RevisionConflict(3, 4),
-        request_id=request_id,
-        current_snapshot=wire_snapshot,
-    )
-    assert envelope.code == "state_conflict"
-    assert envelope.current_snapshot is not None
-    assert envelope.current_snapshot.revision == 4
 
 
 def test_not_ready_error_response() -> None:
@@ -166,13 +135,6 @@ def test_to_error_response_wraps_envelope() -> None:
             409,
             False,
             "Command is not permitted in the current workflow state.",
-        ),
-        (
-            RevisionConflict(1, 2),
-            "state_conflict",
-            409,
-            False,
-            "The request used a stale revision.",
         ),
         (
             Busy(),

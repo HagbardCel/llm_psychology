@@ -39,10 +39,7 @@ class TerminalConsoleOutput:
 
     def render_snapshot(self, snapshot: AppSnapshotResponse) -> None:
         commands = ", ".join(snapshot.available_commands) or "(none)"
-        print(
-            f"\n[stage={snapshot.stage} revision={snapshot.revision} "
-            f"commands={commands}]"
-        )
+        print(f"\n[stage={snapshot.stage} commands={commands}]")
 
     def render_message(self, role: str, content: str) -> None:
         label = "You" if role == "user" else "Therapist"

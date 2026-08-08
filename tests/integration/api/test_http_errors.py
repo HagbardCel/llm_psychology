@@ -66,6 +66,7 @@ async def test_invalid_request_body_returns_validation_error(
                 "date_of_birth": None,
                 "notes": None,
             },
+            "unexpected_field": True,
         },
     )
     assert response.status_code == 422
@@ -191,80 +192,5 @@ async def test_internal_domain_error_is_logged_and_sanitized(
         message="internal domain error",
         request_id=str(body["request_id"]),
         exception_type="InvariantViolation",
-    )
-    assert secret not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_stale_revision_conflict_includes_snapshot(
-    started_api_client: AsyncClient,
-) -> None:
-    revision = (await started_api_client.get("/api/v1/state")).json()["revision"]
-    response = await started_api_client.put(
-        "/api/v1/profile",
-        json={
-            "expected_revision": revision - 1,
-            "profile": {
-                "name": "Alex",
-                "primary_language": "English",
-                "date_of_birth": None,
-                "notes": None,
-            },
-        },
-    )
-    assert response.status_code == 409
-    body = response.json()
-    assert body["code"] == "state_conflict"
-    assert body["current_snapshot"] is not None
-    assert body["request_id"] == response.headers["X-Request-ID"]
-
-
-@pytest.mark.asyncio
-async def test_revision_conflict_enrichment_failure_keeps_409(
-    store,
-    fake_llm,
-    api_settings,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    secret = "secret enrichment detail"
-    app = create_app(
-        api_settings,
-        runtime_factory=runtime_factory(store, fake_llm),
-    )
-
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            revision = (await client.get("/api/v1/state")).json()["revision"]
-            application = app.state.api.runtime.application
-
-            async def failing_get_snapshot():
-                raise RuntimeError(secret)
-
-            application.get_snapshot = failing_get_snapshot  # type: ignore[method-assign]
-            with caplog.at_level(logging.ERROR, logger="jung.api.app"):
-                response = await client.put(
-                    "/api/v1/profile",
-                    json={
-                        "expected_revision": revision - 1,
-                        "profile": {
-                            "name": "Alex",
-                            "primary_language": "English",
-                            "date_of_birth": None,
-                            "notes": None,
-                        },
-                    },
-                )
-
-    assert response.status_code == 409
-    body = response.json()
-    assert body["code"] == "state_conflict"
-    assert body["current_snapshot"] is None
-    assert body["request_id"] == response.headers["X-Request-ID"]
-    _assert_safe_error_log(
-        caplog.records,
-        message="failed to enrich revision conflict snapshot",
-        request_id=str(body["request_id"]),
-        exception_type="RuntimeError",
     )
     assert secret not in caplog.text

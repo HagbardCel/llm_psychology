@@ -331,7 +331,7 @@ def test_classify_error_command_requires_exact_identity(
             if client_message_id == "other"
             else None
         ),
-        code="state_conflict",
+        code="invalid_command",
     )
     with pytest.raises(ChatEventViolation):
         classify_error(event, identity)
@@ -343,7 +343,7 @@ def test_classify_error_command_exact_match_and_unrelated_durable() -> None:
         request_id=identity.request_id,
         session_id=identity.session_id,
         client_message_id=identity.client_message_id,
-        code="state_conflict",
+        code="invalid_command",
     )
     other_durable = _error_event(
         request_id=uuid4(),
@@ -366,7 +366,7 @@ def test_classify_error_different_request_id_without_turn_is_unrelated(
         client_message_id=(
             identity.client_message_id if matching_identity else uuid4()
         ),
-        code="state_conflict",
+        code="invalid_command",
     )
     assert classify_error(event, identity) is ErrorCorrelation.UNRELATED
 
@@ -517,7 +517,6 @@ def test_matches_decisive_event_ignores_token_and_snapshot_operation() -> None:
     snapshot = SnapshotChangedEvent(
         type="snapshot_changed",
         snapshot=AppSnapshotResponse(
-            revision=1,
             stage="intake",
             profile_complete=True,
             available_commands=[],
@@ -531,7 +530,6 @@ def test_matches_decisive_event_ignores_token_and_snapshot_operation() -> None:
             status="pending",
         ),
         snapshot=AppSnapshotResponse(
-            revision=1,
             stage="intake",
             profile_complete=True,
             available_commands=[],
@@ -548,7 +546,7 @@ def test_matches_decisive_event_dispatches_correlated_and_unrelated_errors() -> 
         request_id=identity.request_id,
         session_id=identity.session_id,
         client_message_id=identity.client_message_id,
-        code="state_conflict",
+        code="invalid_command",
     )
     durable = _error_event(
         request_id=uuid4(),
