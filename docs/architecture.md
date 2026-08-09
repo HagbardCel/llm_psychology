@@ -1,11 +1,3 @@
----
-owner: engineering
-status: active
-last_reviewed: 2026-08-08
-review_cycle_days: 30
-source_of_truth_for: Runtime architecture, tech stack, source layout, and UI policy
----
-
 # Architecture
 
 > This document governs the supported Jung runtime architecture, dependency

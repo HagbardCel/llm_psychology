@@ -22,7 +22,6 @@ tests/
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
 │   ├── client/              # Console rendering, one-shot chat stream, correlation
 │   ├── api/                 # Contracts, error mapping, one-shot WS adapter
-│   ├── tooling/             # Repo tooling (docs metadata validation)
 │   └── smoke/               # Unit tests for the smoke helpers themselves
 ├── integration/             # Real SQLite, real ASGI app, real client transport
 │   ├── store/               # SQLite persistence semantics

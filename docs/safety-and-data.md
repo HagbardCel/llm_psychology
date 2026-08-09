@@ -1,11 +1,3 @@
----
-owner: engineering
-status: active
-last_reviewed: 2026-08-08
-review_cycle_days: 90
-source_of_truth_for: Product safety, sensitive-data handling, network exposure, and local data erasure
----
-
 # Safety and Data Handling
 
 ## Not professional care

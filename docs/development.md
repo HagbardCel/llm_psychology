@@ -1,11 +1,3 @@
----
-owner: engineering
-status: active
-last_reviewed: 2026-08-08
-review_cycle_days: 30
-source_of_truth_for: Developer onboarding, workflow commands, and configuration guidance
----
-
 # Development
 
 > This page is the primary workflow guide. Run `make help` for common commands;
@@ -21,8 +13,7 @@ source_of_truth_for: Developer onboarding, workflow commands, and configuration 
 src/      runtime
 tests/    deterministic tests
 evals/    opt-in real-model evaluations
-scripts/  repository tooling
-docs/     canonical documentation
+docs/     documentation
 data/     local SQLite data
 logs/     generated diagnostics
 ```
@@ -125,7 +116,7 @@ make test-unit
 make test-integration
 make probe-console        # deterministic console E2E once; not part of make test
 make lint
-make validate-docs
+make docs-links
 make finalization-check   # includes smoke-compose-api → requires Docker
 ```
 

@@ -1,5 +1,5 @@
 .PHONY: help sync format format-check lint test probe-console smoke-compose-api \
-	smoke-local-llm run-api run-console validate-docs finalization-check \
+	smoke-local-llm run-api run-console docs-links finalization-check \
 	prepare-runtime-dirs docker-build docker-up docker-down \
 	docker-shell docker-logs docker-clean ui-console ui-console-test check-usertest-env \
 	clean test-unit test-integration \
@@ -21,7 +21,7 @@ help:
 	@echo "  format / format-check / lint"
 	@echo "  test                 - unit + integration (not real_llm)"
 	@echo "  probe-console        - deterministic console E2E once"
-	@echo "  validate-docs"
+	@echo "  docs-links           - local Markdown path/section link check"
 	@echo "  run-api / run-console"
 	@echo "  finalization-check   - native release gate + runtime Compose smoke"
 	@echo "  smoke-local-llm      - manual local-model smoke"
@@ -60,8 +60,10 @@ probe-console: prepare-runtime-dirs
 	PROBE_OUTPUT_DIR="$(PROBE_ABS_OUTPUT_DIR)" \
 		uv run --locked pytest $(CONSOLE_E2E_TEST) -v
 
-validate-docs:
-	uv run --locked python scripts/validate_docs_metadata.py
+docs-links:
+	uvx --from 'md-link-checker==1.10' md-link-checker --no-urls \
+		README.md AGENTS.md $$(find docs -type f -name '*.md' -print) \
+		tests/README.md evals/README.md
 
 run-api:
 	uv run --locked jung-api
@@ -115,7 +117,7 @@ finalization-check: prepare-runtime-dirs
 	uv sync --locked
 	uv run --locked ruff format --check .
 	uv run --locked ruff check .
-	$(MAKE) validate-docs
+	$(MAKE) docs-links
 	$(MAKE) test
 	$(MAKE) probe-console
 	$(MAKE) smoke-compose-api
