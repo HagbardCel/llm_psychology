@@ -15,9 +15,8 @@ htmlcov/
 
 # Local configuration
 .env
-.env.usertest
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Runtime data and logs
 data/

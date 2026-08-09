@@ -1,22 +1,14 @@
 name: Release Gate
 on:
   push:
-    branches:
-      - master
-      - main
-      - develop
+    branches: [main]
   pull_request:
-    branches:
-      - master
-      - main
-      - develop
+    branches: [main]
 jobs:
   release-gate:
     name: Release Gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      ENV_FILE: .env.example
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,6 +18,6 @@ jobs:
           version: "0.8.4"
           python-version: "3.11"
       - name: Run release gate
-        run: make finalization-check
+        run: make check
       - name: Check whitespace and stale generated diffs
         run: git diff --check && git diff --exit-code

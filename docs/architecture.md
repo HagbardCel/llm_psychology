@@ -32,7 +32,6 @@ The supported runtime is a lean, local-first therapist application that:
 | Package management | uv |
 | Tests | pytest + pytest-asyncio |
 | Quality | Ruff |
-| Packaging | Optional Docker Compose |
 
 ## Fixed architectural decisions
 
@@ -51,7 +50,6 @@ The supported runtime is a lean, local-first therapist application that:
 
 4. **Modular monolith**
    - No microservices, message broker, plugin framework, event sourcing, or general-purpose scheduler.
-   - Docker remains an optional packaging and multi-process deployment mechanism, not an internal architecture requirement.
 
 5. **One asyncio runtime**
    - Use asyncio consistently across API, WebSockets, LLM calls, console networking, background operations, and tests.
@@ -241,17 +239,6 @@ session/operation/chat behavior, retry/recovery) is specified in
 Errors are mapped at the API boundary to the stable public taxonomy documented
 in [api-v1.md](api-v1.md). Domain and application layers do not construct
 transport errors.
-
-## Docker
-
-Docker packages the system but does not define internal boundaries.
-
-The root [Docker Compose configuration](../docker-compose.yml) defines a
-single `api` service. Manual user testing reuses that service through the
-`ui-console-test` Make target with an isolated Compose project, port,
-environment file, and data directory.
-
-Native development remains the normal path; see [development.md](development.md).
 
 ## Observability
 
