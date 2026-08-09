@@ -15,6 +15,7 @@ from jung.domain.models import (
     NewPlanRevision,
     OperationKind,
     OperationStatus,
+    Plan,
     PlanContent,
     Profile,
     SessionKind,
@@ -216,6 +217,28 @@ def test_initial_plan_stores_sql_null_for_briefing_and_supersedes(
         ).fetchone()
     assert row == (1, 1)
     assert ready.intake_session_id is not None
+
+
+def test_insert_plan_stores_sql_null_for_source_session_id(
+    store: SQLiteStore,
+) -> None:
+    plan = Plan(
+        id=uuid4(),
+        version=1,
+        selected_style="test-style",
+        **_plan_content().model_dump(),
+        session_briefing=None,
+        source_session_id=None,
+        supersedes_plan_id=None,
+        created_at=datetime(2026, 8, 9, 12, 0, tzinfo=UTC),
+    )
+    store._write(lambda conn: store._insert_plan(conn, plan))
+    with sqlite3.connect(store.database_path) as conn:
+        row = conn.execute(
+            "SELECT source_session_id IS NULL FROM plans WHERE id = ?",
+            (str(plan.id),),
+        ).fetchone()
+    assert row == (1,)
 
 
 def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:

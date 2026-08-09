@@ -163,7 +163,7 @@ class SQLiteStore:
 
     def get_current_plan(self) -> Plan | None:
         with self._connect() as conn:
-            return self._load_current_plan(conn, required=False)
+            return self._load_current_plan(conn)
 
     def list_sessions(self) -> list[Session]:
         with self._connect() as conn:
@@ -880,18 +880,15 @@ class SQLiteStore:
             f"operation {operation_id} is in invalid state {row[0]}"
         )
 
-    def _require_current_plan(self, conn: sqlite3.Connection) -> Plan:
-        return self._load_current_plan(conn, required=True)
-
-    def _load_current_plan(
-        self, conn: sqlite3.Connection, *, required: bool
-    ) -> Plan | None:
+    def _load_current_plan(self, conn: sqlite3.Connection) -> Plan | None:
         row = conn.execute(_CURRENT_PLAN_SELECT).fetchone()
-        if row is None:
-            if required:
-                raise InvariantViolation("current plan is required")
-            return None
-        return sql.row_to_plan(row)
+        return sql.row_to_plan(row) if row else None
+
+    def _require_current_plan(self, conn: sqlite3.Connection) -> Plan:
+        plan = self._load_current_plan(conn)
+        if plan is None:
+            raise InvariantViolation("current plan is required")
+        return plan
 
     def _find_operation_by_source(
         self,
@@ -912,6 +909,11 @@ class SQLiteStore:
         briefing_json = (
             sql.json_dumps(plan.session_briefing)
             if plan.session_briefing is not None
+            else None
+        )
+        source_session_id = (
+            str(plan.source_session_id)
+            if plan.source_session_id is not None
             else None
         )
         supersedes_plan_id = (
@@ -939,7 +941,7 @@ class SQLiteStore:
                 sql.json_dumps(plan.planned_interventions),
                 sql.json_dumps(plan.revision_recommendations),
                 briefing_json,
-                str(plan.source_session_id),
+                source_session_id,
                 supersedes_plan_id,
                 sql.dt(plan.created_at),
             ),
