@@ -14,7 +14,8 @@ from jung.domain.models import (
     Profile,
     Stage,
 )
-from jung.llm.fake import FakeLLM, StructuredExpectation
+from jung.llm.errors import LLMTimeout
+from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
@@ -150,6 +151,211 @@ async def test_blocked_running_operation_recovers_on_second_runtime(
     async with build_test_application(store, success_fake) as runtime_b:
         await wait_for_stage(runtime_b.application, Stage.STYLE_SELECTION)
     success_fake.assert_exhausted()
+
+
+async def test_duplicate_recover_on_startup_leaves_live_running_operation(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    gate = asyncio.Event()
+    assessment_calls = 0
+
+    class HoldingAssessmentFake(FakeLLM):
+        async def generate_structured(
+            self,
+            messages,
+            output_type,
+            policy,
+            validate_result=None,
+        ):
+            nonlocal assessment_calls
+            if policy.task is LLMTask.ASSESSMENT:
+                assessment_calls += 1
+                await gate.wait()
+            return await super().generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+
+    fake = HoldingAssessmentFake(
+        [
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            )
+        ]
+    )
+    async with build_test_application(store, fake, recover=False) as runtime:
+        app = runtime.application
+        await app.recover_on_startup()
+        await wait_for_operation_status(
+            app,
+            operation_id,
+            OperationStatus.RUNNING,
+        )
+
+        second = await app.recover_on_startup()
+        assert second.stage is Stage.ASSESSMENT
+        assert second.current_operation is not None
+        assert second.current_operation.id == operation_id
+        assert second.current_operation.status is OperationStatus.RUNNING
+
+        stored = store.get_operation(operation_id)
+        assert stored is not None
+        assert stored.status is OperationStatus.RUNNING
+
+        gate.set()
+        await wait_for_stage(app, Stage.STYLE_SELECTION)
+        assert assessment_calls == 1
+    fake.assert_exhausted()
+
+
+async def test_retry_after_failed_clears_owned_task_before_reschedule(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    assessment_calls = 0
+
+    class CountingFake(FakeLLM):
+        async def generate_structured(
+            self,
+            messages,
+            output_type,
+            policy,
+            validate_result=None,
+        ):
+            nonlocal assessment_calls
+            if policy.task is LLMTask.ASSESSMENT:
+                assessment_calls += 1
+            return await super().generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+
+    fake = CountingFake(
+        [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMTimeout("timeout"),
+            ),
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        app = runtime.application
+        await wait_for_operation_status(
+            app,
+            operation_id,
+            OperationStatus.FAILED,
+        )
+        assert app._operation_task is None
+        assert app._operation_task_id is None
+
+        await app.retry_operation()
+        await wait_for_stage(app, Stage.STYLE_SELECTION)
+
+        completed = store.get_operation(operation_id)
+        assert completed is not None
+        assert completed.id == operation_id
+        assert completed.status is OperationStatus.COMPLETE
+        assert completed.attempt == 2
+        assert assessment_calls == 2
+    fake.assert_exhausted()
+
+
+async def test_schedule_defers_when_different_owned_task_is_live(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    operation_b = store.get_operation(operation_id)
+    assert operation_b is not None
+    assert operation_b.status is OperationStatus.PENDING
+
+    release_a = asyncio.Event()
+    assessment_calls = 0
+
+    class CountingFake(FakeLLM):
+        async def generate_structured(
+            self,
+            messages,
+            output_type,
+            policy,
+            validate_result=None,
+        ):
+            nonlocal assessment_calls
+            if policy.task is LLMTask.ASSESSMENT:
+                assessment_calls += 1
+            return await super().generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+
+    fake = CountingFake(
+        [
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            )
+        ]
+    )
+    async with build_test_application(store, fake, recover=False) as runtime:
+        app = runtime.application
+
+        async def hold() -> None:
+            await release_a.wait()
+
+        holding_task = asyncio.create_task(hold(), name="synthetic-ownership")
+        app._operation_task = holding_task
+        app._operation_task_id = uuid4()
+
+        app._schedule_operation(operation_b)
+        pending = store.get_operation(operation_id)
+        assert pending is not None
+        assert pending.status is OperationStatus.PENDING
+        assert assessment_calls == 0
+
+        release_a.set()
+        await holding_task
+        await wait_for_stage(app, Stage.STYLE_SELECTION)
+
+        completed = store.get_operation(operation_id)
+        assert completed is not None
+        assert completed.status is OperationStatus.COMPLETE
+        assert assessment_calls == 1
+    fake.assert_exhausted()
 
 
 async def test_shutdown_while_mutation_lock_held_rejects_command(

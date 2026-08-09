@@ -407,7 +407,6 @@ def build_failure_summary(
                 ".recovered",
                 ".retried",
                 "runtime.error",
-                "shutdown_timeout",
                 "validation.failed",
             )
         )

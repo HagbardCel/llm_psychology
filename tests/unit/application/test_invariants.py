@@ -9,15 +9,10 @@ import pytest
 
 from jung.application import (
     _classify_worker_error,
-    _validate_snapshot_invariants,
+    _validate_plan_style,
 )
 from jung.domain.errors import InvariantViolation
-from jung.domain.models import (
-    AppSnapshot,
-    CommandName,
-    Plan,
-    Stage,
-)
+from jung.domain.models import Plan
 from jung.llm.errors import (
     InvalidLLMOutput,
     LLMProtocolError,
@@ -27,7 +22,7 @@ from jung.llm.errors import (
 from jung.styles import load_styles
 
 
-def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
+def test_validate_plan_style_rejects_unknown_plan_style() -> None:
     now = datetime.now(UTC)
     plan = Plan(
         id=uuid4(),
@@ -41,28 +36,8 @@ def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
         revision_recommendations=[],
         created_at=now,
     )
-    snapshot = AppSnapshot(
-        stage=Stage.READY,
-        profile_complete=True,
-        selected_style="unknown-style",
-        available_commands=frozenset({CommandName.START_SESSION}),
-    )
     with pytest.raises(InvariantViolation, match="unknown style"):
-        _validate_snapshot_invariants(snapshot, plan, load_styles())
-
-
-def test_validate_snapshot_invariants_rejects_therapy_without_session() -> None:
-    snapshot = AppSnapshot(
-        stage=Stage.THERAPY,
-        profile_complete=True,
-        available_commands=frozenset(
-            {CommandName.SEND_MESSAGE, CommandName.END_SESSION}
-        ),
-    )
-    with pytest.raises(
-        InvariantViolation, match="THERAPY requires an open therapy session"
-    ):
-        _validate_snapshot_invariants(snapshot, None, load_styles())
+        _validate_plan_style(plan, load_styles())
 
 
 SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"

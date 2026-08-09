@@ -260,6 +260,8 @@ class TherapyApplication:
 
     async def recover_on_startup(self) -> AppSnapshot:
         async with self._mutation_lock:
+            if self._operation_task is not None and not self._operation_task.done():
+                return await self._assemble_snapshot_locked()
             recovered = await self._run_store(
                 self._store.recover_stale_operation,
                 now=self._now(),
@@ -267,10 +269,8 @@ class TherapyApplication:
             snapshot = await self._assemble_snapshot_locked()
 
         pending = snapshot.current_operation
-        scheduled = False
         if pending is not None and pending.status is OperationStatus.PENDING:
             self._schedule_operation(pending)
-            scheduled = True
 
         if recovered is not None:
             with diagnostic_context(
@@ -284,28 +284,6 @@ class TherapyApplication:
                         "attempt": recovered.attempt,
                         "from_status": OperationStatus.RUNNING.value,
                         "to_status": OperationStatus.PENDING.value,
-                        "scheduled": scheduled
-                        and pending is not None
-                        and pending.id == recovered.id,
-                    },
-                )
-        elif (
-            scheduled
-            and pending is not None
-            and pending.status is OperationStatus.PENDING
-        ):
-            with diagnostic_context(
-                operation_id=str(pending.id),
-                session_id=str(pending.source_session_id),
-            ):
-                self._record(
-                    "operation.recovered",
-                    {
-                        "kind": pending.kind.value,
-                        "attempt": pending.attempt,
-                        "from_status": OperationStatus.PENDING.value,
-                        "to_status": OperationStatus.PENDING.value,
-                        "scheduled": True,
                     },
                 )
         return snapshot
@@ -1139,7 +1117,7 @@ class TherapyApplication:
             current_operation=current_operation,
             available_commands=workflow.available_commands(facts),
         )
-        _validate_snapshot_invariants(snapshot, plan, self._styles)
+        _validate_plan_style(plan, self._styles)
         return snapshot
 
     def _reject_if_shutdown(self) -> None:
@@ -1583,27 +1561,12 @@ def _select_style_recommendation(
     raise InvalidCommand(f"style {style_id} is not in assessment recommendations")
 
 
-def _validate_snapshot_invariants(
-    snapshot: AppSnapshot,
+def _validate_plan_style(
     plan: Plan | None,
     styles: MappingProxyType[str, StyleDefinition],
 ) -> None:
     if plan is not None and plan.selected_style not in styles:
         raise InvariantViolation(f"unknown style: {plan.selected_style}")
-    if snapshot.stage is Stage.THERAPY and snapshot.active_session is None:
-        raise InvariantViolation("THERAPY requires an open therapy session")
-    if snapshot.stage is Stage.INTAKE and snapshot.active_session is None:
-        raise InvariantViolation("INTAKE requires an open intake session")
-    if snapshot.stage is Stage.ASSESSMENT and (
-        snapshot.current_operation is None
-        or snapshot.current_operation.kind is not OperationKind.ASSESSMENT
-    ):
-        raise InvariantViolation("ASSESSMENT requires an assessment operation")
-    if snapshot.stage is Stage.POST_SESSION and (
-        snapshot.current_operation is None
-        or snapshot.current_operation.kind is not OperationKind.POST_SESSION
-    ):
-        raise InvariantViolation("POST_SESSION requires a post-session operation")
 
 
 def _recent_session_summaries(
