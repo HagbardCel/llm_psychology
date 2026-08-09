@@ -1,33 +1,26 @@
-"""Serverless unit tests for the WebSocket adapter."""
+"""Unit tests for one-shot WebSocket chat adapter."""
 
 from __future__ import annotations
 
-import asyncio
 import json
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from starlette.datastructures import Headers
-from starlette.websockets import WebSocketDisconnect
 
 from jung.api.app import ApiState
 from jung.api.settings import ApiSettings
 from jung.api.websocket import _handle_chat_connection
 from jung.config import build_settings
-from jung.domain.errors import InvalidCommand
-from jung.domain.models import AppSnapshot, Stage
-from jung.events import EventStream, SnapshotChanged
+from jung.domain.models import Message, MessageRole
+from jung.domain.results import ChatCompleted, ChatToken
 
 pytestmark = pytest.mark.asyncio
-
-
-class SentinelError(Exception):
-    pass
 
 
 def _default_settings(
@@ -57,6 +50,8 @@ class FakeWebSocket:
         api_settings: ApiSettings,
         headers: dict[str, str] | None = None,
     ) -> None:
+        import asyncio
+
         self.headers = Headers(headers=headers or {})
         self.app = SimpleNamespace(
             state=SimpleNamespace(api=api_state, api_settings=api_settings)
@@ -66,9 +61,6 @@ class FakeWebSocket:
         self.close_code: int | None = None
         self.sent: list[dict[str, Any]] = []
         self._receive_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._send_gate = asyncio.Event()
-        self._send_gate.set()
-        self._sent_condition = asyncio.Condition()
 
     async def accept(self) -> None:
         self.accepted = True
@@ -86,116 +78,18 @@ class FakeWebSocket:
     def queue_text(self, text: str) -> None:
         self._receive_queue.put_nowait({"type": "websocket.receive", "text": text})
 
-    def block_sends(self) -> None:
-        self._send_gate.clear()
-
-    def unblock_sends(self) -> None:
-        self._send_gate.set()
-
     async def send_json(self, data: dict[str, Any]) -> None:
-        await self._send_gate.wait()
-        async with self._sent_condition:
-            self.sent.append(data)
-            self._sent_condition.notify_all()
-
-    async def wait_for_snapshot_marker(
-        self,
-        marker: str,
-        *,
-        timeout: float = 1.0,
-    ) -> None:
-        def was_received() -> bool:
-            return any(
-                item.get("type") == "snapshot_changed"
-                and item.get("snapshot", {}).get("selected_style") == marker
-                for item in self.sent
-            )
-
-        async with asyncio.timeout(timeout):
-            async with self._sent_condition:
-                await self._sent_condition.wait_for(was_received)
-
-
-class SlowFakeWebSocket(FakeWebSocket):
-    def __init__(
-        self,
-        *,
-        api_state: ApiState,
-        api_settings: ApiSettings,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        super().__init__(
-            api_state=api_state,
-            api_settings=api_settings,
-            headers=headers,
-        )
-        self.first_send_started = asyncio.Event()
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        if not self.first_send_started.is_set():
-            self.first_send_started.set()
-        await super().send_json(data)
-
-
-class TrackingEventStream(EventStream):
-    def __init__(self, *, max_queue_size: int = 64) -> None:
-        super().__init__(max_queue_size=max_queue_size)
-        self._subscription_condition = asyncio.Condition()
-        self._active_subscriptions = 0
-
-    @asynccontextmanager
-    async def subscribe(self):
-        registered = False
-        try:
-            async with super().subscribe() as events:
-                async with self._subscription_condition:
-                    self._active_subscriptions += 1
-                    registered = True
-                    self._subscription_condition.notify_all()
-                yield events
-        finally:
-            if registered:
-                async with self._subscription_condition:
-                    self._active_subscriptions -= 1
-                    self._subscription_condition.notify_all()
-
-    async def wait_for_subscriptions(self, count: int, *, timeout: float = 1.0) -> None:
-        async with asyncio.timeout(timeout):
-            async with self._subscription_condition:
-                await self._subscription_condition.wait_for(
-                    lambda: self._active_subscriptions == count
-                )
-
-
-def _snapshot_event(*, marker: str) -> SnapshotChanged:
-    return SnapshotChanged(
-        AppSnapshot(
-            stage=Stage.SETUP,
-            profile_complete=False,
-            selected_style=marker,
-            available_commands=frozenset(),
-        )
-    )
-
-
-def snapshot_markers(fake: FakeWebSocket) -> list[str]:
-    return [
-        event["snapshot"]["selected_style"]
-        for event in fake.sent
-        if event.get("type") == "snapshot_changed"
-    ]
+        self.sent.append(data)
 
 
 @dataclass
 class MockApplication:
-    submit_message: Any = None
-    get_snapshot: Any = None
+    stream_message: Any = None
 
 
 @dataclass
 class MockRuntime:
     application: MockApplication
-    events: EventStream
 
 
 FIXED_INVALID_REQUEST_ID = uuid4()
@@ -228,103 +122,70 @@ FIXED_INVALID_REQUEST_ID = uuid4()
         ),
     ],
 )
-async def test_invalid_inbound_produces_validation_error_without_content_echo(
+async def test_invalid_inbound_produces_validation_error_and_closes(
     text_payload: str,
     expected_request_id: object,
 ) -> None:
-    events = EventStream()
-    runtime = MockRuntime(application=MockApplication(), events=events)
+    runtime = MockRuntime(application=MockApplication())
     fake = FakeWebSocket(
         api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
     fake.queue_text(text_payload)
-    fake.queue_disconnect()
 
     await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
 
     errors = [item for item in fake.sent if item.get("type") == "error"]
-    assert errors
+    assert len(errors) == 1
     dumped = json.dumps(errors[0])
     assert "secret-content" not in dumped
-    assert "input" not in dumped
+    assert errors[0]["error"]["code"] == "validation_error"
     actual = UUID(errors[0]["request_id"])
     if expected_request_id is not None:
         assert actual == expected_request_id
+    assert fake.closed is True
 
 
-async def test_sentinel_error_propagates_and_drains_tasks() -> None:
-    class EvilStream(EventStream):
-        @asynccontextmanager
-        async def subscribe(self):
-            async def evil():
-                raise SentinelError
-                yield  # pragma: no cover
-
-            yield evil()
-
-    events = EvilStream()
-    runtime = MockRuntime(application=MockApplication(), events=events)
-    fake = FakeWebSocket(
-        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
-        api_settings=_default_settings(),
-    )
-    fake.queue_disconnect()
-
-    with pytest.raises(SentinelError):
-        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
-
-    await events.publish(
-        SnapshotChanged(
-            AppSnapshot(
-                stage=Stage.SETUP,
-                profile_complete=False,
-                available_commands=frozenset(),
-            )
-        )
-    )
-    assert fake.sent == []
-
-
-async def test_parent_cancel_drains_tasks() -> None:
-    events = EventStream()
-    runtime = MockRuntime(application=MockApplication(), events=events)
-    fake = FakeWebSocket(
-        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
-        api_settings=_default_settings(),
-    )
-
-    handler = asyncio.create_task(
-        _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
-    )
-    await asyncio.sleep(0.05)
-    handler.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await handler
-
-    await events.publish(
-        SnapshotChanged(
-            AppSnapshot(
-                stage=Stage.SETUP,
-                profile_complete=False,
-                available_commands=frozenset(),
-            )
-        )
-    )
-    assert fake.sent == []
-
-
-async def test_domain_error_uses_command_request_id() -> None:
-    command_id = uuid4()
+async def test_one_shot_streams_tokens_then_completion_and_closes() -> None:
     session_id = uuid4()
     client_message_id = uuid4()
-    events = EventStream()
-    runtime = MockRuntime(
-        application=MockApplication(
-            submit_message=AsyncMock(side_effect=InvalidCommand("nope"))
-        ),
-        events=events,
+    request_id = uuid4()
+    now = datetime.now(UTC)
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role=MessageRole.USER,
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
     )
+    assistant = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role=MessageRole.ASSISTANT,
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+
+    async def stream_message(_command) -> AsyncIterator[object]:
+        yield ChatToken(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+            text="hi",
+        )
+        yield ChatCompleted(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+            user_message=user,
+            assistant_message=assistant,
+        )
+
+    runtime = MockRuntime(application=MockApplication(stream_message=stream_message))
     fake = FakeWebSocket(
         api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
         api_settings=_default_settings(),
@@ -335,115 +196,279 @@ async def test_domain_error_uses_command_request_id() -> None:
                 "type": "send_message",
                 "session_id": str(session_id),
                 "client_message_id": str(client_message_id),
-                "request_id": str(command_id),
+                "request_id": str(request_id),
                 "content": "hello",
             }
         )
     )
-    fake.queue_disconnect()
 
     await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
 
-    error = next(item for item in fake.sent if item["type"] == "error")
-    assert error["request_id"] == str(command_id)
-    assert error["error"]["request_id"] == str(command_id)
+    types = [item["type"] for item in fake.sent]
+    assert types == ["token", "message_completed"]
+    assert "snapshot_changed" not in types
+    assert "message_in_progress" not in types
+    assert fake.sent[0]["request_id"] == str(request_id)
+    assert fake.sent[0]["session_id"] == str(session_id)
+    assert fake.sent[0]["client_message_id"] == str(client_message_id)
+    assert fake.closed is True
 
 
-async def test_eviction_closes_slow_observer_while_healthy_receives() -> None:
-    events = TrackingEventStream(max_queue_size=4)
-    settings = _default_settings(send_timeout=30.0, close_timeout=0.5)
+async def test_send_disconnect_after_token_closes_stream() -> None:
+    import asyncio
 
-    async def start_observer(
-        fake: FakeWebSocket,
-        *,
-        block_first: bool,
-    ) -> asyncio.Task[None]:
-        runtime = MockRuntime(application=MockApplication(), events=events)
-        fake.app.state.api = ApiState(runtime=runtime, ready=True)  # type: ignore[arg-type]
-        if block_first:
-            fake.block_sends()
-        return asyncio.create_task(
-            _handle_chat_connection(fake, runtime, settings)  # type: ignore[arg-type]
-        )
+    from starlette.websockets import WebSocketDisconnect
 
-    slow = SlowFakeWebSocket(
-        api_state=ApiState(runtime=None, ready=True),
-        api_settings=settings,
-    )
-    healthy = FakeWebSocket(
-        api_state=ApiState(runtime=None, ready=True),
-        api_settings=settings,
-    )
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    aclose_called = asyncio.Event()
+    receive_cancelled = asyncio.Event()
 
-    slow_task = await start_observer(slow, block_first=True)
-    healthy_task = await start_observer(healthy, block_first=False)
+    async def stream_message(_command) -> AsyncIterator[object]:
+        try:
+            yield ChatToken(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+                text="hi",
+            )
+            await asyncio.Event().wait()
+        finally:
+            aclose_called.set()
 
-    try:
-        await events.wait_for_subscriptions(2)
+    class DisconnectingWebSocket(FakeWebSocket):
+        async def receive(self) -> dict[str, Any]:
+            try:
+                return await super().receive()
+            except asyncio.CancelledError:
+                receive_cancelled.set()
+                raise
 
-        await events.publish(_snapshot_event(marker="1"))
-        await asyncio.wait_for(slow.first_send_started.wait(), timeout=1.0)
-        await healthy.wait_for_snapshot_marker("1")
+        async def send_json(self, data: dict[str, Any]) -> None:
+            if data.get("type") == "token":
+                raise WebSocketDisconnect()
+            await super().send_json(data)
 
-        for index in range(2, 7):
-            marker = str(index)
-            await events.publish(_snapshot_event(marker=marker))
-            await healthy.wait_for_snapshot_marker(marker)
-
-        slow.unblock_sends()
-        await asyncio.wait_for(slow_task, timeout=1.0)
-
-        assert snapshot_markers(slow) == ["1"]
-        assert snapshot_markers(healthy) == ["1", "2", "3", "4", "5", "6"]
-        assert slow.closed
-        assert slow.close_code == 1011
-    finally:
-        if not slow_task.done():
-            slow.queue_disconnect()
-            slow_task.cancel()
-        if not healthy_task.done():
-            healthy.queue_disconnect()
-            healthy_task.cancel()
-        await asyncio.gather(slow_task, healthy_task, return_exceptions=True)
-        await events.wait_for_subscriptions(0)
-
-
-class DisconnectOnSendWebSocket(FakeWebSocket):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.send_attempted = asyncio.Event()
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.send_attempted.set()
-        raise WebSocketDisconnect()
-
-
-async def test_outbound_send_disconnect_terminates_without_propagation() -> None:
-    events = TrackingEventStream()
-    runtime = MockRuntime(application=MockApplication(), events=events)
-    fake = DisconnectOnSendWebSocket(
+    runtime = MockRuntime(application=MockApplication(stream_message=stream_message))
+    fake = DisconnectingWebSocket(
         api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
-    settings = _default_settings()
-
-    handler = asyncio.create_task(
-        _handle_chat_connection(fake, runtime, settings)  # type: ignore[arg-type]
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+                "content": "hello",
+            }
+        )
     )
 
-    try:
-        await events.wait_for_subscriptions(1)
-        await events.publish(_snapshot_event(marker="1"))
+    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    assert aclose_called.is_set()
+    assert receive_cancelled.is_set()
 
-        await asyncio.wait_for(fake.send_attempted.wait(), timeout=1.0)
-        await asyncio.wait_for(handler, timeout=1.0)
 
-        assert handler.done()
-        assert not handler.cancelled()
-    finally:
-        if not handler.done():
-            fake.queue_disconnect()
-            handler.cancel()
+@pytest.mark.parametrize(
+    "race",
+    ["stream_pending", "stream_terminal_already_done"],
+)
+async def test_active_protocol_abort_closes_without_terminal_event(
+    race: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
 
-        await asyncio.gather(handler, return_exceptions=True)
-        await events.wait_for_subscriptions(0)
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    now = datetime.now(UTC)
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role=MessageRole.USER,
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    assistant = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role=MessageRole.ASSISTANT,
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    stream_closed = asyncio.Event()
+    terminal_produced = asyncio.Event()
+    second_payload = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(uuid4()),
+            "request_id": str(uuid4()),
+            "content": "illegal-second-frame",
+        }
+    )
+    first_payload = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "request_id": str(request_id),
+            "content": "hello",
+        }
+    )
+
+    if race == "stream_pending":
+
+        async def stream_message(_command) -> AsyncIterator[object]:
+            try:
+                yield ChatToken(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                    text="hi",
+                )
+                await asyncio.Event().wait()
+            finally:
+                stream_closed.set()
+
+        class ProtocolAbortWebSocket(FakeWebSocket):
+            async def send_json(self, data: dict[str, Any]) -> None:
+                if data.get("type") == "token":
+                    await super().send_json(data)
+                    self.queue_text(second_payload)
+                    return
+                await super().send_json(data)
+
+            async def close(self, code: int = 1000) -> None:
+                assert stream_closed.is_set()
+                await super().close(code=code)
+
+        runtime = MockRuntime(
+            application=MockApplication(stream_message=stream_message)
+        )
+        fake = ProtocolAbortWebSocket(
+            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_settings=_default_settings(),
+        )
+        fake.queue_text(first_payload)
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    else:
+
+        async def stream_message(_command) -> AsyncIterator[object]:
+            try:
+                terminal_produced.set()
+                yield ChatCompleted(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                    user_message=user,
+                    assistant_message=assistant,
+                )
+            finally:
+                stream_closed.set()
+
+        class ProtocolAbortWebSocket(FakeWebSocket):
+            async def close(self, code: int = 1000) -> None:
+                assert stream_closed.is_set()
+                await super().close(code=code)
+
+        runtime = MockRuntime(
+            application=MockApplication(stream_message=stream_message)
+        )
+        fake = ProtocolAbortWebSocket(
+            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_settings=_default_settings(),
+        )
+        fake.queue_text(first_payload)
+        fake.queue_text(second_payload)
+
+        real_wait = asyncio.wait
+
+        async def wait_both_ws_tasks(fs, *args, **kwargs):  # noqa: ANN001
+            tasks = set(fs)
+            names = {task.get_name() for task in tasks}
+            if names == {"ws-receive", "ws-stream"}:
+                done, pending = await real_wait(
+                    tasks,
+                    return_when=asyncio.ALL_COMPLETED,
+                )
+                assert not pending
+                assert terminal_produced.is_set()
+                return done, pending
+            return await real_wait(fs, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "wait", wait_both_ws_tasks)
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    assert stream_closed.is_set()
+    assert fake.closed is True
+    types = [item["type"] for item in fake.sent]
+    assert "message_completed" not in types
+    assert "message_failed" not in types
+    assert "error" not in types
+    if race == "stream_pending":
+        assert types == ["token"]
+    else:
+        assert types == []
+        assert terminal_produced.is_set()
+
+
+async def test_fresh_cancellation_during_active_stream_cleanup_propagates() -> None:
+    import asyncio
+
+    from jung._async_cleanup import close_awaitable_safely, drain_cancelled_task
+
+    drain_started = asyncio.Event()
+    drain_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    async def slow_owned_task() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            drain_started.set()
+            await drain_release.wait()
+            raise
+
+    preserve_cleanup_cancellation = False
+
+    async def run_normal_then_cancel_during_cleanup() -> None:
+        nonlocal preserve_cleanup_cancellation
+        owned = asyncio.create_task(slow_owned_task())
+        try:
+            return
+        except asyncio.CancelledError:
+            preserve_cleanup_cancellation = True
+            raise
+        finally:
+
+            async def cleanup() -> None:
+                if not owned.done():
+                    owned.cancel()
+                await drain_cancelled_task(owned)
+                cleanup_finished.set()
+
+            await close_awaitable_safely(
+                cleanup,
+                record_failure=lambda _exc: None,
+                preserve_existing_cancellation=preserve_cleanup_cancellation,
+            )
+
+    task = asyncio.create_task(run_normal_then_cancel_during_cleanup())
+    await drain_started.wait()
+    task.cancel("cleanup-cancel")
+    await asyncio.sleep(0)
+    assert not task.done()
+    drain_release.set()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+    assert exc_info.value.args == ("cleanup-cancel",)
+    assert cleanup_finished.is_set()

@@ -20,20 +20,19 @@ from pydantic import (
     ConfigDict,
     TypeAdapter,
     ValidationError,
-    model_validator,
 )
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from jung.api.contracts import (
     AppSnapshotResponse,
-    ChatTurnSummaryResponse,
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     ErrorResponse,
     HealthResponse,
-    MessageResponse,
+    MessageCompletedEvent,
+    MessageFailedEvent,
     ProfileResponse,
     ProfileUpdateRequest,
     SelectStyleRequest,
@@ -44,30 +43,18 @@ from jung.api.contracts import (
     SessionSummaryResponse,
     StartSessionResponse,
     StyleOptionsResponse,
-)
-from jung.client._chat_events import (
-    ChatEventIdentity,
-    ChatEventViolation,
-    matches_decisive_event,
-)
-from jung.client._durable_chat import (
-    DurableChatViolation,
-    inspect_durable_chat_messages,
+    TokenEvent,
 )
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
-_ALLOWED_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
+_ALLOWED_HTTP_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
     "invalid_command": frozenset({409}),
     "busy": frozenset({409}),
     "not_found": frozenset({404}),
     "validation_error": frozenset({422}),
-    "llm_unavailable": frozenset({409}),
-    "llm_timeout": frozenset({409}),
-    "invalid_llm_output": frozenset({409}),
-    "operation_failed": frozenset({409}),
-    "internal_error": frozenset({409, 500}),
+    "internal_error": frozenset({500}),
     "not_ready": frozenset({503}),
 }
 
@@ -106,60 +93,10 @@ def _validated_timeout(value: float, *, name: str) -> float:
 class ClientSettings:
     base_url: str
     transport_timeout: float = 10.0
-    acknowledgement_timeout: float = 5.0
 
     def __post_init__(self) -> None:
         _validated_origin(self.base_url)
         _validated_timeout(self.transport_timeout, name="transport_timeout")
-        _validated_timeout(
-            self.acknowledgement_timeout,
-            name="acknowledgement_timeout",
-        )
-
-
-class ChatSendIntent(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    session_id: UUID
-    client_message_id: UUID
-    content: str
-
-
-class ChatReconciliationStatus(StrEnum):
-    COMPLETE = "complete"
-    IN_PROGRESS = "in_progress"
-    FAILED = "failed"
-    IDENTITY_CONFLICT = "identity_conflict"
-    UNRESOLVED = "unresolved"
-
-
-class ChatReconciliationResult(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status: ChatReconciliationStatus
-    snapshot: AppSnapshotResponse
-    history: SessionHistoryResponse
-    completed_message: MessageResponse | None = None
-    pending_turn: ChatTurnSummaryResponse | None = None
-    error_event: ErrorEvent | None = None
-    conflicting_user_message: MessageResponse | None = None
-
-    @model_validator(mode="after")
-    def validate_status_payload(self) -> Self:
-        values = {
-            ChatReconciliationStatus.COMPLETE: self.completed_message,
-            ChatReconciliationStatus.IN_PROGRESS: self.pending_turn,
-            ChatReconciliationStatus.FAILED: self.error_event,
-            ChatReconciliationStatus.IDENTITY_CONFLICT: (self.conflicting_user_message),
-        }
-        expected = values.get(self.status)
-        populated = sum(value is not None for value in values.values())
-        if self.status is ChatReconciliationStatus.UNRESOLVED:
-            if populated:
-                raise ValueError("unresolved result cannot carry a status payload")
-        elif expected is None or populated != 1:
-            raise ValueError("reconciliation result payload does not match status")
-        return self
 
 
 class ProtocolErrorKind(StrEnum):
@@ -307,16 +244,20 @@ def _nested_error_envelopes(value: object) -> Iterator[ErrorEnvelope]:
 class JungChatConnection:
     def __init__(self, websocket: ClientConnection) -> None:
         self._websocket = websocket
+        self._used = False
         self._unusable = False
         self._close_attempted = False
-        self._consumer_active = False
 
     def _ensure_open(self) -> None:
         if self._unusable:
             raise RuntimeError("chat connection is unusable")
 
-    async def send(self, command: SendMessageCommand) -> None:
+    async def stream(self, command: SendMessageCommand) -> AsyncIterator[ServerEvent]:
+        """One-shot stream: send command, yield events until terminal, then stop."""
         self._ensure_open()
+        if self._used:
+            raise RuntimeError("chat connection already used")
+        self._used = True
         try:
             await self._websocket.send(command.model_dump_json())
         except ConnectionClosed as exc:
@@ -326,52 +267,105 @@ class JungChatConnection:
             self._unusable = True
             raise JungTransportError("WebSocket send") from None
 
-    async def events(self) -> AsyncIterator[ServerEvent]:
-        self._ensure_open()
-        if self._consumer_active:
-            raise RuntimeError("chat events already have an active consumer")
-        self._consumer_active = True
-        try:
-            while True:
-                try:
-                    raw = await self._websocket.recv()
-                except ConnectionClosed as exc:
-                    self._unusable = True
-                    raise JungConnectionClosed(
-                        code=exc.code,
-                        reason=exc.reason,
-                    ) from None
-                except (OSError, WebSocketException):
-                    self._unusable = True
-                    raise JungTransportError("WebSocket receive") from None
+        while True:
+            try:
+                raw = await self._websocket.recv()
+            except ConnectionClosed as exc:
+                self._unusable = True
+                raise JungConnectionClosed(
+                    code=exc.code,
+                    reason=exc.reason,
+                ) from None
+            except (OSError, WebSocketException):
+                self._unusable = True
+                raise JungTransportError("WebSocket receive") from None
 
-                if not isinstance(raw, str):
-                    raise JungProtocolError(
-                        kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
-                        expected_model="JSON text frame",
-                    )
-                try:
-                    payload = json.loads(raw)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    raise JungProtocolError(
-                        kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
-                        expected_model="ServerEvent",
-                    ) from None
-                try:
-                    event = ServerEventAdapter.validate_python(payload)
-                except ValidationError as exc:
-                    issues = _sanitize_validation_issues(
-                        exc,
-                        expected_model="ServerEvent",
-                    )
-                    raise JungProtocolError(
-                        kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                        expected_model="ServerEvent",
-                        issues=issues,
-                    ) from None
+            if not isinstance(raw, str):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
+                    expected_model="JSON text frame",
+                )
+            try:
+                payload = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
+                    expected_model="ServerEvent",
+                ) from None
+            try:
+                event = ServerEventAdapter.validate_python(payload)
+            except ValidationError as exc:
+                issues = _sanitize_validation_issues(
+                    exc,
+                    expected_model="ServerEvent",
+                )
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="ServerEvent",
+                    issues=issues,
+                ) from None
+
+            self._validate_event_matches_command(command, event)
+
+            if isinstance(
+                event,
+                (MessageCompletedEvent, MessageFailedEvent, ErrorEvent),
+            ):
+                self._unusable = True
                 yield event
-        finally:
-            self._consumer_active = False
+                return
+            if isinstance(event, TokenEvent):
+                yield event
+                continue
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                expected_model="ServerEvent",
+            )
+
+    def _validate_event_matches_command(
+        self,
+        command: SendMessageCommand,
+        event: ServerEvent,
+    ) -> None:
+        if isinstance(event, ErrorEvent):
+            if event.request_id != command.request_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                    expected_model="ErrorEvent",
+                )
+            if event.session_id is not None and event.session_id != command.session_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="ErrorEvent",
+                )
+            if (
+                event.client_message_id is not None
+                and event.client_message_id != command.client_message_id
+            ):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="ErrorEvent",
+                )
+            return
+
+        if isinstance(
+            event,
+            (TokenEvent, MessageCompletedEvent, MessageFailedEvent),
+        ):
+            if event.request_id != command.request_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                    expected_model=type(event).__name__,
+                )
+            if (
+                event.session_id != command.session_id
+                or event.client_message_id != command.client_message_id
+            ):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model=type(event).__name__,
+                )
+            return
 
     async def aclose(self) -> None:
         if self._close_attempted:
@@ -402,10 +396,6 @@ class JungApiClient:
         self._transport_timeout = _validated_timeout(
             settings.transport_timeout,
             name="transport_timeout",
-        )
-        self._acknowledgement_timeout = _validated_timeout(
-            settings.acknowledgement_timeout,
-            name="acknowledgement_timeout",
         )
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
@@ -444,31 +434,20 @@ class JungApiClient:
         scheme = "wss" if self._base_url.scheme == "https" else "ws"
         return str(self._base_url.copy_with(scheme=scheme).join("api/v1/chat"))
 
-    def new_chat_intent(
+    def new_message_command(
         self,
         session_id: UUID,
         content: str,
         *,
         client_message_id: UUID | None = None,
-    ) -> ChatSendIntent:
-        return ChatSendIntent(
-            session_id=session_id,
-            client_message_id=client_message_id or uuid4(),
-            content=content,
-        )
-
-    def new_message_command(
-        self,
-        intent: ChatSendIntent,
-        *,
         request_id: UUID | None = None,
     ) -> SendMessageCommand:
         return SendMessageCommand(
             type="send_message",
-            session_id=intent.session_id,
-            client_message_id=intent.client_message_id,
+            session_id=session_id,
+            client_message_id=client_message_id or uuid4(),
             request_id=request_id or uuid4(),
-            content=intent.content,
+            content=content,
         )
 
     def _response_request_id(
@@ -606,7 +585,7 @@ class JungApiClient:
             route=route,
             status=response.status_code,
         )
-        allowed_statuses = _ALLOWED_ERROR_STATUSES.get(error.code)
+        allowed_statuses = _ALLOWED_HTTP_ERROR_STATUSES.get(error.code)
         if allowed_statuses is None or response.status_code not in allowed_statuses:
             raise JungProtocolError(
                 kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
@@ -732,171 +711,3 @@ class JungApiClient:
             yield chat
         finally:
             await chat.aclose()
-
-    async def _refresh_chat_state(
-        self,
-        session_id: UUID,
-    ) -> tuple[AppSnapshotResponse, SessionHistoryResponse]:
-        snapshot = await self.get_state()
-        history = await self.get_session(session_id)
-        return snapshot, history
-
-    def _classify_chat_state(
-        self,
-        intent: ChatSendIntent,
-        snapshot: AppSnapshotResponse,
-        history: SessionHistoryResponse,
-        *,
-        matched_error: ErrorEvent | None = None,
-    ) -> ChatReconciliationResult | None:
-        try:
-            durable = inspect_durable_chat_messages(
-                history,
-                expected_session_id=intent.session_id,
-                client_message_id=intent.client_message_id,
-            )
-        except DurableChatViolation as exc:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model=exc.expected_model,
-            ) from None
-
-        if durable.user and durable.user.content != intent.content:
-            return ChatReconciliationResult(
-                status=ChatReconciliationStatus.IDENTITY_CONFLICT,
-                snapshot=snapshot,
-                history=history,
-                conflicting_user_message=durable.user,
-            )
-        if durable.user and durable.assistant:
-            return ChatReconciliationResult(
-                status=ChatReconciliationStatus.COMPLETE,
-                snapshot=snapshot,
-                history=history,
-                completed_message=durable.assistant,
-            )
-
-        pending = snapshot.active_chat_turn
-        if (
-            durable.user
-            and pending is not None
-            and pending.session_id == intent.session_id
-            and pending.client_message_id == intent.client_message_id
-        ):
-            return ChatReconciliationResult(
-                status=ChatReconciliationStatus.IN_PROGRESS,
-                snapshot=snapshot,
-                history=history,
-                pending_turn=pending,
-            )
-        if matched_error is not None:
-            return ChatReconciliationResult(
-                status=ChatReconciliationStatus.FAILED,
-                snapshot=snapshot,
-                history=history,
-                error_event=matched_error,
-            )
-        return None
-
-    def _match_decisive_event(
-        self,
-        event: ServerEvent,
-        *,
-        intent: ChatSendIntent,
-        command: SendMessageCommand,
-    ) -> tuple[bool, ErrorEvent | None]:
-        try:
-            return matches_decisive_event(
-                event,
-                identity=ChatEventIdentity(
-                    session_id=intent.session_id,
-                    client_message_id=intent.client_message_id,
-                    request_id=command.request_id,
-                ),
-            )
-        except ChatEventViolation as exc:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                expected_model=exc.expected_model,
-            ) from None
-
-    async def _wait_for_decisive_event(
-        self,
-        chat: JungChatConnection,
-        *,
-        intent: ChatSendIntent,
-        command: SendMessageCommand,
-        acknowledgement_timeout: float,
-    ) -> ErrorEvent | None:
-        try:
-            async with asyncio.timeout(acknowledgement_timeout):
-                async for event in chat.events():
-                    decisive, error = self._match_decisive_event(
-                        event,
-                        intent=intent,
-                        command=command,
-                    )
-                    if decisive:
-                        return error
-        except TimeoutError:
-            return None
-        return None
-
-    async def reconcile_chat_turn(
-        self,
-        intent: ChatSendIntent,
-        *,
-        acknowledgement_timeout: float | None = None,
-    ) -> ChatReconciliationResult:
-        self._ensure_open()
-        timeout = (
-            self._acknowledgement_timeout
-            if acknowledgement_timeout is None
-            else _validated_timeout(
-                acknowledgement_timeout,
-                name="acknowledgement_timeout",
-            )
-        )
-
-        async with self.open_chat() as chat:
-            snapshot, history = await self._refresh_chat_state(intent.session_id)
-            initial = self._classify_chat_state(intent, snapshot, history)
-            if initial is not None:
-                return initial
-
-            command = self.new_message_command(intent)
-            matched_error: ErrorEvent | None = None
-            protocol_failure: JungProtocolError | None = None
-            try:
-                await chat.send(command)
-                matched_error = await self._wait_for_decisive_event(
-                    chat,
-                    intent=intent,
-                    command=command,
-                    acknowledgement_timeout=timeout,
-                )
-            except asyncio.CancelledError:
-                raise
-            except JungProtocolError as exc:
-                protocol_failure = exc
-            except (JungConnectionClosed, JungTransportError):
-                pass
-
-            final_snapshot, final_history = await self._refresh_chat_state(
-                intent.session_id
-            )
-            if protocol_failure is not None:
-                raise protocol_failure
-            final = self._classify_chat_state(
-                intent,
-                final_snapshot,
-                final_history,
-                matched_error=matched_error,
-            )
-            if final is not None:
-                return final
-            return ChatReconciliationResult(
-                status=ChatReconciliationStatus.UNRESOLVED,
-                snapshot=final_snapshot,
-                history=final_history,
-            )

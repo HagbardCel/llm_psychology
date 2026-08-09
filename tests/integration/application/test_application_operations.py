@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from jung.diagnostics import DiagnosticRun
 from jung.domain.commands import (
     EndSession,
     SendMessage,
     UpdateProfile,
 )
 from jung.domain.models import (
-    ChatTurnStatus,
     CommandName,
     MessageRole,
+    OperationKind,
     OperationStatus,
     Profile,
     Stage,
 )
-from jung.events import OperationChanged
+from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
 from jung.llm.fake import (
     FailureExpectation,
@@ -32,13 +35,15 @@ from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
+from jung.supervisor import SupervisorClosed
 
 from .application_fixtures import (
+    ScriptedTaskSupervisor,
     assessment_result,
     build_test_application,
+    collect_stream,
     completing_intake_patch,
     post_session_expectations,
-    wait_for_chat_turn,
     wait_for_operation_status,
     wait_for_stage,
 )
@@ -142,18 +147,15 @@ async def test_conversational_post_session_persists_authoritative_grounded_turn(
     async with build_test_application(store, fake) as runtime:
         started = await runtime.application.start_session()
         session_id = started.session.id
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content=patient_text,
-            )
+            ),
         )
-        await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.COMPLETE,
-        )
+        assert isinstance(items[-1], ChatCompleted)
         messages = runtime.store.list_messages(session_id)
         user_message = next(
             message for message in messages if message.role == MessageRole.USER
@@ -203,22 +205,17 @@ async def test_malformed_derived_profile_fails_therapy_as_internal_error(
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
         started = await runtime.application.start_session()
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=started.session.id,
                 client_message_id=uuid4(),
                 content="I slept badly.",
-            )
+            ),
         )
-        await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.FAILED,
-        )
-        failed = runtime.store.get_chat_turn(turn.id)
-        assert failed is not None
-        assert failed.error_code == "internal_error"
-        assert failed.error_code != "invalid_llm_output"
+        assert isinstance(items[-1], ChatFailed)
+        assert items[-1].code == "internal_error"
+        assert items[-1].code != "invalid_llm_output"
     fake.assert_exhausted()
 
 
@@ -273,18 +270,15 @@ async def test_post_session_processing_failure_leaves_session_artifacts_unchange
         assert plan_before is not None
         assert profile_before is not None
 
-        turn = await runtime.application.submit_message(
+        items = await collect_stream(
+            runtime.application,
             SendMessage(
                 session_id=session_id,
                 client_message_id=uuid4(),
                 content="I slept badly.",
-            )
+            ),
         )
-        await wait_for_chat_turn(
-            runtime.application,
-            turn.id,
-            ChatTurnStatus.COMPLETE,
-        )
+        assert isinstance(items[-1], ChatCompleted)
         await runtime.application.end_session(
             EndSession(
                 session_id=session_id,
@@ -437,7 +431,9 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
     fake.assert_exhausted()
 
 
-async def test_operation_changed_events_are_published(store: SQLiteStore) -> None:
+async def test_pending_assessment_reaches_running_then_complete(
+    store: SQLiteStore,
+) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -474,113 +470,17 @@ async def test_operation_changed_events_are_published(store: SQLiteStore) -> Non
         ]
     )
     async with build_test_application(store, fake, recover=False) as runtime:
-        seen: list[OperationChanged] = []
-        async with runtime.events.subscribe() as events:
-            await runtime.application.recover_on_startup()
-            gate.set()
-            while len(seen) < 2:
-                event = await asyncio.wait_for(events.__anext__(), timeout=2.0)
-                if isinstance(event, OperationChanged):
-                    seen.append(event)
-    assert seen[0].operation.status is OperationStatus.RUNNING
-    assert seen[-1].operation.status is OperationStatus.COMPLETE
-
-
-async def test_end_session_schedules_operation_when_publish_cancelled(
-    store: SQLiteStore,
-) -> None:
-    ready = advance_to_ready(store)
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        session_id=therapy_id,
-        now=ready.now,
-    )
-    fake = FakeLLM([])
-    publish_gate = asyncio.Event()
-    release_publish = asyncio.Event()
-
-    class GatedPublishEventStream:
-        def __init__(self, inner) -> None:
-            self._inner = inner
-
-        async def publish(self, event) -> None:
-            if isinstance(event, OperationChanged):
-                publish_gate.set()
-                await release_publish.wait()
-            await self._inner.publish(event)
-
-        def subscribe(self):
-            return self._inner.subscribe()
-
-    async with build_test_application(store, fake) as runtime:
-        runtime.events = GatedPublishEventStream(runtime.events)
-        runtime.application._events = runtime.events
-        end_task = asyncio.create_task(
-            runtime.application.end_session(EndSession(session_id=therapy_id))
-        )
-        await asyncio.wait_for(publish_gate.wait(), timeout=2.0)
-        end_task.cancel()
-        release_publish.set()
-        with pytest.raises(asyncio.CancelledError):
-            await end_task
-        await wait_for_stage(runtime.application, Stage.READY)
-    fake.assert_exhausted()
-
-
-async def test_retry_operation_schedules_operation_when_publish_fails(
-    store: SQLiteStore,
-) -> None:
-    intake_id, now = open_intake(store)
-    operation_id = uuid4()
-    complete_intake_for_assessment(
-        store,
-        intake_session_id=intake_id,
-        now=now,
-        operation_id=operation_id,
-    )
-    fake = FakeLLM(
-        [
-            FailureExpectation(
-                task=LLMTask.ASSESSMENT,
-                error=LLMTimeout("timeout"),
-            ),
-            StructuredExpectation(
-                task=LLMTask.ASSESSMENT,
-                output_type=AssessmentResult,
-                response=assessment_result(),
-            ),
-        ]
-    )
-
-    class FailingPublishEventStream:
-        def __init__(self, inner) -> None:
-            self._inner = inner
-            self._fail_once = True
-
-        async def publish(self, event) -> None:
-            if self._fail_once and isinstance(event, OperationChanged):
-                operation = event.operation
-                if (
-                    operation.id == operation_id
-                    and operation.status is OperationStatus.PENDING
-                ):
-                    self._fail_once = False
-                    raise RuntimeError("publish failed")
-            await self._inner.publish(event)
-
-        def subscribe(self):
-            return self._inner.subscribe()
-
-    async with build_test_application(store, fake) as runtime:
-        runtime.events = FailingPublishEventStream(runtime.events)
-        runtime.application._events = runtime.events
+        await runtime.application.recover_on_startup()
         await wait_for_operation_status(
             runtime.application,
             operation_id,
-            OperationStatus.FAILED,
+            OperationStatus.RUNNING,
         )
-        await runtime.application.retry_operation()
+        gate.set()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+        operation = runtime.store.get_operation(operation_id)
+    assert operation is not None
+    assert operation.status is OperationStatus.COMPLETE
     fake.assert_exhausted()
 
 
@@ -680,11 +580,11 @@ async def test_retry_operation_schedules_when_assemble_raises(
     fake.assert_exhausted()
 
 
-async def test_final_intake_schedules_when_load_message_fails(
-    store: SQLiteStore,
-) -> None:
-    turn_messages = ("first turn", "second turn", "third turn")
-    final_message_sequence = 5
+def _final_intake_expectations(
+    turn_messages: tuple[str, ...],
+    *,
+    final_message_sequence: int,
+) -> list[StructuredExpectation | StreamExpectation]:
     expectations: list[StructuredExpectation | StreamExpectation] = []
     for index, content in enumerate(turn_messages, start=1):
         if index < len(turn_messages):
@@ -718,47 +618,104 @@ async def test_final_intake_schedules_when_load_message_fails(
                     ),
                 ]
             )
-    expectations.append(
-        StructuredExpectation(
-            task=LLMTask.ASSESSMENT,
-            output_type=AssessmentResult,
-            response=assessment_result(),
-        )
+    return expectations
+
+
+def _load_trace(run_dir: Path) -> list[dict[str, object]]:
+    lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+async def _run_final_intake_with_supervisor_script(
+    store: SQLiteStore,
+    tmp_path: Path,
+    *,
+    start_outcome: object,
+) -> tuple[list[object], list[dict[str, object]]]:
+    turn_messages = ("first turn", "second turn", "third turn")
+    fake = FakeLLM(_final_intake_expectations(turn_messages, final_message_sequence=5))
+    supervisor = ScriptedTaskSupervisor(
+        by_name={"operation:*": [start_outcome]},
     )
-    fake = FakeLLM(expectations)
-    fail_on_next_load = False
-
-    async with build_test_application(store, fake) as runtime:
-        original_load_message = runtime.application._load_message
-
-        async def failing_load_message(session_id, message_id):
-            if fail_on_next_load:
-                raise RuntimeError("injected post-commit read failure")
-            return await original_load_message(session_id, message_id)
-
-        runtime.application._load_message = failing_load_message
-        await runtime.application.update_profile(
-            UpdateProfile(
-                profile=Profile(name="Alex", primary_language="English"),
-            )
-        )
-        session_id = (await runtime.application.get_snapshot()).active_session
-        assert session_id is not None
-        for index, content in enumerate(turn_messages):
-            if index == len(turn_messages) - 1:
-                fail_on_next_load = True
-            turn = await runtime.application.submit_message(
-                SendMessage(
-                    session_id=session_id.id,
-                    client_message_id=uuid4(),
-                    content=content,
+    run_dir = tmp_path / "schedule-failure"
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store,
+            fake,
+            supervisor=supervisor,
+            recorder=recorder,
+        ) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    profile=Profile(name="Alex", primary_language="English"),
                 )
             )
-            if index < len(turn_messages) - 1:
-                await wait_for_chat_turn(
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            for index, content in enumerate(turn_messages):
+                items = await collect_stream(
                     runtime.application,
-                    turn.id,
-                    ChatTurnStatus.COMPLETE,
+                    SendMessage(
+                        session_id=session.id,
+                        client_message_id=uuid4(),
+                        content=content,
+                    ),
                 )
-        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+                if index < len(turn_messages) - 1:
+                    assert isinstance(items[-1], ChatCompleted)
+            snapshot = await runtime.application.get_snapshot()
+            assert isinstance(items[-1], ChatCompleted)
+            assert snapshot.stage is Stage.ASSESSMENT
+            assert snapshot.current_operation is not None
+            assert snapshot.current_operation.kind is OperationKind.ASSESSMENT
+            assert snapshot.current_operation.status is OperationStatus.PENDING
+            user, assistant = store.get_messages_by_client_id(
+                session.id,
+                items[-1].client_message_id,
+            )
+            assert user is not None
+            assert assistant is not None
     fake.assert_exhausted()
+    return items, _load_trace(run_dir)
+
+
+async def test_final_intake_supervisor_closed_keeps_chat_completed(
+    store: SQLiteStore,
+    tmp_path: Path,
+) -> None:
+    items, events = await _run_final_intake_with_supervisor_script(
+        store,
+        tmp_path,
+        start_outcome=SupervisorClosed,
+    )
+    kinds = [event["kind"] for event in events]
+    assert "chat.turn.completed" in kinds
+    assert "chat.turn.failed" not in kinds
+    assert not any(
+        event["kind"] == "runtime.error"
+        and event["data"].get("phase") == "operation_schedule"
+        for event in events
+    )
+    assert isinstance(items[-1], ChatCompleted)
+
+
+async def test_final_intake_supervisor_runtime_error_records_runtime_error(
+    store: SQLiteStore,
+    tmp_path: Path,
+) -> None:
+    items, events = await _run_final_intake_with_supervisor_script(
+        store,
+        tmp_path,
+        start_outcome=RuntimeError("injected supervisor start failure"),
+    )
+    kinds = [event["kind"] for event in events]
+    assert "chat.turn.completed" in kinds
+    assert "chat.turn.failed" not in kinds
+    schedule_errors = [
+        event
+        for event in events
+        if event["kind"] == "runtime.error"
+        and event["data"].get("phase") == "operation_schedule"
+    ]
+    assert len(schedule_errors) == 1
+    assert isinstance(items[-1], ChatCompleted)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from uuid import UUID
 
 from jung.api.contracts import (
     AppSnapshotResponse,
@@ -15,10 +14,8 @@ from jung.api.contracts import (
 from jung.client.api_client import ClientSettings, JungApiClient, JungClientError
 from jung.client.console import (
     ConsoleApp,
-    ConsoleChatFailed,
     ConsoleExitRequested,
     ConsoleOperationFailed,
-    ConsoleUncertainDelivery,
     ErrorDisplay,
     PromptSpec,
 )
@@ -93,20 +90,6 @@ class TerminalConsoleOutput:
             for rec in options.recommendations:
                 print(f"  {rec.style_id} (score={rec.score:.2f}): {rec.rationale}")
 
-    def render_identity_conflict(
-        self,
-        *,
-        session_id: UUID,
-        client_message_id: UUID,
-    ) -> None:
-        print(
-            "\nIdentity conflict for chat turn "
-            f"session={session_id} client_message_id={client_message_id}."
-        )
-
-    def render_uncertain_delivery(self, message: str) -> None:
-        print(f"\n{message}")
-
     def render_invalid_action(self, message: str) -> None:
         print(f"\n{message}")
 
@@ -152,10 +135,8 @@ async def _async_cli() -> int:
             ).run()
     except ConsoleExitRequested:
         return 0
-    except (ConsoleChatFailed, ConsoleOperationFailed):
+    except ConsoleOperationFailed:
         return 1
-    except ConsoleUncertainDelivery:
-        return 2
     except JungClientError as exc:
         output.render_client_error(exc)
         return 3

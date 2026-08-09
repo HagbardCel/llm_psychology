@@ -9,7 +9,6 @@ from jung.api.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ErrorResponse,
-    normalize_public_error_code,
 )
 from jung.domain.errors import (
     Busy,
@@ -18,7 +17,6 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    StoredWorkFailure,
 )
 
 
@@ -137,13 +135,6 @@ def to_error_envelope(
     *,
     request_id: UUID,
 ) -> ErrorEnvelope:
-    if isinstance(exc, StoredWorkFailure):
-        return ErrorEnvelope(
-            code=normalize_public_error_code(exc.code),
-            message=str(exc),
-            request_id=request_id,
-            retryable=exc.retryable,
-        )
     spec = _error_spec(exc)
     return ErrorEnvelope(
         code=spec.code,
@@ -154,8 +145,6 @@ def to_error_envelope(
 
 
 def http_status_for_exception(exc: Exception) -> int:
-    if isinstance(exc, StoredWorkFailure):
-        return 409
     return _error_spec(exc).status
 
 

@@ -41,8 +41,12 @@ Intake is complete only when the durable record meets the processor's required s
 
 All non-table combinations return `invalid_command`. Commands are serialized
 server-side and evaluated against authoritative state at execution time; there
-is no client revision token. Chat idempotency is evaluated first. Conflicting
-mutation, session, operation, or generation returns `busy`.
+is no client revision token. Chat message idempotency is evaluated first.
+Conflicting mutation, session, operation, or generation returns `busy`.
+
+While chat generation holds the generation lock, snapshot assembly masks
+`available_commands` to empty (asynchronous observers may see no commands), and
+public workflow commands that check the lock return `busy`.
 
 Sequential valid `update_profile` commands are last-writer-wins: each accepted
 write replaces the stored profile. During `INTAKE`, profile fields remain
@@ -61,7 +65,9 @@ incomplete profile update returns `invalid_command`.
 | `THERAPY` | `end_session` | active session matches command | session ended; post-session `Operation` `PENDING` | `POST_SESSION` |
 | `POST_SESSION` | operation completes | post-session patch valid | profile/plan revisions saved; operation `COMPLETE` | `READY` |
 
-Failed operations and failed chat turns **never** advance stage. Retry reuses the same durable record.
+Failed operations and unanswered chat messages **never** advance stage. Operation
+retry reuses the same durable operation row. Chat retry reuses the same
+`(session_id, client_message_id)` user message.
 
 ## Operation lifecycle
 
@@ -77,38 +83,73 @@ PENDING → RUNNING → COMPLETE
 5. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
 6. **Idempotency**: `(kind, source_session_id)` is unique; duplicate acceptance returns the existing operation.
 
-## ChatTurn lifecycle
+## Message-native chat
 
-```text
-PENDING → COMPLETE
-        ↘ FAILED
-```
+Durable chat truth is **messages only**. There is no `ChatTurn` / `chat_turns`
+row. Each message has role `user` or `assistant`, a required
+`client_message_id`, and uniqueness on `(session_id, client_message_id, role)`.
+A completed exchange is a user message and an assistant message sharing the same
+`client_message_id`.
 
-1. **Acceptance transaction**: validate stage/session against authoritative state; resolve `(session_id, client_message_id)`; persist user message + `PENDING` turn; schedule generation.
-2. **Generation**: supervisor streams tokens through `EventStream`; tokens are ephemeral.
-3. **Completion transaction**: persist assistant message; mark turn `COMPLETE`; emit completion notifications.
-4. **Failure**: mark turn `FAILED` with retryability; user message remains durable; stage unchanged when failure occurs after acceptance.
-5. **Duplicate client message**: same ID never creates a second user message. `PENDING` and `COMPLETE` return the durable turn; a non-retryable `FAILED` turn raises its stored failure; a retryable `FAILED` turn may, after generation availability and structural eligibility, reset the **same** durable turn to `PENDING` and regenerate. See [API v1](api-v1.md) for the full precedence list.
-6. **During active generation**: conflicting distinct `send_message` returns `busy`; same idempotent resubmit returns in-progress or stored completion.
+Generation is connection-owned: the WebSocket that sends `send_message` drives
+`TherapyApplication.stream_message` until a terminal result. Tokens are
+ephemeral. `TaskSupervisor` is not used for chat.
 
-A pending turn cannot resume token generation exactly after crash; startup converts stale pending turns to retryable `FAILED` while preserving the user message.
+### Acceptance and streaming
+
+1. **New message**: validate stage/session; reject if the open session already
+   ends with an unanswered `USER`; acquire the generation lock; persist the user
+   message; stream tokens; on success persist the assistant message and emit
+   `message_completed`; on an ordinary post-acceptance failure before durable
+   assistant completion emit `message_failed` (user message remains durable;
+   stage unchanged).
+2. **Idempotent complete**: same `(session_id, client_message_id)` already has
+   user and assistant with matching content → yield `message_completed` with the
+   durable pair (no regeneration).
+3. **Content conflict**: same ID with different content → `invalid_command`.
+4. **During active generation**: a distinct new chat attempt or conflicting
+   workflow command returns `busy`.
+
+### Unanswered user and retry
+
+An **open** session may have at most one trailing unanswered `USER`. The client
+must `/retry` (retransmit) the **same** `client_message_id` and content before
+sending another chat message.
+
+Retry is structurally eligible only when:
+
+- the session is still open and is the active session;
+- stage is `INTAKE` or `THERAPY` matching the session kind;
+- that user message is still the latest message in the session.
+
+Otherwise retry returns `invalid_command` (“not eligible for retry”).
+
+Ending therapy (`/quit` / `end_session`) may leave a trailing `USER` on a
+**closed** session. That message is not retryable and is not treated as an
+unresolved diagnostic problem.
+
+### Disconnect and crash
+
+Disconnect cancels the connection-owned generation attempt. The durable user
+message may remain unanswered on an open session and must be retried with the
+same ID. There is no pending-turn row to convert on startup.
 
 ## Startup and shutdown recovery
 
 At startup, before accepting mutations:
 
 - stale `RUNNING` operations → `PENDING`, scheduled by supervisor;
-- stale **pending** chat turns → retryable `FAILED`;
-- completed operations/turns are not rerun.
+- completed operations are not rerun;
+- chat has no supervised recovery — unanswered open-session user messages remain
+  for explicit client retry.
 
 On shutdown:
 
 - stop accepting new commands;
-- wait a bounded interval for accepted work;
-- leave in-flight durable work recoverable;
-- never mark an in-flight operation successful without validated completion.
-
-A connected client is only an observer: supervisor-owned generation continues after disconnect and notifications fan out to all observers.
+- wait a bounded interval for accepted **operation** work;
+- leave in-flight durable operations recoverable;
+- never mark an in-flight operation successful without validated completion;
+- in-flight chat is cancelled with its connection.
 
 ## Post-session grounding
 

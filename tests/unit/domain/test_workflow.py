@@ -6,7 +6,6 @@ import pytest
 
 from jung.domain.errors import InvalidCommand
 from jung.domain.models import (
-    ChatTurnStatus,
     CommandName,
     OperationKind,
     OperationStatus,
@@ -110,16 +109,6 @@ def test_available_commands_matrix(
     facts: WorkflowFacts, expected: frozenset[CommandName]
 ) -> None:
     assert available_commands(facts) == expected
-
-
-def test_pending_chat_turn_blocks_commands():
-    facts = WorkflowFacts(
-        stage=Stage.THERAPY,
-        profile_complete=True,
-        has_active_session=True,
-        chat_turn_status=ChatTurnStatus.PENDING,
-    )
-    assert available_commands(facts) == frozenset()
 
 
 def test_require_command_allowed_rejects_invalid():

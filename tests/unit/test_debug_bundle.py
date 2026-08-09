@@ -56,15 +56,15 @@ def test_write_manifest_and_export_snapshot(tmp_path: Path) -> None:
             {
                 "error_code": "invalid_llm_output",
                 "retryable": True,
-                "source": "generation",
+                "source": "chat_attempt",
             },
         )
         recorder.mark_run_failed()
         finalize_debug_bundle(recorder, store)
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["diagnostic_schema_version"] == 3
-    assert manifest["database_schema_version_expected"] == 4
+    assert manifest["diagnostic_schema_version"] == 4
+    assert manifest["database_schema_version_expected"] == 5
     assert "sekrit" not in json.dumps(manifest)
     assert manifest["llm"]["provider_url"] == "http://127.0.0.1:8080/v1"
     assert manifest["llm"]["tasks"]["intake_patch"]["model"] == "m1"
@@ -290,8 +290,44 @@ def test_write_failed_classified(tmp_path: Path) -> None:
         problems = classify_unresolved_problems(
             recorder=recorder,
             events=[],
-            state={"chat_turns": [], "operations": []},
+            state={"operations": [], "sessions": [], "messages_by_session": {}},
             primary_exception=None,
             cleanup_exception=None,
         )
     assert any("write_failed" in problem for problem in problems)
+
+
+def test_open_session_trailing_user_classified_as_unresolved(tmp_path: Path) -> None:
+    session_id = str(uuid4())
+    client_message_id = str(uuid4())
+    with DiagnosticRun(tmp_path / "run") as recorder:
+        problems = classify_unresolved_problems(
+            recorder=recorder,
+            events=[],
+            state={
+                "sessions": [
+                    {
+                        "id": session_id,
+                        "ended_at": None,
+                    }
+                ],
+                "messages_by_session": {
+                    session_id: [
+                        {
+                            "role": "user",
+                            "client_message_id": client_message_id,
+                            "content": "hello",
+                        }
+                    ]
+                },
+                "operations": [],
+            },
+            primary_exception=None,
+            cleanup_exception=None,
+        )
+    assert any(
+        "unanswered user message on open session" in problem
+        and session_id in problem
+        and client_message_id in problem
+        for problem in problems
+    )

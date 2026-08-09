@@ -17,18 +17,21 @@ from jung.api.contracts import (
     ErrorEvent,
     ErrorResponse,
     MappingContext,
+    MessageCompletedEvent,
+    MessageFailedEvent,
     MessageResponse,
+    MessageRoleWire,
     PlanSummaryResponse,
     ProfileUpdateRequest,
     ProfileWire,
     SendMessageCommand,
     ServerEvent,
     SessionSummaryResponse,
+    TokenEvent,
     build_error_event,
     normalize_public_error_code,
     stored_error_envelope,
-    to_chat_turn_summary,
-    to_operation_changed_event,
+    to_operation_summary,
     to_plan_detail,
     to_plan_summary,
     to_profile_response,
@@ -41,8 +44,6 @@ from jung.api.contracts import (
 )
 from jung.domain.models import (
     AppSnapshot,
-    ChatTurn,
-    ChatTurnStatus,
     CommandName,
     Message,
     MessageRole,
@@ -153,38 +154,23 @@ def _make_failed_operation(*, session_id: UUID, now: datetime) -> Operation:
     )
 
 
-def _make_chat_turn(
+def _message(
     *,
     session_id: UUID,
+    client_message_id: UUID,
+    role: MessageRole,
+    content: str,
+    sequence: int,
     now: datetime,
-    status: ChatTurnStatus,
-    error_code: str | None = None,
-    error_message: str | None = None,
-    retryable: bool = False,
-) -> ChatTurn:
-    if status is ChatTurnStatus.PENDING:
-        assert error_code is None
-        assert error_message is None
-        assert retryable is False
-    elif status is ChatTurnStatus.FAILED:
-        assert error_code is not None
-        assert error_message is not None
-    else:
-        raise AssertionError(f"unsupported test status: {status}")
-
-    return ChatTurn(
+) -> Message:
+    return Message(
         id=uuid4(),
         session_id=session_id,
-        client_message_id=uuid4(),
-        status=status,
-        user_message_id=uuid4(),
-        assistant_message_id=None,
-        error_code=error_code,
-        error_message=error_message,
-        retryable=retryable,
+        sequence=sequence,
+        role=role,
+        content=content,
         created_at=now,
-        updated_at=now,
-        completed_at=now if status is ChatTurnStatus.FAILED else None,
+        client_message_id=client_message_id,
     )
 
 
@@ -324,6 +310,7 @@ def test_snapshot_maps_current_operation_and_command_order() -> None:
         "end_session",
         "retry_operation",
     ]
+    assert not hasattr(response, "active_chat_turn")
 
 
 def test_session_and_plan_summary_detail_separation() -> None:
@@ -347,14 +334,13 @@ def test_profile_history_and_style_mapping_redacts_internals() -> None:
     now = _now()
     session = _make_session(now=now)
     plan = _make_plan(session_id=session.id, now=now)
-    message = Message(
-        id=uuid4(),
+    message = _message(
         session_id=session.id,
-        sequence=1,
+        client_message_id=uuid4(),
         role=MessageRole.USER,
         content="hello",
-        created_at=now,
-        client_message_id=uuid4(),
+        sequence=1,
+        now=now,
     )
     operation = _make_failed_operation(session_id=session.id, now=now)
     context = MappingContext(request_id=uuid4())
@@ -375,6 +361,7 @@ def test_profile_history_and_style_mapping_redacts_internals() -> None:
     history_response = to_session_history_response(history)
     assert profile_response.profile.name == "Alex"
     assert history_response.messages[0].content == "hello"
+    assert history_response.messages[0].client_message_id == message.client_message_id
 
     options = StyleOptions(
         styles=(StyleSummary(id="cbt", name="CBT", description="desc"),),
@@ -428,6 +415,8 @@ def test_error_event_request_id_invariant() -> None:
     )
     event = build_error_event(matching_envelope, context=context)
     assert event.request_id == event.error.request_id == context.request_id
+    assert event.session_id is None
+    assert event.client_message_id is None
 
     adapter = TypeAdapter(ServerEvent)
     shared_request_id = uuid4()
@@ -458,72 +447,122 @@ def test_error_event_request_id_invariant() -> None:
         )
 
 
-def test_operation_changed_event_shares_mapping_context_request_id() -> None:
+def test_operation_summary_shares_mapping_context_request_id() -> None:
     now = _now()
     session = _make_session(now=now)
     operation = _make_failed_operation(session_id=session.id, now=now)
     request_id = uuid4()
     context = MappingContext(request_id=request_id)
-    snapshot = AppSnapshot(
-        stage=Stage.ASSESSMENT,
-        profile_complete=True,
-        current_operation=operation,
-        available_commands=frozenset(),
-    )
 
-    event = to_operation_changed_event(operation, snapshot, context=context)
-    assert event.operation.error is not None
-    assert event.snapshot.operation is not None
-    assert event.operation.error.request_id == request_id
-    assert event.snapshot.operation.error.request_id == request_id
-
-
-def test_failed_chat_turn_summary_normalizes_internal_error() -> None:
-    now = _now()
-    session = _make_session(now=now)
-    context = MappingContext(request_id=uuid4())
-    turn = _make_chat_turn(
-        session_id=session.id,
-        now=now,
-        status=ChatTurnStatus.FAILED,
-        error_code="stale_pending",
-        error_message="The interrupted request can be retried.",
-        retryable=True,
-    )
-
-    summary = to_chat_turn_summary(turn, context=context)
-
-    assert summary.id == turn.id
-    assert summary.status == "failed"
+    summary = to_operation_summary(operation, context=context)
     assert summary.error is not None
-    assert summary.error.code == "operation_failed"
-    assert summary.error.message == turn.error_message
-    assert summary.error.retryable is True
-    assert summary.error.request_id == context.request_id
+    assert summary.error.request_id == request_id
+    assert summary.error.code == "llm_timeout"
 
 
-def test_pending_chat_turn_maps_to_snapshot_active_chat_turn() -> None:
+def test_server_event_union_is_message_native() -> None:
+    adapter = TypeAdapter(ServerEvent)
     now = _now()
-    session = _make_session(now=now)
-    context = MappingContext(request_id=uuid4())
-    turn = _make_chat_turn(
-        session_id=session.id,
-        now=now,
-        status=ChatTurnStatus.PENDING,
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    user = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role="user",
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
     )
-    snapshot = AppSnapshot(
-        stage=Stage.THERAPY,
-        profile_complete=True,
-        active_chat_turn=turn,
-        available_commands=frozenset(),
+    assistant = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role="assistant",
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
     )
 
-    response = to_snapshot_response(snapshot, context=context)
+    token = adapter.validate_python(
+        {
+            "type": "token",
+            "text": "hi",
+            "request_id": str(request_id),
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+        }
+    )
+    completed = adapter.validate_python(
+        {
+            "type": "message_completed",
+            "request_id": str(request_id),
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "user_message": user.model_dump(mode="json"),
+            "assistant_message": assistant.model_dump(mode="json"),
+        }
+    )
+    failed = adapter.validate_python(
+        {
+            "type": "message_failed",
+            "request_id": str(request_id),
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "error": {
+                "code": "llm_timeout",
+                "message": "timed out",
+                "request_id": str(request_id),
+                "retryable": True,
+            },
+        }
+    )
+    assert isinstance(token, TokenEvent)
+    assert isinstance(completed, MessageCompletedEvent)
+    assert isinstance(failed, MessageFailedEvent)
 
-    assert response.active_chat_turn is not None
-    assert response.active_chat_turn.id == turn.id
-    assert response.active_chat_turn.status == "pending"
-    assert response.active_chat_turn.error is None
+    for forbidden_type in (
+        "message_in_progress",
+        "snapshot_changed",
+        "operation_changed",
+    ):
+        with pytest.raises(ValidationError):
+            adapter.validate_python({"type": forbidden_type})
+
+    for forbidden_field in ("turn_id", "sequence"):
+        with pytest.raises(ValidationError):
+            TokenEvent.model_validate(
+                {
+                    "type": "token",
+                    "text": "hi",
+                    "request_id": str(request_id),
+                    "session_id": str(session_id),
+                    "client_message_id": str(client_message_id),
+                    forbidden_field: 1
+                    if forbidden_field == "sequence"
+                    else str(uuid4()),
+                }
+            )
+
+
+def test_message_role_wire_and_domain_are_user_assistant_only() -> None:
+    assert set(get_args(MessageRoleWire)) == {"user", "assistant"}
+    assert {role.value for role in MessageRole} == {"user", "assistant"}
+
+
+def test_message_response_requires_client_message_id() -> None:
+    with pytest.raises(ValidationError):
+        MessageResponse.model_validate(
+            {
+                "id": str(uuid4()),
+                "session_id": str(uuid4()),
+                "sequence": 1,
+                "role": "user",
+                "content": "hello",
+                "created_at": _now().isoformat().replace("+00:00", "Z"),
+            }
+        )
 
 
 @pytest.mark.parametrize("model", _contract_wire_models())
@@ -541,17 +580,19 @@ def test_contract_schema_has_no_optimistic_revision_fields(
         "expected" + "_revision",
         "current" + "_snapshot",
         "state" + "_conflict",
+        "active" + "_chat_turn",
     ):
         assert not _contains_property(schema, forbidden), (
             f"{model.__name__} exposes {forbidden}"
         )
 
 
-def test_app_snapshot_response_schema_has_no_revision() -> None:
+def test_app_snapshot_response_schema_has_no_revision_or_active_chat_turn() -> None:
     from jung.api.contracts import AppSnapshotResponse
 
     properties = AppSnapshotResponse.model_json_schema()["properties"]
     assert "revision" not in properties
+    assert "active_chat_turn" not in properties
 
 
 def test_error_code_excludes_removed_conflict_token() -> None:
@@ -562,3 +603,58 @@ def test_error_response_inherits_error_envelope_fields() -> None:
     assert tuple(ErrorResponse.model_fields) == tuple(ErrorEnvelope.model_fields)
     for name, envelope_field in ErrorEnvelope.model_fields.items():
         assert ErrorResponse.model_fields[name].annotation == envelope_field.annotation
+
+
+def test_message_completed_event_rejects_inconsistent_nested_messages() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    now = datetime.now(UTC)
+    user = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role="user",
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    assistant = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role="assistant",
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    base = {
+        "type": "message_completed",
+        "request_id": str(request_id),
+        "session_id": str(session_id),
+        "client_message_id": str(client_message_id),
+        "user_message": user.model_dump(mode="json"),
+        "assistant_message": assistant.model_dump(mode="json"),
+    }
+    assert MessageCompletedEvent.model_validate(base)
+
+    bad_role = dict(base)
+    bad_role["user_message"] = {**base["user_message"], "role": "assistant"}
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_role)
+
+    bad_sequence = dict(base)
+    bad_sequence["assistant_message"] = {
+        **base["assistant_message"],
+        "sequence": 5,
+    }
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_sequence)
+
+    bad_session = dict(base)
+    bad_session["assistant_message"] = {
+        **base["assistant_message"],
+        "session_id": str(uuid4()),
+    }
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_session)

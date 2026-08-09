@@ -25,7 +25,6 @@ from jung.diagnostics import (
     DiagnosticRun,
     _safe_exception_message,
 )
-from jung.events import EventStream
 from jung.llm.gateway import AdapterConfig, LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
@@ -82,7 +81,6 @@ def _record_cleanup_failure(
 @dataclass(frozen=True, slots=True)
 class ApplicationRuntime:
     application: TherapyApplication
-    events: EventStream
     supervisor: TaskSupervisor
     llm: OpenAICompatibleLLM
 
@@ -348,7 +346,6 @@ async def application_context(
                 )
 
             styles = load_styles()
-            events = EventStream(max_queue_size=settings.event_queue_size)
             supervisor = TaskSupervisor(recorder=recorder)
             await supervisor.__aenter__()
             supervisor_entered = True
@@ -373,7 +370,6 @@ async def application_context(
                     update_policy=policies[LLMTask.POST_SESSION_UPDATE],
                 ),
                 styles=styles,
-                events=events,
                 supervisor=supervisor,
                 now=now or _default_now,
                 new_id=new_id or _default_new_id,
@@ -382,7 +378,6 @@ async def application_context(
             await application.recover_on_startup()
             runtime = ApplicationRuntime(
                 application=application,
-                events=events,
                 supervisor=supervisor,
                 llm=llm,
             )

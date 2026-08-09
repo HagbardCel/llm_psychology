@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from jung.domain.errors import InvalidCommand, InvariantViolation
 from jung.domain.models import (
-    ChatTurnStatus,
     CommandName,
     OperationKind,
     OperationStatus,
@@ -15,9 +14,6 @@ from jung.domain.models import (
 
 def available_commands(facts: WorkflowFacts) -> frozenset[CommandName]:
     """Return commands permitted for the current workflow facts."""
-    if facts.chat_turn_status == ChatTurnStatus.PENDING:
-        return frozenset()
-
     stage = facts.stage
     if stage == Stage.SETUP:
         return frozenset({CommandName.UPDATE_PROFILE})

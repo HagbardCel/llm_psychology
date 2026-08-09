@@ -22,7 +22,6 @@ from jung.domain.errors import (
     InvariantViolation,
     NotFound,
     PersistenceFailure,
-    StoredWorkFailure,
 )
 
 _SECRET_MARKER = "secret-marker"
@@ -62,33 +61,6 @@ def test_invalid_command_maps_without_snapshot_fields() -> None:
     dumped = envelope.model_dump()
     assert "current" + "_snapshot" not in dumped
     assert "revision" not in dumped
-
-
-def test_stored_work_failure_preserves_safe_message() -> None:
-    request_id = uuid4()
-    exc = StoredWorkFailure(
-        code="llm_unavailable",
-        message="The language model is currently unavailable.",
-        retryable=True,
-    )
-    envelope = to_error_envelope(exc, request_id=request_id)
-    assert envelope.code == "llm_unavailable"
-    assert envelope.message == "The language model is currently unavailable."
-    assert envelope.retryable is True
-    assert http_status_for_exception(exc) == 409
-
-
-def test_stored_work_failure_normalizes_internal_code() -> None:
-    request_id = uuid4()
-    exc = StoredWorkFailure(
-        code="stale_pending",
-        message="A pending operation was interrupted.",
-        retryable=True,
-    )
-    envelope = to_error_envelope(exc, request_id=request_id)
-    assert envelope.code == "operation_failed"
-    assert envelope.message == "A pending operation was interrupted."
-    assert envelope.retryable is True
 
 
 def test_not_ready_error_response() -> None:

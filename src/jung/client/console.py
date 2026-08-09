@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Protocol, TypeVar
 from uuid import UUID
 
@@ -14,35 +13,16 @@ from jung.api.contracts import (
     ErrorEnvelope,
     ErrorEvent,
     MessageCompletedEvent,
-    MessageInProgressEvent,
+    MessageFailedEvent,
     MessageResponse,
-    OperationChangedEvent,
     ProfileUpdateRequest,
     ProfileWire,
     SelectStyleRequest,
-    ServerEvent,
     SessionHistoryResponse,
-    SnapshotChangedEvent,
     StyleOptionsResponse,
     TokenEvent,
 )
-from jung.client._chat_events import (
-    ChatEventIdentity,
-    ChatEventViolation,
-    ErrorCorrelation,
-    classify_error,
-    identity_after_progress,
-    matches_completion,
-    matches_progress,
-    matches_token,
-)
-from jung.client._durable_chat import (
-    DurableChatViolation,
-    inspect_durable_chat_messages,
-)
 from jung.client.api_client import (
-    ChatReconciliationStatus,
-    ChatSendIntent,
     JungApiClient,
     JungApiError,
     JungConnectionClosed,
@@ -58,16 +38,8 @@ class ConsoleExitRequested(Exception):
     """Normal user-requested exit (/exit or EOF)."""
 
 
-class ConsoleChatFailed(Exception):
-    """Terminal durable chat generation failure."""
-
-
 class ConsoleOperationFailed(Exception):
     """Terminal non-retryable background operation failure."""
-
-
-class ConsoleUncertainDelivery(Exception):
-    """Outcome cannot safely be established."""
 
 
 @dataclass(frozen=True)
@@ -78,46 +50,18 @@ class ErrorDisplay:
 
 
 @dataclass(frozen=True)
-class PendingTurnContext:
-    intent: ChatSendIntent
-    reconciliation_attempted: bool = False
-
-
-@dataclass(frozen=True)
-class LoadedPendingTurn:
-    context: PendingTurnContext
-    history: SessionHistoryResponse
-
-
-@dataclass(frozen=True)
 class PromptSpec:
     text: str
 
 
 @dataclass
 class ChatRenderState:
-    turn_id: UUID | None = None
-    last_token_sequence: int = 0
     streamed_parts: list[str] = field(default_factory=list)
     output_started: bool = False
 
     @property
     def streamed_text(self) -> str:
         return "".join(self.streamed_parts)
-
-
-class ChatOutcomeKind(StrEnum):
-    PROGRESS = "progress"
-    COMPLETION = "completion"
-    COMMAND_ERROR = "command_error"
-    DURABLE_ERROR = "durable_error"
-
-
-@dataclass(frozen=True)
-class ChatEventOutcome:
-    kind: ChatOutcomeKind
-    identity: ChatEventIdentity
-    event: MessageInProgressEvent | MessageCompletedEvent | ErrorEvent
 
 
 class ConsoleObserver(Protocol):
@@ -147,27 +91,7 @@ class ConsoleOutput(Protocol):
     def render_chat_failure(self, error: ErrorEnvelope) -> None: ...
     def render_operation_failure(self, error: ErrorDisplay) -> None: ...
     def render_style_options(self, options: StyleOptionsResponse) -> None: ...
-    def render_identity_conflict(
-        self,
-        *,
-        session_id: UUID,
-        client_message_id: UUID,
-    ) -> None: ...
-    def render_uncertain_delivery(self, message: str) -> None: ...
     def render_invalid_action(self, message: str) -> None: ...
-
-
-def _bind_stream_turn(
-    state: ChatRenderState,
-    turn_id: UUID,
-) -> None:
-    if state.turn_id is None:
-        state.turn_id = turn_id
-        return
-    if state.turn_id != turn_id:
-        raise ChatEventViolation(
-            expected_model="consistent turn_id across correlated chat events",
-        )
 
 
 def require_command(commands: set[str], command: str) -> None:
@@ -236,14 +160,10 @@ class ConsoleApp:
                 commands=list(snapshot.available_commands),
             )
 
-            active_turn = snapshot.active_chat_turn
-            if active_turn is not None and active_turn.status == "pending":
-                loaded = await self._load_pending_turn_context(snapshot)
-                self._render_session_history(loaded.history)
-                snapshot = await self._wait_for_pending_chat_turn(
-                    snapshot,
-                    context=loaded.context,
-                )
+            unanswered = await self._latest_unanswered_user(snapshot)
+            if unanswered is not None:
+                await self._render_session_history_if_needed(snapshot)
+                snapshot = await self._handle_unanswered_user(snapshot, unanswered)
                 continue
 
             commands = set(snapshot.available_commands)
@@ -304,6 +224,66 @@ class ConsoleApp:
                     )
                     await asyncio.sleep(self.POLL_INTERVAL)
                     snapshot = await self._client.get_state()
+
+    async def _latest_unanswered_user(
+        self,
+        snapshot: AppSnapshotResponse,
+    ) -> MessageResponse | None:
+        session = snapshot.active_session
+        if session is None or session.ended_at is not None:
+            return None
+        history = await self._client.get_session(session.id)
+        if not history.messages:
+            return None
+        latest = history.messages[-1]
+        if latest.role != "user":
+            return None
+        return latest
+
+    async def _handle_unanswered_user(
+        self,
+        snapshot: AppSnapshotResponse,
+        user_msg: MessageResponse,
+    ) -> AppSnapshotResponse:
+        if snapshot.stage == "intake":
+            while True:
+                action = (
+                    await self.read_input(PromptSpec(text="\nEnter /retry or /exit: "))
+                ).strip()
+                if action == "/retry":
+                    return await self._handle_chat_turn(
+                        snapshot,
+                        content=user_msg.content,
+                        client_message_id=user_msg.client_message_id,
+                    )
+                if action == "/exit":
+                    raise ConsoleExitRequested
+                self._output.render_invalid_action("Enter /retry or /exit.")
+
+        if snapshot.stage == "therapy":
+            while True:
+                action = (
+                    await self.read_input(
+                        PromptSpec(text="\nEnter /retry, /quit, or /exit: ")
+                    )
+                ).strip()
+                if action == "/retry":
+                    return await self._handle_chat_turn(
+                        snapshot,
+                        content=user_msg.content,
+                        client_message_id=user_msg.client_message_id,
+                    )
+                if action == "/quit":
+                    require_command(set(snapshot.available_commands), "end_session")
+                    return await self._end_active_session(snapshot)
+                if action == "/exit":
+                    raise ConsoleExitRequested
+                self._output.render_invalid_action("Enter /retry, /quit, or /exit.")
+
+        raise JungProtocolError(
+            kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
+            expected_model="unanswered user on intake or therapy stage",
+        )
 
     async def _handle_setup(self) -> AppSnapshotResponse:
         current = await self._client.get_profile()
@@ -422,178 +402,6 @@ class ConsoleApp:
             await asyncio.sleep(self.POLL_INTERVAL)
             snapshot = await self._client.get_state()
 
-    async def _load_pending_turn_context(
-        self,
-        snapshot: AppSnapshotResponse,
-    ) -> LoadedPendingTurn:
-        turn = snapshot.active_chat_turn
-        if turn is None or turn.status != "pending":
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="pending active chat turn",
-            )
-        history = await self._client.get_session(turn.session_id)
-        try:
-            durable = inspect_durable_chat_messages(
-                history,
-                expected_session_id=turn.session_id,
-                client_message_id=turn.client_message_id,
-            )
-        except DurableChatViolation as exc:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model=exc.expected_model,
-            ) from None
-        if durable.user is None:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model="one durable user message for pending turn",
-            )
-        user_message = durable.user
-        intent = self._client.new_chat_intent(
-            turn.session_id,
-            user_message.content,
-            client_message_id=turn.client_message_id,
-        )
-        return LoadedPendingTurn(
-            context=PendingTurnContext(
-                intent=intent,
-                reconciliation_attempted=False,
-            ),
-            history=history,
-        )
-
-    async def _wait_for_pending_chat_turn(
-        self,
-        snapshot: AppSnapshotResponse,
-        *,
-        context: PendingTurnContext,
-    ) -> AppSnapshotResponse:
-        while True:
-            pending = snapshot.active_chat_turn
-            if (
-                pending is not None
-                and pending.status == "pending"
-                and pending.session_id == context.intent.session_id
-                and pending.client_message_id == context.intent.client_message_id
-            ):
-                await asyncio.sleep(self.POLL_INTERVAL)
-                snapshot = await self._client.get_state()
-                history = await self._client.get_session(context.intent.session_id)
-                assistant = self._assistant_for_intent(history, context.intent)
-                if assistant is not None:
-                    return await self._complete_from_history(
-                        intent=context.intent,
-                        history=history,
-                    )
-                continue
-
-            history = await self._client.get_session(context.intent.session_id)
-            assistant = self._assistant_for_intent(history, context.intent)
-            if assistant is not None:
-                return await self._complete_from_history(
-                    intent=context.intent,
-                    history=history,
-                )
-
-            if context.reconciliation_attempted:
-                self._output.render_uncertain_delivery(
-                    "The previous message outcome could not be determined safely."
-                )
-                raise ConsoleUncertainDelivery
-
-            result = await self._client.reconcile_chat_turn(context.intent)
-            return await self._apply_reconciliation_result(
-                result,
-                context.intent,
-            )
-
-    async def _apply_reconciliation_result(
-        self,
-        result,
-        intent: ChatSendIntent,
-    ) -> AppSnapshotResponse:
-        match result.status:
-            case ChatReconciliationStatus.COMPLETE:
-                return await self._complete_from_history(
-                    intent=intent,
-                    history=result.history,
-                )
-            case ChatReconciliationStatus.FAILED:
-                error_event = result.error_event
-                if error_event is None:
-                    raise JungProtocolError(
-                        kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                        expected_model="failed reconciliation error event",
-                    )
-                if error_event.turn_id is None:
-                    return await self._handle_command_rejection(
-                        error_event,
-                        intent,
-                    )
-                self._render_session_history(result.history)
-                self._output.render_chat_failure(error_event.error)
-                raise ConsoleChatFailed
-            case ChatReconciliationStatus.IN_PROGRESS:
-                return await self._wait_for_pending_chat_turn(
-                    result.snapshot,
-                    context=PendingTurnContext(
-                        intent=intent,
-                        reconciliation_attempted=True,
-                    ),
-                )
-            case ChatReconciliationStatus.UNRESOLVED:
-                self._render_session_history(result.history)
-                self._output.render_uncertain_delivery(
-                    "The previous message outcome could not be determined safely."
-                )
-                raise ConsoleUncertainDelivery
-            case ChatReconciliationStatus.IDENTITY_CONFLICT:
-                self._output.render_identity_conflict(
-                    session_id=intent.session_id,
-                    client_message_id=intent.client_message_id,
-                )
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                    expected_model=(
-                        "durable user content matching ChatSendIntent "
-                        "for client_message_id"
-                    ),
-                )
-            case _:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                    expected_model="known reconciliation status",
-                )
-
-    def _assistant_for_intent(
-        self,
-        history: SessionHistoryResponse,
-        intent: ChatSendIntent,
-    ) -> MessageResponse | None:
-        try:
-            durable = inspect_durable_chat_messages(
-                history,
-                expected_session_id=intent.session_id,
-                client_message_id=intent.client_message_id,
-            )
-        except DurableChatViolation as exc:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-                expected_model=exc.expected_model,
-            ) from None
-        return durable.assistant
-
-    async def _complete_from_history(
-        self,
-        *,
-        intent: ChatSendIntent,
-        history: SessionHistoryResponse,
-    ) -> AppSnapshotResponse:
-        self._render_session_history(history)
-        self._locally_submitted_client_ids.discard(intent.client_message_id)
-        return await self._client.get_state()
-
     async def _render_session_history_if_needed(
         self,
         snapshot: AppSnapshotResponse,
@@ -612,7 +420,6 @@ class ConsoleApp:
                 continue
             if (
                 message.role == "user"
-                and message.client_message_id is not None
                 and message.client_message_id in self._locally_submitted_client_ids
             ):
                 last_rendered = message.sequence
@@ -626,6 +433,7 @@ class ConsoleApp:
         snapshot: AppSnapshotResponse,
         *,
         content: str,
+        client_message_id: UUID | None = None,
     ) -> AppSnapshotResponse:
         session = snapshot.active_session
         if session is None:
@@ -634,145 +442,64 @@ class ConsoleApp:
                 expected_model="active session for chat",
             )
         self._observer.record("user_message", content=content)
-        intent = self._client.new_chat_intent(session.id, content)
-        command = self._client.new_message_command(intent)
+        command = self._client.new_message_command(
+            session.id,
+            content,
+            client_message_id=client_message_id,
+        )
         self._observer.record(
             "chat_send",
-            session_id=str(intent.session_id),
-            client_message_id=str(intent.client_message_id),
+            session_id=str(command.session_id),
+            client_message_id=str(command.client_message_id),
             request_id=str(command.request_id),
         )
 
         render_state = ChatRenderState()
-        reconciliation_needed = False
 
         try:
             async with self._client.open_chat() as chat:
-                self._locally_submitted_client_ids.add(intent.client_message_id)
+                self._locally_submitted_client_ids.add(command.client_message_id)
                 try:
-                    await chat.send(command)
-                    events = chat.events()
-                    identity = ChatEventIdentity(
-                        session_id=intent.session_id,
-                        client_message_id=intent.client_message_id,
-                        request_id=command.request_id,
-                    )
-                    identity, early = await self._wait_for_acknowledgement(
-                        events,
-                        identity=identity,
-                        render_state=render_state,
-                    )
-                    if early is not None:
-                        return await self._resolve_terminal_outcome(
-                            early,
-                            intent=intent,
-                            render_state=render_state,
+                    async for event in chat.stream(command):
+                        if isinstance(event, TokenEvent):
+                            self._append_token(render_state, event)
+                            self._observer.record("ws_event", type=event.type)
+                            continue
+
+                        if isinstance(event, MessageCompletedEvent):
+                            self._finalize_completion(render_state, event)
+                            return await self._client.get_state()
+
+                        if isinstance(event, MessageFailedEvent):
+                            self._discard_partial(render_state)
+                            self._output.render_chat_failure(event.error)
+                            return await self._client.get_state()
+
+                        if isinstance(event, ErrorEvent):
+                            self._discard_partial(render_state)
+                            self._locally_submitted_client_ids.discard(
+                                command.client_message_id
+                            )
+                            self._output.render_command_rejection(event.error)
+                            return await self._client.get_state()
+
+                        raise JungProtocolError(
+                            kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                            expected_model="ServerEvent",
                         )
-                    outcome = await self._wait_for_completion(
-                        events,
-                        identity=identity,
-                        render_state=render_state,
-                    )
-                    return await self._resolve_terminal_outcome(
-                        outcome,
-                        intent=intent,
-                        render_state=render_state,
-                    )
                 except asyncio.CancelledError:
                     self._discard_partial(render_state)
                     raise
-                except (
-                    JungConnectionClosed,
-                    JungTransportError,
-                    TimeoutError,
-                ):
+                except (JungConnectionClosed, JungTransportError):
                     self._discard_partial(render_state)
-                    reconciliation_needed = True
-                except JungProtocolError:
-                    self._discard_partial(render_state)
-                    raise
+                    return await self._client.get_state()
         except JungTransportError:
-            self._locally_submitted_client_ids.discard(intent.client_message_id)
+            self._locally_submitted_client_ids.discard(command.client_message_id)
             raise
 
-        if reconciliation_needed:
-            result = await self._client.reconcile_chat_turn(intent)
-            return await self._apply_reconciliation_result(result, intent)
-
         raise JungProtocolError(
             kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-            expected_model="chat turn outcome",
-        )
-
-    async def _resolve_terminal_outcome(
-        self,
-        outcome: ChatEventOutcome,
-        *,
-        intent: ChatSendIntent,
-        render_state: ChatRenderState,
-    ) -> AppSnapshotResponse:
-        if outcome.kind is ChatOutcomeKind.COMMAND_ERROR:
-            self._discard_partial(render_state)
-            return await self._handle_command_rejection(
-                outcome.event,
-                intent,
-            )
-        if outcome.kind is ChatOutcomeKind.DURABLE_ERROR:
-            self._discard_partial(render_state)
-            snapshot = await self._client.get_state()
-            await self._render_session_history_if_needed(snapshot)
-            self._output.render_chat_failure(outcome.event.error)
-            raise ConsoleChatFailed
-        if outcome.kind is ChatOutcomeKind.COMPLETION:
-            self._finalize_turn_completion(render_state, outcome.event)
-            return await self._client.get_state()
-        raise JungProtocolError(
-            kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-            expected_model="terminal chat outcome",
-        )
-
-    async def _wait_for_acknowledgement(
-        self,
-        events: AsyncIterator[ServerEvent],
-        *,
-        identity: ChatEventIdentity,
-        render_state: ChatRenderState,
-    ) -> tuple[ChatEventIdentity, ChatEventOutcome | None]:
-        async with asyncio.timeout(self._client.settings.acknowledgement_timeout):
-            async for event in events:
-                outcome = self._process_chat_event(
-                    event,
-                    identity=identity,
-                    render_state=render_state,
-                )
-                if outcome is None:
-                    continue
-                if outcome.kind is ChatOutcomeKind.PROGRESS:
-                    return outcome.identity, None
-                return outcome.identity, outcome
-        raise TimeoutError
-
-    async def _wait_for_completion(
-        self,
-        events: AsyncIterator[ServerEvent],
-        *,
-        identity: ChatEventIdentity,
-        render_state: ChatRenderState,
-    ) -> ChatEventOutcome:
-        async for event in events:
-            outcome = self._process_chat_event(
-                event,
-                identity=identity,
-                render_state=render_state,
-            )
-            if outcome is None:
-                continue
-            if outcome.kind is ChatOutcomeKind.PROGRESS:
-                continue
-            return outcome
-        raise JungProtocolError(
-            kind=ProtocolErrorKind.IMPOSSIBLE_HISTORY,
-            expected_model="chat completion event",
+            expected_model="chat stream terminal event",
         )
 
     def _ensure_output_started(self, state: ChatRenderState) -> None:
@@ -783,15 +510,6 @@ class ConsoleApp:
 
     def _append_token(self, state: ChatRenderState, event: TokenEvent) -> None:
         self._ensure_output_started(state)
-        if event.sequence <= state.last_token_sequence:
-            return
-        if event.sequence > state.last_token_sequence + 1:
-            self._observer.record(
-                "token_gap",
-                expected=state.last_token_sequence + 1,
-                received=event.sequence,
-            )
-        state.last_token_sequence = event.sequence
         state.streamed_parts.append(event.text)
         self._output.append_assistant_token(event.text)
 
@@ -801,112 +519,13 @@ class ConsoleApp:
         self._output.discard_partial_assistant_message()
         state.output_started = False
         state.streamed_parts.clear()
-        state.last_token_sequence = 0
 
-    def _process_chat_event(
-        self,
-        event: ServerEvent,
-        *,
-        identity: ChatEventIdentity,
-        render_state: ChatRenderState,
-    ) -> ChatEventOutcome | None:
-        try:
-            if isinstance(event, MessageInProgressEvent):
-                if matches_progress(event, identity):
-                    _bind_stream_turn(render_state, event.turn.id)
-                    new_identity = identity_after_progress(event, identity)
-                    self._observer.record(
-                        "ws_event",
-                        type=event.type,
-                        turn_id=str(event.turn.id),
-                    )
-                    return ChatEventOutcome(
-                        kind=ChatOutcomeKind.PROGRESS,
-                        identity=new_identity,
-                        event=event,
-                    )
-                return None
-
-            if isinstance(event, TokenEvent):
-                if matches_token(event, identity):
-                    _bind_stream_turn(render_state, event.turn_id)
-                    self._append_token(render_state, event)
-                    self._observer.record(
-                        "ws_event",
-                        type=event.type,
-                        sequence=event.sequence,
-                    )
-                return None
-
-            if isinstance(event, MessageCompletedEvent):
-                if matches_completion(event, identity):
-                    _bind_stream_turn(render_state, event.turn.id)
-                    return ChatEventOutcome(
-                        kind=ChatOutcomeKind.COMPLETION,
-                        identity=identity,
-                        event=event,
-                    )
-                return None
-
-            if isinstance(event, ErrorEvent):
-                correlation = classify_error(event, identity)
-                if correlation is ErrorCorrelation.UNRELATED:
-                    return None
-                if correlation is ErrorCorrelation.COMMAND_REJECTED:
-                    if render_state.turn_id is not None or identity.turn_id is not None:
-                        raise ChatEventViolation(
-                            expected_model=(
-                                "command ErrorEvent before durable acceptance"
-                            )
-                        )
-                    return ChatEventOutcome(
-                        kind=ChatOutcomeKind.COMMAND_ERROR,
-                        identity=identity,
-                        event=event,
-                    )
-                turn_id = event.turn_id
-                if turn_id is None:
-                    raise ChatEventViolation(
-                        expected_model="durable ErrorEvent turn_id",
-                    )
-                _bind_stream_turn(render_state, turn_id)
-                return ChatEventOutcome(
-                    kind=ChatOutcomeKind.DURABLE_ERROR,
-                    identity=identity,
-                    event=event,
-                )
-
-            if isinstance(event, OperationChangedEvent):
-                self._observer.record(
-                    "ws_event",
-                    type=event.type,
-                    operation_kind=event.operation.kind,
-                    operation_status=event.operation.status,
-                    stage=event.snapshot.stage,
-                )
-                return None
-
-            if isinstance(event, SnapshotChangedEvent):
-                self._observer.record(
-                    "ws_event",
-                    type=event.type,
-                    stage=event.snapshot.stage,
-                )
-                return None
-        except ChatEventViolation as exc:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                expected_model=exc.expected_model,
-            ) from None
-
-        return None
-
-    def _finalize_turn_completion(
+    def _finalize_completion(
         self,
         state: ChatRenderState,
         completion: MessageCompletedEvent,
     ) -> None:
-        canonical = completion.message.content
+        canonical = completion.assistant_message.content
         if not state.output_started:
             self._output.render_assistant_message(canonical)
         elif state.streamed_text == canonical:
@@ -919,26 +538,17 @@ class ConsoleApp:
         session_id = completion.session_id
         self._last_rendered_sequence[session_id] = max(
             self._last_rendered_sequence.get(session_id, 0),
-            completion.message.sequence,
+            completion.user_message.sequence,
+            completion.assistant_message.sequence,
         )
-        client_id = completion.turn.client_message_id
-        self._locally_submitted_client_ids.discard(client_id)
+        self._locally_submitted_client_ids.discard(completion.client_message_id)
         self._observer.record(
             "ws_event",
             type=completion.type,
-            client_message_id=str(client_id),
+            client_message_id=str(completion.client_message_id),
         )
         self._observer.record(
             "assistant_message",
             content=canonical,
-            client_message_id=str(client_id),
+            client_message_id=str(completion.client_message_id),
         )
-
-    async def _handle_command_rejection(
-        self,
-        error_event: ErrorEvent,
-        intent: ChatSendIntent,
-    ) -> AppSnapshotResponse:
-        self._locally_submitted_client_ids.discard(intent.client_message_id)
-        self._output.render_command_rejection(error_event.error)
-        return await self._client.get_state()

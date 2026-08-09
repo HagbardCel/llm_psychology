@@ -10,11 +10,12 @@ import pytest
 
 from jung.domain.commands import SendMessage
 from jung.domain.models import MessageRole
+from jung.domain.results import ChatCompleted
 from jung.llm.fake import FakeLLM, StreamExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 
-from .application_fixtures import build_test_application
+from .application_fixtures import build_test_application, collect_stream
 from .scenarios import advance_to_ready
 
 pytestmark = pytest.mark.asyncio
@@ -30,17 +31,16 @@ async def test_get_session_history_preserves_store_derived_client_message_ids(
         now=ready.now,
     )
     client_message_id = uuid4()
-    turn_id = uuid4()
-    store.accept_chat_message(
+    store.append_user_message(
         session_id=therapy_id,
         client_message_id=client_message_id,
-        turn_id=turn_id,
         user_message_id=uuid4(),
         content="hello",
         now=ready.now,
     )
-    store.complete_chat_turn(
-        turn_id,
+    store.complete_chat_response(
+        session_id=therapy_id,
+        client_message_id=client_message_id,
         assistant_message_id=uuid4(),
         content="reply",
         now=ready.now,
@@ -91,13 +91,15 @@ async def test_get_session_history_is_consistent_under_concurrent_mutation(
 
         async def mutate() -> None:
             mutation_started.set()
-            await runtime.application.submit_message(
+            items = await collect_stream(
+                runtime.application,
                 SendMessage(
                     session_id=therapy_id,
                     client_message_id=new_client_message_id,
                     content=new_content,
-                )
+                ),
             )
+            assert isinstance(items[-1], ChatCompleted)
 
         history_task = asyncio.create_task(
             runtime.application.get_session_history(therapy_id)

@@ -347,13 +347,21 @@ def test_client_uses_contract_only_import_allow_list() -> None:
     assert violations == []
 
 
-def test_chat_events_does_not_import_api_client() -> None:
-    path = CLIENT_SRC / "_chat_events.py"
-    assert path.is_file(), "jung.client._chat_events correlation boundary is missing"
-
-    modules = _resolved_imported_modules(path)
-    assert "jung.client.api_client" not in modules
-    assert not any(module.startswith("jung.client.api_client.") for module in modules)
+def test_client_package_has_no_legacy_chat_correlation_surface() -> None:
+    assert not (CLIENT_SRC / "_chat_events.py").exists()
+    assert not (CLIENT_SRC / "_durable_chat.py").exists()
+    forbidden_symbols = (
+        "ConsoleUncertainDelivery",
+        "render_identity_conflict",
+        "render_uncertain_delivery",
+    )
+    violations: list[str] = []
+    for path in _python_files(CLIENT_SRC):
+        text = path.read_text(encoding="utf-8")
+        for symbol in forbidden_symbols:
+            if symbol in text:
+                violations.append(f"{path.relative_to(ROOT)} contains {symbol}")
+    assert violations == []
 
 
 # ---------------------------------------------------------------------------

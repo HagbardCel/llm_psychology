@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from jung.domain.models import AppSnapshot, Message, Plan, Profile, Session
@@ -52,3 +54,35 @@ class StartedSession(BaseModel):
 
     session: Session
     snapshot: AppSnapshot
+
+
+class ChatToken(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text: str
+    session_id: UUID
+    client_message_id: UUID
+    request_id: UUID | None = None
+
+
+class ChatCompleted(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: UUID
+    client_message_id: UUID
+    request_id: UUID | None = None
+    user_message: Message
+    assistant_message: Message
+
+
+class ChatFailed(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: UUID
+    client_message_id: UUID
+    request_id: UUID | None = None
+    code: str
+    message: str
+
+
+ChatStreamResult = ChatToken | ChatCompleted | ChatFailed

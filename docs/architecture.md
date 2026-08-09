@@ -67,7 +67,7 @@ The supported runtime is a lean, local-first therapist application that:
 
 6. **One workflow model**
    - Persist one workflow stage and derive available commands from it.
-   - See [workflow.md](workflow.md) for stages, transitions, operation/ChatTurn lifecycle, retry, and recovery.
+   - See [workflow.md](workflow.md) for stages, transitions, operation lifecycle, message-native chat acceptance/retry, and recovery.
 
 7. **No schema migration compatibility**
    - Incompatible database schemas are rejected. Resetting requires stopping the application and manually removing `jung.db` together with any `jung.db-wal` and `jung.db-shm` sidecars. See [safety-and-data.md](safety-and-data.md) and [database.md](database.md).
@@ -107,8 +107,7 @@ src/jung/
 ├── llm/             LLM abstraction/provider adapter
 ├── application.py   use-case coordination
 ├── workflow.py      pure workflow policy
-├── events.py        in-process event distribution
-├── supervisor.py    accepted-work supervision
+├── supervisor.py    operation-task supervision
 ├── composition.py   composition root
 └── config.py        application configuration
 ```
@@ -125,43 +124,34 @@ The application:
 - coordinates phase processors;
 - orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transaction boundaries live in `SQLiteStore`);
 - enforces server-side concurrency and idempotency;
-- starts and recovers long-running operations;
+- starts and recovers long-running operations via `TaskSupervisor`;
+- streams chat generation on the calling connection through `stream_message`;
 - returns domain results, not HTTP/WebSocket payloads.
 
 Use-case surface (semantic):
 
-- **Reads:** `get_snapshot`, `get_profile`, `get_style_options`, `list_sessions`, `get_session_history`, `get_chat_turn`
+- **Reads:** `get_snapshot`, `get_profile`, `get_style_options`, `list_sessions`, `get_session_history`
 - **Mutations:** `update_profile`, `select_style`, `start_session` (returns session plus snapshot), `end_session`, `retry_operation`
-- **Chat:** `submit_message` accepts a turn; accepted chat work is application-owned
+- **Chat:** `stream_message` — connection-owned acceptance, token stream, and terminal result
 - **Lifecycle:** `recover_on_startup`, `begin_shutdown`
 
-Accepted chat work is application-owned. The composition root supplies an
-application event subscription port for API adapters; WebSocket disconnects do
-not own or cancel generation.
+### Connection-owned chat streaming
 
-### Application event distribution
+Chat is not supervised background work and does not use an in-process event
+fan-out. The WebSocket adapter calls `TherapyApplication.stream_message` on the
+connection that issued `send_message`. That connection owns the stream:
 
-Live generation events are delivered through a small in-process broadcaster
-(`EventStream`) owned by application composition. It is not a message broker,
-event store, replay system, plugin bus, or generalized queueing framework.
+- normally: one command frame → token events → one terminal event → close;
+  active protocol aborts follow the uncertain-delivery behavior defined in
+  [api-v1.md](api-v1.md);
+- disconnect cancels generation for that attempt;
+- durable truth is messages only (see [workflow.md](workflow.md) and
+  [database.md](database.md));
+- a generation lock serializes chat work and masks `available_commands` while
+  generation is active (conflicting workflow commands return `busy`).
 
-Semantics:
-
-- bounded in-process fan-out to currently connected subscribers;
-- scoped subscriptions (enter/exit a subscription context; disconnect unsubscribes one client only);
-- non-blocking publication;
-- slow-subscriber eviction;
-- no replay — token delivery is best-effort to currently connected observers only;
-- accepted generation continues after disconnect;
-- token events are ephemeral;
-- completed messages and snapshot changes are durable.
-
-`submit_message` validates stage, session, and idempotency against authoritative
-state; persists the user message and pending `ChatTurn`; schedules generation
-through the application task supervisor; and returns the accepted `ChatTurn`.
-Token events are published through `EventStream`; API adapters map them to
-WebSocket `token` events. See [workflow.md](workflow.md) for ChatTurn lifecycle
-and recovery, and [api-v1.md](api-v1.md) for wire events.
+`TaskSupervisor` schedules assessment and post-session operations only. See
+[api-v1.md](api-v1.md) for the four-event WebSocket wire contract.
 
 No generic service locator or runtime string-based dependency lookup remains.
 
@@ -183,15 +173,15 @@ Processors should not call other workflow processors. A coordinator may call pur
 ## Workflow, API, and persistence (owned elsewhere)
 
 One persisted workflow stage and backend-derived command set govern progression.
-See [workflow.md](workflow.md) for stages, transitions, operation/ChatTurn
-lifecycle, retry, and recovery semantics.
+See [workflow.md](workflow.md) for stages, transitions, operation lifecycle,
+message-native chat acceptance/retry, and recovery semantics.
 
 Clients use versioned HTTP and WebSocket interfaces under `/api/v1`. See
 [api-v1.md](api-v1.md) for routes, DTOs, public errors, ordering, and WebSocket
 messages.
 
 Persistence uses one explicit `SQLiteStore` with immutable plan revisions and
-durable operation/chat idempotency. See [database.md](database.md) for tables,
+durable message/operation idempotency. See [database.md](database.md) for tables,
 relationships, and invariants.
 
 ## Console client
@@ -202,7 +192,9 @@ The console is the reference API client. It must use one reusable `JungApiClient
 console UI → JungApiClient → /api/v1
 ```
 
-Use HTTP for commands and snapshots and WebSocket for chat streaming and state/operation notifications. Console contract tests run against an ephemeral real API server.
+Use HTTP for commands and snapshots and a one-shot WebSocket
+(`JungChatConnection.stream`) for each chat message. Console contract tests run
+against an ephemeral real API server.
 
 Development priority: backend workflow and persistence correctness, then LLM
 reliability, then `/api/v1` contract stability, then `jung-console` and
@@ -235,8 +227,10 @@ Explicit server-side structure:
 - `SQLiteStore` owns `BEGIN IMMEDIATE` transaction boundaries for durable writes;
 - clients observe state and issue commands; they do not send concurrency tokens or otherwise participate in concurrency control;
 - one generation lock / one active generation at a time;
-- FastAPI lifespan owns a failure-isolating application `TaskSupervisor` backed by an `asyncio.TaskGroup`;
-- independent chat and operation failures are persisted locally and must not cancel siblings or API lifespan;
+- while generation is active, snapshot assembly masks `available_commands` to empty, and public workflow commands that conflict with generation return `busy`;
+- FastAPI lifespan owns a failure-isolating application `TaskSupervisor` backed by an `asyncio.TaskGroup` for **operations only**;
+- independent operation failures are persisted locally and must not cancel siblings or API lifespan;
+- chat generation is connection-owned and is not scheduled on `TaskSupervisor`;
 - detached tasks are prohibited;
 - each synchronous store operation opens and closes its own SQLite connection;
 - async code calls whole store operations via `asyncio.to_thread()`; no connection is shared across threads.
@@ -266,9 +260,8 @@ Native development remains the normal path; see [development.md](development.md)
 
 Diagnostics observe the system and must not become workflow state or API
 contract fields. Application command, chat, operation, and recovery paths
-record schema-v3 events directly into an opt-in `DiagnosticRecorder`.
-`EventStream` remains an in-process fan-out for connected WebSocket observers
-and does not project diagnostic events.
+record schema-v4 events directly into an opt-in `DiagnosticRecorder`.
+Chat correlation uses `client_message_id` (no `turn_id`).
 
 Ordinary logs may include safe LLM metadata when enabled. Opt-in
 `JUNG_DEBUG_RUN_DIR` writes a sensitive correlated debug bundle (`manifest.json`,

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Any, Literal, Self, assert_never, cast, get_args
+from typing import Annotated, Any, Literal, Self, cast, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from jung.domain.models import (
     AppSnapshot,
-    ChatTurn,
     CommandName,
     Message,
     Operation,
@@ -25,15 +24,6 @@ from jung.domain.results import (
     SessionHistory,
     StartedSession,
     StyleOptions,
-)
-from jung.events import (
-    ApplicationEvent,
-    ChatTokenGenerated,
-    ChatTurnAccepted,
-    ChatTurnCompleted,
-    ChatTurnFailed,
-    OperationChanged,
-    SnapshotChanged,
 )
 
 # Internal mapper support — not a wire schema or OpenAPI export.
@@ -78,10 +68,9 @@ def normalize_public_error_code(stored_code: str) -> ErrorCode:
 
 
 SessionKindWire = Literal["intake", "therapy"]
-MessageRoleWire = Literal["user", "assistant", "system"]
+MessageRoleWire = Literal["user", "assistant"]
 OperationKindWire = Literal["assessment", "post_session"]
 OperationStatusWire = Literal["pending", "running", "complete", "failed"]
-ChatTurnStatusWire = Literal["pending", "complete", "failed"]
 StageWire = Literal[
     "setup",
     "intake",
@@ -185,7 +174,7 @@ class MessageResponse(BaseModel):
     role: MessageRoleWire
     content: str
     created_at: UtcDateTime
-    client_message_id: UUID | None = None
+    client_message_id: UUID
 
 
 class PlanSummaryResponse(BaseModel):
@@ -235,18 +224,6 @@ class OperationSummaryResponse(BaseModel):
     error: ErrorEnvelope | None = None
 
 
-class ChatTurnSummaryResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: UUID
-    session_id: UUID
-    client_message_id: UUID
-    status: ChatTurnStatusWire
-    user_message_id: UUID
-    assistant_message_id: UUID | None = None
-    error: ErrorEnvelope | None = None
-
-
 class AppSnapshotResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -255,7 +232,6 @@ class AppSnapshotResponse(BaseModel):
     selected_style: str | None = None
     active_session: SessionSummaryResponse | None = None
     operation: OperationSummaryResponse | None = None
-    active_chat_turn: ChatTurnSummaryResponse | None = None
     available_commands: list[Command]
 
 
@@ -322,43 +298,61 @@ class TokenEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["token"]
-    session_id: UUID
-    turn_id: UUID
-    request_id: UUID
-    sequence: int
     text: str
-
-
-class MessageInProgressEvent(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: Literal["message_in_progress"]
+    request_id: UUID
     session_id: UUID
-    turn: ChatTurnSummaryResponse
+    client_message_id: UUID
 
 
 class MessageCompletedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["message_completed"]
+    request_id: UUID
     session_id: UUID
-    turn: ChatTurnSummaryResponse
-    message: MessageResponse
+    client_message_id: UUID
+    user_message: MessageResponse
+    assistant_message: MessageResponse
+
+    @model_validator(mode="after")
+    def messages_match_event_identity(self) -> Self:
+        if self.user_message.role != "user":
+            raise ValueError("user_message.role must be user")
+        if self.assistant_message.role != "assistant":
+            raise ValueError("assistant_message.role must be assistant")
+        if self.user_message.session_id != self.session_id:
+            raise ValueError("user_message.session_id must match session_id")
+        if self.assistant_message.session_id != self.session_id:
+            raise ValueError("assistant_message.session_id must match session_id")
+        if self.user_message.client_message_id != self.client_message_id:
+            raise ValueError(
+                "user_message.client_message_id must match client_message_id"
+            )
+        if self.assistant_message.client_message_id != self.client_message_id:
+            raise ValueError(
+                "assistant_message.client_message_id must match client_message_id"
+            )
+        if self.assistant_message.sequence != self.user_message.sequence + 1:
+            raise ValueError(
+                "assistant_message.sequence must equal user_message.sequence + 1"
+            )
+        return self
 
 
-class SnapshotChangedEvent(BaseModel):
+class MessageFailedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["snapshot_changed"]
-    snapshot: AppSnapshotResponse
+    type: Literal["message_failed"]
+    request_id: UUID
+    session_id: UUID
+    client_message_id: UUID
+    error: ErrorEnvelope
 
-
-class OperationChangedEvent(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: Literal["operation_changed"]
-    operation: OperationSummaryResponse
-    snapshot: AppSnapshotResponse
+    @model_validator(mode="after")
+    def request_ids_match(self) -> Self:
+        if self.request_id != self.error.request_id:
+            raise ValueError("error.request_id must match request_id")
+        return self
 
 
 class ErrorEvent(BaseModel):
@@ -368,7 +362,6 @@ class ErrorEvent(BaseModel):
     error: ErrorEnvelope
     request_id: UUID
     session_id: UUID | None = None
-    turn_id: UUID | None = None
     client_message_id: UUID | None = None
 
     @model_validator(mode="after")
@@ -379,12 +372,7 @@ class ErrorEvent(BaseModel):
 
 
 ServerEvent = Annotated[
-    TokenEvent
-    | MessageInProgressEvent
-    | MessageCompletedEvent
-    | SnapshotChangedEvent
-    | OperationChangedEvent
-    | ErrorEvent,
+    TokenEvent | MessageCompletedEvent | MessageFailedEvent | ErrorEvent,
     Field(discriminator="type"),
 ]
 
@@ -427,7 +415,6 @@ def build_error_event(
     *,
     context: MappingContext,
     session_id: UUID | None = None,
-    turn_id: UUID | None = None,
     client_message_id: UUID | None = None,
 ) -> ErrorEvent:
     if envelope.request_id != context.request_id:
@@ -437,7 +424,6 @@ def build_error_event(
         error=envelope,
         request_id=context.request_id,
         session_id=session_id,
-        turn_id=turn_id,
         client_message_id=client_message_id,
     )
 
@@ -456,27 +442,6 @@ def to_operation_summary(
             operation.error_code,
             operation.error_message,
             operation.retryable,
-            context=context,
-        ),
-    )
-
-
-def to_chat_turn_summary(
-    turn: ChatTurn,
-    *,
-    context: MappingContext,
-) -> ChatTurnSummaryResponse:
-    return ChatTurnSummaryResponse(
-        id=turn.id,
-        session_id=turn.session_id,
-        client_message_id=turn.client_message_id,
-        status=turn.status.value,
-        user_message_id=turn.user_message_id,
-        assistant_message_id=turn.assistant_message_id,
-        error=stored_error_envelope(
-            turn.error_code,
-            turn.error_message,
-            turn.retryable,
             context=context,
         ),
     )
@@ -563,11 +528,6 @@ def to_snapshot_response(
             if snapshot.current_operation is not None
             else None
         ),
-        active_chat_turn=(
-            to_chat_turn_summary(snapshot.active_chat_turn, context=context)
-            if snapshot.active_chat_turn is not None
-            else None
-        ),
         available_commands=_ordered_commands(snapshot.available_commands),
     )
 
@@ -625,124 +585,3 @@ def to_start_session_response(
         session=to_session_summary(started.session),
         snapshot=to_snapshot_response(started.snapshot, context=context),
     )
-
-
-def to_operation_changed_event(
-    operation: Operation,
-    snapshot: AppSnapshot,
-    *,
-    context: MappingContext,
-) -> OperationChangedEvent:
-    operation_summary = to_operation_summary(operation, context=context)
-    snapshot_response = to_snapshot_response(snapshot, context=context)
-    return OperationChangedEvent(
-        type="operation_changed",
-        operation=operation_summary,
-        snapshot=snapshot_response,
-    )
-
-
-def to_message_in_progress_event(
-    event: ChatTurnAccepted,
-    *,
-    context: MappingContext,
-) -> MessageInProgressEvent:
-    return MessageInProgressEvent(
-        type="message_in_progress",
-        session_id=event.session_id,
-        turn=to_chat_turn_summary(event.turn, context=context),
-    )
-
-
-def to_token_event(
-    event: ChatTokenGenerated,
-    *,
-    context: MappingContext,
-) -> TokenEvent:
-    return TokenEvent(
-        type="token",
-        session_id=event.session_id,
-        turn_id=event.turn_id,
-        request_id=context.request_id,
-        sequence=event.sequence,
-        text=event.text,
-    )
-
-
-def to_message_completed_event(
-    event: ChatTurnCompleted,
-    *,
-    context: MappingContext,
-) -> MessageCompletedEvent:
-    return MessageCompletedEvent(
-        type="message_completed",
-        session_id=event.session_id,
-        turn=to_chat_turn_summary(event.turn, context=context),
-        message=to_message_response(event.assistant_message),
-    )
-
-
-def to_snapshot_changed_event(
-    event: SnapshotChanged,
-    *,
-    context: MappingContext,
-) -> SnapshotChangedEvent:
-    return SnapshotChangedEvent(
-        type="snapshot_changed",
-        snapshot=to_snapshot_response(event.snapshot, context=context),
-    )
-
-
-def to_chat_turn_failed_event(
-    event: ChatTurnFailed,
-    *,
-    context: MappingContext,
-) -> ErrorEvent:
-    if (
-        not event.turn.error_code
-        or not event.turn.error_code.strip()
-        or not event.turn.error_message
-        or not event.turn.error_message.strip()
-    ):
-        raise ValueError("ChatTurnFailed requires durable error code and message")
-    envelope = stored_error_envelope(
-        event.turn.error_code,
-        event.turn.error_message,
-        event.turn.retryable,
-        context=context,
-    )
-    if envelope is None:
-        raise ValueError("ChatTurnFailed requires durable error code and message")
-    return build_error_event(
-        envelope,
-        context=context,
-        session_id=event.session_id,
-        turn_id=event.turn_id,
-        client_message_id=event.turn.client_message_id,
-    )
-
-
-def map_application_event(
-    event: ApplicationEvent,
-    *,
-    context: MappingContext,
-) -> ServerEvent:
-    match event:
-        case ChatTurnAccepted():
-            return to_message_in_progress_event(event, context=context)
-        case ChatTokenGenerated():
-            return to_token_event(event, context=context)
-        case ChatTurnCompleted():
-            return to_message_completed_event(event, context=context)
-        case ChatTurnFailed():
-            return to_chat_turn_failed_event(event, context=context)
-        case SnapshotChanged():
-            return to_snapshot_changed_event(event, context=context)
-        case OperationChanged():
-            return to_operation_changed_event(
-                event.operation,
-                event.snapshot,
-                context=context,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)

@@ -723,3 +723,58 @@ def test_complete_post_session_store_persists_opaque_derived_profile_json(
     assert stored_after.derived_profile == sparse
     assert "observations" not in (stored_after.derived_profile or {})
     assert stored_after.updated_at == updated_before
+
+
+def test_complete_final_intake_rolls_back_all_artifacts(store: SQLiteStore) -> None:
+    from jung.phases.intake.models import IntakeRecord
+
+    intake_id, now = open_intake(store)
+    client_message_id = uuid4()
+    store.append_user_message(
+        session_id=intake_id,
+        client_message_id=client_message_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=now,
+    )
+    before = store.get_session(intake_id)
+    assert before is not None
+    original_intake = before.intake_record
+
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER abort_final_intake_session_close
+            BEFORE UPDATE OF ended_at ON sessions
+            BEGIN
+                SELECT RAISE(ABORT, 'injected final intake rollback');
+            END
+            """
+        )
+        conn.commit()
+
+    try:
+        with pytest.raises(PersistenceFailure):
+            store.complete_final_intake_response(
+                session_id=intake_id,
+                client_message_id=client_message_id,
+                assistant_message_id=uuid4(),
+                content="goodbye",
+                intake_record=IntakeRecord().model_dump(mode="json"),
+                operation_id=uuid4(),
+                now=now,
+            )
+    finally:
+        with sqlite3.connect(store.database_path) as conn:
+            conn.execute("DROP TRIGGER IF EXISTS abort_final_intake_session_close")
+            conn.commit()
+
+    assert store.get_app_state().stage == Stage.INTAKE
+    session = store.get_session(intake_id)
+    assert session is not None
+    assert session.ended_at is None
+    assert session.intake_record == original_intake
+    user, assistant = store.get_messages_by_client_id(intake_id, client_message_id)
+    assert user is not None
+    assert assistant is None
+    assert store.get_current_operation() is None

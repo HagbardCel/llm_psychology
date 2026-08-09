@@ -142,7 +142,6 @@ async def _assert_setup_ready_api(http_base: str) -> None:
         snapshot = await client.get_state()
         assert snapshot.stage == "ready"
         assert snapshot.operation is None
-        assert snapshot.active_chat_turn is None
 
         profile = await client.get_profile()
         assert profile.profile.name == "Alex"
@@ -197,7 +196,6 @@ async def _assert_therapy_ready_api(
         snapshot = await client.get_state()
         assert snapshot.stage == "ready"
         assert snapshot.operation is None
-        assert snapshot.active_chat_turn is None
 
         sessions = await client.list_sessions()
         therapy_sessions = [item for item in sessions if item.kind == "therapy"]
