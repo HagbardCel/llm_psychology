@@ -125,7 +125,9 @@ async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
     conn = sqlite3.connect(snapshot)
     try:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SQLITE_SCHEMA_VERSION
+        assert (
+            conn.execute("PRAGMA user_version").fetchone()[0] == SQLITE_SCHEMA_VERSION
+        )
         assert SQLITE_SCHEMA_VERSION == 6
         profile_name = conn.execute("SELECT name FROM profile LIMIT 1").fetchone()
         assert profile_name is not None

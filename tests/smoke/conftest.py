@@ -33,9 +33,7 @@ def diagnostic_run(request: pytest.FixtureRequest):
     ) as recorder:
         yield recorder
         if _session_failed or request.session.testsfailed:
-            recorder.close(
-                primary_exception=RuntimeError("local-model smoke failed")
-            )
+            recorder.close(primary_exception=RuntimeError("local-model smoke failed"))
 
 
 @pytest.fixture(scope="session", autouse=True)
