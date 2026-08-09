@@ -1033,7 +1033,7 @@ async def test_validator_invalid_llm_output_records_semantic_correction_trigger(
 async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     chunk = json.dumps(
@@ -1081,7 +1081,7 @@ async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
     assert len(events) == 1
     assert events[0].response_chars is None
 
-    with DiagnosticRun(tmp_path / "llm-stream") as recorder:
+    with DiagnosticRecorder(tmp_path / "llm-stream") as recorder:
         observed = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,
@@ -1116,7 +1116,7 @@ async def test_stream_diagnostics_buffer_only_when_recorder_enabled(
 async def test_structured_diagnostics_capture_request_and_validated_result(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1139,7 +1139,7 @@ async def test_structured_diagnostics_capture_request_and_validated_result(
             },
         )
 
-    with DiagnosticRun(tmp_path / "llm-structured") as recorder:
+    with DiagnosticRecorder(tmp_path / "llm-structured") as recorder:
         gateway = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,
@@ -1203,10 +1203,10 @@ def _assert_one_terminal(
 async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
-    with DiagnosticRun(tmp_path / "unexpected") as recorder:
+    with DiagnosticRecorder(tmp_path / "unexpected") as recorder:
         inner = _client(
             httpx.MockTransport(lambda request: httpx.Response(500)),
             recorder=recorder,
@@ -1250,10 +1250,10 @@ async def test_unexpected_provider_error_records_provider_and_gateway_terminals(
 async def test_hostile_str_provider_error_records_safe_message_structured(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
-    with DiagnosticRun(tmp_path / "hostile-structured") as recorder:
+    with DiagnosticRecorder(tmp_path / "hostile-structured") as recorder:
         inner = _client(
             httpx.MockTransport(lambda request: httpx.Response(500)),
             recorder=recorder,
@@ -1292,10 +1292,10 @@ async def test_hostile_str_provider_error_records_safe_message_structured(
 async def test_hostile_str_provider_error_records_safe_message_stream(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
-    with DiagnosticRun(tmp_path / "hostile-stream") as recorder:
+    with DiagnosticRecorder(tmp_path / "hostile-stream") as recorder:
         inner = _client(
             httpx.MockTransport(lambda request: httpx.Response(500)),
             recorder=recorder,
@@ -1332,7 +1332,7 @@ async def test_hostile_str_provider_error_records_safe_message_stream(
 
 
 async def test_stream_early_aclose_emits_abandoned_terminals(tmp_path: Path) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     chunk = json.dumps(
@@ -1362,7 +1362,7 @@ async def test_stream_early_aclose_emits_abandoned_terminals(tmp_path: Path) -> 
             headers={"content-type": "text/event-stream"},
         )
 
-    with DiagnosticRun(tmp_path / "abandoned") as recorder:
+    with DiagnosticRecorder(tmp_path / "abandoned") as recorder:
         gateway = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,
@@ -1398,7 +1398,7 @@ async def test_stream_early_aclose_closes_sdk_stream(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1442,7 +1442,7 @@ async def test_stream_early_aclose_closes_sdk_stream(
         # Not used: we monkeypatch the SDK create() to return FakeSDKStream.
         return httpx.Response(500, content=b"unused")
 
-    with DiagnosticRun(tmp_path / "sdk-close") as recorder:
+    with DiagnosticRecorder(tmp_path / "sdk-close") as recorder:
         gateway = _client(httpx.MockTransport(handler), recorder=recorder)
         monkeypatch.setattr(
             gateway._client.chat.completions,  # type: ignore[attr-defined]
@@ -1479,7 +1479,7 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1519,7 +1519,7 @@ async def test_sdk_stream_close_cancellederror_is_swallowed_and_recorded(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"unused")
 
-    with DiagnosticRun(tmp_path / "sdk-close-cancel") as recorder:
+    with DiagnosticRecorder(tmp_path / "sdk-close-cancel") as recorder:
         gateway = _client(httpx.MockTransport(handler), recorder=recorder)
         monkeypatch.setattr(
             gateway._client.chat.completions,  # type: ignore[attr-defined]
@@ -1554,7 +1554,7 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1599,7 +1599,7 @@ async def test_stream_task_cancellation_emits_cancelled_terminals(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"unused")
 
-    with DiagnosticRun(tmp_path / "cancel-terminals") as recorder:
+    with DiagnosticRecorder(tmp_path / "cancel-terminals") as recorder:
         gateway = _client(httpx.MockTransport(handler), recorder=recorder)
         monkeypatch.setattr(
             gateway._client.chat.completions,  # type: ignore[attr-defined]
@@ -1644,7 +1644,7 @@ async def test_stream_preserves_stream_cancel_message_over_close_cancel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1695,7 +1695,7 @@ async def test_stream_preserves_stream_cancel_message_over_close_cancel(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"unused")
 
-    with DiagnosticRun(tmp_path / "preserve-stream-cancel") as recorder:
+    with DiagnosticRecorder(tmp_path / "preserve-stream-cancel") as recorder:
         gateway = _client(httpx.MockTransport(handler), recorder=recorder)
         monkeypatch.setattr(
             gateway._client.chat.completions,  # type: ignore[attr-defined]
@@ -1752,7 +1752,7 @@ async def test_stream_cancel_with_close_cancellederror_keeps_single_terminals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1796,7 +1796,7 @@ async def test_stream_cancel_with_close_cancellederror_keeps_single_terminals(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"unused")
 
-    with DiagnosticRun(tmp_path / "cancel-plus-close-cancel") as recorder:
+    with DiagnosticRecorder(tmp_path / "cancel-plus-close-cancel") as recorder:
         gateway = _client(httpx.MockTransport(handler), recorder=recorder)
         monkeypatch.setattr(
             gateway._client.chat.completions,  # type: ignore[attr-defined]
@@ -1918,7 +1918,7 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     class _Delta:
@@ -1968,7 +1968,7 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
 
     attempts: list[ProviderAttemptEvent] = []
 
-    with DiagnosticRun(tmp_path / "early-aclose-cancel") as recorder:
+    with DiagnosticRecorder(tmp_path / "early-aclose-cancel") as recorder:
         gateway = _client(
             httpx.MockTransport(handler),
             on_provider_attempt=attempts.append,
@@ -2049,7 +2049,7 @@ async def test_early_aclose_ambient_cancel_emits_abandoned_terminals(
 async def test_structured_validation_failure_then_correction_success(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     calls = {"n": 0}
@@ -2072,7 +2072,7 @@ async def test_structured_validation_failure_then_correction_success(
             },
         )
 
-    with DiagnosticRun(tmp_path / "correction-ok") as recorder:
+    with DiagnosticRecorder(tmp_path / "correction-ok") as recorder:
         gateway = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,
@@ -2100,7 +2100,7 @@ async def test_structured_validation_failure_then_correction_success(
 
 
 async def test_structured_double_validation_failure(tmp_path: Path) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2119,7 +2119,7 @@ async def test_structured_double_validation_failure(tmp_path: Path) -> None:
             },
         )
 
-    with DiagnosticRun(tmp_path / "correction-fail") as recorder:
+    with DiagnosticRecorder(tmp_path / "correction-fail") as recorder:
         gateway = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,
@@ -2148,7 +2148,7 @@ async def test_structured_double_validation_failure(tmp_path: Path) -> None:
 async def test_stream_aclose_records_consumer_closed_cancellation(
     tmp_path: Path,
 ) -> None:
-    from jung.diagnostics import DiagnosticRun
+    from jung.diagnostics import DiagnosticRecorder
     from jung.llm.tracing import ObservedLLMGateway
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2164,7 +2164,7 @@ async def test_stream_aclose_records_consumer_closed_cancellation(
             ),
         )
 
-    with DiagnosticRun(tmp_path / "stream-aclose") as recorder:
+    with DiagnosticRecorder(tmp_path / "stream-aclose") as recorder:
         gateway = ObservedLLMGateway(
             _client(httpx.MockTransport(handler), recorder=recorder),
             recorder=recorder,

@@ -248,9 +248,10 @@ record schema-v5 events directly into an opt-in `DiagnosticRecorder`.
 Chat correlation uses `client_message_id` (no `turn_id` or `task` context field).
 
 Ordinary logs may include safe LLM metadata when enabled. Opt-in
-`JUNG_DEBUG_RUN_DIR` writes a sensitive correlated debug bundle (`manifest.json`,
-`trace.jsonl`, durable `state.json` / `transcript.md`, and conditional
-`failure_summary.md`) for local AI-agent debugging. See
+`JUNG_DEBUG_RUN_DIR` captures two primary evidence sources for local debugging:
+ordered `trace.jsonl` for runtime/LLM activity, and a shutdown-time SQLite
+snapshot for durable application state. Diagnostics do not maintain derived
+workflow, transcript, or failure projections. See
 [safety-and-data.md](safety-and-data.md).
 
 Minimum useful ordinary-log records:

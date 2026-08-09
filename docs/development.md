@@ -131,13 +131,17 @@ for suite ownership and hard-versus-diagnostic semantics.
 ## Diagnostics
 
 - Ordinary logs under the process logger / `./logs` as configured
-- Opt-in debug bundles via `JUNG_DEBUG_RUN_DIR` (`manifest.json`, `trace.jsonl`,
-  `state.json`, `transcript.md`, conditional `failure_summary.md`) — see
+- Opt-in diagnostic capture via `JUNG_DEBUG_RUN_DIR` — see
   [safety-and-data.md](safety-and-data.md)
-- Export a SQLite snapshot into an existing run directory:
 
 ```bash
-jung-debug-export --run-dir "$JUNG_DEBUG_RUN_DIR" --database data/jung.db
+JUNG_DEBUG_RUN_DIR=./logs/debug-runs/example make run-api
+```
+
+After shutdown, inspect primary evidence:
+
+```bash
+sqlite3 ./logs/debug-runs/example/db_snapshot.sqlite
 ```
 
 - Database reset and data erasure — see [safety-and-data.md](safety-and-data.md)

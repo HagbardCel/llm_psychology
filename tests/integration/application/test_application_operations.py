@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from jung.diagnostics import DiagnosticRun
+from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import (
     EndSession,
     SendMessage,
@@ -644,7 +644,7 @@ async def test_final_intake_spawn_failure_keeps_completion_and_pending_operation
 
     monkeypatch.setattr(OperationRuntime, "_spawn_operation_task", boom_spawn)
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         async with build_test_application(
             store,
             fake,

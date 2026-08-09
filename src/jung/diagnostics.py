@@ -1,9 +1,12 @@
-"""Lean local diagnostic logging for explicit debug runs.
+"""Lean local diagnostic capture for explicit debug runs.
 
-Sensitive prompts, responses, and related artifacts are written only when a
-``DiagnosticRun`` is constructed for ``JUNG_DEBUG_RUN_DIR``. Ordinary console
+When ``JUNG_DEBUG_RUN_DIR`` is set, composition constructs a
+``DiagnosticRecorder`` that writes an ordered ``trace.jsonl``. After
+successful database initialization, composition also attempts a full
+SQLite ``db_snapshot.sqlite`` after runtime cleanup. Ordinary console
 logging remains separate. Capture is best-effort after successful startup:
-individual write failures never change application outcome.
+individual write failures and ordinary snapshot errors never change
+application outcome.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -262,19 +266,45 @@ def open_private_file(path: Path, *, mode: str = "w") -> Any:
     return handle
 
 
-def write_private_text(path: Path, text: str) -> None:
-    """Create a new ``0600`` text file (fails if it already exists)."""
-    path = Path(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+def snapshot_database(source: Path, destination: Path) -> None:
+    """Copy ``source`` into ``destination`` via SQLite's backup API.
+
+    Destination must not already exist. Partial destinations are removed on any
+    escaping ``BaseException`` (including ``KeyboardInterrupt`` / ``SystemExit``).
+    """
+    source = Path(source)
+    destination = Path(destination)
+    if not source.is_file():
+        raise FileNotFoundError(f"database does not exist: {source}")
+    if destination.exists():
+        raise FileExistsError(f"destination already exists: {destination}")
+
+    destination_created = False
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-    except Exception:
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        destination_created = True
+        os.close(fd)
+
+        uri = source.resolve().as_uri() + "?mode=ro"
+        source_conn = sqlite3.connect(uri, uri=True)
         try:
-            path.unlink(missing_ok=True)
+            dest_conn = sqlite3.connect(destination)
+            try:
+                source_conn.backup(dest_conn)
+            finally:
+                dest_conn.close()
+        finally:
+            source_conn.close()
+        try:
+            os.chmod(destination, 0o600)
         except OSError:
             pass
+    except BaseException:
+        if destination_created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
 
 
@@ -283,9 +313,8 @@ class DiagnosticRecorder:
 
     def __init__(
         self,
-        run_dir: Path,
+        run_dir: str | Path,
         *,
-        metadata: Mapping[str, Any] | None = None,
         secret_values: Sequence[str] = (),
         run_id: UUID | None = None,
     ) -> None:
@@ -298,7 +327,6 @@ class DiagnosticRecorder:
         self._sequence = 0
         self._id_counters: dict[str, int] = {}
         self._started_monotonic = time.perf_counter()
-        self._run_failed = False
         self._write_failed = False
         self._warned_write_failure = False
         self._trace_file: Any = None
@@ -312,11 +340,25 @@ class DiagnosticRecorder:
 
         trace_path = self._run_dir / "trace.jsonl"
         self._trace_file = open_private_file(trace_path, mode="a")
+        self._write_line_or_raise("diagnostics.start", {})
 
-        start_data: dict[str, Any] = {}
-        if metadata:
-            start_data.update(dict(metadata))
-        self._write_line_or_raise("diagnostics.start", start_data)
+    def __enter__(self) -> DiagnosticRecorder:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> bool:
+        try:
+            self.close(primary_exception=exc)
+        except Exception as finalize_exc:
+            sys.stderr.write(
+                f"jung diagnostics: finalize failed: "
+                f"{type(finalize_exc).__name__}: {finalize_exc}\n"
+            )
+        return False
 
     @property
     def run_dir(self) -> Path:
@@ -327,26 +369,14 @@ class DiagnosticRecorder:
         return self._run_id
 
     @property
-    def run_failed(self) -> bool:
-        return self._run_failed
-
-    @property
     def write_failed(self) -> bool:
         return self._write_failed
-
-    @property
-    def secret_values(self) -> tuple[str, ...]:
-        return self._secret_values
 
     def next_id(self, prefix: str) -> str:
         with self._lock:
             count = self._id_counters.get(prefix, 0) + 1
             self._id_counters[prefix] = count
             return f"{prefix}-{count}"
-
-    def mark_run_failed(self) -> None:
-        with self._lock:
-            self._run_failed = True
 
     def record(self, kind: str, data: Mapping[str, Any] | None = None) -> None:
         """Record an event without propagating write failures."""
@@ -361,8 +391,7 @@ class DiagnosticRecorder:
             if self._closed:
                 return
             self._closed = True
-            run_failed = self._run_failed or primary_exception is not None
-            status = "failed" if run_failed else "success"
+            status = "failed" if primary_exception is not None else "success"
             end_data: dict[str, object] = {"status": status}
             if primary_exception is not None:
                 end_data["error_type"] = type(primary_exception).__name__
@@ -493,48 +522,3 @@ class DiagnosticRecorder:
             return
         self._warned_write_failure = True
         sys.stderr.write(f"jung diagnostics: {reason}\n")
-
-
-class DiagnosticRun:
-    """Owns recorder lifetime for one opt-in debug run."""
-
-    def __init__(
-        self,
-        run_dir: str | Path,
-        *,
-        metadata: Mapping[str, Any] | None = None,
-        secret_values: Sequence[str] = (),
-        run_id: UUID | None = None,
-    ) -> None:
-        self._run_dir = Path(run_dir)
-        self._metadata = metadata
-        self._secret_values = secret_values
-        self._run_id = run_id
-        self._recorder: DiagnosticRecorder | None = None
-
-    def __enter__(self) -> DiagnosticRecorder:
-        self._recorder = DiagnosticRecorder(
-            self._run_dir,
-            metadata=self._metadata,
-            secret_values=self._secret_values,
-            run_id=self._run_id,
-        )
-        return self._recorder
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: Any,
-    ) -> bool:
-        recorder = self._recorder
-        if recorder is None:
-            return False
-        try:
-            recorder.close(primary_exception=exc)
-        except Exception as finalize_exc:
-            sys.stderr.write(
-                f"jung diagnostics: finalize failed: "
-                f"{type(finalize_exc).__name__}: {finalize_exc}\n"
-            )
-        return False

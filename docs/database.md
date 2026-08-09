@@ -111,5 +111,3 @@ Initialization behavior:
 `workflow.derive_stage(...)` computes the current stage. Impossible present-state
 combinations (for example open session + current operation, incomplete profile with
 progress, orphan plans without `current_plan_id`) raise `InvariantViolation`.
-Diagnostic debug bundles may record `workflow.integrity_error` instead of failing
-the entire state projection.
