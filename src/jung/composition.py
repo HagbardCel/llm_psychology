@@ -15,15 +15,10 @@ from uuid import UUID, uuid4
 from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
 from jung.config import ApplicationSettings
-from jung.debug_bundle import (
-    build_manifest_llm_info,
-    finalize_debug_bundle,
-    write_manifest,
-)
 from jung.diagnostics import (
     DiagnosticRecorder,
-    DiagnosticRun,
     _safe_exception_message,
+    snapshot_database,
 )
 from jung.llm.gateway import AdapterConfig, LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.openai_compatible import OpenAICompatibleLLM
@@ -248,7 +243,7 @@ async def application_context(
 ) -> AsyncIterator[ApplicationRuntime]:
     run_cm: Any
     if settings.debug_run_dir is not None:
-        run_cm = DiagnosticRun(
+        run_cm = DiagnosticRecorder(
             settings.debug_run_dir,
             secret_values=_secret_values(settings),
         )
@@ -257,6 +252,7 @@ async def application_context(
 
     with run_cm as recorder:
         store: SQLiteStore | None = None
+        store_initialized = False
         llm: OpenAICompatibleLLM | None = None
         application: TherapyApplication | None = None
         primary: _ExcInfo | None = None
@@ -264,17 +260,10 @@ async def application_context(
 
         try:
             policies = build_model_policies(settings.llm)
-            if recorder is not None:
-                write_manifest(
-                    recorder,
-                    llm=build_manifest_llm_info(
-                        provider_url=settings.llm.base_url,
-                        policies=policies,
-                    ),
-                )
             _preflight_json_schema_policies(policies)
             store = SQLiteStore(settings.database_path)
             await asyncio.to_thread(store.initialize)
+            store_initialized = True
             adapter_config = AdapterConfig(
                 base_url=settings.llm.base_url,
                 api_key=settings.llm.api_key,
@@ -342,15 +331,29 @@ async def application_context(
                 cleanup_error=cleanup_error,
                 shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
             )
-            if recorder is not None and store is not None:
-                finalize_debug_bundle(
-                    recorder,
-                    store,
-                    primary_exception=primary[0] if primary is not None else None,
-                    cleanup_exception=(
-                        cleanup_error[0] if cleanup_error is not None else None
-                    ),
-                )
+            if recorder is not None and store is not None and store_initialized:
+                try:
+                    # Synchronous by design: shutdown-only; avoid to_thread
+                    # cancellation complexity.
+                    snapshot_database(
+                        store.database_path,
+                        recorder.run_dir / "db_snapshot.sqlite",
+                    )
+                except Exception as exc:
+                    message = _safe_exception_message(exc)
+                    recorder.record(
+                        "runtime.error",
+                        {
+                            "phase": "diagnostic_snapshot",
+                            "error_type": type(exc).__name__,
+                            "error_message": message,
+                        },
+                    )
+                    logger.warning(
+                        "diagnostic snapshot failed error_type=%s error=%s",
+                        type(exc).__name__,
+                        message,
+                    )
 
         if primary is not None:
             exc, tb = primary

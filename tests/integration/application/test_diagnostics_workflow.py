@@ -13,7 +13,7 @@ import pytest
 
 from jung.composition import _record_cleanup_failure
 from jung.diagnostics import SCHEMA_VERSION as DIAGNOSTIC_SCHEMA_VERSION
-from jung.diagnostics import DiagnosticRun
+from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import SelectStyle, SendMessage, UpdateProfile
 from jung.domain.errors import InvalidCommand, InvariantViolation
 from jung.domain.models import (
@@ -52,7 +52,7 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         store = SQLiteStore(db_path)
         store.initialize()
         fake = FakeLLM(
@@ -125,7 +125,7 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         store = SQLiteStore(db_path)
         store.initialize()
         fake = FakeLLM(
@@ -173,7 +173,7 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
 async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         store = SQLiteStore(db_path)
         store.initialize()
         fake = FakeLLM([])
@@ -205,7 +205,7 @@ async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
 async def test_incomplete_intake_profile_update_is_rejected(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         store = SQLiteStore(db_path)
         store.initialize()
         fake = FakeLLM([])
@@ -248,7 +248,7 @@ async def test_dead_trace_cleanup_still_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     run_dir = tmp_path / "debug-run"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         real_write = recorder._trace_file.write
 
         def flaky(text: str) -> int:
@@ -294,7 +294,7 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
     store.mark_operation_running(op_id, now=now)
 
     run_dir = tmp_path / "debug-run"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         async with build_test_application(
             store, FakeLLM([]), recorder=recorder, recover=True
         ) as runtime:
@@ -322,7 +322,7 @@ async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
     run_dir = tmp_path / "debug-run"
     db_path = tmp_path / "app.db"
     client_message_id = uuid4()
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         store = SQLiteStore(db_path)
         store.initialize()
         failing = FakeLLM(
@@ -421,7 +421,7 @@ async def test_select_style_invariant_records_runtime_error(
     )
     assert store.load_snapshot_facts().stage == Stage.STYLE_SELECTION
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         async with build_test_application(
             store, FakeLLM([]), recorder=recorder, recover=False
         ) as runtime:
@@ -477,7 +477,7 @@ async def test_retry_operation_invariant_records_runtime_error(
         now=now,
     )
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         async with build_test_application(
             store, FakeLLM([]), recorder=recorder, recover=False
         ) as runtime:
@@ -539,7 +539,7 @@ async def test_store_drained_failure_records_runtime_error(
 
     monkeypatch.setattr(store_calls_module, "drain_cancelled_task", observed_drain)
 
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         async with build_test_application(
             store, FakeLLM([]), recorder=recorder, recover=False
         ) as runtime:

@@ -3,25 +3,29 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import BaseModel
 
+import jung.diagnostics as diagnostics
 from jung.composition import application_context
 from jung.config import ApplicationSettings
 from jung.diagnostics import (
     DiagnosticRecorder,
-    DiagnosticRun,
     diagnostic_context,
     sanitize_url,
     sanitize_value,
+    snapshot_database,
 )
+from jung.domain.models import Profile
 from jung.llm.gateway import LLMSettings
+from jung.persistence.sqlite_store import SQLiteStore
 
 
 class _Kind(Enum):
@@ -98,7 +102,7 @@ def test_sanitize_value_redacts_short_caller_designated_secrets() -> None:
 
 def test_recorder_redacts_short_configured_secrets(tmp_path: Path) -> None:
     secret = "abc123"
-    with DiagnosticRun(tmp_path / "run", secret_values=[secret]) as recorder:
+    with DiagnosticRecorder(tmp_path / "run", secret_values=[secret]) as recorder:
         recorder.record(
             "operation.failed",
             {"error_message": f"authentication failed for {secret}"},
@@ -154,7 +158,7 @@ def test_diagnostic_context_nested_merge_and_restore() -> None:
 
 def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         with diagnostic_context(session_id="s1", operation_id="o1"):
             recorder.record("llm.provider.request", {"attempt": "initial"})
     lines = _trace_lines(run_dir)
@@ -174,19 +178,10 @@ def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     assert event["data"]["attempt"] == "initial"
 
 
-def test_mark_run_failed_sets_end_status_without_raising(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    with DiagnosticRun(run_dir) as recorder:
-        recorder.mark_run_failed()
-    end = _trace_lines(run_dir)[-1]
-    assert end["kind"] == "diagnostics.end"
-    assert end["data"] == {"status": "failed"}
-
-
 def test_top_level_exception_records_error_and_propagates(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     with pytest.raises(RuntimeError, match="boom"):
-        with DiagnosticRun(run_dir) as recorder:
+        with DiagnosticRecorder(run_dir) as recorder:
             recorder.record("test.event", {"value": 1})
             raise RuntimeError("boom")
     end = _trace_lines(run_dir)[-1]
@@ -208,7 +203,7 @@ def test_diagnostics_start_write_failure_fails_startup(
 
     monkeypatch.setattr(DiagnosticRecorder, "_write_line", boom_write)
     with pytest.raises(OSError, match="disk full"):
-        DiagnosticRun(run_dir).__enter__()
+        DiagnosticRecorder(run_dir)
 
 
 def test_write_failure_latches_and_warns_once(
@@ -217,7 +212,7 @@ def test_write_failure_latches_and_warns_once(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     run_dir = tmp_path / "run"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         real_write = recorder._trace_file.write
 
         def flaky_write(text: str) -> int:
@@ -235,7 +230,7 @@ def test_write_failure_latches_and_warns_once(
 
 def test_thread_safe_sequence(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
 
         def worker(n: int) -> None:
             for i in range(20):
@@ -334,7 +329,7 @@ def test_concurrent_record_cannot_append_after_diagnostics_end(
 
 def test_secure_permissions(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    with DiagnosticRun(run_dir):
+    with DiagnosticRecorder(run_dir):
         pass
     assert oct(run_dir.stat().st_mode & 0o777) == "0o700"
     assert oct((run_dir / "trace.jsonl").stat().st_mode & 0o777) == "0o600"
@@ -344,7 +339,7 @@ def test_existing_dir_fails_startup(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     with pytest.raises(FileExistsError):
-        with DiagnosticRun(run_dir):
+        with DiagnosticRecorder(run_dir):
             pass
 
 
@@ -370,3 +365,74 @@ async def test_disabled_mode_creates_no_artifacts(tmp_path: Path) -> None:
         assert not hasattr(runtime, "recorder")
         await runtime.application.get_snapshot()
     assert list(tmp_path.glob("**/trace.jsonl")) == []
+
+
+def test_snapshot_database_handles_reserved_path_chars(tmp_path: Path) -> None:
+    db_dir = tmp_path / "db with spaces?#frag"
+    db_dir.mkdir()
+    db_path = db_dir / "jung.db"
+    store = SQLiteStore(db_path)
+    store.initialize()
+    store.update_profile(
+        Profile(name="Alex", primary_language="English"),
+        intake_session_id=uuid4(),
+        now=datetime.now(UTC),
+    )
+    destination = tmp_path / "db_snapshot.sqlite"
+    snapshot_database(db_path, destination)
+    assert destination.exists()
+    conn = sqlite3.connect(destination)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+    assert len(tables) > 0
+
+
+def test_snapshot_database_refuses_overwrite(tmp_path: Path) -> None:
+    db_path = tmp_path / "jung.db"
+    SQLiteStore(db_path).initialize()
+    destination = tmp_path / "db_snapshot.sqlite"
+    snapshot_database(db_path, destination)
+    with pytest.raises(FileExistsError):
+        snapshot_database(db_path, destination)
+
+
+def test_snapshot_database_cleans_up_after_post_create_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "jung.db"
+    SQLiteStore(db_path).initialize()
+    destination = tmp_path / "db_snapshot.sqlite"
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("forced connect failure")
+
+    monkeypatch.setattr(diagnostics.sqlite3, "connect", boom)
+    with pytest.raises(sqlite3.OperationalError, match="forced connect failure"):
+        snapshot_database(db_path, destination)
+    assert not destination.exists()
+
+
+def test_snapshot_database_cleans_up_when_close_fails_after_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "jung.db"
+    SQLiteStore(db_path).initialize()
+    destination = tmp_path / "db_snapshot.sqlite"
+
+    real_close = diagnostics.os.close
+
+    def close_then_fail(fd: int) -> None:
+        real_close(fd)
+        raise OSError("forced close failure")
+
+    monkeypatch.setattr(diagnostics.os, "close", close_then_fail)
+    with pytest.raises(OSError, match="forced close failure"):
+        snapshot_database(db_path, destination)
+    assert not destination.exists()

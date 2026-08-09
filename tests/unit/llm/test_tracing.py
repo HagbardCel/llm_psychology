@@ -12,7 +12,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 from pydantic import BaseModel
 
-from jung.diagnostics import DiagnosticRun
+from jung.diagnostics import DiagnosticRecorder
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import (
     FailureExpectation,
@@ -251,7 +251,7 @@ async def test_observed_gateway_swallow_close_method_cancellederror_and_records_
     )
 
     run_dir = tmp_path / "gateway-close-cancel"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         gateway = ObservedLLMGateway(Inner(), recorder=recorder)
         chunks: list[str] = []
         async for chunk in gateway.stream_text(
@@ -311,7 +311,7 @@ async def test_observed_gateway_ambient_cancel_during_close_drains_then_propagat
     )
 
     run_dir = tmp_path / "gateway-close-ambient-cancel"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         gateway = ObservedLLMGateway(Inner(), recorder=recorder)
 
         async def consume() -> None:
@@ -387,7 +387,7 @@ async def test_observed_gateway_preserves_stream_cancel_message_over_close_cance
     )
 
     run_dir = tmp_path / "gateway-preserve-stream-cancel"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         gateway = ObservedLLMGateway(Inner(), recorder=recorder)
 
         async def consume() -> None:
@@ -458,7 +458,7 @@ async def test_observed_gateway_preserves_cancel_when_close_also_raises_cancelle
     )
 
     run_dir = tmp_path / "gateway-cancel-plus-close-cancel"
-    with DiagnosticRun(run_dir) as recorder:
+    with DiagnosticRecorder(run_dir) as recorder:
         gateway = ObservedLLMGateway(Inner(), recorder=recorder)
 
         async def consume() -> None:
