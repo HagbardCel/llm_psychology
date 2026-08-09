@@ -10,7 +10,7 @@ import pytest
 
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.errors import Busy, InvalidCommand
-from jung.domain.models import MessageRole, Profile, Stage
+from jung.domain.models import CommandName, MessageRole, Profile, Stage
 from jung.domain.results import ChatCompleted, ChatFailed, ChatStreamResult, ChatToken
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import (
@@ -514,3 +514,5 @@ async def test_post_accept_busy_becomes_chat_failed_internal_error(
         assert "workflow.command.rejected" not in kinds
 
         store.complete_chat_response = original_complete  # type: ignore[method-assign]
+        snapshot = await runtime.application.get_snapshot()
+        assert CommandName.SEND_MESSAGE in snapshot.available_commands
