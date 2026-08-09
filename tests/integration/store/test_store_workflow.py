@@ -197,6 +197,27 @@ def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
     assert plan.source_session_id == ready.intake_session_id
 
 
+def test_initial_plan_stores_sql_null_for_briefing_and_supersedes(
+    store: SQLiteStore,
+) -> None:
+    ready = advance_to_ready(store)
+    plan = store.get_current_plan()
+    assert plan is not None
+    assert plan.session_briefing is None
+    assert plan.supersedes_plan_id is None
+    with sqlite3.connect(store.database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT session_briefing_json IS NULL, supersedes_plan_id IS NULL
+            FROM plans
+            WHERE id = ?
+            """,
+            (str(plan.id),),
+        ).fetchone()
+    assert row == (1, 1)
+    assert ready.intake_session_id is not None
+
+
 def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()

@@ -222,6 +222,9 @@ def test_intake_record_on_therapy_session_raises_invariant(
             intake_record={"schema_version": 1},
             now=now,
         )
+    user, assistant = store.get_messages_by_client_id(therapy_id, client_message_id)
+    assert user is not None
+    assert assistant is None
 
 
 def test_duplicate_assistant_completion_raises(store: SQLiteStore) -> None:
