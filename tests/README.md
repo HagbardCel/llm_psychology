@@ -1,9 +1,8 @@
 # Jung Test Suite
 
-Supported tests for the asyncio Jung runtime. Native `uv` is the normal
-developer workflow; Docker remains available for reproducible CI/runtime images.
-General developer workflow and release commands are documented in
-[`docs/development.md`](../docs/development.md).
+Supported tests for the asyncio Jung runtime. Native `uv` is the supported
+developer workflow. General developer workflow and release commands are
+documented in [`docs/development.md`](../docs/development.md).
 
 ## Layout
 
@@ -22,7 +21,6 @@ tests/
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
 │   ├── client/              # Console rendering, one-shot chat stream, correlation
 │   ├── api/                 # Contracts, error mapping, one-shot WS adapter
-│   ├── tooling/             # Repo tooling (docs metadata validation)
 │   └── smoke/               # Unit tests for the smoke helpers themselves
 ├── integration/             # Real SQLite, real ASGI app, real client transport
 │   ├── store/               # SQLite persistence semantics
@@ -79,7 +77,7 @@ survived a round-trip through SQLite, or reached the terminal renderer.
 ## Real-model suites: smoke, evals, eval-report
 
 Three different questions, three different owners. None of them run in
-`make test` or `make finalization-check`.
+`make test` or `make check`.
 
 | Surface | Question | Failure means |
 | --- | --- | --- |

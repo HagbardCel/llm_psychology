@@ -1,9 +1,0 @@
-# Runtime build-context allowlist
-*
-
-!pyproject.toml
-!uv.lock
-!README.md
-
-!src/
-!src/**

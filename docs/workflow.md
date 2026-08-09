@@ -1,11 +1,3 @@
----
-owner: engineering
-status: active
-last_reviewed: 2026-08-08
-review_cycle_days: 30
-source_of_truth_for: Supported workflow, recovery, and command-conflict semantics
----
-
 # Workflow Specification
 
 > This document governs the supported Jung workflow runtime. Wire DTO shapes and

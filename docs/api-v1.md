@@ -1,11 +1,3 @@
----
-owner: engineering
-status: active
-last_reviewed: 2026-08-08
-review_cycle_days: 30
-source_of_truth_for: Supported /api/v1 HTTP semantics and WebSocket wire contract
----
-
 # API v1 Contract
 
 > This document governs the supported `/api/v1` runtime contract.

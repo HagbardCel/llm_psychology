@@ -2,7 +2,7 @@
 
 Opt-in suites that run against a configured local (or otherwise
 OpenAI-compatible) model. Neither surface runs in `make test` or
-`make finalization-check`. General developer workflow and release commands are
+`make check`. General developer workflow and release commands are
 documented in [`docs/development.md`](../docs/development.md).
 
 ```
