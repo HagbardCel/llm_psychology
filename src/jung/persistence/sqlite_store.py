@@ -72,6 +72,40 @@ _SESSION_SELECT = """
     FROM sessions
 """
 
+_PLAN_COLUMNS = """
+    id, version, selected_style, focus, themes_json, goals_json,
+    current_progress, planned_interventions_json,
+    revision_recommendations_json, session_briefing_json,
+    source_session_id, supersedes_plan_id, created_at
+"""
+
+_PLAN_SELECT = f"""
+    SELECT {_PLAN_COLUMNS.strip()}
+    FROM plans
+"""
+
+_CURRENT_PLAN_SELECT = """
+    SELECT p.id, p.version, p.selected_style, p.focus, p.themes_json,
+           p.goals_json, p.current_progress, p.planned_interventions_json,
+           p.revision_recommendations_json, p.session_briefing_json,
+           p.source_session_id, p.supersedes_plan_id, p.created_at
+    FROM profile pr
+    JOIN plans p ON p.id = pr.current_plan_id
+    WHERE pr.singleton_id = 1
+"""
+
+_OPERATION_SELECT = """
+    SELECT id, kind, status, source_session_id, attempt, result_json,
+           error_code, error_message, retryable, created_at, updated_at,
+           started_at, completed_at
+    FROM operations
+"""
+
+_MESSAGE_SELECT = """
+    SELECT id, session_id, sequence, role, content, client_message_id, created_at
+    FROM messages
+"""
+
 
 class SQLiteStore:
     """Synchronous use-case store with one connection per operation."""
@@ -129,20 +163,7 @@ class SQLiteStore:
 
     def get_current_plan(self) -> Plan | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT p.id, p.version, p.selected_style, p.focus, p.themes_json,
-                       p.goals_json, p.current_progress, p.planned_interventions_json,
-                       p.revision_recommendations_json, p.session_briefing_json,
-                       p.source_session_id, p.supersedes_plan_id, p.created_at
-                FROM profile pr
-                JOIN plans p ON p.id = pr.current_plan_id
-                WHERE pr.singleton_id = 1
-                """
-            ).fetchone()
-            if row is None:
-                return None
-            return sql.row_to_plan(row)
+            return self._load_current_plan(conn)
 
     def list_sessions(self) -> list[Session]:
         with self._connect() as conn:
@@ -162,10 +183,8 @@ class SQLiteStore:
     def list_messages(self, session_id: UUID) -> list[Message]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT id, session_id, sequence, role, content, client_message_id,
-                       created_at
-                FROM messages
+                f"""
+                {_MESSAGE_SELECT}
                 WHERE session_id = ?
                 ORDER BY sequence ASC
                 """,
@@ -182,11 +201,8 @@ class SQLiteStore:
     def get_current_operation(self) -> Operation | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, status, source_session_id, attempt, result_json,
-                       error_code, error_message, retryable, created_at, updated_at,
-                       started_at, completed_at
-                FROM operations
+                f"""
+                {_OPERATION_SELECT}
                 WHERE status IN ('pending', 'running', 'failed')
                 ORDER BY created_at DESC
                 LIMIT 1
@@ -197,12 +213,7 @@ class SQLiteStore:
     def get_operation(self, operation_id: UUID) -> Operation | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, status, source_session_id, attempt, result_json,
-                       error_code, error_message, retryable, created_at, updated_at,
-                       started_at, completed_at
-                FROM operations WHERE id = ?
-                """,
+                f"{_OPERATION_SELECT} WHERE id = ?",
                 (str(operation_id),),
             ).fetchone()
             return sql.row_to_operation(row) if row else None
@@ -273,11 +284,8 @@ class SQLiteStore:
     def get_latest_completed_operation(self, kind: OperationKind) -> Operation | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT id, kind, status, source_session_id, attempt, result_json,
-                       error_code, error_message, retryable, created_at, updated_at,
-                       started_at, completed_at
-                FROM operations
+                f"""
+                {_OPERATION_SELECT}
                 WHERE kind = ? AND status = ?
                 ORDER BY completed_at DESC
                 LIMIT 1
@@ -308,22 +316,7 @@ class SQLiteStore:
             for row in rows:
                 if row[0] not in plan_ids:
                     plan_ids.append(row[0])
-            if not plan_ids:
-                return []
-            placeholders = ",".join("?" for _ in plan_ids)
-            plan_rows = conn.execute(
-                f"""
-                SELECT id, version, selected_style, focus, themes_json, goals_json,
-                       current_progress, planned_interventions_json,
-                       revision_recommendations_json, session_briefing_json,
-                       source_session_id, supersedes_plan_id, created_at
-                FROM plans
-                WHERE id IN ({placeholders})
-                ORDER BY version ASC, created_at ASC, id ASC
-                """,
-                plan_ids,
-            ).fetchall()
-            return [sql.row_to_plan(row) for row in plan_rows]
+            return [self._load_plan(conn, UUID(plan_id)) for plan_id in plan_ids]
 
     def append_user_message(
         self,
@@ -399,44 +392,41 @@ class SQLiteStore:
             validated_intake_record = sql.validate_json_mapping(
                 intake_record, field_name="intake_record"
             )
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                message = self._insert_assistant_response(
-                    conn,
-                    session_id=session_id,
-                    client_message_id=client_message_id,
-                    assistant_message_id=assistant_message_id,
-                    content=content,
-                    now=now,
-                )
-                if validated_intake_record is not None:
-                    session_row = conn.execute(
-                        f"{_SESSION_SELECT} WHERE id = ?",
-                        (str(session_id),),
-                    ).fetchone()
-                    if session_row is None:
-                        raise NotFound(f"session {session_id}")
-                    if SessionKind(session_row[1]) is not SessionKind.INTAKE:
-                        raise InvariantViolation(
-                            "intake_record is only allowed for intake sessions"
-                        )
-                    conn.execute(
-                        """
-                        UPDATE sessions
-                        SET intake_record_json = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            sql.json_dumps(validated_intake_record),
-                            str(session_id),
-                        ),
+
+        def mutate(conn: sqlite3.Connection) -> Message:
+            message = self._insert_assistant_response(
+                conn,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                assistant_message_id=assistant_message_id,
+                content=content,
+                now=now,
+            )
+            if validated_intake_record is not None:
+                session_row = conn.execute(
+                    f"{_SESSION_SELECT} WHERE id = ?",
+                    (str(session_id),),
+                ).fetchone()
+                if session_row is None:
+                    raise NotFound(f"session {session_id}")
+                if SessionKind(session_row[1]) is not SessionKind.INTAKE:
+                    raise InvariantViolation(
+                        "intake_record is only allowed for intake sessions"
                     )
-                conn.commit()
-                return message
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET intake_record_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        sql.json_dumps(validated_intake_record),
+                        str(session_id),
+                    ),
+                )
+            return message
+
+        return self._write(mutate)
 
     def complete_final_intake_response(
         self,
@@ -537,24 +527,13 @@ class SQLiteStore:
 
         def mutate(conn: sqlite3.Connection) -> Stage:
             self._require_stage(conn, {Stage.ASSESSMENT})
-            cursor = conn.execute(
-                """
-                UPDATE operations
-                SET status = ?, result_json = ?, completed_at = ?, updated_at = ?,
-                    error_code = NULL, error_message = NULL, retryable = 0
-                WHERE id = ? AND status = ? AND kind = ?
-                """,
-                (
-                    OperationStatus.COMPLETE.value,
-                    sql.json_dumps(validated_result),
-                    sql.dt(now),
-                    sql.dt(now),
-                    str(operation_id),
-                    OperationStatus.RUNNING.value,
-                    OperationKind.ASSESSMENT.value,
-                ),
+            self._complete_running_operation(
+                conn,
+                operation_id,
+                kind=OperationKind.ASSESSMENT,
+                result=validated_result,
+                now=now,
             )
-            self._ensure_operation_updated(conn, cursor, operation_id)
             stage = self._load_snapshot_facts(conn).stage
             if stage is not Stage.STYLE_SELECTION:
                 raise InvariantViolation(
@@ -655,29 +634,7 @@ class SQLiteStore:
             ).fetchone()
             if assessment is None or not assessment[0]:
                 raise InvariantViolation("completed assessment result is required")
-            conn.execute(
-                """
-                INSERT INTO plans (
-                    id, version, selected_style, focus, themes_json, goals_json,
-                    current_progress, planned_interventions_json,
-                    revision_recommendations_json, session_briefing_json,
-                    source_session_id, supersedes_plan_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?)
-                """,
-                (
-                    str(plan.id),
-                    plan.version,
-                    plan.selected_style,
-                    plan.focus,
-                    sql.json_dumps(plan.themes),
-                    sql.json_dumps(plan.goals),
-                    plan.current_progress,
-                    sql.json_dumps(plan.planned_interventions),
-                    sql.json_dumps(plan.revision_recommendations),
-                    str(plan.source_session_id),
-                    sql.dt(plan.created_at),
-                ),
-            )
+            self._insert_plan(conn, plan)
             conn.execute(
                 "UPDATE profile SET current_plan_id = ?, updated_at = ? WHERE singleton_id = 1",
                 (str(plan.id), sql.dt(now)),
@@ -776,20 +733,12 @@ class SQLiteStore:
 
         def mutate(conn: sqlite3.Connection) -> Stage:
             self._require_stage(conn, {Stage.POST_SESSION})
-            op_row = conn.execute(
-                """
-                SELECT kind, status, source_session_id
-                FROM operations WHERE id = ?
-                """,
-                (str(operation_id),),
-            ).fetchone()
-            if op_row is None:
-                raise NotFound(f"operation {operation_id}")
-            if op_row[0] != OperationKind.POST_SESSION.value:
+            operation = self._load_operation(conn, operation_id)
+            if operation.kind is not OperationKind.POST_SESSION:
                 raise InvariantViolation("operation must be post_session")
-            if op_row[1] != OperationStatus.RUNNING.value:
+            if operation.status is not OperationStatus.RUNNING:
                 raise InvariantViolation("operation must be running")
-            source_session_id = UUID(op_row[2])
+            source_session_id = operation.source_session_id
             current_plan = self._require_current_plan(conn)
             profile_row = conn.execute(
                 "SELECT derived_profile_json, current_plan_id, updated_at "
@@ -829,93 +778,31 @@ class SQLiteStore:
                     supersedes_plan_id=current_plan.id,
                     created_at=now,
                 )
-                conn.execute(
-                    """
-                    INSERT INTO plans (
-                        id, version, selected_style, focus, themes_json, goals_json,
-                        current_progress, planned_interventions_json,
-                        revision_recommendations_json, session_briefing_json,
-                        source_session_id, supersedes_plan_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(plan.id),
-                        plan.version,
-                        plan.selected_style,
-                        plan.focus,
-                        sql.json_dumps(plan.themes),
-                        sql.json_dumps(plan.goals),
-                        plan.current_progress,
-                        sql.json_dumps(plan.planned_interventions),
-                        sql.json_dumps(plan.revision_recommendations),
-                        sql.json_dumps(plan.session_briefing),
-                        str(plan.source_session_id),
-                        str(plan.supersedes_plan_id),
-                        sql.dt(plan.created_at),
-                    ),
-                )
+                self._insert_plan(conn, plan)
                 result_plan_id = str(plan.id)
                 result_plan_version = plan.version
                 current_plan_id = str(plan.id)
 
-            if profile_changed or plan_changed:
-                if profile_changed and plan_changed:
-                    conn.execute(
-                        """
-                        UPDATE profile
-                        SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
-                        WHERE singleton_id = 1
-                        """,
-                        (
-                            sql.json_dumps(validated_profile),
-                            current_plan_id,
-                            sql.dt(now),
-                        ),
-                    )
-                elif profile_changed:
-                    conn.execute(
-                        """
-                        UPDATE profile
-                        SET derived_profile_json = ?, updated_at = ?
-                        WHERE singleton_id = 1
-                        """,
-                        (
-                            sql.json_dumps(validated_profile),
-                            sql.dt(now),
-                        ),
-                    )
-                else:
-                    conn.execute(
-                        """
-                        UPDATE profile
-                        SET current_plan_id = ?, updated_at = ?
-                        WHERE singleton_id = 1
-                        """,
-                        (current_plan_id, sql.dt(now)),
-                    )
+            self._update_profile_after_post_session(
+                conn,
+                profile_changed=profile_changed,
+                plan_changed=plan_changed,
+                derived_profile=validated_profile,
+                current_plan_id=current_plan_id,
+                now=now,
+            )
             result = {
                 "plan_id": result_plan_id,
                 "plan_version": result_plan_version,
                 "profile_changed": profile_changed,
             }
-            cursor = conn.execute(
-                """
-                UPDATE operations
-                SET status = ?, result_json = ?, completed_at = ?, updated_at = ?,
-                    error_code = NULL, error_message = NULL, retryable = 0
-                WHERE id = ? AND status = ? AND kind = ?
-                """,
-                (
-                    OperationStatus.COMPLETE.value,
-                    sql.json_dumps(result),
-                    sql.dt(now),
-                    sql.dt(now),
-                    str(operation_id),
-                    OperationStatus.RUNNING.value,
-                    OperationKind.POST_SESSION.value,
-                ),
+            self._complete_running_operation(
+                conn,
+                operation_id,
+                kind=OperationKind.POST_SESSION,
+                result=result,
+                now=now,
             )
-            self._ensure_operation_updated(conn, cursor, operation_id)
             stage = self._load_snapshot_facts(conn).stage
             if stage is not Stage.READY:
                 raise InvariantViolation(
@@ -993,21 +880,15 @@ class SQLiteStore:
             f"operation {operation_id} is in invalid state {row[0]}"
         )
 
+    def _load_current_plan(self, conn: sqlite3.Connection) -> Plan | None:
+        row = conn.execute(_CURRENT_PLAN_SELECT).fetchone()
+        return sql.row_to_plan(row) if row else None
+
     def _require_current_plan(self, conn: sqlite3.Connection) -> Plan:
-        row = conn.execute(
-            """
-            SELECT p.id, p.version, p.selected_style, p.focus, p.themes_json,
-                   p.goals_json, p.current_progress, p.planned_interventions_json,
-                   p.revision_recommendations_json, p.session_briefing_json,
-                   p.source_session_id, p.supersedes_plan_id, p.created_at
-            FROM profile pr
-            JOIN plans p ON p.id = pr.current_plan_id
-            WHERE pr.singleton_id = 1
-            """
-        ).fetchone()
-        if row is None:
+        plan = self._load_current_plan(conn)
+        if plan is None:
             raise InvariantViolation("current plan is required")
-        return sql.row_to_plan(row)
+        return plan
 
     def _find_operation_by_source(
         self,
@@ -1016,15 +897,129 @@ class SQLiteStore:
         source_session_id: UUID,
     ) -> Operation | None:
         row = conn.execute(
-            """
-            SELECT id FROM operations
+            f"""
+            {_OPERATION_SELECT}
             WHERE kind = ? AND source_session_id = ?
             """,
             (kind.value, str(source_session_id)),
         ).fetchone()
-        if row is None:
-            return None
-        return self._load_operation(conn, UUID(row[0]))
+        return sql.row_to_operation(row) if row else None
+
+    def _insert_plan(self, conn: sqlite3.Connection, plan: Plan) -> None:
+        briefing_json = (
+            sql.json_dumps(plan.session_briefing)
+            if plan.session_briefing is not None
+            else None
+        )
+        source_session_id = (
+            str(plan.source_session_id) if plan.source_session_id is not None else None
+        )
+        supersedes_plan_id = (
+            str(plan.supersedes_plan_id)
+            if plan.supersedes_plan_id is not None
+            else None
+        )
+        conn.execute(
+            """
+            INSERT INTO plans (
+                id, version, selected_style, focus, themes_json, goals_json,
+                current_progress, planned_interventions_json,
+                revision_recommendations_json, session_briefing_json,
+                source_session_id, supersedes_plan_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(plan.id),
+                plan.version,
+                plan.selected_style,
+                plan.focus,
+                sql.json_dumps(plan.themes),
+                sql.json_dumps(plan.goals),
+                plan.current_progress,
+                sql.json_dumps(plan.planned_interventions),
+                sql.json_dumps(plan.revision_recommendations),
+                briefing_json,
+                source_session_id,
+                supersedes_plan_id,
+                sql.dt(plan.created_at),
+            ),
+        )
+
+    def _complete_running_operation(
+        self,
+        conn: sqlite3.Connection,
+        operation_id: UUID,
+        *,
+        kind: OperationKind,
+        result: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        cursor = conn.execute(
+            """
+            UPDATE operations
+            SET status = ?, result_json = ?, completed_at = ?, updated_at = ?,
+                error_code = NULL, error_message = NULL, retryable = 0
+            WHERE id = ? AND status = ? AND kind = ?
+            """,
+            (
+                OperationStatus.COMPLETE.value,
+                sql.json_dumps(result),
+                sql.dt(now),
+                sql.dt(now),
+                str(operation_id),
+                OperationStatus.RUNNING.value,
+                kind.value,
+            ),
+        )
+        self._ensure_operation_updated(conn, cursor, operation_id)
+
+    def _update_profile_after_post_session(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        profile_changed: bool,
+        plan_changed: bool,
+        derived_profile: dict[str, Any] | None,
+        current_plan_id: str,
+        now: datetime,
+    ) -> None:
+        if not profile_changed and not plan_changed:
+            return
+        if profile_changed and plan_changed:
+            conn.execute(
+                """
+                UPDATE profile
+                SET derived_profile_json = ?, current_plan_id = ?, updated_at = ?
+                WHERE singleton_id = 1
+                """,
+                (
+                    sql.json_dumps(derived_profile),
+                    current_plan_id,
+                    sql.dt(now),
+                ),
+            )
+            return
+        if profile_changed:
+            conn.execute(
+                """
+                UPDATE profile
+                SET derived_profile_json = ?, updated_at = ?
+                WHERE singleton_id = 1
+                """,
+                (
+                    sql.json_dumps(derived_profile),
+                    sql.dt(now),
+                ),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE profile
+            SET current_plan_id = ?, updated_at = ?
+            WHERE singleton_id = 1
+            """,
+            (current_plan_id, sql.dt(now)),
+        )
 
     def _insert_pending_operation(
         self,
@@ -1100,13 +1095,7 @@ class SQLiteStore:
 
     def _load_plan(self, conn: sqlite3.Connection, plan_id: UUID) -> Plan:
         row = conn.execute(
-            """
-            SELECT id, version, selected_style, focus, themes_json, goals_json,
-                   current_progress, planned_interventions_json,
-                   revision_recommendations_json, session_briefing_json,
-                   source_session_id, supersedes_plan_id, created_at
-            FROM plans WHERE id = ?
-            """,
+            f"{_PLAN_SELECT} WHERE id = ?",
             (str(plan_id),),
         ).fetchone()
         if row is None:
@@ -1117,12 +1106,7 @@ class SQLiteStore:
         self, conn: sqlite3.Connection, operation_id: UUID
     ) -> Operation:
         row = conn.execute(
-            """
-            SELECT id, kind, status, source_session_id, attempt, result_json,
-                   error_code, error_message, retryable, created_at, updated_at,
-                   started_at, completed_at
-            FROM operations WHERE id = ?
-            """,
+            f"{_OPERATION_SELECT} WHERE id = ?",
             (str(operation_id),),
         ).fetchone()
         if row is None:
@@ -1151,11 +1135,8 @@ class SQLiteStore:
         ).fetchone()
         active_session = sql.row_to_session(active_row) if active_row else None
         op_row = conn.execute(
-            """
-            SELECT id, kind, status, source_session_id, attempt, result_json,
-                   error_code, error_message, retryable, created_at, updated_at,
-                   started_at, completed_at
-            FROM operations
+            f"""
+            {_OPERATION_SELECT}
             WHERE status IN ('pending', 'running', 'failed')
             ORDER BY created_at DESC LIMIT 1
             """
@@ -1206,9 +1187,8 @@ class SQLiteStore:
         client_message_id: UUID,
     ) -> tuple[Message | None, Message | None]:
         rows = conn.execute(
-            """
-            SELECT id, session_id, sequence, role, content, client_message_id, created_at
-            FROM messages
+            f"""
+            {_MESSAGE_SELECT}
             WHERE session_id = ? AND client_message_id = ?
             """,
             (str(session_id), str(client_message_id)),
@@ -1235,9 +1215,8 @@ class SQLiteStore:
         self, conn: sqlite3.Connection, session_id: UUID
     ) -> Message | None:
         row = conn.execute(
-            """
-            SELECT id, session_id, sequence, role, content, client_message_id, created_at
-            FROM messages
+            f"""
+            {_MESSAGE_SELECT}
             WHERE session_id = ?
             ORDER BY sequence DESC
             LIMIT 1
