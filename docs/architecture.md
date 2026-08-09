@@ -105,11 +105,16 @@ src/jung/
 ├── persistence/     SQLite implementation
 ├── phases/          therapeutic phase processors
 ├── llm/             LLM abstraction/provider adapter
-├── application.py   use-case coordination
+├── application.py   use-case façade
+├── _application/    private chat/operation/input helpers
 ├── workflow.py      pure workflow policy
 ├── composition.py   composition root
 └── config.py        application configuration
 ```
+
+`TherapyApplication` remains the sole application-facing type. Private helpers under
+`_application/` implement chat generation, durable operation tasks, phase-input
+construction, and cancellation-safe store calls; they are not a public service layer.
 
 ## Application boundary
 
