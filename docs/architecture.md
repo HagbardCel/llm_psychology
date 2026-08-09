@@ -66,7 +66,7 @@ The supported runtime is a lean, local-first therapist application that:
    - Trio adapters are not supported.
 
 6. **One workflow model**
-   - Persist one workflow stage and derive available commands from it.
+   - Derive the current workflow stage from authoritative durable profile, session, plan, and operation state. Do not persist a second workflow-state projection.
    - See [workflow.md](workflow.md) for stages, transitions, operation lifecycle, message-native chat acceptance/retry, and recovery.
 
 7. **No schema migration compatibility**
@@ -172,7 +172,7 @@ Processors should not call other workflow processors. A coordinator may call pur
 
 ## Workflow, API, and persistence (owned elsewhere)
 
-One persisted workflow stage and backend-derived command set govern progression.
+One derived workflow stage and backend-derived command set govern progression.
 See [workflow.md](workflow.md) for stages, transitions, operation lifecycle,
 message-native chat acceptance/retry, and recovery semantics.
 

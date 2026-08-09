@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,7 +18,6 @@ from jung.domain.commands import SelectStyle, SendMessage, UpdateProfile
 from jung.domain.errors import InvalidCommand, InvariantViolation
 from jung.domain.models import (
     MessageRole,
-    OperationKind,
     OperationStatus,
     Profile,
     Stage,
@@ -338,54 +336,15 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
     db_path = tmp_path / "app.db"
     store = SQLiteStore(db_path)
     store.initialize()
-    fake = FakeLLM([])
-    async with build_test_application(store, fake, recover=False) as runtime:
-        await runtime.application.update_profile(
-            UpdateProfile(
-                profile=Profile(name="Alex", primary_language="English"),
-            )
-        )
-        session = (await runtime.application.get_snapshot()).active_session
-        assert session is not None
-        session_id = session.id
-
-    now = datetime.now(UTC)
-    client_message_id = uuid4()
-    user_message_id = uuid4()
+    intake_id, now = open_intake(store)
     op_id = uuid4()
-    with store._connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO messages (
-                id, session_id, sequence, role, content, client_message_id, created_at
-            )
-            VALUES (?, ?, 1, 'user', 'stale', ?, ?)
-            """,
-            (
-                str(user_message_id),
-                str(session_id),
-                str(client_message_id),
-                now.isoformat(),
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO operations (
-                id, kind, status, attempt, source_session_id,
-                created_at, updated_at, started_at, retryable
-            ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0)
-            """,
-            (
-                str(op_id),
-                OperationKind.ASSESSMENT.value,
-                OperationStatus.RUNNING.value,
-                str(session_id),
-                now.isoformat(),
-                now.isoformat(),
-                now.isoformat(),
-            ),
-        )
-        conn.commit()
+    client_message_id, _, _ = complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=op_id,
+    )
+    store.mark_operation_running(op_id, now=now)
 
     run_dir = tmp_path / "debug-run"
     with DiagnosticRun(run_dir) as recorder:
@@ -403,10 +362,13 @@ async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
     assert recovered["data"]["to_status"] == OperationStatus.PENDING.value
     assert recovered["context"]["operation_id"] == str(op_id)
 
-    messages = store.list_messages(session_id)
+    messages = store.list_messages(intake_id)
     assert messages
-    assert messages[-1].role is MessageRole.USER
-    assert messages[-1].client_message_id == client_message_id
+    assert any(
+        message.role is MessageRole.USER
+        and message.client_message_id == client_message_id
+        for message in messages
+    )
 
 
 async def test_chat_retry_emits_retried_not_accepted(tmp_path: Path) -> None:
@@ -510,7 +472,7 @@ async def test_select_style_invariant_records_runtime_error(
         result=assessment_result_data(),
         now=now,
     )
-    assert store.get_app_state().stage == Stage.STYLE_SELECTION
+    assert store.load_snapshot_facts().stage == Stage.STYLE_SELECTION
 
     with DiagnosticRun(run_dir) as recorder:
         async with build_test_application(

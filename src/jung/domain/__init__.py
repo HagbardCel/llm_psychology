@@ -13,7 +13,6 @@ from jung.domain.errors import (
 )
 from jung.domain.models import (
     AppSnapshot,
-    AppState,
     CommandName,
     Message,
     MessageRole,
@@ -35,7 +34,6 @@ from jung.domain.models import (
 
 __all__ = [
     "AppSnapshot",
-    "AppState",
     "Busy",
     "CommandName",
     "EndSession",

@@ -9,21 +9,25 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.errors import PersistenceFailure
+from jung.domain.errors import InvariantViolation, PersistenceFailure
 from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
+EXPECTED_TABLES = frozenset(
+    {"profile", "sessions", "plans", "messages", "operations"}
+)
+
 
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:
-    state = store.get_app_state()
-    assert state.stage == Stage.SETUP
-    assert not hasattr(state, "revision")
+    facts = store.load_snapshot_facts()
+    assert facts.stage == Stage.SETUP
+    assert facts.profile_complete is False
 
 
 def test_initialize_is_idempotent(store: SQLiteStore) -> None:
     store.initialize()
-    assert store.get_app_state().stage == Stage.SETUP
+    assert store.load_snapshot_facts().stage == Stage.SETUP
 
 
 def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
@@ -38,21 +42,19 @@ def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
     assert busy == 5000
 
 
-def test_fresh_schema_is_version_five_without_revision_column(
+def test_fresh_schema_is_version_six_without_app_state(
     store_path: Path,
 ) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     with sqlite3.connect(store_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(app_state)").fetchall()
-        }
         tables = {
             row[0]
             for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
+            if not row[0].startswith("sqlite_")
         }
         message_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
@@ -60,11 +62,11 @@ def test_fresh_schema_is_version_five_without_revision_column(
         message_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
         ).fetchone()[0]
-    assert version == 5
+    assert version == 6
     assert version == SCHEMA_VERSION
-    assert "revision" not in columns
-    assert columns == {"singleton_id", "stage", "created_at", "updated_at"}
-    assert "chat_turns" not in tables
+    assert tables == EXPECTED_TABLES
+    assert "app_state" not in tables
+    assert tables == sql.TARGET_TABLES
     assert "client_message_id" in message_columns
     assert "role IN ('user', 'assistant')" in message_sql
     assert "UNIQUE (session_id, client_message_id, role)" in message_sql
@@ -78,7 +80,7 @@ def test_user_version_is_set(store_path: Path) -> None:
     assert version == SCHEMA_VERSION
 
 
-@pytest.mark.parametrize("version", [1, 3, 4, 99])
+@pytest.mark.parametrize("version", [1, 3, 4, 5, 99])
 def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -102,7 +104,7 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     )
     reopened = SQLiteStore(store.database_path)
     reopened.initialize()
-    assert reopened.get_app_state().stage == Stage.INTAKE
+    assert reopened.load_snapshot_facts().stage == Stage.INTAKE
     assert reopened.get_active_session() is not None
 
 
@@ -120,6 +122,27 @@ def test_version_zero_partial_target_schema_is_rejected(
         match="unexpected tables without schema version",
     ):
         SQLiteStore(store_path).initialize()
+
+
+def test_version_zero_orphan_app_state_table_is_rejected(store_path: Path) -> None:
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("CREATE TABLE app_state (placeholder INTEGER)")
+        conn.commit()
+        assert sql.has_any_user_table(conn)
+
+    with pytest.raises(
+        PersistenceFailure,
+        match="unexpected tables without schema version",
+    ):
+        SQLiteStore(store_path).initialize()
+
+
+def test_missing_profile_raises_invariant_violation(store: SQLiteStore) -> None:
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute("DELETE FROM profile WHERE singleton_id = 1")
+        conn.commit()
+    with pytest.raises(InvariantViolation, match="profile singleton is missing"):
+        store.load_snapshot_facts()
 
 
 def test_initialize_rolls_back_on_seed_failure(

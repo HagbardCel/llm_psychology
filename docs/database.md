@@ -40,9 +40,8 @@ Durable chat truth is `messages` only. There is no `chat_turns` table.
 
 | Table | Purpose | Key relationships | Important constraints |
 |---|---|---|---|
-| `app_state` | Singleton workflow stage | — | `singleton_id = 1` |
 | `profile` | Singleton user-editable profile plus optional derived JSON and current plan pointer | `current_plan_id` → `plans` | `singleton_id = 1` |
-| `sessions` | Intake and therapy sessions | `plan_id` → `plans` | at most one open session globally; therapy sessions must not carry intake JSON |
+| `sessions` | Intake and therapy sessions | `plan_id` → `plans` | at most one open session globally; intake must have null `plan_id`; therapy must have non-null `plan_id`; therapy sessions must not carry intake JSON |
 | `plans` | Immutable plan revisions | `source_session_id` → `sessions`; `supersedes_plan_id` → `plans` | unique `version`; unique `source_session_id`; at most one successor per superseded plan |
 | `messages` | Durable transcript | `session_id` → `sessions` | unique `(session_id, sequence)`; roles `user`/`assistant`; required `client_message_id`; unique `(session_id, client_message_id, role)` |
 | `operations` | Assessment and post-session background work | `source_session_id` → `sessions` | unique `(kind, source_session_id)`; at most one current pending/running/failed operation globally |
@@ -52,8 +51,9 @@ Durable chat truth is `messages` only. There is no `chat_turns` table.
 These guarantees are encoded in SQL (including partial unique indexes that use
 constant expressions and are therefore **database-global**):
 
-- `app_state` and `profile` are singletons (`singleton_id = 1`);
+- `profile` is a singleton (`singleton_id = 1`);
 - at most one open session globally (`ended_at IS NULL`);
+- intake sessions must have null `plan_id`; therapy sessions must have non-null `plan_id`;
 - unique message sequence within a session;
 - message roles are `user` or `assistant` only;
 - message acceptance is idempotent by `(session_id, client_message_id, role)`;
@@ -71,13 +71,14 @@ These relationships and policies are maintained by `SQLiteStore` and the
 application rather than claimed as pure SQL guarantees:
 
 - plan revisions are immutable as a programming model (new revision rows, never in-place mutation of plan content);
-- valid workflow stage transitions and command acceptance are application/workflow policy;
+- workflow `Stage` is **derived** from durable profile, session, plan, and operation state (not persisted); impossible present-state combinations raise `InvariantViolation`;
+- valid command acceptance is application/workflow policy over derived `WorkflowFacts`;
 - an open session may have at most one trailing unanswered `USER`; a new user message is rejected until that ID is retried (see [workflow.md](workflow.md));
 - assistant persistence requires an unanswered latest user message in the same session with the matching `client_message_id`;
 - multi-table use cases such as assessment completion and post-session completion commit atomically in store methods;
 - `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`) and commit/rollback; it does not own optimistic concurrency checks or snapshot-revision increments;
 - `TherapyApplication` serializes mutations and validates commands against authoritative state before calling the store;
-- `app_state.updated_at` means the last persisted workflow-stage change.
+- missing singleton `profile` is corruption, not a legitimate `SETUP` state.
 
 ## JSON-owned documents
 
@@ -103,11 +104,20 @@ JSON TEXT columns hold validated documents owned by specific subsystems:
 ## Initialization and schema compatibility
 
 Schema compatibility is guarded by `PRAGMA user_version` against the code-owned
-`SCHEMA_VERSION` (schema v5). Migrations are not supported.
+`SCHEMA_VERSION` (schema v6). Migrations are not supported.
 
 Initialization behavior:
 
-- a fresh `user_version = 0` database with no Jung tables is initialized: schema created, singleton `app_state` and `profile` rows seeded, version set;
-- a `user_version = 0` database that already contains Jung tables is rejected;
-- a database with an unsupported code-owned schema version is rejected;
+- a fresh `user_version = 0` database with **no user-created tables** is initialized: schema created, singleton `profile` row seeded, version set;
+- a `user_version = 0` database that already contains any user-created table is rejected;
+- a database with an unsupported code-owned schema version is rejected (including schema v5);
 - there is no migration path — reset by stopping the application and removing `jung.db` plus `-wal`/`-shm` sidecars (see [safety-and-data.md](safety-and-data.md)).
+
+## Derived workflow stage
+
+`Stage` is not stored. `SQLiteStore.load_snapshot_facts()` loads durable signals and
+`workflow.derive_stage(...)` computes the current stage. Impossible present-state
+combinations (for example open session + current operation, incomplete profile with
+progress, orphan plans without `current_plan_id`) raise `InvariantViolation`.
+Diagnostic debug bundles may record `workflow.integrity_error` instead of failing
+the entire state projection.

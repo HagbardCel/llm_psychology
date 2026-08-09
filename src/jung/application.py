@@ -477,7 +477,7 @@ class TherapyApplication:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.START_SESSION, facts)
-                _, session = await self._run_store(
+                session = await self._run_store(
                     self._store.start_therapy_session,
                     session_id=session_id,
                     now=self._now(),
@@ -527,7 +527,7 @@ class TherapyApplication:
                         )
                     if active.kind is not SessionKind.THERAPY:
                         raise InvalidCommand("active session is not therapy")
-                    _, operation = await self._run_store(
+                    operation = await self._run_store(
                         self._store.end_therapy_session,
                         session_id=command.session_id,
                         operation_id=operation_id,
@@ -899,7 +899,7 @@ class TherapyApplication:
         active = await self._run_store(self._store.get_active_session)
         if active is None or active.id != session_id:
             return False
-        state = await self._run_store(self._store.get_app_state)
+        state = await self._run_store(self._store.load_snapshot_facts)
         if state.stage is Stage.INTAKE and session.kind is not SessionKind.INTAKE:
             return False
         if state.stage is Stage.THERAPY and session.kind is not SessionKind.THERAPY:
@@ -1034,7 +1034,7 @@ class TherapyApplication:
             async with self._mutation_lock:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
-                assistant, operation, _state = await self._run_store(
+                assistant, operation = await self._run_store(
                     self._store.complete_final_intake_response,
                     session_id=user_message.session_id,
                     client_message_id=user_message.client_message_id,
@@ -1100,13 +1100,12 @@ class TherapyApplication:
         return snapshot
 
     def _build_snapshot(self) -> AppSnapshot:
-        state = self._store.get_app_state()
         facts = self._store.load_snapshot_facts()
         plan = self._store.get_current_plan()
         active_session = self._store.get_active_session()
         current_operation = self._store.get_current_operation()
         snapshot = AppSnapshot(
-            stage=state.stage,
+            stage=facts.stage,
             profile_complete=facts.profile_complete,
             selected_style=plan.selected_style if plan is not None else None,
             active_session=active_session,
@@ -1194,29 +1193,23 @@ class TherapyApplication:
                     assessment_input = await self._build_assessment_input(operation)
                     result = await self._assessment.assess(assessment_input)
                     async with self._mutation_lock:
-                        before = await self._run_store(self._store.get_app_state)
-                        await self._run_store(
+                        before = await self._run_store(self._store.load_snapshot_facts)
+                        to_stage = await self._run_store(
                             self._store.complete_assessment,
                             operation_id,
                             result=result.model_dump(mode="json"),
                             now=self._now(),
                         )
-                        snapshot = await self._assemble_snapshot_locked()
-                    completed = await self._run_store(
-                        self._store.get_operation,
-                        operation_id,
-                    )
-                    assert completed is not None
                     self._record(
                         "operation.completed",
                         {
-                            "kind": completed.kind.value,
-                            "attempt": completed.attempt,
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
                         },
                     )
                     self._record_transition_if_changed(
                         from_stage=before.stage,
-                        to_stage=snapshot.stage,
+                        to_stage=to_stage,
                         trigger="assessment_completed",
                     )
                 elif operation.kind is OperationKind.POST_SESSION:
@@ -1248,8 +1241,8 @@ class TherapyApplication:
                         else None
                     )
                     async with self._mutation_lock:
-                        before = await self._run_store(self._store.get_app_state)
-                        await self._run_store(
+                        before = await self._run_store(self._store.load_snapshot_facts)
+                        to_stage = await self._run_store(
                             self._store.complete_post_session,
                             operation_id,
                             summary=result.session_summary,
@@ -1258,22 +1251,16 @@ class TherapyApplication:
                             new_plan=new_plan,
                             now=self._now(),
                         )
-                        snapshot = await self._assemble_snapshot_locked()
-                    completed = await self._run_store(
-                        self._store.get_operation,
-                        operation_id,
-                    )
-                    assert completed is not None
                     self._record(
                         "operation.completed",
                         {
-                            "kind": completed.kind.value,
-                            "attempt": completed.attempt,
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
                         },
                     )
                     self._record_transition_if_changed(
                         from_stage=before.stage,
-                        to_stage=snapshot.stage,
+                        to_stage=to_stage,
                         trigger="post_session_completed",
                     )
                 else:
@@ -1531,40 +1518,28 @@ def _validate_snapshot_invariants(
     plan: Plan | None,
     styles: MappingProxyType[str, StyleDefinition],
 ) -> None:
-    stage = snapshot.stage
-    if stage is Stage.SETUP and snapshot.active_session is not None:
-        raise InvariantViolation("SETUP must not have an active session")
-    if stage is Stage.INTAKE:
-        if (
-            snapshot.active_session is None
-            or snapshot.active_session.kind is not SessionKind.INTAKE
-        ):
-            raise InvariantViolation("INTAKE requires an open intake session")
-    if stage is Stage.THERAPY:
-        if (
-            snapshot.active_session is None
-            or snapshot.active_session.kind is not SessionKind.THERAPY
-        ):
-            raise InvariantViolation("THERAPY requires an open therapy session")
-    if stage is Stage.READY:
-        if snapshot.active_session is not None:
-            raise InvariantViolation("READY must not have an active session")
-        if snapshot.current_operation is not None:
-            raise InvariantViolation("READY must not have a current operation")
-    if stage is Stage.ASSESSMENT:
-        if (
-            snapshot.current_operation is None
-            or snapshot.current_operation.kind is not OperationKind.ASSESSMENT
-        ):
-            raise InvariantViolation("ASSESSMENT requires an assessment operation")
-    if stage is Stage.POST_SESSION:
-        if (
-            snapshot.current_operation is None
-            or snapshot.current_operation.kind is not OperationKind.POST_SESSION
-        ):
-            raise InvariantViolation("POST_SESSION requires a post-session operation")
     if plan is not None and plan.selected_style not in styles:
         raise InvariantViolation(f"unknown style: {plan.selected_style}")
+    if snapshot.stage is Stage.THERAPY and snapshot.active_session is None:
+        raise InvariantViolation("THERAPY requires an open therapy session")
+    if snapshot.stage is Stage.INTAKE and snapshot.active_session is None:
+        raise InvariantViolation("INTAKE requires an open intake session")
+    if (
+        snapshot.stage is Stage.ASSESSMENT
+        and (
+            snapshot.current_operation is None
+            or snapshot.current_operation.kind is not OperationKind.ASSESSMENT
+        )
+    ):
+        raise InvariantViolation("ASSESSMENT requires an assessment operation")
+    if (
+        snapshot.stage is Stage.POST_SESSION
+        and (
+            snapshot.current_operation is None
+            or snapshot.current_operation.kind is not OperationKind.POST_SESSION
+        )
+    ):
+        raise InvariantViolation("POST_SESSION requires a post-session operation")
 
 
 def _recent_session_summaries(

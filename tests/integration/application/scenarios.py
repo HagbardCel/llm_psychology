@@ -68,7 +68,7 @@ def complete_intake_for_assessment(
         content="intake message",
         now=now,
     )
-    _, operation, _ = store.complete_final_intake_response(
+    _, operation = store.complete_final_intake_response(
         session_id=intake_session_id,
         client_message_id=client_message_id,
         assistant_message_id=uuid4(),
@@ -96,7 +96,7 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
         result=assessment_result_data(),
         now=now,
     )
-    assert store.get_app_state().stage == Stage.STYLE_SELECTION
+    assert store.load_snapshot_facts().stage == Stage.STYLE_SELECTION
 
     plan_id = uuid4()
     store.select_style_and_create_initial_plan(
@@ -113,7 +113,7 @@ def advance_to_ready(store: SQLiteStore) -> ReadyScenario:
         intake_session_id=intake_id,
         now=now,
     )
-    assert store.get_app_state().stage == Stage.READY
+    assert store.load_snapshot_facts().stage == Stage.READY
     return ReadyScenario(
         intake_session_id=intake_id,
         initial_plan_id=plan_id,
@@ -128,7 +128,7 @@ def advance_to_post_session(store: SQLiteStore) -> PostSessionScenario:
         session_id=therapy_id,
         now=ready.now,
     )
-    assert store.get_app_state().stage == Stage.THERAPY
+    assert store.load_snapshot_facts().stage == Stage.THERAPY
 
     post_op_id = uuid4()
     store.end_therapy_session(
@@ -136,7 +136,7 @@ def advance_to_post_session(store: SQLiteStore) -> PostSessionScenario:
         operation_id=post_op_id,
         now=ready.now,
     )
-    assert store.get_app_state().stage == Stage.POST_SESSION
+    assert store.load_snapshot_facts().stage == Stage.POST_SESSION
     operation = store.get_operation(post_op_id)
     assert operation is not None
     assert operation.status == OperationStatus.PENDING

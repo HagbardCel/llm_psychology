@@ -49,27 +49,27 @@ def test_incomplete_profile_does_not_create_session(store: SQLiteStore) -> None:
         intake_session_id=None,
         now=datetime.now(UTC),
     )
-    assert store.get_app_state().stage == Stage.SETUP
+    assert store.load_snapshot_facts().stage == Stage.SETUP
     assert store.get_active_session() is None
 
 
-def test_stage_transition_updates_app_state_timestamp(store: SQLiteStore) -> None:
+def test_complete_profile_advances_to_intake(store: SQLiteStore) -> None:
     fixed_now = datetime(2026, 7, 12, 10, 30, tzinfo=UTC)
     store.update_profile(
         Profile(name="Alex", primary_language="English"),
         intake_session_id=uuid4(),
         now=fixed_now,
     )
-    state = store.get_app_state()
-    assert state.stage == Stage.INTAKE
-    assert state.updated_at == fixed_now
+    assert store.load_snapshot_facts().stage == Stage.INTAKE
+    session = store.get_active_session()
+    assert session is not None
+    assert session.started_at == fixed_now
 
 
-def test_intake_profile_edit_updates_profile_not_app_state_timestamp(
+def test_intake_profile_edit_updates_profile_keeps_intake_stage(
     store: SQLiteStore,
 ) -> None:
     open_intake(store)
-    app_state_before = store.get_app_state()
     profile_before = store.get_profile()
     assert profile_before is not None
     edit_now = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -83,9 +83,7 @@ def test_intake_profile_edit_updates_profile_not_app_state_timestamp(
     assert profile_after.profile.name == "Alexandra"
     assert profile_after.updated_at == edit_now
     assert profile_after.updated_at != profile_before.updated_at
-    app_state_after = store.get_app_state()
-    assert app_state_after.stage == Stage.INTAKE
-    assert app_state_after.updated_at == app_state_before.updated_at
+    assert store.load_snapshot_facts().stage == Stage.INTAKE
 
 
 def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) -> None:
@@ -95,7 +93,7 @@ def test_complete_profile_creates_one_open_intake_session(store: SQLiteStore) ->
     assert session.id == intake_id
     assert session.kind == SessionKind.INTAKE
     assert session.ended_at is None
-    assert store.get_app_state().stage == Stage.INTAKE
+    assert store.load_snapshot_facts().stage == Stage.INTAKE
 
 
 def test_intake_profile_edit_reuses_session(store: SQLiteStore) -> None:
@@ -164,7 +162,7 @@ def test_complete_final_intake_closes_session_and_creates_assessment(
         now=now,
         operation_id=operation_id,
     )
-    state = store.get_app_state()
+    state = store.load_snapshot_facts()
     assert state.stage == Stage.ASSESSMENT
     closed = store.get_session(session.id)
     assert closed is not None
@@ -184,12 +182,12 @@ def test_assessment_completion_advances_to_style_selection(store: SQLiteStore) -
         operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
-    state = store.complete_assessment(
+    stage = store.complete_assessment(
         operation_id,
         result={"initial_plan": {"focus": "anxiety"}},
         now=now,
     )
-    assert state.stage == Stage.STYLE_SELECTION
+    assert stage == Stage.STYLE_SELECTION
 
 
 def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
@@ -216,7 +214,7 @@ def test_operation_failure_preserves_stage(store: SQLiteStore) -> None:
         retryable=True,
         now=now,
     )
-    assert store.get_app_state().stage == Stage.ASSESSMENT
+    assert store.load_snapshot_facts().stage == Stage.ASSESSMENT
 
 
 def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> None:
@@ -253,7 +251,7 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
     new_plan_id = uuid4()
     briefing = {"summary": "session notes"}
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    state = store.complete_post_session(
+    stage = store.complete_post_session(
         scenario.post_session_operation_id,
         summary="good session",
         briefing=briefing,
@@ -269,7 +267,7 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
         ),
         now=scenario.now,
     )
-    assert state.stage == Stage.READY
+    assert stage == Stage.READY
     session = store.get_session(scenario.therapy_session_id)
     assert session is not None
     assert session.summary == "good session"
@@ -287,7 +285,7 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
 def test_complete_post_session_without_plan_revision(store: SQLiteStore) -> None:
     scenario = advance_to_post_session(store)
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    state = store.complete_post_session(
+    stage = store.complete_post_session(
         scenario.post_session_operation_id,
         summary="steady session",
         briefing={"summary": "no plan change"},
@@ -295,7 +293,7 @@ def test_complete_post_session_without_plan_revision(store: SQLiteStore) -> None
         new_plan=None,
         now=scenario.now,
     )
-    assert state.stage == Stage.READY
+    assert stage == Stage.READY
     plan = store.get_current_plan()
     assert plan is not None
     assert plan.id == scenario.current_plan_id
@@ -338,7 +336,7 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
             now=scenario.now,
         )
 
-    state = store.get_app_state()
+    state = store.load_snapshot_facts()
     assert state.stage == Stage.POST_SESSION
 
     session = store.get_session(scenario.therapy_session_id)
@@ -528,21 +526,19 @@ def test_end_therapy_session_is_idempotent_by_session_key(store: SQLiteStore) ->
         now=ready.now,
     )
     post_op_id = uuid4()
-    _, first_operation = store.end_therapy_session(
+    first_operation = store.end_therapy_session(
         session_id=therapy_id,
         operation_id=post_op_id,
         now=ready.now,
     )
-    first_state = store.get_app_state()
-    second_state, second_operation = store.end_therapy_session(
+    second_operation = store.end_therapy_session(
         session_id=therapy_id,
         operation_id=uuid4(),
         now=ready.now,
     )
-    assert second_state == first_state
     assert second_operation.id == first_operation.id
     assert second_operation.status == first_operation.status
-    assert store.get_app_state().stage == Stage.POST_SESSION
+    assert store.load_snapshot_facts().stage == Stage.POST_SESSION
     with sqlite3.connect(store.database_path) as conn:
         count = conn.execute(
             """
@@ -769,7 +765,7 @@ def test_complete_final_intake_rolls_back_all_artifacts(store: SQLiteStore) -> N
             conn.execute("DROP TRIGGER IF EXISTS abort_final_intake_session_close")
             conn.commit()
 
-    assert store.get_app_state().stage == Stage.INTAKE
+    assert store.load_snapshot_facts().stage == Stage.INTAKE
     session = store.get_session(intake_id)
     assert session is not None
     assert session.ended_at is None
@@ -778,3 +774,65 @@ def test_complete_final_intake_rolls_back_all_artifacts(store: SQLiteStore) -> N
     assert user is not None
     assert assistant is None
     assert store.get_current_operation() is None
+
+
+def test_load_snapshot_facts_rejects_therapy_without_completed_assessment(
+    store: SQLiteStore,
+) -> None:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(session_id=therapy_id, now=ready.now)
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute(
+            "DELETE FROM operations WHERE kind = ?",
+            (OperationKind.ASSESSMENT.value,),
+        )
+        conn.commit()
+    with pytest.raises(
+        InvariantViolation, match="THERAPY requires a completed assessment"
+    ):
+        store.load_snapshot_facts()
+
+
+def test_load_snapshot_facts_rejects_intake_with_completed_assessment(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    stamp = now.isoformat()
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO operations (
+                id, kind, status, source_session_id, attempt, result_json,
+                error_code, error_message, retryable, created_at, updated_at,
+                started_at, completed_at
+            ) VALUES (?, 'assessment', 'complete', ?, 1, '{}', NULL, NULL, 0, ?, ?, ?, ?)
+            """,
+            (str(uuid4()), str(intake_id), stamp, stamp, stamp, stamp),
+        )
+        conn.commit()
+    with pytest.raises(
+        InvariantViolation, match="INTAKE cannot coexist with a completed assessment"
+    ):
+        store.load_snapshot_facts()
+
+
+def test_load_snapshot_facts_rejects_assessment_without_intake_record(
+    store: SQLiteStore,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET intake_record_json = NULL WHERE id = ?",
+            (str(intake_id),),
+        )
+        conn.commit()
+    with pytest.raises(InvariantViolation, match="intake_record"):
+        store.load_snapshot_facts()

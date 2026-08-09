@@ -1,10 +1,3 @@
-CREATE TABLE IF NOT EXISTS app_state (
-    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    stage TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('intake', 'therapy')),
@@ -15,7 +8,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     briefing_json TEXT NULL,
     intake_record_json TEXT NULL,
     FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE RESTRICT,
-    CHECK (kind = 'intake' OR intake_record_json IS NULL)
+    CHECK (kind = 'intake' OR intake_record_json IS NULL),
+    CHECK (
+        (kind = 'intake' AND plan_id IS NULL)
+        OR
+        (kind = 'therapy' AND plan_id IS NOT NULL)
+    )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_open

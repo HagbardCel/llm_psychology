@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -19,7 +19,6 @@ from jung.domain.errors import (
     PersistenceFailure,
 )
 from jung.domain.models import (
-    AppState,
     Message,
     MessageRole,
     NewPlanRevision,
@@ -37,8 +36,10 @@ from jung.domain.models import (
     is_profile_complete,
 )
 from jung.persistence import _sqlite_support as sql
+from jung.workflow import derive_stage
 
 SCHEMA_VERSION = sql.SCHEMA_VERSION
+_T = TypeVar("_T")
 
 
 def _build_plan(**values: object) -> Plan:
@@ -88,7 +89,7 @@ class SQLiteStore:
         with self._connect() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if version == 0:
-                if sql.has_any_target_table(conn):
+                if sql.has_any_user_table(conn):
                     raise PersistenceFailure(
                         "database has unexpected tables without schema version; "
                         "reset the database"
@@ -112,15 +113,6 @@ class SQLiteStore:
                 raise PersistenceFailure(
                     f"unsupported schema version {version}; reset the database"
                 )
-
-    def get_app_state(self) -> AppState:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT stage, created_at, updated_at FROM app_state WHERE singleton_id = 1"
-            ).fetchone()
-            if row is None:
-                raise NotFound("app_state")
-            return sql.row_to_app_state(row)
 
     def get_profile(self) -> StoredProfile | None:
         with self._connect() as conn:
@@ -232,7 +224,7 @@ class SQLiteStore:
         *,
         intake_session_id: UUID | None,
         now: datetime,
-    ) -> AppState:
+    ) -> None:
         def mutate(conn: sqlite3.Connection) -> None:
             stage = self._require_stage(conn, {Stage.SETUP, Stage.INTAKE})
             profile_complete = is_profile_complete(profile)
@@ -271,13 +263,12 @@ class SQLiteStore:
                         sql.dt(now),
                     ),
                 )
-                self._set_stage(conn, Stage.INTAKE, now)
             elif intake_session_id is not None:
                 raise InvariantViolation(
                     "intake_session_id must be None while profile remains incomplete"
                 )
 
-        return self._write(mutate)
+        self._write(mutate)
 
     def get_latest_completed_operation(self, kind: OperationKind) -> Operation | None:
         with self._connect() as conn:
@@ -343,64 +334,55 @@ class SQLiteStore:
         content: str,
         now: datetime,
     ) -> Message:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                stage = self._load_stage(conn)
-                if stage not in {Stage.INTAKE, Stage.THERAPY}:
-                    raise InvariantViolation(
-                        "chat is only allowed in intake or therapy"
-                    )
-                session = self._require_open_session(conn, session_id)
-                if stage == Stage.INTAKE and session.kind != SessionKind.INTAKE:
-                    raise InvariantViolation("intake chat requires intake session")
-                if stage == Stage.THERAPY and session.kind != SessionKind.THERAPY:
-                    raise InvariantViolation("therapy chat requires therapy session")
-                latest = self._latest_message(conn, session_id)
-                if latest is not None and latest.role is MessageRole.USER:
-                    raise InvariantViolation(
-                        "unanswered user message must be retried before sending another"
-                    )
-                existing_user, _existing_assistant = self._load_messages_by_client_id(
-                    conn, session_id, client_message_id
+        def mutate(conn: sqlite3.Connection) -> Message:
+            stage = self._require_stage(conn, {Stage.INTAKE, Stage.THERAPY})
+            session = self._require_open_session(conn, session_id)
+            if stage == Stage.INTAKE and session.kind != SessionKind.INTAKE:
+                raise InvariantViolation("intake chat requires intake session")
+            if stage == Stage.THERAPY and session.kind != SessionKind.THERAPY:
+                raise InvariantViolation("therapy chat requires therapy session")
+            latest = self._latest_message(conn, session_id)
+            if latest is not None and latest.role is MessageRole.USER:
+                raise InvariantViolation(
+                    "unanswered user message must be retried before sending another"
                 )
-                if existing_user is not None:
-                    raise InvariantViolation(
-                        "user message already exists for client_message_id"
-                    )
-                sequence = self._next_sequence(conn, session_id)
-                created_at = sql.dt(now)
-                conn.execute(
-                    """
-                    INSERT INTO messages (
-                        id, session_id, sequence, role, content, client_message_id,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(user_message_id),
-                        str(session_id),
-                        sequence,
-                        MessageRole.USER.value,
-                        content,
-                        str(client_message_id),
-                        created_at,
-                    ),
+            existing_user, _existing_assistant = self._load_messages_by_client_id(
+                conn, session_id, client_message_id
+            )
+            if existing_user is not None:
+                raise InvariantViolation(
+                    "user message already exists for client_message_id"
                 )
-                message = Message(
-                    id=user_message_id,
-                    session_id=session_id,
-                    sequence=sequence,
-                    role=MessageRole.USER,
-                    content=content,
-                    client_message_id=client_message_id,
-                    created_at=sql.parse_dt(created_at),
-                )
-                conn.commit()
-                return message
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
+            sequence = self._next_sequence(conn, session_id)
+            created_at = sql.dt(now)
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(user_message_id),
+                    str(session_id),
+                    sequence,
+                    MessageRole.USER.value,
+                    content,
+                    str(client_message_id),
+                    created_at,
+                ),
+            )
+            return Message(
+                id=user_message_id,
+                session_id=session_id,
+                sequence=sequence,
+                role=MessageRole.USER,
+                content=content,
+                client_message_id=client_message_id,
+                created_at=sql.parse_dt(created_at),
+            )
+
+        return self._write(mutate)
 
     def complete_chat_response(
         self,
@@ -466,62 +448,57 @@ class SQLiteStore:
         intake_record: dict[str, Any],
         operation_id: UUID,
         now: datetime,
-    ) -> tuple[Message, Operation, AppState]:
+    ) -> tuple[Message, Operation]:
         validated_intake_record = sql.validate_json_mapping(
             intake_record, field_name="intake_record"
         )
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                session_row = conn.execute(
-                    f"{_SESSION_SELECT} WHERE id = ?",
-                    (str(session_id),),
-                ).fetchone()
-                if session_row is None:
-                    raise NotFound(f"session {session_id}")
-                if SessionKind(session_row[1]) is not SessionKind.INTAKE:
-                    raise InvariantViolation("final intake requires intake session")
-                self._require_stage(conn, {Stage.INTAKE})
-                message = self._insert_assistant_response(
+
+        def mutate(conn: sqlite3.Connection) -> tuple[Message, Operation]:
+            session_row = conn.execute(
+                f"{_SESSION_SELECT} WHERE id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if session_row is None:
+                raise NotFound(f"session {session_id}")
+            if SessionKind(session_row[1]) is not SessionKind.INTAKE:
+                raise InvariantViolation("final intake requires intake session")
+            self._require_stage(conn, {Stage.INTAKE})
+            message = self._insert_assistant_response(
+                conn,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                assistant_message_id=assistant_message_id,
+                content=content,
+                now=now,
+            )
+            conn.execute(
+                """
+                UPDATE sessions
+                SET intake_record_json = ?, ended_at = ?
+                WHERE id = ?
+                """,
+                (
+                    sql.json_dumps(validated_intake_record),
+                    sql.dt(now),
+                    str(session_id),
+                ),
+            )
+            existing = self._find_operation_by_source(
+                conn, OperationKind.ASSESSMENT, session_id
+            )
+            if existing is not None:
+                operation = existing
+            else:
+                operation = self._insert_pending_operation(
                     conn,
-                    session_id=session_id,
-                    client_message_id=client_message_id,
-                    assistant_message_id=assistant_message_id,
-                    content=content,
+                    kind=OperationKind.ASSESSMENT,
+                    source_session_id=session_id,
+                    operation_id=operation_id,
                     now=now,
                 )
-                conn.execute(
-                    """
-                    UPDATE sessions
-                    SET intake_record_json = ?, ended_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        sql.json_dumps(validated_intake_record),
-                        sql.dt(now),
-                        str(session_id),
-                    ),
-                )
-                existing = self._find_operation_by_source(
-                    conn, OperationKind.ASSESSMENT, session_id
-                )
-                if existing is not None:
-                    operation = existing
-                else:
-                    operation = self._insert_pending_operation(
-                        conn,
-                        kind=OperationKind.ASSESSMENT,
-                        source_session_id=session_id,
-                        operation_id=operation_id,
-                        now=now,
-                    )
-                self._set_stage(conn, Stage.ASSESSMENT, now)
-                state = self._load_app_state(conn)
-                conn.commit()
-                return message, operation, state
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
+            return message, operation
+
+        return self._write(mutate)
 
     def mark_operation_running(
         self,
@@ -529,7 +506,7 @@ class SQLiteStore:
         *,
         now: datetime,
     ) -> Operation:
-        def mutate(conn: sqlite3.Connection) -> None:
+        def mutate(conn: sqlite3.Connection) -> Operation:
             cursor = conn.execute(
                 """
                 UPDATE operations
@@ -545,11 +522,9 @@ class SQLiteStore:
                 ),
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
+            return self._load_operation(conn, operation_id)
 
-        self._write(mutate)
-        operation = self.get_operation(operation_id)
-        assert operation is not None
-        return operation
+        return self._write(mutate)
 
     def complete_assessment(
         self,
@@ -557,10 +532,10 @@ class SQLiteStore:
         *,
         result: dict[str, Any],
         now: datetime,
-    ) -> AppState:
+    ) -> Stage:
         validated_result = sql.validate_json_mapping(result, field_name="result")
 
-        def mutate(conn: sqlite3.Connection) -> None:
+        def mutate(conn: sqlite3.Connection) -> Stage:
             self._require_stage(conn, {Stage.ASSESSMENT})
             cursor = conn.execute(
                 """
@@ -580,7 +555,12 @@ class SQLiteStore:
                 ),
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
-            self._set_stage(conn, Stage.STYLE_SELECTION, now)
+            stage = self._load_snapshot_facts(conn).stage
+            if stage is not Stage.STYLE_SELECTION:
+                raise InvariantViolation(
+                    f"assessment completion must yield style_selection, got {stage.value}"
+                )
+            return stage
 
         return self._write(mutate)
 
@@ -593,7 +573,7 @@ class SQLiteStore:
         retryable: bool,
         now: datetime,
     ) -> Operation:
-        def mutate(conn: sqlite3.Connection) -> None:
+        def mutate(conn: sqlite3.Connection) -> Operation:
             cursor = conn.execute(
                 """
                 UPDATE operations
@@ -613,11 +593,9 @@ class SQLiteStore:
                 ),
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
+            return self._load_operation(conn, operation_id)
 
-        self._write(mutate)
-        operation = self.get_operation(operation_id)
-        assert operation is not None
-        return operation
+        return self._write(mutate)
 
     def retry_operation(
         self,
@@ -625,7 +603,7 @@ class SQLiteStore:
         *,
         now: datetime,
     ) -> Operation:
-        def mutate(conn: sqlite3.Connection) -> None:
+        def mutate(conn: sqlite3.Connection) -> Operation:
             cursor = conn.execute(
                 """
                 UPDATE operations
@@ -641,11 +619,9 @@ class SQLiteStore:
                 ),
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
+            return self._load_operation(conn, operation_id)
 
-        self._write(mutate)
-        operation = self.get_operation(operation_id)
-        assert operation is not None
-        return operation
+        return self._write(mutate)
 
     def select_style_and_create_initial_plan(
         self,
@@ -655,7 +631,7 @@ class SQLiteStore:
         content: PlanContent,
         intake_session_id: UUID,
         now: datetime,
-    ) -> tuple[AppState, Plan]:
+    ) -> None:
         plan = _build_plan(
             id=plan_id,
             version=1,
@@ -666,7 +642,6 @@ class SQLiteStore:
             supersedes_plan_id=None,
             created_at=now,
         )
-        plan_holder: dict[str, Plan] = {"plan": plan}
 
         def mutate(conn: sqlite3.Connection) -> None:
             self._require_stage(conn, {Stage.STYLE_SELECTION})
@@ -707,20 +682,16 @@ class SQLiteStore:
                 "UPDATE profile SET current_plan_id = ?, updated_at = ? WHERE singleton_id = 1",
                 (str(plan.id), sql.dt(now)),
             )
-            self._set_stage(conn, Stage.READY, now)
 
-        state = self._write(mutate)
-        return state, plan_holder["plan"]
+        self._write(mutate)
 
     def start_therapy_session(
         self,
         *,
         session_id: UUID,
         now: datetime,
-    ) -> tuple[AppState, Session]:
-        session_holder: dict[str, Session] = {}
-
-        def mutate(conn: sqlite3.Connection) -> None:
+    ) -> Session:
+        def mutate(conn: sqlite3.Connection) -> Session:
             self._require_stage(conn, {Stage.READY})
             if conn.execute(
                 "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
@@ -746,15 +717,13 @@ class SQLiteStore:
                     sql.dt(now),
                 ),
             )
-            self._set_stage(conn, Stage.THERAPY, now)
             row = conn.execute(
                 f"{_SESSION_SELECT} WHERE id = ?",
                 (str(session_id),),
             ).fetchone()
-            session_holder["session"] = sql.row_to_session(row)
+            return sql.row_to_session(row)
 
-        state = self._write(mutate)
-        return state, session_holder["session"]
+        return self._write(mutate)
 
     def end_therapy_session(
         self,
@@ -762,40 +731,31 @@ class SQLiteStore:
         session_id: UUID,
         operation_id: UUID,
         now: datetime,
-    ) -> tuple[AppState, Operation]:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                existing = self._find_operation_by_source(
-                    conn, OperationKind.POST_SESSION, session_id
-                )
-                if existing is not None:
-                    state = self._load_app_state(conn)
-                    conn.rollback()
-                    return state, existing
+    ) -> Operation:
+        def mutate(conn: sqlite3.Connection) -> Operation:
+            existing = self._find_operation_by_source(
+                conn, OperationKind.POST_SESSION, session_id
+            )
+            if existing is not None:
+                return existing
 
-                self._require_stage(conn, {Stage.THERAPY})
-                session = self._require_open_session(conn, session_id)
-                if session.kind != SessionKind.THERAPY:
-                    raise InvariantViolation("session must be therapy")
-                conn.execute(
-                    "UPDATE sessions SET ended_at = ? WHERE id = ?",
-                    (sql.dt(now), str(session_id)),
-                )
-                operation = self._insert_pending_operation(
-                    conn,
-                    kind=OperationKind.POST_SESSION,
-                    source_session_id=session_id,
-                    operation_id=operation_id,
-                    now=now,
-                )
-                self._set_stage(conn, Stage.POST_SESSION, now)
-                conn.commit()
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
+            self._require_stage(conn, {Stage.THERAPY})
+            session = self._require_open_session(conn, session_id)
+            if session.kind != SessionKind.THERAPY:
+                raise InvariantViolation("session must be therapy")
+            conn.execute(
+                "UPDATE sessions SET ended_at = ? WHERE id = ?",
+                (sql.dt(now), str(session_id)),
+            )
+            return self._insert_pending_operation(
+                conn,
+                kind=OperationKind.POST_SESSION,
+                source_session_id=session_id,
+                operation_id=operation_id,
+                now=now,
+            )
 
-        return self.get_app_state(), operation
+        return self._write(mutate)
 
     def complete_post_session(
         self,
@@ -806,7 +766,7 @@ class SQLiteStore:
         derived_profile: dict[str, Any] | None,
         new_plan: NewPlanRevision | None,
         now: datetime,
-    ) -> AppState:
+    ) -> Stage:
         validated_briefing = sql.validate_json_mapping(briefing, field_name="briefing")
         validated_profile: dict[str, Any] | None = None
         if derived_profile is not None:
@@ -814,7 +774,7 @@ class SQLiteStore:
                 derived_profile, field_name="derived_profile"
             )
 
-        def mutate(conn: sqlite3.Connection) -> None:
+        def mutate(conn: sqlite3.Connection) -> Stage:
             self._require_stage(conn, {Stage.POST_SESSION})
             op_row = conn.execute(
                 """
@@ -956,7 +916,12 @@ class SQLiteStore:
                 ),
             )
             self._ensure_operation_updated(conn, cursor, operation_id)
-            self._set_stage(conn, Stage.READY, now)
+            stage = self._load_snapshot_facts(conn).stage
+            if stage is not Stage.READY:
+                raise InvariantViolation(
+                    f"post-session completion must yield ready, got {stage.value}"
+                )
+            return stage
 
         return self._write(mutate)
 
@@ -994,17 +959,20 @@ class SQLiteStore:
 
     def _write(
         self,
-        mutate: Callable[[sqlite3.Connection], None],
-    ) -> AppState:
+        mutate: Callable[[sqlite3.Connection], _T],
+    ) -> _T:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                mutate(conn)
+                result = mutate(conn)
                 conn.commit()
+                return result
             except Exception as exc:
                 conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
-        return self.get_app_state()
+                translated = sql.translate_sqlite_error(exc)
+                if translated is exc:
+                    raise
+                raise translated from exc
 
     @contextmanager
     def _connect(self):
@@ -1044,14 +1012,6 @@ class SQLiteStore:
         if row is None:
             raise InvariantViolation("current plan is required")
         return sql.row_to_plan(row)
-
-    def _load_app_state(self, conn: sqlite3.Connection) -> AppState:
-        row = conn.execute(
-            "SELECT stage, created_at, updated_at FROM app_state WHERE singleton_id = 1"
-        ).fetchone()
-        if row is None:
-            raise NotFound("app_state")
-        return sql.row_to_app_state(row)
 
     def _find_operation_by_source(
         self,
@@ -1098,27 +1058,13 @@ class SQLiteStore:
         )
         return self._load_operation(conn, operation_id)
 
-    def _load_stage(self, conn: sqlite3.Connection) -> Stage:
-        row = conn.execute(
-            "SELECT stage FROM app_state WHERE singleton_id = 1"
-        ).fetchone()
-        if row is None:
-            raise NotFound("app_state")
-        return Stage(row[0])
-
     def _require_stage(self, conn: sqlite3.Connection, allowed: set[Stage]) -> Stage:
-        stage = self._load_stage(conn)
+        stage = self._load_snapshot_facts(conn).stage
         if stage not in allowed:
             raise InvariantViolation(
                 f"stage {stage.value} not in {[s.value for s in allowed]}"
             )
         return stage
-
-    def _set_stage(self, conn: sqlite3.Connection, stage: Stage, now: datetime) -> None:
-        conn.execute(
-            "UPDATE app_state SET stage = ?, updated_at = ? WHERE singleton_id = 1",
-            (stage.value, sql.dt(now)),
-        )
 
     def _upsert_profile(
         self, conn: sqlite3.Connection, profile: Profile, *, now: datetime
@@ -1188,35 +1134,73 @@ class SQLiteStore:
         return sql.row_to_operation(row)
 
     def _load_snapshot_facts(self, conn: sqlite3.Connection) -> WorkflowFacts:
-        stage = self._load_stage(conn)
         profile_row = conn.execute(
-            "SELECT name, primary_language FROM profile WHERE singleton_id = 1"
+            """
+            SELECT name, primary_language, current_plan_id
+            FROM profile WHERE singleton_id = 1
+            """
         ).fetchone()
-        profile = (
-            Profile(
-                name=profile_row[0],
-                primary_language=profile_row[1],
-            )
-            if profile_row
-            else Profile(name="", primary_language="")
+        if profile_row is None:
+            raise InvariantViolation("profile singleton is missing")
+        profile = Profile(
+            name=profile_row[0],
+            primary_language=profile_row[1],
         )
-        active_session = conn.execute(
-            "SELECT 1 FROM sessions WHERE ended_at IS NULL LIMIT 1"
+        current_plan_id = UUID(profile_row[2]) if profile_row[2] else None
+        has_any_plan = (
+            conn.execute("SELECT 1 FROM plans LIMIT 1").fetchone() is not None
+        )
+        active_row = conn.execute(
+            f"{_SESSION_SELECT} WHERE ended_at IS NULL LIMIT 1"
         ).fetchone()
+        active_session = sql.row_to_session(active_row) if active_row else None
         op_row = conn.execute(
             """
-            SELECT kind, status, retryable FROM operations
+            SELECT id, kind, status, source_session_id, attempt, result_json,
+                   error_code, error_message, retryable, created_at, updated_at,
+                   started_at, completed_at
+            FROM operations
             WHERE status IN ('pending', 'running', 'failed')
             ORDER BY created_at DESC LIMIT 1
             """
         ).fetchone()
+        current_operation = sql.row_to_operation(op_row) if op_row else None
+        operation_source_session: Session | None = None
+        if current_operation is not None:
+            source_row = conn.execute(
+                f"{_SESSION_SELECT} WHERE id = ?",
+                (str(current_operation.source_session_id),),
+            ).fetchone()
+            if source_row is None:
+                raise InvariantViolation(
+                    "current operation is missing its source session"
+                )
+            operation_source_session = sql.row_to_session(source_row)
+        completed_assessment = conn.execute(
+            """
+            SELECT 1 FROM operations
+            WHERE kind = ? AND status = ?
+            LIMIT 1
+            """,
+            (OperationKind.ASSESSMENT.value, OperationStatus.COMPLETE.value),
+        ).fetchone()
+        stage = derive_stage(
+            profile_complete=is_profile_complete(profile),
+            active_session=active_session,
+            current_plan_id=current_plan_id,
+            has_any_plan=has_any_plan,
+            current_operation=current_operation,
+            operation_source_session=operation_source_session,
+            has_completed_assessment=completed_assessment is not None,
+        )
         return WorkflowFacts(
             stage=stage,
             profile_complete=is_profile_complete(profile),
-            has_active_session=active_session is not None,
-            operation_kind=OperationKind(op_row[0]) if op_row else None,
-            operation_status=OperationStatus(op_row[1]) if op_row else None,
-            operation_retryable=bool(op_row[2]) if op_row else None,
+            operation_kind=current_operation.kind if current_operation else None,
+            operation_status=current_operation.status if current_operation else None,
+            operation_retryable=(
+                current_operation.retryable if current_operation else None
+            ),
         )
 
     def _load_messages_by_client_id(
