@@ -1,12 +1,12 @@
 """Lean local diagnostic capture for explicit debug runs.
 
 When ``JUNG_DEBUG_RUN_DIR`` is set, composition constructs a
-``DiagnosticRecorder`` that writes an ordered ``trace.jsonl``. After a
-successfully initialized application shuts down, composition also writes a
-full SQLite ``db_snapshot.sqlite`` into the same directory. Ordinary console
+``DiagnosticRecorder`` that writes an ordered ``trace.jsonl``. After
+successful database initialization, composition also attempts a full
+SQLite ``db_snapshot.sqlite`` after runtime cleanup. Ordinary console
 logging remains separate. Capture is best-effort after successful startup:
-individual write failures and snapshot failures never change application
-outcome.
+individual write failures and ordinary snapshot errors never change
+application outcome.
 """
 
 from __future__ import annotations
