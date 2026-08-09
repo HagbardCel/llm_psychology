@@ -512,7 +512,7 @@ async def test_store_drained_failure_records_runtime_error(
 ) -> None:
     import threading
 
-    import jung.application as application_module
+    import jung._application.store_calls as store_calls_module
     from jung._async_cleanup import drain_cancelled_task as real_drain
 
     run_dir = tmp_path / "debug-run"
@@ -537,7 +537,7 @@ async def test_store_drained_failure_records_runtime_error(
         drain_entered.set()
         return await real_drain(task)
 
-    monkeypatch.setattr(application_module, "drain_cancelled_task", observed_drain)
+    monkeypatch.setattr(store_calls_module, "drain_cancelled_task", observed_drain)
 
     with DiagnosticRun(run_dir) as recorder:
         async with build_test_application(

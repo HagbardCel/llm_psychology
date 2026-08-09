@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
-from jung.application import ScheduleRejected, TherapyApplication
+from jung.application import TherapyApplication
 from jung.domain.commands import SendMessage
 from jung.domain.models import (
-    Operation,
     OperationStatus,
     Stage,
 )
@@ -46,8 +45,6 @@ from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
 
 from .assessment_test_data import assessment_result_data, plan_content
-
-ScheduleScript = bool | type[ScheduleRejected] | BaseException
 
 
 def assessment_result() -> AssessmentResult:
@@ -156,34 +153,6 @@ def completing_intake_patch(
     )
 
 
-class ScriptedScheduleHook:
-    """Test hook that scripts ``_schedule_operation`` outcomes by call order."""
-
-    def __init__(
-        self,
-        *,
-        in_order: Sequence[ScheduleScript] | None = None,
-    ) -> None:
-        self._in_order = list(in_order or [])
-
-    def __call__(self, operation: Operation) -> None:
-        del operation
-        outcome = self._in_order.pop(0) if self._in_order else True
-        if outcome is True:
-            return
-        if outcome is False:
-            raise ScheduleRejected("scripted schedule skip")
-        if outcome is ScheduleRejected or (
-            isinstance(outcome, type) and issubclass(outcome, ScheduleRejected)
-        ):
-            raise ScheduleRejected("scripted schedule rejected")
-        if isinstance(outcome, BaseException):
-            raise outcome
-        if isinstance(outcome, type) and issubclass(outcome, BaseException):
-            raise outcome("scripted schedule failure")
-        raise TypeError(f"unsupported scripted schedule outcome: {outcome!r}")
-
-
 @dataclass
 class TestApplicationRuntime:
     application: TherapyApplication
@@ -246,7 +215,6 @@ async def build_test_application(
     now: Callable[[], datetime] | None = None,
     new_id: Callable[[], UUID] | None = None,
     recover: bool = True,
-    schedule_hook: Callable[[Operation], None] | None = None,
     recorder: object | None = None,
 ) -> AsyncIterator[TestApplicationRuntime]:
     """Wire TherapyApplication with real store and processors."""
@@ -275,8 +243,6 @@ async def build_test_application(
         new_id=ids,
         recorder=recorder,  # type: ignore[arg-type]
     )
-    if schedule_hook is not None:
-        application._schedule_test_hook = schedule_hook
     if recover:
         await application.recover_on_startup()
     runtime = TestApplicationRuntime(
@@ -363,8 +329,6 @@ async def wait_for_operation_status(
 
 
 __all__ = [
-    "ScheduleRejected",
-    "ScriptedScheduleHook",
     "TestApplicationRuntime",
     "assessment_result",
     "build_test_application",

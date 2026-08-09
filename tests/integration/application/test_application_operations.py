@@ -37,8 +37,6 @@ from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
 
 from .application_fixtures import (
-    ScheduleRejected,
-    ScriptedScheduleHook,
     assessment_result,
     build_test_application,
     collect_stream,
@@ -629,20 +627,27 @@ def _load_trace(run_dir: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
-async def _run_final_intake_with_schedule_script(
+async def test_final_intake_spawn_failure_keeps_completion_and_pending_operation(
     store: SQLiteStore,
     tmp_path: Path,
-    *,
-    start_outcome: object,
-) -> tuple[list[object], list[dict[str, object]]]:
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     turn_messages = ("first turn", "second turn", "third turn")
     fake = FakeLLM(_final_intake_expectations(turn_messages, final_message_sequence=5))
     run_dir = tmp_path / "schedule-failure"
+
+    def boom_spawn(self, operation):  # type: ignore[no-untyped-def]
+        del operation
+        raise RuntimeError("injected schedule start failure")
+
+    from jung._application.operations import OperationRuntime
+
+    monkeypatch.setattr(OperationRuntime, "_spawn_operation_task", boom_spawn)
+
     with DiagnosticRun(run_dir) as recorder:
         async with build_test_application(
             store,
             fake,
-            schedule_hook=ScriptedScheduleHook(in_order=[start_outcome]),
             recorder=recorder,
         ) as runtime:
             await runtime.application.update_profile(
@@ -676,38 +681,7 @@ async def _run_final_intake_with_schedule_script(
             assert user is not None
             assert assistant is not None
     fake.assert_exhausted()
-    return items, _load_trace(run_dir)
-
-
-async def test_final_intake_schedule_rejected_keeps_chat_completed(
-    store: SQLiteStore,
-    tmp_path: Path,
-) -> None:
-    items, events = await _run_final_intake_with_schedule_script(
-        store,
-        tmp_path,
-        start_outcome=ScheduleRejected,
-    )
-    kinds = [event["kind"] for event in events]
-    assert "chat.turn.completed" in kinds
-    assert "chat.turn.failed" not in kinds
-    assert not any(
-        event["kind"] == "runtime.error"
-        and event["data"].get("phase") == "operation_schedule"
-        for event in events
-    )
-    assert isinstance(items[-1], ChatCompleted)
-
-
-async def test_final_intake_schedule_runtime_error_records_runtime_error(
-    store: SQLiteStore,
-    tmp_path: Path,
-) -> None:
-    items, events = await _run_final_intake_with_schedule_script(
-        store,
-        tmp_path,
-        start_outcome=RuntimeError("injected schedule start failure"),
-    )
+    events = _load_trace(run_dir)
     kinds = [event["kind"] for event in events]
     assert "chat.turn.completed" in kinds
     assert "chat.turn.failed" not in kinds

@@ -271,8 +271,9 @@ async def test_retry_after_failed_clears_owned_task_before_reschedule(
             operation_id,
             OperationStatus.FAILED,
         )
-        assert app._operation_task is None
-        assert app._operation_task_id is None
+        assert not app._operations.has_live_task
+        assert app._operations._operation_task is None
+        assert app._operations._operation_task_id is None
 
         await app.retry_operation()
         await wait_for_stage(app, Stage.STYLE_SELECTION)
@@ -338,10 +339,10 @@ async def test_schedule_defers_when_different_owned_task_is_live(
             await release_a.wait()
 
         holding_task = asyncio.create_task(hold(), name="synthetic-ownership")
-        app._operation_task = holding_task
-        app._operation_task_id = uuid4()
+        app._operations._operation_task = holding_task
+        app._operations._operation_task_id = uuid4()
 
-        app._schedule_operation(operation_b)
+        app._operations.schedule(operation_b)
         pending = store.get_operation(operation_id)
         assert pending is not None
         assert pending.status is OperationStatus.PENDING

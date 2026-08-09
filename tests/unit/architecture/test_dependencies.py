@@ -385,6 +385,28 @@ def test_core_does_not_import_transport_frameworks_outside_api_and_client() -> N
 
 
 # ---------------------------------------------------------------------------
+# Rule 7: private application helpers are internal to application.py.
+# ---------------------------------------------------------------------------
+
+
+def test_private_application_package_is_only_imported_by_application() -> None:
+    """Within src/jung, only jung.application and jung._application may import
+    jung._application.
+    """
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        relative = path.relative_to(JUNG_SRC)
+        if relative.parts[0] == "_application":
+            continue
+        if relative == Path("application.py"):
+            continue
+        for module in _resolved_imported_modules(path):
+            if module == "jung._application" or module.startswith("jung._application."):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+# ---------------------------------------------------------------------------
 # Positive controls: synthetic sources prove the checkers catch violations.
 # ---------------------------------------------------------------------------
 

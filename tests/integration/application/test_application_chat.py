@@ -10,7 +10,7 @@ import pytest
 
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.errors import Busy, InvalidCommand
-from jung.domain.models import MessageRole, Profile, Stage
+from jung.domain.models import CommandName, MessageRole, Profile, Stage
 from jung.domain.results import ChatCompleted, ChatFailed, ChatStreamResult, ChatToken
 from jung.llm.errors import LLMTimeout
 from jung.llm.fake import (
@@ -323,13 +323,16 @@ async def test_cancel_during_generation_leaves_user_without_assistant(
             )
         )
         for _ in range(200):
-            if runtime.application._generation_lock.locked():
+            user, _assistant = store.get_messages_by_client_id(
+                session.id, client_message_id
+            )
+            if user is not None:
                 break
             await asyncio.sleep(0.01)
         else:
             gate.set()
             await stream_task
-            raise AssertionError("generation lock was never acquired")
+            raise AssertionError("user message was never persisted")
 
         stream_task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -419,9 +422,7 @@ async def test_fresh_accept_persist_failure_releases_generation_lock(
                     content="hello",
                 ),
             )
-        assert runtime.application._generation_lock.locked() is False
-        messages = store.list_messages(session.id)
-        assert messages == []
+        assert store.list_messages(session.id) == []
 
         store.append_user_message = original_append  # type: ignore[method-assign]
         items = await collect_stream(
@@ -446,7 +447,7 @@ async def test_fresh_accept_cancelled_persist_releases_generation_lock(
         async def cancelled_persist(**kwargs):
             raise asyncio.CancelledError()
 
-        runtime.application._persist_user_message_drained = cancelled_persist  # type: ignore[method-assign]
+        runtime.application._chat._persist_user_message_drained = cancelled_persist  # type: ignore[method-assign]
         with pytest.raises(asyncio.CancelledError):
             await collect_stream(
                 runtime.application,
@@ -456,10 +457,9 @@ async def test_fresh_accept_cancelled_persist_releases_generation_lock(
                     content="hello",
                 ),
             )
-        assert runtime.application._generation_lock.locked() is False
         assert store.list_messages(session.id) == []
 
-        del runtime.application._persist_user_message_drained
+        del runtime.application._chat._persist_user_message_drained
         items = await collect_stream(
             runtime.application,
             SendMessage(
@@ -499,7 +499,6 @@ async def test_post_accept_busy_becomes_chat_failed_internal_error(
         user, assistant = store.get_messages_by_client_id(session.id, client_message_id)
         assert user is not None
         assert assistant is None
-        assert runtime.application._generation_lock.locked() is False
         kinds = [kind for kind, _ in recorder.events]
         assert "chat.turn.failed" in kinds
         assert "runtime.error" in kinds
@@ -515,3 +514,5 @@ async def test_post_accept_busy_becomes_chat_failed_internal_error(
         assert "workflow.command.rejected" not in kinds
 
         store.complete_chat_response = original_complete  # type: ignore[method-assign]
+        snapshot = await runtime.application.get_snapshot()
+        assert CommandName.SEND_MESSAGE in snapshot.available_commands

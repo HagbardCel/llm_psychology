@@ -7,10 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from jung.application import (
-    _classify_worker_error,
-    _validate_plan_style,
-)
+from jung._application.work_errors import _classify_work_error
+from jung.application import _validate_plan_style
 from jung.domain.errors import InvariantViolation
 from jung.domain.models import Plan
 from jung.llm.errors import (
@@ -78,7 +76,7 @@ def test_classify_worker_error_maps_llm_errors_to_public_messages(
     expected_message: str,
     expected_retryable: bool,
 ) -> None:
-    code, message, retryable = _classify_worker_error(error)
+    code, message, retryable = _classify_work_error(error)
     assert code == expected_code
     assert message == expected_message
     assert retryable is expected_retryable
@@ -86,7 +84,7 @@ def test_classify_worker_error_maps_llm_errors_to_public_messages(
 
 
 def test_classify_worker_error_maps_unexpected_errors() -> None:
-    code, message, retryable = _classify_worker_error(RuntimeError("boom"))
+    code, message, retryable = _classify_work_error(RuntimeError("boom"))
     assert code == "internal_error"
     assert message == "An unexpected error occurred."
     assert retryable is False
