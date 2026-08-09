@@ -272,6 +272,155 @@ async def test_send_disconnect_after_token_closes_stream() -> None:
     assert receive_cancelled.is_set()
 
 
+@pytest.mark.parametrize(
+    "race",
+    ["stream_pending", "stream_terminal_already_done"],
+)
+async def test_active_protocol_abort_closes_without_terminal_event(
+    race: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    now = datetime.now(UTC)
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role=MessageRole.USER,
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    assistant = Message(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role=MessageRole.ASSISTANT,
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    stream_closed = asyncio.Event()
+    terminal_produced = asyncio.Event()
+    second_payload = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(uuid4()),
+            "request_id": str(uuid4()),
+            "content": "illegal-second-frame",
+        }
+    )
+    first_payload = json.dumps(
+        {
+            "type": "send_message",
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "request_id": str(request_id),
+            "content": "hello",
+        }
+    )
+
+    if race == "stream_pending":
+
+        async def stream_message(_command) -> AsyncIterator[object]:
+            try:
+                yield ChatToken(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                    text="hi",
+                )
+                await asyncio.Event().wait()
+            finally:
+                stream_closed.set()
+
+        class ProtocolAbortWebSocket(FakeWebSocket):
+            async def send_json(self, data: dict[str, Any]) -> None:
+                if data.get("type") == "token":
+                    await super().send_json(data)
+                    self.queue_text(second_payload)
+                    return
+                await super().send_json(data)
+
+            async def close(self, code: int = 1000) -> None:
+                assert stream_closed.is_set()
+                await super().close(code=code)
+
+        runtime = MockRuntime(
+            application=MockApplication(stream_message=stream_message)
+        )
+        fake = ProtocolAbortWebSocket(
+            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_settings=_default_settings(),
+        )
+        fake.queue_text(first_payload)
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    else:
+
+        async def stream_message(_command) -> AsyncIterator[object]:
+            try:
+                terminal_produced.set()
+                yield ChatCompleted(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                    user_message=user,
+                    assistant_message=assistant,
+                )
+            finally:
+                stream_closed.set()
+
+        class ProtocolAbortWebSocket(FakeWebSocket):
+            async def close(self, code: int = 1000) -> None:
+                assert stream_closed.is_set()
+                await super().close(code=code)
+
+        runtime = MockRuntime(
+            application=MockApplication(stream_message=stream_message)
+        )
+        fake = ProtocolAbortWebSocket(
+            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_settings=_default_settings(),
+        )
+        fake.queue_text(first_payload)
+        fake.queue_text(second_payload)
+
+        real_wait = asyncio.wait
+
+        async def wait_both_ws_tasks(fs, *args, **kwargs):  # noqa: ANN001
+            tasks = set(fs)
+            names = {task.get_name() for task in tasks}
+            if names == {"ws-receive", "ws-stream"}:
+                done, pending = await real_wait(
+                    tasks,
+                    return_when=asyncio.ALL_COMPLETED,
+                )
+                assert not pending
+                assert terminal_produced.is_set()
+                return done, pending
+            return await real_wait(fs, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "wait", wait_both_ws_tasks)
+        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+
+    assert stream_closed.is_set()
+    assert fake.closed is True
+    types = [item["type"] for item in fake.sent]
+    assert "message_completed" not in types
+    assert "message_failed" not in types
+    assert "error" not in types
+    if race == "stream_pending":
+        assert types == ["token"]
+    else:
+        assert types == []
+        assert terminal_produced.is_set()
+
+
 async def test_fresh_cancellation_during_active_stream_cleanup_propagates() -> None:
     import asyncio
 

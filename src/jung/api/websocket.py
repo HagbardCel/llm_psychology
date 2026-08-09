@@ -279,6 +279,7 @@ async def _stream_one_command(
         client_message_id=str(command.client_message_id),
     ):
         preserve_cleanup_cancellation = False
+        protocol_violation = False
         stream = runtime.application.stream_message(domain_command)
         stream_iter = stream.__aiter__()
         receive_task: asyncio.Task[Any] | None = asyncio.create_task(
@@ -309,17 +310,11 @@ async def _stream_one_command(
                     if message["type"] == "websocket.disconnect":
                         return
 
-                    # Unexpected data frame during an active command.
-                    await send_event(
-                        build_error_event(
-                            _validation_envelope(command.request_id),
-                            context=MappingContext(request_id=command.request_id),
-                            session_id=command.session_id,
-                            client_message_id=command.client_message_id,
-                        )
-                    )
-                    await websocket.close()
-                    return
+                    # Unexpected data frame while the valid first command is
+                    # active. Abort without a terminal ServerEvent: durable
+                    # outcome is uncertain.
+                    protocol_violation = True
+                    break
 
                 assert stream_task in done
                 try:
@@ -407,6 +402,10 @@ async def _stream_one_command(
                 record_failure=_record_cleanup_failure,
                 preserve_existing_cancellation=preserve_cleanup_cancellation,
             )
+
+        if protocol_violation:
+            await websocket.close()
+            return
 
 
 async def _aclose_stream(stream: AsyncIterator[ChatStreamResult]) -> None:
