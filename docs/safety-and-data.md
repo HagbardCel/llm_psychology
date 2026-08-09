@@ -87,7 +87,8 @@ Init-gate semantics:
 
 - preflight failure → `trace.jsonl` only (if capture started)
 - database initialization failure → `trace.jsonl` only
-- successfully initialized application → `trace.jsonl` + `db_snapshot.sqlite`
+- database initialization succeeds → snapshot is attempted after cleanup,
+  even if later application/LLM startup or runtime fails
 
 For `jung-api` diagnostic runs, `db_snapshot.sqlite` is an automatic full
 snapshot of the local Jung database after runtime cleanup. It may contain

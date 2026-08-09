@@ -410,10 +410,10 @@ def test_snapshot_database_cleans_up_after_post_create_failure(
     destination = tmp_path / "db_snapshot.sqlite"
 
     def boom(*args, **kwargs):
-        raise sqlite3.OperationalError("forced connect failure")
+        raise KeyboardInterrupt()
 
     monkeypatch.setattr(diagnostics.sqlite3, "connect", boom)
-    with pytest.raises(sqlite3.OperationalError, match="forced connect failure"):
+    with pytest.raises(KeyboardInterrupt):
         snapshot_database(db_path, destination)
     assert not destination.exists()
 

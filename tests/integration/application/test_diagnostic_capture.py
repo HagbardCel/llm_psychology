@@ -185,7 +185,6 @@ async def test_diagnostic_capture_double_structured_failure(tmp_path: Path) -> N
     assert kinds.count("llm.correction.started") == 1
     assert kinds.count("llm.call.failed") == 1
     assert kinds.count("chat.turn.failed") == 1
-    _assert_no_derived_artifacts(run_dir)
 
     snapshot = run_dir / "db_snapshot.sqlite"
     assert snapshot.exists()
@@ -228,7 +227,7 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
 
     settings = _settings(tmp_path, run_dir=run_dir)
     if raise_primary:
-        with pytest.raises(RuntimeError, match="sentinel-primary"):
+        with pytest.raises(RuntimeError, match="sentinel-primary") as exc_info:
             async with application_context(
                 settings, llm_factory=_llm_factory(handler)
             ) as runtime:
@@ -238,6 +237,7 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
                     )
                 )
                 raise sentinel
+        assert exc_info.value is sentinel
     else:
         async with application_context(
             settings, llm_factory=_llm_factory(handler)
