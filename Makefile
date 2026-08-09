@@ -2,7 +2,7 @@
 	smoke-local-llm run-api run-console validate-docs finalization-check \
 	prepare-runtime-dirs docker-build docker-up docker-down \
 	docker-shell docker-logs docker-clean ui-console ui-console-test check-usertest-env \
-	install-hooks clean hook-commit hook-push test-unit test-integration \
+	clean test-unit test-integration \
 	evals eval-report
 
 export PYTHONPATH := src
@@ -172,12 +172,6 @@ check-usertest-env:
 		echo "MODEL_NAME is not configured in .env.usertest."; \
 		exit 1; \
 	fi
-
-hook-commit: lint
-hook-push: hook-commit
-
-install-hooks:
-	@./scripts/install-hooks.sh
 
 clean:
 	@rm -rf __pycache__ .pytest_cache .ruff_cache build dist *.egg-info 2>/dev/null || true
