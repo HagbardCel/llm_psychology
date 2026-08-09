@@ -12,7 +12,7 @@ from tests.integration.application.scenarios import (
 )
 
 
-def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
+def test_recover_stale_operation_is_idempotent(store: SQLiteStore) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -22,11 +22,11 @@ def test_recover_stale_operations_is_idempotent(store: SQLiteStore) -> None:
         operation_id=operation_id,
     )
     store.mark_operation_running(operation_id, now=now)
-    recovered = store.recover_stale_operations(now=now)
-    assert len(recovered) == 1
-    assert recovered[0].status == OperationStatus.PENDING
-    again = store.recover_stale_operations(now=now)
-    assert again == []
+    recovered = store.recover_stale_operation(now=now)
+    assert recovered is not None
+    assert recovered.status == OperationStatus.PENDING
+    again = store.recover_stale_operation(now=now)
+    assert again is None
     operation = store.get_operation(operation_id)
     assert operation is not None
     assert operation.status == OperationStatus.PENDING

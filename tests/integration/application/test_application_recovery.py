@@ -131,8 +131,7 @@ async def test_blocked_running_operation_recovers_on_second_runtime(
             operation_id,
             OperationStatus.RUNNING,
         )
-        runtime_a.application.begin_shutdown()
-        await runtime_a.supervisor.shutdown(timeout_seconds=0.05)
+        await runtime_a.application.shutdown(timeout_seconds=0.05)
         gate.set()
 
     operation = store.get_operation(operation_id)
@@ -153,7 +152,7 @@ async def test_blocked_running_operation_recovers_on_second_runtime(
     success_fake.assert_exhausted()
 
 
-async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
+async def test_shutdown_while_mutation_lock_held_rejects_command(
     store: SQLiteStore,
 ) -> None:
     fake = FakeLLM([])
@@ -188,7 +187,7 @@ async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
             )
         )
         await asyncio.sleep(0.01)
-        app.begin_shutdown()
+        await app.shutdown(timeout_seconds=1.0)
         release_slow_path.set()
         with pytest.raises(Busy, match="shutting down"):
             await blocked_update
@@ -198,14 +197,13 @@ async def test_begin_shutdown_while_mutation_lock_held_rejects_command(
 async def test_shutdown_rejects_new_commands(store: SQLiteStore) -> None:
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
-        runtime.application.begin_shutdown()
+        await runtime.application.shutdown(timeout_seconds=1.0)
         with pytest.raises(Busy, match="shutting down"):
             await runtime.application.update_profile(
                 UpdateProfile(
                     profile=Profile(name="Alex", primary_language="English"),
                 )
             )
-        await runtime.supervisor.shutdown(timeout_seconds=1.0)
         with pytest.raises(Busy, match="shutting down"):
             async for _ in runtime.application.stream_message(
                 SendMessage(

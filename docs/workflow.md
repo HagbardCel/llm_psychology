@@ -80,7 +80,7 @@ PENDING → RUNNING → COMPLETE
 ```
 
 1. **Creation transaction**: persist workflow mutation, create `PENDING` operation keyed by `(kind, source_session_id)`.
-2. **Start**: supervisor marks `RUNNING` outside the acceptance transaction.
+2. **Start**: the application marks `RUNNING` outside the acceptance transaction.
 3. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable.
 4. **Failure**: persist stable error code and retryability; leave stage unchanged.
 5. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
@@ -96,7 +96,7 @@ A completed exchange is a user message and an assistant message sharing the same
 
 Generation is connection-owned: the WebSocket that sends `send_message` drives
 `TherapyApplication.stream_message` until a terminal result. Tokens are
-ephemeral. `TaskSupervisor` is not used for chat.
+ephemeral. Chat is not scheduled as the application's owned operation task.
 
 ### Acceptance and streaming
 
@@ -141,7 +141,7 @@ same ID. There is no pending-turn row to convert on startup.
 
 At startup, before accepting mutations:
 
-- stale `RUNNING` operations → `PENDING`, scheduled by supervisor;
+- stale `RUNNING` operations → `PENDING`, then scheduled by the application;
 - completed operations are not rerun;
 - chat has no supervised recovery — unanswered open-session user messages remain
   for explicit client retry.

@@ -925,37 +925,33 @@ class SQLiteStore:
 
         return self._write(mutate)
 
-    def recover_stale_operations(self, *, now: datetime) -> list[Operation]:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT id FROM operations WHERE status = ?
-                    """,
-                    (OperationStatus.RUNNING.value,),
-                ).fetchall()
-                if not rows:
-                    conn.rollback()
-                    return []
-                conn.execute(
-                    """
-                    UPDATE operations
-                    SET status = ?, started_at = NULL, updated_at = ?
-                    WHERE status = ?
-                    """,
-                    (
-                        OperationStatus.PENDING.value,
-                        sql.dt(now),
-                        OperationStatus.RUNNING.value,
-                    ),
-                )
-                recovered = [self._load_operation(conn, UUID(row[0])) for row in rows]
-                conn.commit()
-                return recovered
-            except Exception as exc:
-                conn.rollback()
-                raise sql.translate_sqlite_error(exc) from exc
+    def recover_stale_operation(self, *, now: datetime) -> Operation | None:
+        def mutate(conn: sqlite3.Connection) -> Operation | None:
+            row = conn.execute(
+                """
+                SELECT id FROM operations WHERE status = ?
+                """,
+                (OperationStatus.RUNNING.value,),
+            ).fetchone()
+            if row is None:
+                return None
+            operation_id = UUID(row[0])
+            conn.execute(
+                """
+                UPDATE operations
+                SET status = ?, started_at = NULL, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    OperationStatus.PENDING.value,
+                    sql.dt(now),
+                    str(operation_id),
+                    OperationStatus.RUNNING.value,
+                ),
+            )
+            return self._load_operation(conn, operation_id)
+
+        return self._write(mutate)
 
     def _write(
         self,

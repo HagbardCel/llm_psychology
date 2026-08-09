@@ -107,7 +107,6 @@ src/jung/
 ├── llm/             LLM abstraction/provider adapter
 ├── application.py   use-case coordination
 ├── workflow.py      pure workflow policy
-├── supervisor.py    operation-task supervision
 ├── composition.py   composition root
 └── config.py        application configuration
 ```
@@ -124,7 +123,7 @@ The application:
 - coordinates phase processors;
 - orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transaction boundaries live in `SQLiteStore`);
 - enforces server-side concurrency and idempotency;
-- starts and recovers long-running operations via `TaskSupervisor`;
+- owns and recovers at most one long-running assessment or post-session operation task;
 - streams chat generation on the calling connection through `stream_message`;
 - returns domain results, not HTTP/WebSocket payloads.
 
@@ -133,7 +132,7 @@ Use-case surface (semantic):
 - **Reads:** `get_snapshot`, `get_profile`, `get_style_options`, `list_sessions`, `get_session_history`
 - **Mutations:** `update_profile`, `select_style`, `start_session` (returns session plus snapshot), `end_session`, `retry_operation`
 - **Chat:** `stream_message` — connection-owned acceptance, token stream, and terminal result
-- **Lifecycle:** `recover_on_startup`, `begin_shutdown`
+- **Lifecycle:** `recover_on_startup`, `shutdown`
 
 ### Connection-owned chat streaming
 
@@ -150,8 +149,9 @@ connection that issued `send_message`. That connection owns the stream:
 - a generation lock serializes chat work and masks `available_commands` while
   generation is active (conflicting workflow commands return `busy`).
 
-`TaskSupervisor` schedules assessment and post-session operations only. See
-[api-v1.md](api-v1.md) for the four-event WebSocket wire contract.
+`TherapyApplication` schedules assessment and post-session operations as a
+single owned asyncio task. See [api-v1.md](api-v1.md) for the four-event
+WebSocket wire contract.
 
 No generic service locator or runtime string-based dependency lookup remains.
 
@@ -228,9 +228,9 @@ Explicit server-side structure:
 - clients observe state and issue commands; they do not send concurrency tokens or otherwise participate in concurrency control;
 - one generation lock / one active generation at a time;
 - while generation is active, snapshot assembly masks `available_commands` to empty, and public workflow commands that conflict with generation return `busy`;
-- FastAPI lifespan owns a failure-isolating application `TaskSupervisor` backed by an `asyncio.TaskGroup` for **operations only**;
-- independent operation failures are persisted locally and must not cancel siblings or API lifespan;
-- chat generation is connection-owned and is not scheduled on `TaskSupervisor`;
+- FastAPI lifespan owns `TherapyApplication`, which schedules at most one assessment or post-session operation task;
+- independent operation failures are persisted locally and must not cancel API lifespan;
+- chat generation is connection-owned and is not scheduled as that owned operation task;
 - detached tasks are prohibited;
 - each synchronous store operation opens and closes its own SQLite connection;
 - async code calls whole store operations via `asyncio.to_thread()`; no connection is shared across threads.
@@ -260,8 +260,8 @@ Native development remains the normal path; see [development.md](development.md)
 
 Diagnostics observe the system and must not become workflow state or API
 contract fields. Application command, chat, operation, and recovery paths
-record schema-v4 events directly into an opt-in `DiagnosticRecorder`.
-Chat correlation uses `client_message_id` (no `turn_id`).
+record schema-v5 events directly into an opt-in `DiagnosticRecorder`.
+Chat correlation uses `client_message_id` (no `turn_id` or `task` context field).
 
 Ordinary logs may include safe LLM metadata when enabled. Opt-in
 `JUNG_DEBUG_RUN_DIR` writes a sensitive correlated debug bundle (`manifest.json`,

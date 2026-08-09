@@ -331,10 +331,6 @@ def classify_unresolved_problems(
     workflow = state.get("workflow")
     if isinstance(workflow, Mapping) and workflow.get("integrity_error"):
         problems.append(f"workflow.integrity_error: {workflow['integrity_error']}")
-    if _trace_has_kind(events, "task.failed"):
-        problems.append("task.failed present in trace")
-    if _trace_has_kind(events, "task.shutdown_timeout"):
-        problems.append("task.shutdown_timeout present in trace")
     if _trace_has_kind(events, "runtime.error"):
         problems.append("runtime.error present in trace")
 
@@ -417,7 +413,6 @@ def build_failure_summary(
         )
         or event.get("kind")
         in {
-            "task.shutdown_timeout",
             "runtime.error",
             "llm.validation.failed",
             "llm.correction.started",

@@ -27,7 +27,6 @@ from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import FailureExpectation, FakeLLM
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
-from jung.supervisor import TaskSupervisor
 
 from .application_fixtures import (
     build_test_application,
@@ -47,14 +46,6 @@ def _load_trace(run_dir: Path) -> list[dict[str, object]]:
 
 def _kinds(events: list[dict[str, object]]) -> list[str]:
     return [str(event["kind"]) for event in events]
-
-
-async def _wait_until_idle(supervisor: TaskSupervisor) -> None:
-    for _ in range(200):
-        if not supervisor._active:
-            return
-        await asyncio.sleep(0.01)
-    raise TimeoutError("supervisor still active")
 
 
 async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> None:
@@ -199,10 +190,10 @@ async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:
 
     events = _load_trace(run_dir)
     assert events[0]["schema_version"] == DIAGNOSTIC_SCHEMA_VERSION
-    assert DIAGNOSTIC_SCHEMA_VERSION == 4
+    assert DIAGNOSTIC_SCHEMA_VERSION == 5
     transitions = [e for e in events if e["kind"] == "workflow.transition"]
     assert len(transitions) == 1
-    assert transitions[0]["schema_version"] == 4
+    assert transitions[0]["schema_version"] == 5
     assert transitions[0]["data"] == {
         "from_stage": Stage.SETUP.value,
         "to_stage": Stage.INTAKE.value,
@@ -251,30 +242,6 @@ async def test_incomplete_intake_profile_update_is_rejected(tmp_path: Path) -> N
     assert "runtime.error" not in kinds
 
 
-async def test_pre_running_ownership_failure_emits_task_failed(
-    tmp_path: Path,
-) -> None:
-    run_dir = tmp_path / "debug-run"
-    with DiagnosticRun(run_dir) as recorder:
-        supervisor = TaskSupervisor(recorder=recorder)
-
-        async def failing_run() -> None:
-            raise RuntimeError("ownership failed")
-
-        async with supervisor:
-            assert supervisor.start(name="operation:test", run=failing_run)
-            await _wait_until_idle(supervisor)
-
-    events = _load_trace(run_dir)
-    kinds = _kinds(events)
-    assert "task.started" in kinds
-    assert "task.failed" in kinds
-    assert "task.completed" not in kinds
-    failed = next(e for e in events if e["kind"] == "task.failed")
-    assert failed["context"]["task"] == "operation:test"
-    assert failed["data"]["error_type"] == "RuntimeError"
-
-
 async def test_dead_trace_cleanup_still_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -310,26 +277,6 @@ async def test_dead_trace_cleanup_still_logs(
     kinds = _kinds(_load_trace(run_dir))
     # After a latched write failure, later records (including runtime.error) are dropped.
     assert "diagnostics.start" in kinds
-
-
-async def test_shutdown_timeout_recorded(tmp_path: Path) -> None:
-    run_dir = tmp_path / "debug-run"
-    with DiagnosticRun(run_dir) as recorder:
-        supervisor = TaskSupervisor(recorder=recorder)
-        async with supervisor:
-            started = asyncio.Event()
-
-            async def hang() -> None:
-                started.set()
-                await asyncio.sleep(60)
-
-            assert supervisor.start(name="hang", run=hang)
-            await started.wait()
-            await supervisor.shutdown(timeout_seconds=0.01)
-
-    kinds = _kinds(_load_trace(run_dir))
-    assert "task.shutdown_timeout" in kinds
-    assert "task.cancelled" in kinds
 
 
 async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:

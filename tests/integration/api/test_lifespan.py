@@ -100,14 +100,9 @@ async def test_failed_runtime_exit_does_not_log_shutdown_complete(
     app = create_app(api_settings, runtime_factory=failing_exit_factory)
 
     with caplog.at_level(logging.INFO, logger="jung.api.app"):
-        with pytest.raises(ExceptionGroup) as exc_info:
+        with pytest.raises(RuntimeError, match="shutdown failed"):
             async with app.router.lifespan_context(app):
                 pass
-
-    assert any(
-        isinstance(exc, RuntimeError) and str(exc) == "shutdown failed"
-        for exc in exc_info.value.exceptions
-    )
 
     assert not any(
         record.message == "api_shutdown_complete" for record in caplog.records

@@ -125,26 +125,26 @@ def test_sanitize_value_common_project_types() -> None:
 
 def test_diagnostic_context_rejects_unknown_fields() -> None:
     with pytest.raises(TypeError, match="unknown diagnostic context fields"):
-        with diagnostic_context(task_name="old"):
+        with diagnostic_context(task="removed"):
             pass
 
 
 def test_diagnostic_context_nested_merge_and_restore() -> None:
     with diagnostic_context(session_id="s1"):
-        with diagnostic_context(operation_id="o1", task="t1"):
+        with diagnostic_context(operation_id="o1", client_message_id="c1"):
             with diagnostic_context(llm_call_id="llm-1"):
                 from jung.diagnostics import current_diagnostic_context
 
                 ctx = current_diagnostic_context()
                 assert ctx.session_id == "s1"
                 assert ctx.operation_id == "o1"
-                assert ctx.task == "t1"
+                assert ctx.client_message_id == "c1"
                 assert ctx.llm_call_id == "llm-1"
             from jung.diagnostics import current_diagnostic_context
 
             mid = current_diagnostic_context()
             assert mid.llm_call_id is None
-            assert mid.task == "t1"
+            assert mid.client_message_id == "c1"
         outer = __import__(
             "jung.diagnostics", fromlist=["current_diagnostic_context"]
         ).current_diagnostic_context()
@@ -155,20 +155,21 @@ def test_diagnostic_context_nested_merge_and_restore() -> None:
 def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     with DiagnosticRun(run_dir) as recorder:
-        with diagnostic_context(session_id="s1", task="chat:1"):
+        with diagnostic_context(session_id="s1", operation_id="o1"):
             recorder.record("llm.provider.request", {"attempt": "initial"})
     lines = _trace_lines(run_dir)
     assert lines[0]["kind"] == "diagnostics.start"
     assert lines[-1]["kind"] == "diagnostics.end"
     assert lines[-1]["data"]["status"] == "success"
     event = lines[1]
-    assert event["schema_version"] == 4
+    assert event["schema_version"] == 5
     assert event["sequence"] == 2
     assert "timestamp" in event
     assert "elapsed_ms" in event
     assert event["kind"] == "llm.provider.request"
     assert event["context"]["session_id"] == "s1"
-    assert event["context"]["task"] == "chat:1"
+    assert event["context"]["operation_id"] == "o1"
+    assert "task" not in event["context"]
     assert "run_id" in event["context"]
     assert event["data"]["attempt"] == "initial"
 

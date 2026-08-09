@@ -14,9 +14,7 @@ from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
-EXPECTED_TABLES = frozenset(
-    {"profile", "sessions", "plans", "messages", "operations"}
-)
+EXPECTED_TABLES = frozenset({"profile", "sessions", "plans", "messages", "operations"})
 
 
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:

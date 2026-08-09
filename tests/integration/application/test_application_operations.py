@@ -35,10 +35,10 @@ from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
-from jung.supervisor import SupervisorClosed
 
 from .application_fixtures import (
-    ScriptedTaskSupervisor,
+    ScheduleRejected,
+    ScriptedScheduleHook,
     assessment_result,
     build_test_application,
     collect_stream,
@@ -425,9 +425,12 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
             OperationStatus.FAILED,
         )
         await runtime.application.retry_operation()
-        runtime.application.begin_shutdown()
+        shutdown_task = asyncio.create_task(
+            runtime.application.shutdown(timeout_seconds=5.0)
+        )
         gate.set()
         await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+        await shutdown_task
     fake.assert_exhausted()
 
 
@@ -626,7 +629,7 @@ def _load_trace(run_dir: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
-async def _run_final_intake_with_supervisor_script(
+async def _run_final_intake_with_schedule_script(
     store: SQLiteStore,
     tmp_path: Path,
     *,
@@ -634,15 +637,12 @@ async def _run_final_intake_with_supervisor_script(
 ) -> tuple[list[object], list[dict[str, object]]]:
     turn_messages = ("first turn", "second turn", "third turn")
     fake = FakeLLM(_final_intake_expectations(turn_messages, final_message_sequence=5))
-    supervisor = ScriptedTaskSupervisor(
-        by_name={"operation:*": [start_outcome]},
-    )
     run_dir = tmp_path / "schedule-failure"
     with DiagnosticRun(run_dir) as recorder:
         async with build_test_application(
             store,
             fake,
-            supervisor=supervisor,
+            schedule_hook=ScriptedScheduleHook(in_order=[start_outcome]),
             recorder=recorder,
         ) as runtime:
             await runtime.application.update_profile(
@@ -679,14 +679,14 @@ async def _run_final_intake_with_supervisor_script(
     return items, _load_trace(run_dir)
 
 
-async def test_final_intake_supervisor_closed_keeps_chat_completed(
+async def test_final_intake_schedule_rejected_keeps_chat_completed(
     store: SQLiteStore,
     tmp_path: Path,
 ) -> None:
-    items, events = await _run_final_intake_with_supervisor_script(
+    items, events = await _run_final_intake_with_schedule_script(
         store,
         tmp_path,
-        start_outcome=SupervisorClosed,
+        start_outcome=ScheduleRejected,
     )
     kinds = [event["kind"] for event in events]
     assert "chat.turn.completed" in kinds
@@ -699,14 +699,14 @@ async def test_final_intake_supervisor_closed_keeps_chat_completed(
     assert isinstance(items[-1], ChatCompleted)
 
 
-async def test_final_intake_supervisor_runtime_error_records_runtime_error(
+async def test_final_intake_schedule_runtime_error_records_runtime_error(
     store: SQLiteStore,
     tmp_path: Path,
 ) -> None:
-    items, events = await _run_final_intake_with_supervisor_script(
+    items, events = await _run_final_intake_with_schedule_script(
         store,
         tmp_path,
-        start_outcome=RuntimeError("injected supervisor start failure"),
+        start_outcome=RuntimeError("injected schedule start failure"),
     )
     kinds = [event["kind"] for event in events]
     assert "chat.turn.completed" in kinds

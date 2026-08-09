@@ -63,7 +63,7 @@ def test_write_manifest_and_export_snapshot(tmp_path: Path) -> None:
         finalize_debug_bundle(recorder, store)
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["diagnostic_schema_version"] == 4
+    assert manifest["diagnostic_schema_version"] == 5
     assert manifest["database_schema_version_expected"] == 6
     assert "sekrit" not in json.dumps(manifest)
     assert manifest["llm"]["provider_url"] == "http://127.0.0.1:8080/v1"
