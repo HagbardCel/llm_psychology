@@ -141,7 +141,9 @@ Chat is not supervised background work and does not use an in-process event
 fan-out. The WebSocket adapter calls `TherapyApplication.stream_message` on the
 connection that issued `send_message`. That connection owns the stream:
 
-- one command frame → token events → one terminal event → close;
+- normally: one command frame → token events → one terminal event → close;
+  active protocol aborts follow the uncertain-delivery behavior defined in
+  [api-v1.md](api-v1.md);
 - disconnect cancels generation for that attempt;
 - durable truth is messages only (see [workflow.md](workflow.md) and
   [database.md](database.md));

@@ -90,12 +90,12 @@ Disconnect cancels that attempt. There is no multi-subscriber fan-out, no
 `snapshot_changed` / `operation_changed` stream, and no event replay.
 
 Normally, a valid one-shot chat connection emits one terminal event and closes.
-If an additional inbound data frame arrives while the first valid command is
-active, the server aborts that connection: it cancels/drains owned generation and
-closes without emitting a terminal event for the active request. Its durable
-outcome is therefore uncertain to the client; recover through authoritative HTTP
-state/history as for other uncertain delivery. Initial-frame validation failures
-still emit `error`.
+If an additional inbound data frame is received by the server while the first
+valid command is active, the server aborts that connection: it cancels/drains
+owned generation and closes without emitting a terminal event for the active
+request. Its durable outcome is therefore uncertain to the client; recover
+through authoritative HTTP state/history as for other uncertain delivery.
+Initial-frame validation failures still emit `error`.
 
 Browser WebSocket handshakes containing an `Origin` header are accepted only when
 that exact HTTP(S) Origin is present in `JUNG_API_ALLOWED_ORIGINS`. Native clients

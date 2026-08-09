@@ -100,8 +100,9 @@ ephemeral. `TaskSupervisor` is not used for chat.
 1. **New message**: validate stage/session; reject if the open session already
    ends with an unanswered `USER`; acquire the generation lock; persist the user
    message; stream tokens; on success persist the assistant message and emit
-   `message_completed`; on classified generation failure emit `message_failed`
-   (user message remains durable; stage unchanged).
+   `message_completed`; on an ordinary post-acceptance failure before durable
+   assistant completion emit `message_failed` (user message remains durable;
+   stage unchanged).
 2. **Idempotent complete**: same `(session_id, client_message_id)` already has
    user and assistant with matching content → yield `message_completed` with the
    durable pair (no regeneration).
