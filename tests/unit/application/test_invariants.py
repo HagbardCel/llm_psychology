@@ -9,17 +9,10 @@ import pytest
 
 from jung.application import (
     _classify_worker_error,
-    _validate_snapshot_invariants,
+    _validate_plan_style,
 )
 from jung.domain.errors import InvariantViolation
-from jung.domain.models import (
-    AppSnapshot,
-    CommandName,
-    Plan,
-    Session,
-    SessionKind,
-    Stage,
-)
+from jung.domain.models import Plan
 from jung.llm.errors import (
     InvalidLLMOutput,
     LLMProtocolError,
@@ -29,26 +22,7 @@ from jung.llm.errors import (
 from jung.styles import load_styles
 
 
-def test_validate_snapshot_invariants_rejects_setup_with_session() -> None:
-    now = datetime.now(UTC)
-    session = Session(
-        id=uuid4(),
-        kind=SessionKind.INTAKE,
-        started_at=now,
-    )
-    snapshot = AppSnapshot(
-        stage=Stage.SETUP,
-        profile_complete=True,
-        active_session=session,
-        available_commands=frozenset(),
-    )
-    with pytest.raises(
-        InvariantViolation, match="SETUP must not have an active session"
-    ):
-        _validate_snapshot_invariants(snapshot, None, load_styles())
-
-
-def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
+def test_validate_plan_style_rejects_unknown_plan_style() -> None:
     now = datetime.now(UTC)
     plan = Plan(
         id=uuid4(),
@@ -62,14 +36,8 @@ def test_validate_snapshot_invariants_rejects_unknown_plan_style() -> None:
         revision_recommendations=[],
         created_at=now,
     )
-    snapshot = AppSnapshot(
-        stage=Stage.READY,
-        profile_complete=True,
-        selected_style="unknown-style",
-        available_commands=frozenset({CommandName.START_SESSION}),
-    )
     with pytest.raises(InvariantViolation, match="unknown style"):
-        _validate_snapshot_invariants(snapshot, plan, load_styles())
+        _validate_plan_style(plan, load_styles())
 
 
 SECRET_MARKER = "secret-marker https://api.example.com sk-test-key"

@@ -77,12 +77,15 @@ from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
-from jung.supervisor import SupervisorClosed, TaskSupervisor
 
 logger = logging.getLogger(__name__)
 
 _RECENT_SUMMARY_LIMIT = 5
 _T = TypeVar("_T")
+
+
+class ScheduleRejected(Exception):
+    """Test seam: refuse schedule without recording operation_schedule error."""
 
 
 class _AcceptedDuringCancel(Exception):
@@ -109,7 +112,6 @@ class TherapyApplication:
         therapy: TherapyProcessor,
         post_session: PostSessionProcessor,
         styles: MappingProxyType[str, StyleDefinition],
-        supervisor: TaskSupervisor,
         now: Callable[[], datetime],
         new_id: Callable[[], UUID],
         recorder: DiagnosticRecorder | None = None,
@@ -120,20 +122,48 @@ class TherapyApplication:
         self._therapy = therapy
         self._post_session = post_session
         self._styles = styles
-        self._supervisor = supervisor
         self._now = now
         self._new_id = new_id
         self._recorder = recorder
         self._mutation_lock = asyncio.Lock()
         self._generation_lock = asyncio.Lock()
         self._shutdown = False
+        self._operation_task: asyncio.Task[None] | None = None
+        self._operation_task_id: UUID | None = None
+        self._schedule_test_hook: Callable[[Operation], None] | None = None
 
     @property
     def is_shutdown(self) -> bool:
         return self._shutdown
 
-    def begin_shutdown(self) -> None:
+    async def shutdown(self, *, timeout_seconds: float) -> None:
         self._shutdown = True
+        task = self._operation_task
+        if task is None:
+            return
+        if task.done():
+            self._clear_operation_ownership(expected=task)
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+        except TimeoutError:
+            task.cancel()
+            await drain_cancelled_task(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            await drain_cancelled_task(task)
+            raise
+        finally:
+            self._clear_operation_ownership(expected=task)
+
+    def _clear_operation_ownership(
+        self, *, expected: asyncio.Task[None] | None = None
+    ) -> None:
+        current = self._operation_task
+        if expected is not None and current is not None and current is not expected:
+            return
+        self._operation_task = None
+        self._operation_task_id = None
 
     def _record(self, kind: str, data: dict[str, Any] | None = None) -> None:
         if self._recorder is not None:
@@ -230,55 +260,30 @@ class TherapyApplication:
 
     async def recover_on_startup(self) -> AppSnapshot:
         async with self._mutation_lock:
-            recovered_ops = await self._run_store(
-                self._store.recover_stale_operations,
+            if self._operation_task is not None and not self._operation_task.done():
+                return await self._assemble_snapshot_locked()
+            recovered = await self._run_store(
+                self._store.recover_stale_operation,
                 now=self._now(),
             )
             snapshot = await self._assemble_snapshot_locked()
 
-        recovered_by_id = {operation.id: operation for operation in recovered_ops}
-        scheduled_id: UUID | None = None
-        if (
-            snapshot.current_operation is not None
-            and snapshot.current_operation.status is OperationStatus.PENDING
-        ):
-            scheduled_id = snapshot.current_operation.id
-            self._schedule_operation(snapshot.current_operation)
+        pending = snapshot.current_operation
+        if pending is not None and pending.status is OperationStatus.PENDING:
+            self._schedule_operation(pending)
 
-        for operation in recovered_ops:
+        if recovered is not None:
             with diagnostic_context(
-                operation_id=str(operation.id),
-                session_id=str(operation.source_session_id),
+                operation_id=str(recovered.id),
+                session_id=str(recovered.source_session_id),
             ):
                 self._record(
                     "operation.recovered",
                     {
-                        "kind": operation.kind.value,
-                        "attempt": operation.attempt,
+                        "kind": recovered.kind.value,
+                        "attempt": recovered.attempt,
                         "from_status": OperationStatus.RUNNING.value,
                         "to_status": OperationStatus.PENDING.value,
-                        "scheduled": operation.id == scheduled_id,
-                    },
-                )
-
-        if (
-            scheduled_id is not None
-            and scheduled_id not in recovered_by_id
-            and snapshot.current_operation is not None
-        ):
-            operation = snapshot.current_operation
-            with diagnostic_context(
-                operation_id=str(operation.id),
-                session_id=str(operation.source_session_id),
-            ):
-                self._record(
-                    "operation.recovered",
-                    {
-                        "kind": operation.kind.value,
-                        "attempt": operation.attempt,
-                        "from_status": OperationStatus.PENDING.value,
-                        "to_status": OperationStatus.PENDING.value,
-                        "scheduled": True,
                     },
                 )
         return snapshot
@@ -477,7 +482,7 @@ class TherapyApplication:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
                 workflow.require_command_allowed(CommandName.START_SESSION, facts)
-                _, session = await self._run_store(
+                session = await self._run_store(
                     self._store.start_therapy_session,
                     session_id=session_id,
                     now=self._now(),
@@ -527,7 +532,7 @@ class TherapyApplication:
                         )
                     if active.kind is not SessionKind.THERAPY:
                         raise InvalidCommand("active session is not therapy")
-                    _, operation = await self._run_store(
+                    operation = await self._run_store(
                         self._store.end_therapy_session,
                         session_id=command.session_id,
                         operation_id=operation_id,
@@ -899,7 +904,7 @@ class TherapyApplication:
         active = await self._run_store(self._store.get_active_session)
         if active is None or active.id != session_id:
             return False
-        state = await self._run_store(self._store.get_app_state)
+        state = await self._run_store(self._store.load_snapshot_facts)
         if state.stage is Stage.INTAKE and session.kind is not SessionKind.INTAKE:
             return False
         if state.stage is Stage.THERAPY and session.kind is not SessionKind.THERAPY:
@@ -1034,7 +1039,7 @@ class TherapyApplication:
             async with self._mutation_lock:
                 facts = await self._run_store(self._store.load_snapshot_facts)
                 from_stage = facts.stage
-                assistant, operation, _state = await self._run_store(
+                assistant, operation = await self._run_store(
                     self._store.complete_final_intake_response,
                     session_id=user_message.session_id,
                     client_message_id=user_message.client_message_id,
@@ -1100,20 +1105,19 @@ class TherapyApplication:
         return snapshot
 
     def _build_snapshot(self) -> AppSnapshot:
-        state = self._store.get_app_state()
         facts = self._store.load_snapshot_facts()
         plan = self._store.get_current_plan()
         active_session = self._store.get_active_session()
         current_operation = self._store.get_current_operation()
         snapshot = AppSnapshot(
-            stage=state.stage,
+            stage=facts.stage,
             profile_complete=facts.profile_complete,
             selected_style=plan.selected_style if plan is not None else None,
             active_session=active_session,
             current_operation=current_operation,
             available_commands=workflow.available_commands(facts),
         )
-        _validate_snapshot_invariants(snapshot, plan, self._styles)
+        _validate_plan_style(plan, self._styles)
         return snapshot
 
     def _reject_if_shutdown(self) -> None:
@@ -1130,24 +1134,48 @@ class TherapyApplication:
             self._generation_lock.release()
 
     def _operation_task_name(self, operation: Operation) -> str:
-        return f"operation:{operation.id}:attempt:{operation.attempt + 1}"
+        return f"operation:{operation.id}"
 
     def _schedule_operation(self, operation: Operation) -> None:
-        name = self._operation_task_name(operation)
-        try:
-            started = self._supervisor.start(
-                name=name,
-                run=lambda: self._run_operation_worker(operation.id),
-            )
-            if not started:
-                logger.debug(
-                    "operation attempt already scheduled operation_id=%s name=%s",
-                    operation.id,
-                    name,
-                )
-        except SupervisorClosed:
+        if self._shutdown:
             return
+        task = self._operation_task
+        if task is not None and not task.done():
+            if self._operation_task_id == operation.id:
+                return
+            pending = operation
+
+            def _defer(_done: asyncio.Task[None]) -> None:
+                self._schedule_operation(pending)
+
+            task.add_done_callback(_defer)
+            return
+
+        if self._schedule_test_hook is not None:
+            try:
+                self._schedule_test_hook(operation)
+            except ScheduleRejected:
+                return
+            except Exception as exc:
+                logger.exception(
+                    "failed to schedule operation operation_id=%s",
+                    operation.id,
+                )
+                self._record_runtime_error(
+                    phase="operation_schedule",
+                    exc=exc,
+                    operation_id=str(operation.id),
+                )
+                return
+
+        coro = self._run_owned_operation(operation.id)
+        try:
+            created = asyncio.create_task(
+                coro,
+                name=self._operation_task_name(operation),
+            )
         except Exception as exc:
+            coro.close()
             logger.exception(
                 "failed to schedule operation operation_id=%s",
                 operation.id,
@@ -1157,10 +1185,29 @@ class TherapyApplication:
                 exc=exc,
                 operation_id=str(operation.id),
             )
+            return
+        self._operation_task = created
+        self._operation_task_id = operation.id
 
-    async def _run_operation_worker(self, operation_id: UUID) -> None:
-        with diagnostic_context(operation_id=str(operation_id)):
-            await self._run_operation_worker_body(operation_id)
+    async def _run_owned_operation(self, operation_id: UUID) -> None:
+        try:
+            with diagnostic_context(operation_id=str(operation_id)):
+                await self._run_operation_worker_body(operation_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "operation task failed unexpectedly operation_id=%s",
+                operation_id,
+            )
+            self._record_runtime_error(
+                phase="operation_task",
+                exc=exc,
+                operation_id=str(operation_id),
+            )
+        finally:
+            current = asyncio.current_task()
+            self._clear_operation_ownership(expected=current)
 
     async def _run_operation_worker_body(self, operation_id: UUID) -> None:
         running_owned = False
@@ -1194,29 +1241,23 @@ class TherapyApplication:
                     assessment_input = await self._build_assessment_input(operation)
                     result = await self._assessment.assess(assessment_input)
                     async with self._mutation_lock:
-                        before = await self._run_store(self._store.get_app_state)
-                        await self._run_store(
+                        before = await self._run_store(self._store.load_snapshot_facts)
+                        to_stage = await self._run_store(
                             self._store.complete_assessment,
                             operation_id,
                             result=result.model_dump(mode="json"),
                             now=self._now(),
                         )
-                        snapshot = await self._assemble_snapshot_locked()
-                    completed = await self._run_store(
-                        self._store.get_operation,
-                        operation_id,
-                    )
-                    assert completed is not None
                     self._record(
                         "operation.completed",
                         {
-                            "kind": completed.kind.value,
-                            "attempt": completed.attempt,
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
                         },
                     )
                     self._record_transition_if_changed(
                         from_stage=before.stage,
-                        to_stage=snapshot.stage,
+                        to_stage=to_stage,
                         trigger="assessment_completed",
                     )
                 elif operation.kind is OperationKind.POST_SESSION:
@@ -1248,8 +1289,8 @@ class TherapyApplication:
                         else None
                     )
                     async with self._mutation_lock:
-                        before = await self._run_store(self._store.get_app_state)
-                        await self._run_store(
+                        before = await self._run_store(self._store.load_snapshot_facts)
+                        to_stage = await self._run_store(
                             self._store.complete_post_session,
                             operation_id,
                             summary=result.session_summary,
@@ -1258,22 +1299,16 @@ class TherapyApplication:
                             new_plan=new_plan,
                             now=self._now(),
                         )
-                        snapshot = await self._assemble_snapshot_locked()
-                    completed = await self._run_store(
-                        self._store.get_operation,
-                        operation_id,
-                    )
-                    assert completed is not None
                     self._record(
                         "operation.completed",
                         {
-                            "kind": completed.kind.value,
-                            "attempt": completed.attempt,
+                            "kind": operation.kind.value,
+                            "attempt": operation.attempt,
                         },
                     )
                     self._record_transition_if_changed(
                         from_stage=before.stage,
-                        to_stage=snapshot.stage,
+                        to_stage=to_stage,
                         trigger="post_session_completed",
                     )
                 else:
@@ -1526,43 +1561,10 @@ def _select_style_recommendation(
     raise InvalidCommand(f"style {style_id} is not in assessment recommendations")
 
 
-def _validate_snapshot_invariants(
-    snapshot: AppSnapshot,
+def _validate_plan_style(
     plan: Plan | None,
     styles: MappingProxyType[str, StyleDefinition],
 ) -> None:
-    stage = snapshot.stage
-    if stage is Stage.SETUP and snapshot.active_session is not None:
-        raise InvariantViolation("SETUP must not have an active session")
-    if stage is Stage.INTAKE:
-        if (
-            snapshot.active_session is None
-            or snapshot.active_session.kind is not SessionKind.INTAKE
-        ):
-            raise InvariantViolation("INTAKE requires an open intake session")
-    if stage is Stage.THERAPY:
-        if (
-            snapshot.active_session is None
-            or snapshot.active_session.kind is not SessionKind.THERAPY
-        ):
-            raise InvariantViolation("THERAPY requires an open therapy session")
-    if stage is Stage.READY:
-        if snapshot.active_session is not None:
-            raise InvariantViolation("READY must not have an active session")
-        if snapshot.current_operation is not None:
-            raise InvariantViolation("READY must not have a current operation")
-    if stage is Stage.ASSESSMENT:
-        if (
-            snapshot.current_operation is None
-            or snapshot.current_operation.kind is not OperationKind.ASSESSMENT
-        ):
-            raise InvariantViolation("ASSESSMENT requires an assessment operation")
-    if stage is Stage.POST_SESSION:
-        if (
-            snapshot.current_operation is None
-            or snapshot.current_operation.kind is not OperationKind.POST_SESSION
-        ):
-            raise InvariantViolation("POST_SESSION requires a post-session operation")
     if plan is not None and plan.selected_style not in styles:
         raise InvariantViolation(f"unknown style: {plan.selected_style}")
 

@@ -48,7 +48,6 @@ async def test_application_context_smoke(
     async with application_context(settings) as runtime:
         snapshot = await runtime.application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
-        assert runtime.supervisor is not None
     assert closed is True
 
 

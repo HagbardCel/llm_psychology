@@ -27,7 +27,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 _TOKEN_METRIC_KEYS: Final = frozenset(
     {
         "prompt_tokens",
@@ -64,7 +64,6 @@ class DiagnosticContext:
     session_id: str | None = None
     client_message_id: str | None = None
     operation_id: str | None = None
-    task: str | None = None
     llm_call_id: str | None = None
 
     def as_dict(self) -> dict[str, str]:
@@ -75,7 +74,6 @@ class DiagnosticContext:
                 ("session_id", self.session_id),
                 ("client_message_id", self.client_message_id),
                 ("operation_id", self.operation_id),
-                ("task", self.task),
                 ("llm_call_id", self.llm_call_id),
             )
             if value is not None

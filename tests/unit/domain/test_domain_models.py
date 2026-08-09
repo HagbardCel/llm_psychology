@@ -9,12 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 from jung.domain.models import (
-    AppState,
     Message,
     MessageRole,
     Plan,
     Profile,
-    Stage,
     is_profile_complete,
 )
 
@@ -68,6 +66,7 @@ def test_message_sequence_must_be_positive():
             sequence=0,
             role=MessageRole.USER,
             content="hi",
+            client_message_id=uuid4(),
             created_at=datetime.now(UTC),
         )
 
@@ -85,18 +84,26 @@ def test_profile_optional_fields():
 
 def test_domain_timestamp_rejects_naive_datetime() -> None:
     with pytest.raises(ValidationError):
-        AppState(
-            stage=Stage.SETUP,
+        Message(
+            id=uuid4(),
+            session_id=uuid4(),
+            sequence=1,
+            role=MessageRole.USER,
+            content="hi",
+            client_message_id=uuid4(),
             created_at=datetime.now(),
-            updated_at=datetime.now(UTC),
         )
 
 
 def test_domain_timestamp_normalizes_offset_to_utc() -> None:
     source = datetime(2026, 7, 12, 12, tzinfo=timezone(timedelta(hours=2)))
-    state = AppState(
-        stage=Stage.SETUP,
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        sequence=1,
+        role=MessageRole.USER,
+        content="hi",
+        client_message_id=uuid4(),
         created_at=source,
-        updated_at=source,
     )
-    assert state.created_at.utcoffset() == timedelta(0)
+    assert message.created_at.utcoffset() == timedelta(0)

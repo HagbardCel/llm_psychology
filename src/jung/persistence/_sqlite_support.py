@@ -14,7 +14,6 @@ from uuid import UUID
 
 from jung.domain.errors import Busy, InvariantViolation, PersistenceFailure
 from jung.domain.models import (
-    AppState,
     Message,
     MessageRole,
     Operation,
@@ -24,17 +23,15 @@ from jung.domain.models import (
     Profile,
     Session,
     SessionKind,
-    Stage,
     StoredProfile,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 TARGET_TABLES = frozenset(
     {
-        "app_state",
         "profile",
         "sessions",
         "messages",
@@ -71,13 +68,6 @@ def seed_initial_state(conn: sqlite3.Connection) -> None:
     now = dt(datetime.now(UTC))
     conn.execute(
         """
-        INSERT INTO app_state (singleton_id, stage, created_at, updated_at)
-        VALUES (1, ?, ?, ?)
-        """,
-        (Stage.SETUP.value, now, now),
-    )
-    conn.execute(
-        """
         INSERT INTO profile (
             singleton_id, name, primary_language, date_of_birth, notes,
             derived_profile_json, current_plan_id, created_at, updated_at
@@ -87,15 +77,14 @@ def seed_initial_state(conn: sqlite3.Connection) -> None:
     )
 
 
-def has_any_target_table(conn: sqlite3.Connection) -> bool:
-    placeholders = ", ".join("?" for _ in TARGET_TABLES)
+def has_any_user_table(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
-        f"""
+        """
         SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name IN ({placeholders})
+        WHERE type = 'table'
+          AND name NOT LIKE 'sqlite_%'
         LIMIT 1
-        """,
-        tuple(sorted(TARGET_TABLES)),
+        """
     ).fetchone()
     return row is not None
 
@@ -217,14 +206,6 @@ def parse_dt(value: str) -> datetime:
 
 def parse_date(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
-
-
-def row_to_app_state(row: sqlite3.Row | tuple[Any, ...]) -> AppState:
-    return AppState(
-        stage=Stage(row[0]),
-        created_at=parse_dt(row[1]),
-        updated_at=parse_dt(row[2]),
-    )
 
 
 def row_to_stored_profile(row: sqlite3.Row | tuple[Any, ...]) -> StoredProfile:

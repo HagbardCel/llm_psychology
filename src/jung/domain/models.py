@@ -220,22 +220,13 @@ class Operation(BaseModel):
     completed_at: UtcDateTime | None = None
 
 
-class AppState(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    stage: Stage
-    created_at: UtcDateTime
-    updated_at: UtcDateTime
-
-
 class WorkflowFacts(BaseModel):
-    """Compact facts for pure workflow policy."""
+    """Compact derived workflow facts for snapshot assembly and command policy."""
 
     model_config = ConfigDict(frozen=True)
 
     stage: Stage
     profile_complete: bool
-    has_active_session: bool
     operation_kind: OperationKind | None = None
     operation_status: OperationStatus | None = None
     operation_retryable: bool | None = None

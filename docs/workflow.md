@@ -15,15 +15,18 @@ source_of_truth_for: Supported workflow, recovery, and command-conflict semantic
 
 ## Stages
 
+Stage is a **derived workflow view** over durable profile, session, plan, and
+operation rows. It is not independently mutable persistent state.
+
 | Stage | Entry condition | Exit condition | Edit policy |
 |---|---|---|---|
-| `SETUP` | fresh database | complete profile → `INTAKE` | profile fields editable (may be incomplete) |
-| `INTAKE` | complete profile | processor accepts complete intake → assessment operation / `ASSESSMENT` | profile fields editable, but profile must remain complete; intake chat accepted |
-| `ASSESSMENT` | assessment operation pending/running | complete → `STYLE_SELECTION` | no profile/style/session/chat edits |
-| `STYLE_SELECTION` | recommendations and assessment result durable | valid style + initial plan → `READY` | only style selection |
-| `READY` | no active session/operation | start session → `THERAPY` | profile is read-only; start session only |
-| `THERAPY` | one active session | end active session → post-session operation / `POST_SESSION` | therapy chat and end only |
-| `POST_SESSION` | operation pending/running | complete revision → `READY` | no user edits |
+| `SETUP` | fresh database / incomplete profile | complete profile + open intake session → `INTAKE` | profile fields editable (may be incomplete) |
+| `INTAKE` | open intake session | processor accepts complete intake → assessment operation / `ASSESSMENT` | profile fields editable, but profile must remain complete; intake chat accepted |
+| `ASSESSMENT` | current assessment operation `PENDING` / `RUNNING` / `FAILED` | complete → `STYLE_SELECTION` | no profile/style/session/chat edits; failed assessment may retry |
+| `STYLE_SELECTION` | completed assessment and no plans | valid style + initial plan → `READY` | only style selection |
+| `READY` | current plan; no active session/operation | start session → `THERAPY` | profile is read-only; start session only |
+| `THERAPY` | one active therapy session | end active session → post-session operation / `POST_SESSION` | therapy chat and end only |
+| `POST_SESSION` | current post-session operation `PENDING` / `RUNNING` / `FAILED` | complete revision → `READY` | no user edits; failed post-session may retry |
 
 Intake is complete only when the durable record meets the processor's required slot/evidence policy. Intake completion is an internal application transition caused by an accepted intake chat result, not a client command.
 
@@ -57,7 +60,7 @@ incomplete profile update returns `invalid_command`.
 
 | Current stage | Command/event | Preconditions | Atomic persisted changes | Resulting stage |
 |---|---|---|---|---|
-| `SETUP` | `update_profile` completes profile | profile passes validation | profile saved | `INTAKE` |
+| `SETUP` | `update_profile` completes profile | profile passes validation | profile saved + open intake session created | `INTAKE` |
 | `INTAKE` | intake completion (processor) | intake record meets evidence policy | assessment `Operation` created `PENDING` | `ASSESSMENT` |
 | `ASSESSMENT` | operation completes | structured assessment result valid; includes initial plan material | assessment result saved; operation `COMPLETE` | `STYLE_SELECTION` |
 | `STYLE_SELECTION` | `select_style` | style valid; assessment result contains initial plan material | selected style + initial immutable plan | `READY` |
@@ -77,7 +80,7 @@ PENDING → RUNNING → COMPLETE
 ```
 
 1. **Creation transaction**: persist workflow mutation, create `PENDING` operation keyed by `(kind, source_session_id)`.
-2. **Start**: supervisor marks `RUNNING` outside the acceptance transaction.
+2. **Start**: the application marks `RUNNING` outside the acceptance transaction.
 3. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable.
 4. **Failure**: persist stable error code and retryability; leave stage unchanged.
 5. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
@@ -93,7 +96,7 @@ A completed exchange is a user message and an assistant message sharing the same
 
 Generation is connection-owned: the WebSocket that sends `send_message` drives
 `TherapyApplication.stream_message` until a terminal result. Tokens are
-ephemeral. `TaskSupervisor` is not used for chat.
+ephemeral. Chat is not scheduled as the application's owned operation task.
 
 ### Acceptance and streaming
 
@@ -138,7 +141,7 @@ same ID. There is no pending-turn row to convert on startup.
 
 At startup, before accepting mutations:
 
-- stale `RUNNING` operations → `PENDING`, scheduled by supervisor;
+- stale `RUNNING` operations → `PENDING`, then scheduled by the application;
 - completed operations are not rerun;
 - chat has no supervised recovery — unanswered open-session user messages remain
   for explicit client retry.

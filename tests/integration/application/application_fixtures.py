@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
-from jung.application import TherapyApplication
+from jung.application import ScheduleRejected, TherapyApplication
 from jung.domain.commands import SendMessage
 from jung.domain.models import (
+    Operation,
     OperationStatus,
     Stage,
 )
@@ -44,11 +44,10 @@ from jung.phases.post_session.models import (
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
-from jung.supervisor import SupervisorClosed, TaskSupervisor
 
 from .assessment_test_data import assessment_result_data, plan_content
 
-StartScript = bool | type[SupervisorClosed] | BaseException
+ScheduleScript = bool | type[ScheduleRejected] | BaseException
 
 
 def assessment_result() -> AssessmentResult:
@@ -157,53 +156,37 @@ def completing_intake_patch(
     )
 
 
-class ScriptedTaskSupervisor(TaskSupervisor):
-    """Test supervisor that scripts ``start()`` outcomes by name or call order."""
+class ScriptedScheduleHook:
+    """Test hook that scripts ``_schedule_operation`` outcomes by call order."""
 
     def __init__(
         self,
         *,
-        by_name: Mapping[str, Sequence[StartScript]] | None = None,
-        in_order: Sequence[StartScript] | None = None,
+        in_order: Sequence[ScheduleScript] | None = None,
     ) -> None:
-        super().__init__()
-        self._by_name = {
-            pattern: list(outcomes) for pattern, outcomes in (by_name or {}).items()
-        }
         self._in_order = list(in_order or [])
 
-    def start(
-        self,
-        *,
-        name: str,
-        run: Callable[[], Awaitable[None]],
-    ) -> bool:
-        outcome = self._next_outcome(name)
+    def __call__(self, operation: Operation) -> None:
+        del operation
+        outcome = self._in_order.pop(0) if self._in_order else True
         if outcome is True:
-            return super().start(name=name, run=run)
+            return
         if outcome is False:
-            return False
-        if outcome is SupervisorClosed or (
-            isinstance(outcome, type) and issubclass(outcome, SupervisorClosed)
+            raise ScheduleRejected("scripted schedule skip")
+        if outcome is ScheduleRejected or (
+            isinstance(outcome, type) and issubclass(outcome, ScheduleRejected)
         ):
-            raise SupervisorClosed(f"scripted supervisor closed for {name}")
+            raise ScheduleRejected("scripted schedule rejected")
         if isinstance(outcome, BaseException):
             raise outcome
-        raise TypeError(f"unsupported scripted start outcome: {outcome!r}")
-
-    def _next_outcome(self, name: str) -> StartScript:
-        for pattern, outcomes in self._by_name.items():
-            if fnmatch.fnmatch(name, pattern) and outcomes:
-                return outcomes.pop(0)
-        if self._in_order:
-            return self._in_order.pop(0)
-        return True
+        if isinstance(outcome, type) and issubclass(outcome, BaseException):
+            raise outcome("scripted schedule failure")
+        raise TypeError(f"unsupported scripted schedule outcome: {outcome!r}")
 
 
 @dataclass
 class TestApplicationRuntime:
     application: TherapyApplication
-    supervisor: TaskSupervisor
     store: SQLiteStore
     fake_llm: FakeLLM
 
@@ -263,10 +246,10 @@ async def build_test_application(
     now: Callable[[], datetime] | None = None,
     new_id: Callable[[], UUID] | None = None,
     recover: bool = True,
-    supervisor: TaskSupervisor | None = None,
+    schedule_hook: Callable[[Operation], None] | None = None,
     recorder: object | None = None,
 ) -> AsyncIterator[TestApplicationRuntime]:
-    """Wire TherapyApplication with real store, processors, and supervisor."""
+    """Wire TherapyApplication with real store and processors."""
     from jung.llm.tracing import ObservedLLMGateway
 
     gateway: object = fake_llm
@@ -281,33 +264,30 @@ async def build_test_application(
     clock = now or (lambda: datetime.now(UTC))
     ids = new_id or uuid4
 
-    supervisor_instance = supervisor or TaskSupervisor(recorder=recorder)  # type: ignore[arg-type]
-    async with supervisor_instance as active_supervisor:
-        application = TherapyApplication(
-            store=store,
-            intake=intake,
-            assessment=assessment,
-            therapy=therapy,
-            post_session=post_session,
-            styles=styles,
-            supervisor=active_supervisor,
-            now=clock,
-            new_id=ids,
-            recorder=recorder,  # type: ignore[arg-type]
-        )
-        if recover:
-            await application.recover_on_startup()
-        runtime = TestApplicationRuntime(
-            application=application,
-            supervisor=active_supervisor,
-            store=store,
-            fake_llm=fake_llm,
-        )
-        try:
-            yield runtime
-        finally:
-            application.begin_shutdown()
-            await active_supervisor.shutdown(timeout_seconds=5.0)
+    application = TherapyApplication(
+        store=store,
+        intake=intake,
+        assessment=assessment,
+        therapy=therapy,
+        post_session=post_session,
+        styles=styles,
+        now=clock,
+        new_id=ids,
+        recorder=recorder,  # type: ignore[arg-type]
+    )
+    if schedule_hook is not None:
+        application._schedule_test_hook = schedule_hook
+    if recover:
+        await application.recover_on_startup()
+    runtime = TestApplicationRuntime(
+        application=application,
+        store=store,
+        fake_llm=fake_llm,
+    )
+    try:
+        yield runtime
+    finally:
+        await application.shutdown(timeout_seconds=5.0)
 
 
 async def wait_for_stage(
@@ -383,7 +363,8 @@ async def wait_for_operation_status(
 
 
 __all__ = [
-    "ScriptedTaskSupervisor",
+    "ScheduleRejected",
+    "ScriptedScheduleHook",
     "TestApplicationRuntime",
     "assessment_result",
     "build_test_application",

@@ -28,6 +28,7 @@ from jung.diagnostics import (
     sanitize_value,
     write_private_text,
 )
+from jung.domain.errors import InvariantViolation
 from jung.domain.models import MessageRole, OperationStatus
 from jung.llm.gateway import ModelPolicy
 from jung.persistence.sqlite_store import SCHEMA_VERSION as DB_SCHEMA_VERSION
@@ -201,7 +202,18 @@ def build_state_projection(
     *,
     touched: Mapping[str, set[str]],
 ) -> dict[str, Any]:
-    app_state = store.get_app_state()
+    try:
+        facts = store.load_snapshot_facts()
+        workflow = {
+            "stage": facts.stage.value,
+            "integrity_error": None,
+        }
+    except InvariantViolation as exc:
+        workflow = {
+            "stage": None,
+            "integrity_error": _safe_exception_message(exc),
+        }
+
     stored_profile = store.get_profile()
     current_plan = store.get_current_plan()
     active_session = store.get_active_session()
@@ -245,7 +257,7 @@ def build_state_projection(
         profile_payload = _model_dump(stored_profile)
 
     return {
-        "app_state": _model_dump(app_state),
+        "workflow": workflow,
         "profile": profile_payload,
         "sessions": sessions,
         "messages_by_session": messages_by_session,
@@ -316,10 +328,9 @@ def classify_unresolved_problems(
         problems.append("recorder.run_failed is set")
     if recorder.write_failed:
         problems.append("recorder.write_failed: trace evidence may be incomplete")
-    if _trace_has_kind(events, "task.failed"):
-        problems.append("task.failed present in trace")
-    if _trace_has_kind(events, "task.shutdown_timeout"):
-        problems.append("task.shutdown_timeout present in trace")
+    workflow = state.get("workflow")
+    if isinstance(workflow, Mapping) and workflow.get("integrity_error"):
+        problems.append(f"workflow.integrity_error: {workflow['integrity_error']}")
     if _trace_has_kind(events, "runtime.error"):
         problems.append("runtime.error present in trace")
 
@@ -396,13 +407,11 @@ def build_failure_summary(
                 ".recovered",
                 ".retried",
                 "runtime.error",
-                "shutdown_timeout",
                 "validation.failed",
             )
         )
         or event.get("kind")
         in {
-            "task.shutdown_timeout",
             "runtime.error",
             "llm.validation.failed",
             "llm.correction.started",

@@ -182,8 +182,10 @@ async def test_debug_bundle_double_structured_failure(tmp_path: Path) -> None:
     assert not any(e.get("data", {}).get("task") == "intake_response" for e in events)
 
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    assert "revision" not in state["app_state"]
-    assert set(state["app_state"]) >= {"stage", "created_at", "updated_at"}
+    assert "app_state" not in state
+    assert set(state["workflow"]) == {"stage", "integrity_error"}
+    assert state["workflow"]["stage"] == "intake"
+    assert state["workflow"]["integrity_error"] is None
     assert any(s["id"] == str(session.id) for s in state["sessions"])
     assert "chat_turns" not in state
     session_messages = state["messages_by_session"][str(session.id)]
@@ -287,7 +289,9 @@ async def test_debug_bundle_correction_success(tmp_path: Path) -> None:
     assert "task.started" not in kinds
 
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    assert "revision" not in state["app_state"]
+    assert "app_state" not in state
+    assert set(state["workflow"]) == {"stage", "integrity_error"}
+    assert state["workflow"]["integrity_error"] is None
     assert "chat_turns" not in state
     session_messages = state["messages_by_session"][str(session.id)]
     assert [m["role"] for m in session_messages[-2:]] == [

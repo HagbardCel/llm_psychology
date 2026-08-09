@@ -42,7 +42,6 @@ from jung.phases.post_session.models import (
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
-from jung.supervisor import TaskSupervisor
 
 _ExcInfo = tuple[BaseException, TracebackType | None]
 
@@ -81,7 +80,6 @@ def _record_cleanup_failure(
 @dataclass(frozen=True, slots=True)
 class ApplicationRuntime:
     application: TherapyApplication
-    supervisor: TaskSupervisor
     llm: OpenAICompatibleLLM
 
 
@@ -160,8 +158,6 @@ async def _cleanup_application_runtime(
     *,
     recorder: DiagnosticRecorder | None,
     llm: OpenAICompatibleLLM | None,
-    supervisor: TaskSupervisor | None,
-    supervisor_entered: bool,
     application: TherapyApplication | None,
     primary: _ExcInfo | None,
     cleanup_error: _ExcInfo | None,
@@ -169,29 +165,11 @@ async def _cleanup_application_runtime(
 ) -> tuple[_ExcInfo | None, _ExcInfo | None]:
     if application is not None:
         try:
-            application.begin_shutdown()
-        except BaseException as exc:
-            selected_as_cleanup_error = _selected_cleanup_error(
-                exc,
-                primary=primary,
-                cleanup_error=cleanup_error,
-            )
-            if selected_as_cleanup_error:
-                cleanup_error = (exc, exc.__traceback__)
-            _record_cleanup_failure(
-                recorder,
-                step="application.begin_shutdown",
-                exc=exc,
-                selected_as_cleanup_error=selected_as_cleanup_error,
-            )
-
-    if supervisor is not None:
-        try:
             await _drain_cleanup_step(
-                supervisor.shutdown(timeout_seconds=shutdown_timeout_seconds),
+                application.shutdown(timeout_seconds=shutdown_timeout_seconds),
                 on_drained_failure=lambda exc: _record_cleanup_failure(
                     recorder,
-                    step="supervisor.shutdown",
+                    step="application.shutdown",
                     exc=exc,
                     selected_as_cleanup_error=False,
                     discovered_while_draining=True,
@@ -207,36 +185,10 @@ async def _cleanup_application_runtime(
                 cleanup_error = (exc, exc.__traceback__)
             _record_cleanup_failure(
                 recorder,
-                step="supervisor.shutdown",
+                step="application.shutdown",
                 exc=exc,
                 selected_as_cleanup_error=selected_as_cleanup_error,
             )
-        if supervisor_entered:
-            try:
-                await _drain_cleanup_step(
-                    supervisor.__aexit__(None, None, None),
-                    on_drained_failure=lambda exc: _record_cleanup_failure(
-                        recorder,
-                        step="supervisor.__aexit__",
-                        exc=exc,
-                        selected_as_cleanup_error=False,
-                        discovered_while_draining=True,
-                    ),
-                )
-            except BaseException as exc:
-                selected_as_cleanup_error = _selected_cleanup_error(
-                    exc,
-                    primary=primary,
-                    cleanup_error=cleanup_error,
-                )
-                if selected_as_cleanup_error:
-                    cleanup_error = (exc, exc.__traceback__)
-                _record_cleanup_failure(
-                    recorder,
-                    step="supervisor.__aexit__",
-                    exc=exc,
-                    selected_as_cleanup_error=selected_as_cleanup_error,
-                )
 
     if llm is not None:
         try:
@@ -306,8 +258,6 @@ async def application_context(
     with run_cm as recorder:
         store: SQLiteStore | None = None
         llm: OpenAICompatibleLLM | None = None
-        supervisor: TaskSupervisor | None = None
-        supervisor_entered = False
         application: TherapyApplication | None = None
         primary: _ExcInfo | None = None
         cleanup_error: _ExcInfo | None = None
@@ -346,9 +296,6 @@ async def application_context(
                 )
 
             styles = load_styles()
-            supervisor = TaskSupervisor(recorder=recorder)
-            await supervisor.__aenter__()
-            supervisor_entered = True
             application = TherapyApplication(
                 store=store,
                 intake=IntakeProcessor(
@@ -370,7 +317,6 @@ async def application_context(
                     update_policy=policies[LLMTask.POST_SESSION_UPDATE],
                 ),
                 styles=styles,
-                supervisor=supervisor,
                 now=now or _default_now,
                 new_id=new_id or _default_new_id,
                 recorder=recorder,
@@ -378,7 +324,6 @@ async def application_context(
             await application.recover_on_startup()
             runtime = ApplicationRuntime(
                 application=application,
-                supervisor=supervisor,
                 llm=llm,
             )
             try:
@@ -392,8 +337,6 @@ async def application_context(
             primary, cleanup_error = await _cleanup_application_runtime(
                 recorder=recorder,
                 llm=llm,
-                supervisor=supervisor,
-                supervisor_entered=supervisor_entered,
                 application=application,
                 primary=primary,
                 cleanup_error=cleanup_error,
