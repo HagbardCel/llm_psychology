@@ -396,3 +396,122 @@ async def test_final_intake_advances_to_assessment(store: SQLiteStore) -> None:
     assert snapshot.stage is Stage.ASSESSMENT
     assert snapshot.current_operation is not None
     fake.assert_exhausted()
+
+
+async def test_fresh_accept_persist_failure_releases_generation_lock(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(intake_message_expectations("Welcome after recovery."))
+    async with build_test_application(store, fake) as runtime:
+        session = await _open_intake(runtime)
+        original_append = store.append_user_message
+
+        def failing_append(**kwargs):
+            raise RuntimeError("injected append failure")
+
+        store.append_user_message = failing_append  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="injected append failure"):
+            await collect_stream(
+                runtime.application,
+                SendMessage(
+                    session_id=session.id,
+                    client_message_id=uuid4(),
+                    content="hello",
+                ),
+            )
+        assert runtime.application._generation_lock.locked() is False
+        messages = store.list_messages(session.id)
+        assert messages == []
+
+        store.append_user_message = original_append  # type: ignore[method-assign]
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=session.id,
+                client_message_id=uuid4(),
+                content="hello again",
+            ),
+        )
+        assert isinstance(items[-1], ChatCompleted)
+    fake.assert_exhausted()
+
+
+async def test_fresh_accept_cancelled_persist_releases_generation_lock(
+    store: SQLiteStore,
+) -> None:
+    fake = FakeLLM(intake_message_expectations("Welcome after cancel."))
+    async with build_test_application(store, fake) as runtime:
+        session = await _open_intake(runtime)
+
+        async def cancelled_persist(**kwargs):
+            raise asyncio.CancelledError()
+
+        runtime.application._persist_user_message_drained = cancelled_persist  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
+            await collect_stream(
+                runtime.application,
+                SendMessage(
+                    session_id=session.id,
+                    client_message_id=uuid4(),
+                    content="hello",
+                ),
+            )
+        assert runtime.application._generation_lock.locked() is False
+        assert store.list_messages(session.id) == []
+
+        del runtime.application._persist_user_message_drained
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=session.id,
+                client_message_id=uuid4(),
+                content="hello again",
+            ),
+        )
+        assert isinstance(items[-1], ChatCompleted)
+    fake.assert_exhausted()
+
+
+async def test_post_accept_busy_becomes_chat_failed_internal_error(
+    store: SQLiteStore,
+) -> None:
+    recorder = _ListRecorder()
+    fake = FakeLLM(intake_message_expectations("Welcome."))
+    async with build_test_application(store, fake, recorder=recorder) as runtime:
+        session = await _open_intake(runtime)
+        original_complete = store.complete_chat_response
+
+        def busy_complete(**kwargs):
+            raise Busy("database is locked")
+
+        store.complete_chat_response = busy_complete  # type: ignore[method-assign]
+        client_message_id = uuid4()
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=session.id,
+                client_message_id=client_message_id,
+                content="hello",
+            ),
+        )
+        assert isinstance(items[-1], ChatFailed)
+        assert items[-1].code == "internal_error"
+        user, assistant = store.get_messages_by_client_id(session.id, client_message_id)
+        assert user is not None
+        assert assistant is None
+        assert runtime.application._generation_lock.locked() is False
+        kinds = [kind for kind, _ in recorder.events]
+        assert "chat.turn.failed" in kinds
+        assert "runtime.error" in kinds
+        failed = next(
+            data for kind, data in recorder.events if kind == "chat.turn.failed"
+        )
+        assert failed["source"] == "chat_attempt"
+        assert failed["error_code"] == "internal_error"
+        runtime_error = next(
+            data for kind, data in recorder.events if kind == "runtime.error"
+        )
+        assert runtime_error["phase"] == "chat_attempt"
+        assert "workflow.command.rejected" not in kinds
+
+        store.complete_chat_response = original_complete  # type: ignore[method-assign]

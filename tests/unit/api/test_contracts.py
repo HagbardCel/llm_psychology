@@ -603,3 +603,58 @@ def test_error_response_inherits_error_envelope_fields() -> None:
     assert tuple(ErrorResponse.model_fields) == tuple(ErrorEnvelope.model_fields)
     for name, envelope_field in ErrorEnvelope.model_fields.items():
         assert ErrorResponse.model_fields[name].annotation == envelope_field.annotation
+
+
+def test_message_completed_event_rejects_inconsistent_nested_messages() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    now = datetime.now(UTC)
+    user = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=1,
+        role="user",
+        content="hello",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    assistant = MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=2,
+        role="assistant",
+        content="hi",
+        created_at=now,
+        client_message_id=client_message_id,
+    )
+    base = {
+        "type": "message_completed",
+        "request_id": str(request_id),
+        "session_id": str(session_id),
+        "client_message_id": str(client_message_id),
+        "user_message": user.model_dump(mode="json"),
+        "assistant_message": assistant.model_dump(mode="json"),
+    }
+    assert MessageCompletedEvent.model_validate(base)
+
+    bad_role = dict(base)
+    bad_role["user_message"] = {**base["user_message"], "role": "assistant"}
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_role)
+
+    bad_sequence = dict(base)
+    bad_sequence["assistant_message"] = {
+        **base["assistant_message"],
+        "sequence": 5,
+    }
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_sequence)
+
+    bad_session = dict(base)
+    bad_session["assistant_message"] = {
+        **base["assistant_message"],
+        "session_id": str(uuid4()),
+    }
+    with pytest.raises(ValidationError):
+        MessageCompletedEvent.model_validate(bad_session)

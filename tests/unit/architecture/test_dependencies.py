@@ -347,9 +347,21 @@ def test_client_uses_contract_only_import_allow_list() -> None:
     assert violations == []
 
 
-def test_client_package_has_no_legacy_chat_correlation_modules() -> None:
+def test_client_package_has_no_legacy_chat_correlation_surface() -> None:
     assert not (CLIENT_SRC / "_chat_events.py").exists()
     assert not (CLIENT_SRC / "_durable_chat.py").exists()
+    forbidden_symbols = (
+        "ConsoleUncertainDelivery",
+        "render_identity_conflict",
+        "render_uncertain_delivery",
+    )
+    violations: list[str] = []
+    for path in _python_files(CLIENT_SRC):
+        text = path.read_text(encoding="utf-8")
+        for symbol in forbidden_symbols:
+            if symbol in text:
+                violations.append(f"{path.relative_to(ROOT)} contains {symbol}")
+    assert violations == []
 
 
 # ---------------------------------------------------------------------------

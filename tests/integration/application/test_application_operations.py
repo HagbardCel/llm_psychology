@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from jung.diagnostics import DiagnosticRun
 from jung.domain.commands import (
     EndSession,
     SendMessage,
@@ -15,6 +18,7 @@ from jung.domain.commands import (
 from jung.domain.models import (
     CommandName,
     MessageRole,
+    OperationKind,
     OperationStatus,
     Profile,
     Stage,
@@ -31,8 +35,10 @@ from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
+from jung.supervisor import SupervisorClosed
 
 from .application_fixtures import (
+    ScriptedTaskSupervisor,
     assessment_result,
     build_test_application,
     collect_stream,
@@ -574,11 +580,11 @@ async def test_retry_operation_schedules_when_assemble_raises(
     fake.assert_exhausted()
 
 
-async def test_final_intake_schedules_despite_post_schedule_failure(
-    store: SQLiteStore,
-) -> None:
-    turn_messages = ("first turn", "second turn", "third turn")
-    final_message_sequence = 5
+def _final_intake_expectations(
+    turn_messages: tuple[str, ...],
+    *,
+    final_message_sequence: int,
+) -> list[StructuredExpectation | StreamExpectation]:
     expectations: list[StructuredExpectation | StreamExpectation] = []
     for index, content in enumerate(turn_messages, start=1):
         if index < len(turn_messages):
@@ -612,49 +618,104 @@ async def test_final_intake_schedules_despite_post_schedule_failure(
                     ),
                 ]
             )
-    expectations.append(
-        StructuredExpectation(
-            task=LLMTask.ASSESSMENT,
-            output_type=AssessmentResult,
-            response=assessment_result(),
-        )
+    return expectations
+
+
+def _load_trace(run_dir: Path) -> list[dict[str, object]]:
+    lines = (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+async def _run_final_intake_with_supervisor_script(
+    store: SQLiteStore,
+    tmp_path: Path,
+    *,
+    start_outcome: object,
+) -> tuple[list[object], list[dict[str, object]]]:
+    turn_messages = ("first turn", "second turn", "third turn")
+    fake = FakeLLM(_final_intake_expectations(turn_messages, final_message_sequence=5))
+    supervisor = ScriptedTaskSupervisor(
+        by_name={"operation:*": [start_outcome]},
     )
-    fake = FakeLLM(expectations)
-    fail_on_next_schedule = False
-
-    async with build_test_application(store, fake) as runtime:
-        original_schedule = runtime.application._schedule_operation
-
-        def failing_schedule(operation) -> None:
-            nonlocal fail_on_next_schedule
-            original_schedule(operation)
-            if fail_on_next_schedule:
-                fail_on_next_schedule = False
-                raise RuntimeError("injected post-schedule failure")
-
-        runtime.application._schedule_operation = failing_schedule
-        await runtime.application.update_profile(
-            UpdateProfile(
-                profile=Profile(name="Alex", primary_language="English"),
+    run_dir = tmp_path / "schedule-failure"
+    with DiagnosticRun(run_dir) as recorder:
+        async with build_test_application(
+            store,
+            fake,
+            supervisor=supervisor,
+            recorder=recorder,
+        ) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
             )
-        )
-        session = (await runtime.application.get_snapshot()).active_session
-        assert session is not None
-        for index, content in enumerate(turn_messages):
-            if index == len(turn_messages) - 1:
-                fail_on_next_schedule = True
-            items = await collect_stream(
-                runtime.application,
-                SendMessage(
-                    session_id=session.id,
-                    client_message_id=uuid4(),
-                    content=content,
-                ),
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            for index, content in enumerate(turn_messages):
+                items = await collect_stream(
+                    runtime.application,
+                    SendMessage(
+                        session_id=session.id,
+                        client_message_id=uuid4(),
+                        content=content,
+                    ),
+                )
+                if index < len(turn_messages) - 1:
+                    assert isinstance(items[-1], ChatCompleted)
+            snapshot = await runtime.application.get_snapshot()
+            assert isinstance(items[-1], ChatCompleted)
+            assert snapshot.stage is Stage.ASSESSMENT
+            assert snapshot.current_operation is not None
+            assert snapshot.current_operation.kind is OperationKind.ASSESSMENT
+            assert snapshot.current_operation.status is OperationStatus.PENDING
+            user, assistant = store.get_messages_by_client_id(
+                session.id,
+                items[-1].client_message_id,
             )
-            if index < len(turn_messages) - 1:
-                assert isinstance(items[-1], ChatCompleted)
-            else:
-                assert isinstance(items[-1], ChatFailed)
-                assert items[-1].code == "internal_error"
-        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+            assert user is not None
+            assert assistant is not None
     fake.assert_exhausted()
+    return items, _load_trace(run_dir)
+
+
+async def test_final_intake_supervisor_closed_keeps_chat_completed(
+    store: SQLiteStore,
+    tmp_path: Path,
+) -> None:
+    items, events = await _run_final_intake_with_supervisor_script(
+        store,
+        tmp_path,
+        start_outcome=SupervisorClosed,
+    )
+    kinds = [event["kind"] for event in events]
+    assert "chat.turn.completed" in kinds
+    assert "chat.turn.failed" not in kinds
+    assert not any(
+        event["kind"] == "runtime.error"
+        and event["data"].get("phase") == "operation_schedule"
+        for event in events
+    )
+    assert isinstance(items[-1], ChatCompleted)
+
+
+async def test_final_intake_supervisor_runtime_error_records_runtime_error(
+    store: SQLiteStore,
+    tmp_path: Path,
+) -> None:
+    items, events = await _run_final_intake_with_supervisor_script(
+        store,
+        tmp_path,
+        start_outcome=RuntimeError("injected supervisor start failure"),
+    )
+    kinds = [event["kind"] for event in events]
+    assert "chat.turn.completed" in kinds
+    assert "chat.turn.failed" not in kinds
+    schedule_errors = [
+        event
+        for event in events
+        if event["kind"] == "runtime.error"
+        and event["data"].get("phase") == "operation_schedule"
+    ]
+    assert len(schedule_errors) == 1
+    assert isinstance(items[-1], ChatCompleted)

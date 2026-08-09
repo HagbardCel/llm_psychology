@@ -305,6 +305,8 @@ class JungChatConnection:
                     issues=issues,
                 ) from None
 
+            self._validate_event_matches_command(command, event)
+
             if isinstance(
                 event,
                 (MessageCompletedEvent, MessageFailedEvent, ErrorEvent),
@@ -319,6 +321,51 @@ class JungChatConnection:
                 kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
                 expected_model="ServerEvent",
             )
+
+    def _validate_event_matches_command(
+        self,
+        command: SendMessageCommand,
+        event: ServerEvent,
+    ) -> None:
+        if isinstance(event, ErrorEvent):
+            if event.request_id != command.request_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                    expected_model="ErrorEvent",
+                )
+            if event.session_id is not None and event.session_id != command.session_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="ErrorEvent",
+                )
+            if (
+                event.client_message_id is not None
+                and event.client_message_id != command.client_message_id
+            ):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model="ErrorEvent",
+                )
+            return
+
+        if isinstance(
+            event,
+            (TokenEvent, MessageCompletedEvent, MessageFailedEvent),
+        ):
+            if event.request_id != command.request_id:
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                    expected_model=type(event).__name__,
+                )
+            if (
+                event.session_id != command.session_id
+                or event.client_message_id != command.client_message_id
+            ):
+                raise JungProtocolError(
+                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                    expected_model=type(event).__name__,
+                )
+            return
 
     async def aclose(self) -> None:
         if self._close_attempted:

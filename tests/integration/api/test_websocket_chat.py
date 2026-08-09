@@ -384,6 +384,71 @@ async def test_disconnect_during_generation_leaves_unanswered_user(
         assert events[-1]["assistant_message"]["content"] == "completed after retry"
 
 
+async def test_disconnect_after_token_releases_generation_for_retry(
+    uvicorn_api_urls,
+    fake_llm: FakeLLM,
+) -> None:
+    http_base, ws_url = uvicorn_api_urls
+    after_token = asyncio.Event()
+    aclose_seen = asyncio.Event()
+
+    class TokenThenHoldFakeLLM(FakeLLM):
+        async def stream_text(self, messages, policy):
+            try:
+                yield "partial"
+                await after_token.wait()
+                async for chunk in super().stream_text(messages, policy):
+                    yield chunk
+            finally:
+                aclose_seen.set()
+
+    holding = TokenThenHoldFakeLLM(
+        list(intake_message_expectations("completed after disconnect"))
+    )
+    # Replace the stream expectation chunks so FakeLLM still has the patch expectation.
+    holding._expectations = [
+        holding._expectations[0],
+        StreamExpectation(task=LLMTask.INTAKE_RESPONSE, chunks=("ignored",)),
+    ]
+    fake_llm._expectations = holding._expectations
+    fake_llm.generate_structured = holding.generate_structured  # type: ignore[method-assign]
+    fake_llm.stream_text = holding.stream_text  # type: ignore[method-assign]
+
+    session_id = await _setup_intake_http(http_base)
+    client_message_id = uuid4()
+
+    async with ws_connect(ws_url) as ws:
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+        )
+        first = await asyncio.wait_for(ws.recv(), timeout=5.0)
+        event = json.loads(first)
+        assert event["type"] == "token"
+        assert event["text"] == "partial"
+
+    after_token.set()
+    await asyncio.wait_for(aclose_seen.wait(), timeout=5.0)
+
+    fake_llm._expectations = list(intake_message_expectations("completed after retry"))
+    fake_llm.stream_text = FakeLLM.stream_text.__get__(fake_llm, FakeLLM)
+    fake_llm.generate_structured = FakeLLM.generate_structured.__get__(
+        fake_llm, FakeLLM
+    )
+    async with ws_connect(ws_url) as ws:
+        await _send_message(
+            ws,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+        )
+        events = await receive_until_terminal(ws)
+        assert events[-1]["type"] == "message_completed"
+        assert events[-1]["assistant_message"]["content"] == "completed after retry"
+
+
 async def test_final_intake_schedules_assessment_operation(
     uvicorn_api_urls,
     fake_llm: FakeLLM,
@@ -506,10 +571,13 @@ async def test_http_end_session_still_works_without_ws_broadcast(
         assert state["active_session"]["id"] == str(therapy_id)
         response = await client.post(f"/api/v1/sessions/{therapy_id}/end")
         assert response.status_code == 202
-        assert response.json()["stage"] == "post_session"
+        body = response.json()
+        assert body["stage"] == "post_session"
+        assert body["operation"]["kind"] == "post_session"
+        assert body["operation"]["status"] == "pending"
         for _ in range(50):
             state = (await client.get("/api/v1/state")).json()
-            if state.get("operation") and state["operation"]["kind"] == "post_session":
+            if state["stage"] == "ready":
                 return
             await asyncio.sleep(0.1)
-    pytest.fail("post_session operation was not observed")
+    pytest.fail("stage did not become ready after end session")

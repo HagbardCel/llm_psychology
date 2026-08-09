@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import traceback
 from datetime import UTC, datetime
@@ -713,3 +714,65 @@ async def test_fresh_internal_error_accepts_500_status() -> None:
     assert raised.value.status == 500
     assert raised.value.code == "internal_error"
     await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutate", "expected_kind"),
+    [
+        (
+            lambda event, command: {
+                **event,
+                "request_id": str(uuid4()),
+            },
+            ProtocolErrorKind.REQUEST_ID_MISMATCH,
+        ),
+        (
+            lambda event, command: {
+                **event,
+                "session_id": str(uuid4()),
+            },
+            ProtocolErrorKind.INVALID_SERVER_EVENT,
+        ),
+        (
+            lambda event, command: {
+                **event,
+                "client_message_id": str(uuid4()),
+            },
+            ProtocolErrorKind.INVALID_SERVER_EVENT,
+        ),
+    ],
+)
+async def test_chat_stream_rejects_mismatched_event_ids(
+    mutate,
+    expected_kind: ProtocolErrorKind,
+) -> None:
+    command = _command()
+    token_payload = {
+        "type": "token",
+        "text": "hi",
+        "request_id": str(command.request_id),
+        "session_id": str(command.session_id),
+        "client_message_id": str(command.client_message_id),
+    }
+    payload = mutate(token_payload, command)
+
+    class FakeWebSocket:
+        async def send(self, _payload: str) -> None:
+            return None
+
+        async def recv(self) -> str:
+            return json.dumps(payload)
+
+        async def close(self) -> None:
+            return None
+
+    chat = JungChatConnection(FakeWebSocket())  # type: ignore[arg-type]
+    with pytest.raises(JungProtocolError) as raised:
+        await anext(chat.stream(command))
+    assert raised.value.kind is expected_kind
+    summary = str(raised.value)
+    assert str(command.request_id) not in summary
+    assert str(command.session_id) not in summary
+    assert str(command.client_message_id) not in summary
+    await chat.aclose()

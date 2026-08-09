@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
+from contextlib import aclosing
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, TypeVar
@@ -723,6 +724,9 @@ class TherapyApplication:
                 self._record_command_completed("send_message", "committed")
                 self._record("chat.turn.accepted", {})
             raise
+        except BaseException:
+            self._release_generation_lock()
+            raise
         with diagnostic_context(
             session_id=str(session_id),
             client_message_id=str(client_message_id),
@@ -732,6 +736,44 @@ class TherapyApplication:
             self._record("chat.turn.accepted", {})
             self._record("chat.turn.started", {})
         return user_message, None, True
+
+    def _chat_failure_result(
+        self,
+        exc: Exception,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
+        request_id: UUID | None,
+    ) -> ChatFailed:
+        if not isinstance(exc, LLMError):
+            self._record_runtime_error(
+                phase="chat_attempt",
+                exc=exc,
+                session_id=str(session_id),
+                client_message_id=str(client_message_id),
+                request_id=str(request_id) if request_id is not None else None,
+            )
+        code, message, retryable = _classify_worker_error(exc)
+        with diagnostic_context(
+            session_id=str(session_id),
+            client_message_id=str(client_message_id),
+            request_id=str(request_id) if request_id is not None else None,
+        ):
+            self._record(
+                "chat.turn.failed",
+                {
+                    "error_code": code,
+                    "retryable": retryable,
+                    "source": "chat_attempt",
+                },
+            )
+        return ChatFailed(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+            code=code,
+            message=message,
+        )
 
     async def stream_message(
         self, command: SendMessage
@@ -754,24 +796,28 @@ class TherapyApplication:
                     reused,
                     generation_owned,
                 ) = await self._accept_chat_command_locked(command)
-                if reused is not None:
-                    terminal = True
-                    yield reused
-                    return
-                accepted = True
+                accepted = user_message is not None
+
+            if reused is not None:
+                terminal = True
+                yield reused
+                return
 
             assert user_message is not None
             try:
-                async for item in self._generate_chat_stream(
-                    user_message=user_message,
-                    request_id=request_id,
-                ):
-                    if isinstance(item, (ChatCompleted, ChatFailed)):
-                        terminal = True
-                        if generation_owned:
-                            self._release_generation_lock()
-                            generation_owned = False
-                    yield item
+                async with aclosing(
+                    self._generate_chat_stream(
+                        user_message=user_message,
+                        request_id=request_id,
+                    )
+                ) as generated:
+                    async for item in generated:
+                        if isinstance(item, (ChatCompleted, ChatFailed)):
+                            terminal = True
+                            if generation_owned:
+                                self._release_generation_lock()
+                                generation_owned = False
+                        yield item
             except _TerminalDuringCancel as terminal_cancel:
                 terminal = True
                 raise terminal_cancel.cancellation from None
@@ -779,41 +825,27 @@ class TherapyApplication:
             accepted = True
             generation_owned = True
             raise cancel_accept.cancellation from None
-        except self._COMMAND_REJECT_TYPES as exc:
-            if not accepted:
-                self._record_command_rejected("send_message", exc)
-            raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if not accepted:
-                self._record_command_error("send_message", exc)
+                if isinstance(exc, self._COMMAND_REJECT_TYPES):
+                    self._record_command_rejected("send_message", exc)
+                else:
+                    self._record_command_error("send_message", exc)
                 raise
-            code, message, retryable = _classify_worker_error(exc)
-            with diagnostic_context(
-                session_id=str(session_id),
-                client_message_id=str(client_message_id),
-                request_id=str(request_id) if request_id is not None else None,
-            ):
-                self._record(
-                    "chat.turn.failed",
-                    {
-                        "error_code": code,
-                        "retryable": retryable,
-                        "source": "generation",
-                    },
-                )
+
+            result = self._chat_failure_result(
+                exc,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+            )
             terminal = True
             if generation_owned:
                 self._release_generation_lock()
                 generation_owned = False
-            yield ChatFailed(
-                session_id=session_id,
-                client_message_id=client_message_id,
-                request_id=request_id,
-                code=code,
-                message=message,
-            )
+            yield result
         finally:
             if accepted and not terminal:
                 with diagnostic_context(
@@ -911,16 +943,17 @@ class TherapyApplication:
             raise InvariantViolation(f"unsupported session kind: {session.kind}")
 
         buffer: list[str] = []
-        async for chunk in chunk_source:
-            if not chunk:
-                continue
-            buffer.append(chunk)
-            yield ChatToken(
-                text=chunk,
-                session_id=session_id,
-                client_message_id=client_message_id,
-                request_id=request_id,
-            )
+        async with aclosing(chunk_source) as chunks:
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                buffer.append(chunk)
+                yield ChatToken(
+                    text=chunk,
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    request_id=request_id,
+                )
 
         response_text = "".join(buffer)
         if not _response_has_content(response_text):

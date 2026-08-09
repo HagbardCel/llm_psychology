@@ -42,10 +42,6 @@ class ConsoleOperationFailed(Exception):
     """Terminal non-retryable background operation failure."""
 
 
-class ConsoleUncertainDelivery(Exception):
-    """Outcome cannot safely be established."""
-
-
 @dataclass(frozen=True)
 class ErrorDisplay:
     code: str
@@ -95,13 +91,6 @@ class ConsoleOutput(Protocol):
     def render_chat_failure(self, error: ErrorEnvelope) -> None: ...
     def render_operation_failure(self, error: ErrorDisplay) -> None: ...
     def render_style_options(self, options: StyleOptionsResponse) -> None: ...
-    def render_identity_conflict(
-        self,
-        *,
-        session_id: UUID,
-        client_message_id: UUID,
-    ) -> None: ...
-    def render_uncertain_delivery(self, message: str) -> None: ...
     def render_invalid_action(self, message: str) -> None: ...
 
 

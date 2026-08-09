@@ -116,7 +116,7 @@ types) rather than duplicating nested fields here.
 |---|---|---|---|---|
 | `token` | `session_id`, `client_message_id`, `request_id`, `text` | after acceptance; ephemeral | none | none |
 | `message_completed` | `session_id`, `client_message_id`, `request_id`, `user_message`, `assistant_message` | terminal | assistant message stored (or both already present) | completion persisted / idempotent reuse |
-| `message_failed` | `session_id`, `client_message_id`, `request_id`, `error` (`ErrorEnvelope`) | terminal after acceptance | user message remains; no assistant | generation failed |
+| `message_failed` | `session_id`, `client_message_id`, `request_id`, `error` (`ErrorEnvelope`) | terminal after acceptance | user message remains; no assistant | accepted chat attempt failed before durable assistant completion |
 | `error` | `error` (`ErrorEnvelope`), `request_id`; optional `session_id`, optional `client_message_id` | terminal (typically pre-acceptance or protocol) | none unless noted | command/protocol rejection |
 
 Chat error durable semantics:
@@ -124,7 +124,7 @@ Chat error durable semantics:
 | Error point | Durable change |
 |---|---|
 | Before command acceptance (`error`) | none |
-| After accepted generation fails (`message_failed`) | user message remains unanswered; no assistant row |
+| After an ordinary post-acceptance failure before completion (`message_failed`) | user message remains unanswered; no assistant row |
 | Disconnect / cancel mid-generation | user message may remain unanswered on an open session |
 
 `error` correlation fields:

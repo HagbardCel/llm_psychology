@@ -177,7 +177,8 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
     failed_event = next(e for e in events if e["kind"] == "chat.turn.failed")
     assert failed_event["data"]["error_code"]
     assert "retryable" in failed_event["data"]
-    assert failed_event["data"]["source"] == "generation"
+    assert failed_event["data"]["source"] == "chat_attempt"
+    assert "runtime.error" not in kinds
 
 
 async def test_workflow_transition_only_on_stage_change(tmp_path: Path) -> None:

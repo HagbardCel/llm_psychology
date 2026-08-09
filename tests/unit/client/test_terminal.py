@@ -12,7 +12,6 @@ from jung.client.api_client import JungApiError
 from jung.client.console import (
     ConsoleExitRequested,
     ConsoleOperationFailed,
-    ConsoleUncertainDelivery,
     PromptSpec,
 )
 from jung.client.terminal import (
@@ -164,25 +163,6 @@ async def test_async_cli_maps_operation_failure_to_exit_one() -> None:
         ),
     ):
         assert await _async_cli() == 1
-
-
-@pytest.mark.asyncio
-async def test_async_cli_maps_uncertain_delivery_to_exit_two() -> None:
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with (
-        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
-        patch(
-            "jung.client.terminal.JungApiClient",
-            return_value=mock_client,
-        ),
-        patch(
-            "jung.client.terminal.ConsoleApp.run",
-            AsyncMock(side_effect=ConsoleUncertainDelivery()),
-        ),
-    ):
-        assert await _async_cli() == 2
 
 
 @pytest.mark.asyncio

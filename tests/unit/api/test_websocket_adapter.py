@@ -212,3 +212,114 @@ async def test_one_shot_streams_tokens_then_completion_and_closes() -> None:
     assert fake.sent[0]["session_id"] == str(session_id)
     assert fake.sent[0]["client_message_id"] == str(client_message_id)
     assert fake.closed is True
+
+
+async def test_send_disconnect_after_token_closes_stream() -> None:
+    import asyncio
+
+    from starlette.websockets import WebSocketDisconnect
+
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    aclose_called = asyncio.Event()
+    receive_cancelled = asyncio.Event()
+
+    async def stream_message(_command) -> AsyncIterator[object]:
+        try:
+            yield ChatToken(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+                text="hi",
+            )
+            await asyncio.Event().wait()
+        finally:
+            aclose_called.set()
+
+    class DisconnectingWebSocket(FakeWebSocket):
+        async def receive(self) -> dict[str, Any]:
+            try:
+                return await super().receive()
+            except asyncio.CancelledError:
+                receive_cancelled.set()
+                raise
+
+        async def send_json(self, data: dict[str, Any]) -> None:
+            if data.get("type") == "token":
+                raise WebSocketDisconnect()
+            await super().send_json(data)
+
+    runtime = MockRuntime(application=MockApplication(stream_message=stream_message))
+    fake = DisconnectingWebSocket(
+        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_settings=_default_settings(),
+    )
+    fake.queue_text(
+        json.dumps(
+            {
+                "type": "send_message",
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+                "content": "hello",
+            }
+        )
+    )
+
+    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    assert aclose_called.is_set()
+    assert receive_cancelled.is_set()
+
+
+async def test_fresh_cancellation_during_active_stream_cleanup_propagates() -> None:
+    import asyncio
+
+    from jung._async_cleanup import close_awaitable_safely, drain_cancelled_task
+
+    drain_started = asyncio.Event()
+    drain_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    async def slow_owned_task() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            drain_started.set()
+            await drain_release.wait()
+            raise
+
+    preserve_cleanup_cancellation = False
+
+    async def run_normal_then_cancel_during_cleanup() -> None:
+        nonlocal preserve_cleanup_cancellation
+        owned = asyncio.create_task(slow_owned_task())
+        try:
+            return
+        except asyncio.CancelledError:
+            preserve_cleanup_cancellation = True
+            raise
+        finally:
+
+            async def cleanup() -> None:
+                if not owned.done():
+                    owned.cancel()
+                await drain_cancelled_task(owned)
+                cleanup_finished.set()
+
+            await close_awaitable_safely(
+                cleanup,
+                record_failure=lambda _exc: None,
+                preserve_existing_cancellation=preserve_cleanup_cancellation,
+            )
+
+    task = asyncio.create_task(run_normal_then_cancel_during_cleanup())
+    await drain_started.wait()
+    task.cancel("cleanup-cancel")
+    await asyncio.sleep(0)
+    assert not task.done()
+    drain_release.set()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+    assert exc_info.value.args == ("cleanup-cancel",)
+    assert cleanup_finished.is_set()

@@ -222,3 +222,53 @@ def test_intake_record_on_therapy_session_raises_invariant(
             intake_record={"schema_version": 1},
             now=now,
         )
+
+
+def test_duplicate_assistant_completion_raises(store: SQLiteStore) -> None:
+    intake_id, now = open_intake(store)
+    client_message_id = uuid4()
+    store.append_user_message(
+        session_id=intake_id,
+        client_message_id=client_message_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=now,
+    )
+    store.complete_chat_response(
+        session_id=intake_id,
+        client_message_id=client_message_id,
+        assistant_message_id=uuid4(),
+        content="hi",
+        now=now,
+    )
+    with pytest.raises(
+        InvariantViolation,
+        match="assistant message already exists",
+    ):
+        store.complete_chat_response(
+            session_id=intake_id,
+            client_message_id=client_message_id,
+            assistant_message_id=uuid4(),
+            content="hi again",
+            now=now,
+        )
+
+
+def test_assistant_sequence_follows_user(store: SQLiteStore) -> None:
+    intake_id, now = open_intake(store)
+    client_message_id = uuid4()
+    user = store.append_user_message(
+        session_id=intake_id,
+        client_message_id=client_message_id,
+        user_message_id=uuid4(),
+        content="hello",
+        now=now,
+    )
+    assistant = store.complete_chat_response(
+        session_id=intake_id,
+        client_message_id=client_message_id,
+        assistant_message_id=uuid4(),
+        content="hi",
+        now=now,
+    )
+    assert assistant.sequence == user.sequence + 1

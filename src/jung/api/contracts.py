@@ -314,6 +314,30 @@ class MessageCompletedEvent(BaseModel):
     user_message: MessageResponse
     assistant_message: MessageResponse
 
+    @model_validator(mode="after")
+    def messages_match_event_identity(self) -> Self:
+        if self.user_message.role != "user":
+            raise ValueError("user_message.role must be user")
+        if self.assistant_message.role != "assistant":
+            raise ValueError("assistant_message.role must be assistant")
+        if self.user_message.session_id != self.session_id:
+            raise ValueError("user_message.session_id must match session_id")
+        if self.assistant_message.session_id != self.session_id:
+            raise ValueError("assistant_message.session_id must match session_id")
+        if self.user_message.client_message_id != self.client_message_id:
+            raise ValueError(
+                "user_message.client_message_id must match client_message_id"
+            )
+        if self.assistant_message.client_message_id != self.client_message_id:
+            raise ValueError(
+                "assistant_message.client_message_id must match client_message_id"
+            )
+        if self.assistant_message.sequence != self.user_message.sequence + 1:
+            raise ValueError(
+                "assistant_message.sequence must equal user_message.sequence + 1"
+            )
+        return self
+
 
 class MessageFailedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")

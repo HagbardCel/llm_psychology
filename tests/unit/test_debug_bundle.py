@@ -56,7 +56,7 @@ def test_write_manifest_and_export_snapshot(tmp_path: Path) -> None:
             {
                 "error_code": "invalid_llm_output",
                 "retryable": True,
-                "source": "generation",
+                "source": "chat_attempt",
             },
         )
         recorder.mark_run_failed()

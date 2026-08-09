@@ -14,7 +14,7 @@ from fastapi import APIRouter, WebSocket
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
-from jung._async_cleanup import drain_cancelled_task
+from jung._async_cleanup import close_awaitable_safely, drain_cancelled_task
 from jung.api.contracts import (
     ErrorCode,
     ErrorEnvelope,
@@ -186,7 +186,6 @@ async def _handle_chat_connection(
     logger.info("websocket_connected", extra={"connection_id": connection_id})
 
     try:
-        send_lock = asyncio.Lock()
 
         async def close_slow_connection() -> None:
             try:
@@ -204,8 +203,7 @@ async def _handle_chat_connection(
         async def send_event(event: ServerEvent) -> None:
             try:
                 async with asyncio.timeout(settings.websocket_send_timeout):
-                    async with send_lock:
-                        await websocket.send_json(event.model_dump(mode="json"))
+                    await websocket.send_json(event.model_dump(mode="json"))
             except TimeoutError:
                 await close_slow_connection()
                 raise _SlowClient from None
@@ -247,7 +245,6 @@ async def _handle_chat_connection(
             command=command,
             connection_id=connection_id,
             send_event=send_event,
-            close_slow_connection=close_slow_connection,
         )
     except (_SlowClient, WebSocketDisconnect):
         return
@@ -268,7 +265,6 @@ async def _stream_one_command(
     command: SendMessageCommand,
     connection_id: str,
     send_event,
-    close_slow_connection,
 ) -> None:
     domain_command = SendMessage(
         session_id=command.session_id,
@@ -282,6 +278,7 @@ async def _stream_one_command(
         session_id=str(command.session_id),
         client_message_id=str(command.client_message_id),
     ):
+        preserve_cleanup_cancellation = False
         stream = runtime.application.stream_message(domain_command)
         stream_iter = stream.__aiter__()
         receive_task: asyncio.Task[Any] | None = asyncio.create_task(
@@ -305,20 +302,14 @@ async def _stream_one_command(
                     try:
                         message = receive_task.result()
                     except WebSocketDisconnect:
-                        await _cancel_stream(stream_task, stream)
                         return
                     except Exception:
-                        await _cancel_stream(stream_task, stream)
                         raise
 
                     if message["type"] == "websocket.disconnect":
-                        await _cancel_stream(stream_task, stream)
                         return
 
                     # Unexpected data frame during an active command.
-                    stream_task.cancel()
-                    await drain_cancelled_task(stream_task)
-                    await _aclose_stream(stream)
                     await send_event(
                         build_error_event(
                             _validation_envelope(command.request_id),
@@ -334,14 +325,8 @@ async def _stream_one_command(
                 try:
                     item = stream_task.result()
                 except StopAsyncIteration:
-                    receive_task.cancel()
-                    await drain_cancelled_task(receive_task)
-                    await _aclose_stream(stream)
                     return
                 except DomainError as exc:
-                    receive_task.cancel()
-                    await drain_cancelled_task(receive_task)
-                    await _aclose_stream(stream)
                     envelope = to_error_envelope(exc, request_id=command.request_id)
                     _log_command_rejected(
                         connection_id=connection_id,
@@ -365,9 +350,6 @@ async def _stream_one_command(
                     await websocket.close()
                     return
                 except Exception as exc:
-                    receive_task.cancel()
-                    await drain_cancelled_task(receive_task)
-                    await _aclose_stream(stream)
                     envelope = to_error_envelope(exc, request_id=command.request_id)
                     _log_command_rejected(
                         connection_id=connection_id,
@@ -390,9 +372,6 @@ async def _stream_one_command(
                 wire = _to_server_event(item)
                 await send_event(wire)
                 if isinstance(item, (ChatCompleted, ChatFailed)):
-                    receive_task.cancel()
-                    await drain_cancelled_task(receive_task)
-                    await _aclose_stream(stream)
                     await websocket.close()
                     return
 
@@ -402,30 +381,47 @@ async def _stream_one_command(
                     name="ws-stream",
                 )
         except _SlowClient:
-            if stream_task is not None and not stream_task.done():
-                stream_task.cancel()
-                await drain_cancelled_task(stream_task)
-            if receive_task is not None and not receive_task.done():
-                receive_task.cancel()
-                await drain_cancelled_task(receive_task)
-            await _aclose_stream(stream)
             return
+        except asyncio.CancelledError:
+            preserve_cleanup_cancellation = True
+            raise
+        finally:
 
+            async def cleanup() -> None:
+                for task in (stream_task, receive_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                for task in (stream_task, receive_task):
+                    if task is not None:
+                        await drain_cancelled_task(task)
+                await _aclose_stream(stream)
 
-async def _cancel_stream(
-    stream_task: asyncio.Task[Any],
-    stream: AsyncIterator[ChatStreamResult],
-) -> None:
-    stream_task.cancel()
-    await drain_cancelled_task(stream_task)
-    await _aclose_stream(stream)
+            def _record_cleanup_failure(exc: BaseException) -> None:
+                logger.debug(
+                    "websocket active-stream cleanup failed error_type=%s",
+                    type(exc).__name__,
+                )
+
+            await close_awaitable_safely(
+                cleanup,
+                record_failure=_record_cleanup_failure,
+                preserve_existing_cancellation=preserve_cleanup_cancellation,
+            )
 
 
 async def _aclose_stream(stream: AsyncIterator[ChatStreamResult]) -> None:
-    aclose = getattr(stream, "aclose", None)
-    if aclose is None:
+    close = getattr(stream, "aclose", None)
+    if close is None:
         return
-    try:
-        await aclose()
-    except Exception:
-        logger.debug("chat stream aclose failed", exc_info=True)
+
+    def _record_close_failure(exc: BaseException) -> None:
+        logger.debug(
+            "chat stream aclose failed error_type=%s",
+            type(exc).__name__,
+        )
+
+    await close_awaitable_safely(
+        close,
+        record_failure=_record_close_failure,
+        preserve_existing_cancellation=False,
+    )
