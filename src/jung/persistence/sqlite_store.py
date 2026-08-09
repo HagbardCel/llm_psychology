@@ -912,9 +912,7 @@ class SQLiteStore:
             else None
         )
         source_session_id = (
-            str(plan.source_session_id)
-            if plan.source_session_id is not None
-            else None
+            str(plan.source_session_id) if plan.source_session_id is not None else None
         )
         supersedes_plan_id = (
             str(plan.supersedes_plan_id)
