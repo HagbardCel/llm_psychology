@@ -14,14 +14,14 @@ from openai import AsyncOpenAI
 
 from jung import composition as composition_module
 from jung.composition import application_context
-from jung.config import ApplicationSettings
 from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.models import MessageRole, Profile
 from jung.domain.results import ChatFailed
-from jung.llm.gateway import AdapterConfig, LLMSettings
+from jung.llm.gateway import AdapterConfig
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.persistence.sqlite_store import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
+from tests.support.settings import make_test_settings
 
 from .application_fixtures import collect_stream
 
@@ -74,14 +74,12 @@ def _llm_factory(
     return factory
 
 
-def _settings(tmp_path: Path, *, run_dir: Path) -> ApplicationSettings:
-    return ApplicationSettings(
-        database_path=tmp_path / "composition.db",
-        llm=LLMSettings(
-            default_model="test-model",
-            base_url="http://testserver/v1",
-            api_key="test-key",
-        ),
+def _settings(tmp_path: Path, *, run_dir: Path):
+    return make_test_settings(
+        data_dir=tmp_path,
+        model_name="test-model",
+        llm_base_url="http://testserver/v1",
+        llm_api_key="test-key",
         shutdown_timeout_seconds=5.0,
         debug_run_dir=run_dir,
     )

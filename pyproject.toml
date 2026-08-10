@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 authors = [{ name = "Therapist Team" }]
 dependencies = [
     "openai>=1.68.0",
-    "python-dotenv",
-    "pydantic",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.14",
     "fastapi",
     "uvicorn",
     "httpx",

@@ -31,17 +31,16 @@ from jung.api.errors import (
     validation_error_response,
 )
 from jung.api.routes import router
-from jung.api.settings import ApiSettings, validate_api_settings
 from jung.api.websocket import router as websocket_router
 from jung.composition import application_context
-from jung.config import ApplicationSettings
+from jung.config import JungSettings, load_settings, validate_bind_host
 from jung.diagnostics import diagnostic_context
 from jung.domain.errors import DomainError
 
 logger = logging.getLogger(__name__)
 
 RuntimeFactory = Callable[
-    [ApplicationSettings],
+    [JungSettings],
     AbstractAsyncContextManager[ApiRuntime],
 ]
 
@@ -175,19 +174,17 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 def create_app(
-    settings: ApiSettings,
+    settings: JungSettings,
     *,
     runtime_factory: RuntimeFactory = application_context,
 ) -> FastAPI:
-    settings = validate_api_settings(settings)
-
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         state: ApiState = app.state.api
         runtime_exited = False
 
         try:
-            async with runtime_factory(settings.application) as runtime:
+            async with runtime_factory(settings) as runtime:
                 state.runtime = runtime
                 state.ready = True
                 logger.info("api_ready")
@@ -217,10 +214,10 @@ def create_app(
     _register_exception_handlers(app)
     app.add_middleware(RequestIdMiddleware)
 
-    if settings.allowed_origins:
+    if settings.api_allowed_origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=list(settings.allowed_origins),
+            allow_origins=list(settings.api_allowed_origins),
             allow_credentials=False,
             allow_methods=["GET", "PUT", "POST", "OPTIONS"],
             allow_headers=["Content-Type", "X-Request-ID"],
@@ -254,18 +251,17 @@ def _uvicorn_log_config_with_jung(log_level: str) -> dict[str, Any]:
 def cli() -> None:
     import uvicorn
 
-    from jung.api.settings import load_api_settings, validate_bind_host
-
-    settings = load_api_settings()
+    settings = load_settings()
     validate_bind_host(settings)
     app = create_app(settings)
 
+    log_level = settings.api_log_level.value
     uvicorn.run(
         app,
-        host=settings.host,
-        port=settings.port,
-        log_level=settings.log_level,
-        log_config=_uvicorn_log_config_with_jung(settings.log_level),
+        host=settings.api_host,
+        port=settings.api_port,
+        log_level=log_level,
+        log_config=_uvicorn_log_config_with_jung(log_level),
         access_log=False,
     )
 

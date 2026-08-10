@@ -14,11 +14,11 @@ import pytest
 from starlette.datastructures import Headers
 
 from jung.api.app import ApiState
-from jung.api.settings import ApiSettings
 from jung.api.websocket import _handle_chat_connection
-from jung.config import build_settings
+from jung.config import JungSettings
 from jung.domain.models import Message, MessageRole
 from jung.domain.results import ChatCompleted, ChatToken
+from tests.support.settings import make_test_settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,15 +28,9 @@ def _default_settings(
     send_timeout: float = 5.0,
     close_timeout: float = 2.0,
     allowed_origins: tuple[str, ...] = (),
-) -> ApiSettings:
-    return ApiSettings(
-        application=build_settings(
-            database_path="data/jung.db",
-            llm_base_url="http://127.0.0.1:8080/v1",
-            llm_api_key="",
-            default_model="local-model",
-        ),
-        allowed_origins=allowed_origins,
+) -> JungSettings:
+    return make_test_settings(
+        api_allowed_origins=allowed_origins,
         websocket_send_timeout=send_timeout,
         websocket_close_timeout=close_timeout,
     )
@@ -47,7 +41,7 @@ class FakeWebSocket:
         self,
         *,
         api_state: ApiState,
-        api_settings: ApiSettings,
+        api_settings: JungSettings,
         headers: dict[str, str] | None = None,
     ) -> None:
         import asyncio

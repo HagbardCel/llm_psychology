@@ -30,7 +30,7 @@ from jung.api.contracts import (
 )
 from jung.api.deps import ApiNotReady, ApiRuntime, get_websocket_runtime
 from jung.api.errors import new_request_id, to_error_envelope
-from jung.api.settings import ApiSettings
+from jung.config import JungSettings
 from jung.diagnostics import diagnostic_context
 from jung.domain.commands import SendMessage
 from jung.domain.errors import DomainError
@@ -97,13 +97,13 @@ def _log_command_rejected(
         logger.info("websocket_command_rejected", extra=fields)
 
 
-def _origin_is_allowed(websocket: WebSocket, settings: ApiSettings) -> bool:
+def _origin_is_allowed(websocket: WebSocket, settings: JungSettings) -> bool:
     origin = websocket.headers.get("origin")
     if origin is None:
         return True
     if origin == "null":
         return False
-    return origin in settings.allowed_origins
+    return origin in settings.api_allowed_origins
 
 
 def _parse_command(text: str) -> tuple[SendMessageCommand | None, UUID]:
@@ -160,7 +160,7 @@ def _to_server_event(item: ChatStreamResult) -> ServerEvent:
 
 @router.websocket("/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
-    settings: ApiSettings = websocket.app.state.api_settings
+    settings: JungSettings = websocket.app.state.api_settings
 
     if not _origin_is_allowed(websocket, settings):
         await websocket.close(code=1008)
@@ -178,7 +178,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 async def _handle_chat_connection(
     websocket: WebSocket,
     runtime: ApiRuntime,
-    settings: ApiSettings,
+    settings: JungSettings,
 ) -> None:
     connection_id = str(uuid4())
     await websocket.accept()

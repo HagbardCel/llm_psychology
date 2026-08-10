@@ -1,21 +1,29 @@
-"""Environment-backed application settings for the target application core."""
+"""Environment-backed Jung settings — sole production owner of os.environ."""
 
 from __future__ import annotations
 
+import ipaddress
+import json
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from typing import Annotated, Any
 
-from jung._env import (
-    assert_finite_json_numbers,
-    optional_string,
-    parse_bool,
-    parse_optional_json_object,
-    parse_positive_finite_float,
-    require_non_empty_string,
+from pydantic import (
+    BeforeValidator,
+    Field,
+    PositiveFloat,
+    field_validator,
+    model_validator,
 )
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    SettingsConfigDict,
+)
+
 from jung.llm.gateway import LLMSettings, LLMTask, StructuredOutputMode
+from jung.llm.policies import TaskOverride, task_overrides_to_llm_settings
 
 _STREAMING_TASKS = frozenset(
     {
@@ -24,298 +32,363 @@ _STREAMING_TASKS = frozenset(
     }
 )
 
-_TASK_CONFIG_FIELDS = frozenset(
-    {
-        "model",
-        "temperature",
-        "timeout_seconds",
-        "max_completion_tokens",
-        "structured_output_mode",
-        "extra_body",
-    }
+_TRUE_VALUES = frozenset({"1", "true", "yes"})
+_FALSE_VALUES = frozenset({"0", "false", "no"})
+
+_VALID_LOG_LEVELS = frozenset(
+    {"critical", "error", "warning", "info", "debug", "trace"}
 )
 
-_TASK_CONFIG_ENV = "JUNG_LLM_TASK_CONFIG_JSON"
+
+class LogLevel(StrEnum):
+    CRITICAL = "critical"
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+    DEBUG = "debug"
+    TRACE = "trace"
 
 
-@dataclass(frozen=True, slots=True)
-class ApplicationSettings:
-    database_path: str | Path
-    llm: LLMSettings
-    shutdown_timeout_seconds: float = 30.0
-    enable_llm_tracing: bool = False
-    debug_run_dir: Path | None = None
-
-    def __post_init__(self) -> None:
-        timeout = self.shutdown_timeout_seconds
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or timeout <= 0
-        ):
-            raise ValueError("shutdown_timeout_seconds must be finite and positive")
-        try:
-            finite_timeout = math.isfinite(float(timeout))
-        except OverflowError:
-            finite_timeout = False
-        if not finite_timeout:
-            raise ValueError("shutdown_timeout_seconds must be finite and positive")
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("invalid JSON constant")
 
 
-def _parse_default_headers(
-    raw: dict[str, object] | None,
-    *,
-    env_name: str,
-) -> dict[str, str] | None:
-    if raw is None:
-        return None
-    headers: dict[str, str] = {}
-    for key, value in raw.items():
-        if not isinstance(key, str):
-            raise ValueError(f"{env_name} keys must be strings")
-        if not isinstance(value, str):
-            raise ValueError(f"{env_name}.{key} must be a string")
-        headers[key] = value
-    return headers or None
+def _assert_finite_json_numbers(value: object, *, path: str) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must be a finite number")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_finite_json_numbers(item, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_finite_json_numbers(item, path=f"{path}[{index}]")
 
 
-def _reject_null(path: str, value: object) -> None:
+def _parse_optional_json_object(value: object) -> dict[str, object] | None:
+    """Absent/blank → None; nonblank must be a JSON object (not null/array/scalar)."""
     if value is None:
-        raise ValueError(f"{path} must not be null")
-
-
-def _coerce_finite_float(path: str, value: object) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{path} must be a finite number")
-
-    try:
-        result = float(value)
-    except OverflowError:
-        raise ValueError(f"{path} must be a finite number") from None
-
-    if not math.isfinite(result):
-        raise ValueError(f"{path} must be a finite number")
-
-    return result
-
-
-def _parse_task_model(path: str, value: object) -> str:
-    _reject_null(path, value)
+        return None
+    if isinstance(value, dict):
+        _assert_finite_json_numbers(value, path="value")
+        return value
     if not isinstance(value, str):
-        raise ValueError(f"{path} must be a string")
-    model = value.strip()
-    if not model:
-        raise ValueError(f"{path} must be non-empty")
-    return model
-
-
-def _parse_task_temperature(path: str, value: object) -> float:
-    _reject_null(path, value)
-    temperature = _coerce_finite_float(path, value)
-    if not 0.0 <= temperature <= 2.0:
-        raise ValueError(f"{path} must be a finite number between 0 and 2")
-    return temperature
-
-
-def _parse_task_timeout(path: str, value: object) -> float:
-    _reject_null(path, value)
-    timeout = _coerce_finite_float(path, value)
-    if timeout <= 0:
-        raise ValueError(f"{path} must be a finite positive number")
-    return timeout
-
-
-def _parse_task_max_tokens(path: str, value: object) -> int:
-    _reject_null(path, value)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{path} must be a positive integer")
-    if value <= 0:
-        raise ValueError(f"{path} must be a positive integer")
-    return value
-
-
-def _parse_task_structured_mode(
-    path: str,
-    value: object,
-    *,
-    task: LLMTask,
-) -> StructuredOutputMode:
-    _reject_null(path, value)
-    if not isinstance(value, str):
-        raise ValueError(f"{path} must be a string")
+        raise ValueError("must be a JSON object")
+    if not value.strip():
+        return None
     try:
-        mode = StructuredOutputMode(value)
+        parsed = json.loads(value, parse_constant=_reject_json_constant)
     except ValueError as exc:
-        raise ValueError(f"{path} must be a valid structured_output_mode") from exc
-    if task in _STREAMING_TASKS and mode is not StructuredOutputMode.PROMPT:
-        raise ValueError(f'{path} must be "prompt"')
-    return mode
+        raise ValueError("must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("must be a JSON object")
+    _assert_finite_json_numbers(parsed, path="value")
+    return parsed
 
 
-def _parse_task_extra_body(path: str, value: object) -> dict[str, object]:
-    _reject_null(path, value)
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} must be a JSON object")
-    assert_finite_json_numbers(value, path=path)
-    return value
+def _parse_origins(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, tuple):
+        raw_parts = value
+    elif isinstance(value, list):
+        raw_parts = tuple(value)
+    elif isinstance(value, str):
+        if not value.strip():
+            return ()
+        raw_parts = tuple(value.split(","))
+    else:
+        raise ValueError("invalid CORS origins")
+
+    origins: list[str] = []
+    seen: set[str] = set()
+    for part in raw_parts:
+        if not isinstance(part, str):
+            raise ValueError("CORS origins must be strings")
+        origin = part.strip()
+        if not origin:
+            continue
+        if origin == "*":
+            raise ValueError("wildcard CORS origin is not allowed")
+        if origin in seen:
+            continue
+        seen.add(origin)
+        origins.append(origin)
+    return tuple(origins)
+
+
+def _parse_tight_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("must be one of 1/true/yes or 0/false/no")
+    if not value.strip():
+        raise ValueError("must be one of 1/true/yes or 0/false/no")
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise ValueError("must be one of 1/true/yes or 0/false/no")
+
+
+def _parse_data_dir(value: object) -> Path:
+    if value is None:
+        return Path("./data")
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return Path("./data")
+        return Path(stripped)
+    raise ValueError("invalid data directory")
+
+
+def _parse_optional_path(value: object) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str):
+        if not value.strip():
+            return None
+        return Path(value.strip())
+    raise ValueError("invalid path")
+
+
+def _parse_non_empty_trimmed(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("must be a non-empty string")
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("must be non-empty")
+    return stripped
+
+
+def _parse_log_level(value: object) -> LogLevel:
+    if isinstance(value, LogLevel):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("invalid log level")
+    normalized = value.strip().lower()
+    if normalized not in _VALID_LOG_LEVELS:
+        raise ValueError(f"invalid log level: {value!r}")
+    return LogLevel(normalized)
 
 
 def _parse_task_config(
-    raw: dict[str, object] | None,
-) -> tuple[
-    dict[LLMTask, str] | None,
-    dict[LLMTask, float] | None,
-    dict[LLMTask, float] | None,
-    dict[LLMTask, StructuredOutputMode] | None,
-    dict[LLMTask, int] | None,
-    dict[LLMTask, dict[str, object]] | None,
-]:
+    value: object,
+) -> dict[LLMTask, TaskOverride]:
+    raw = _parse_optional_json_object(value)
     if raw is None:
-        return None, None, None, None, None, None
+        return {}
 
-    task_models: dict[LLMTask, str] = {}
-    task_temperatures: dict[LLMTask, float] = {}
-    task_timeouts: dict[LLMTask, float] = {}
-    task_modes: dict[LLMTask, StructuredOutputMode] = {}
-    task_max_tokens: dict[LLMTask, int] = {}
-    task_extra_body: dict[LLMTask, dict[str, object]] = {}
-
+    overrides: dict[LLMTask, TaskOverride] = {}
     for task_name, task_entry in raw.items():
         if not isinstance(task_name, str):
-            raise ValueError(f"{_TASK_CONFIG_ENV} keys must be strings")
+            raise ValueError("task config keys must be strings")
         try:
             task = LLMTask(task_name)
         except ValueError as exc:
-            raise ValueError(
-                f"{_TASK_CONFIG_ENV}.{task_name} is an unknown task"
-            ) from exc
+            raise ValueError(f"{task_name} is an unknown task") from exc
         if not isinstance(task_entry, dict):
-            raise ValueError(f"{_TASK_CONFIG_ENV}.{task_name} must be a JSON object")
-        for field_name, field_value in task_entry.items():
-            if field_name not in _TASK_CONFIG_FIELDS:
-                raise ValueError(
-                    f"{_TASK_CONFIG_ENV}.{task_name}.{field_name} is an unknown field"
-                )
-            path = f"{_TASK_CONFIG_ENV}.{task_name}.{field_name}"
-            if field_name == "model":
-                task_models[task] = _parse_task_model(path, field_value)
-            elif field_name == "temperature":
-                task_temperatures[task] = _parse_task_temperature(path, field_value)
-            elif field_name == "timeout_seconds":
-                task_timeouts[task] = _parse_task_timeout(path, field_value)
-            elif field_name == "max_completion_tokens":
-                task_max_tokens[task] = _parse_task_max_tokens(path, field_value)
-            elif field_name == "structured_output_mode":
-                task_modes[task] = _parse_task_structured_mode(
-                    path,
-                    field_value,
-                    task=task,
-                )
-            elif field_name == "extra_body":
-                parsed_extra_body = _parse_task_extra_body(path, field_value)
-                if parsed_extra_body:
-                    task_extra_body[task] = parsed_extra_body
+            raise ValueError(f"{task_name} must be a JSON object")
+        override = TaskOverride.model_validate(task_entry)
+        if (
+            task in _STREAMING_TASKS
+            and override.structured_output_mode is not None
+            and override.structured_output_mode is not StructuredOutputMode.PROMPT
+        ):
+            raise ValueError(
+                f'{task_name}.structured_output_mode must be "prompt"'
+            )
+        overrides[task] = override
+    return overrides
 
-    return (
-        task_models or None,
-        task_temperatures or None,
-        task_timeouts or None,
-        task_modes or None,
-        task_max_tokens or None,
-        task_extra_body or None,
+
+def _parse_default_headers(value: object) -> dict[str, str] | None:
+    raw = _parse_optional_json_object(value)
+    if raw is None:
+        return None
+    headers: dict[str, str] = {}
+    for key, item in raw.items():
+        if not isinstance(key, str):
+            raise ValueError("header keys must be strings")
+        if not isinstance(item, str):
+            raise ValueError(f"{key} must be a string")
+        headers[key] = item
+    return headers or None
+
+
+def _parse_extra_body(value: object) -> dict[str, object] | None:
+    return _parse_optional_json_object(value)
+
+
+CorsOrigins = Annotated[
+    tuple[str, ...],
+    NoDecode,
+    BeforeValidator(_parse_origins),
+]
+
+TightBool = Annotated[bool, BeforeValidator(_parse_tight_bool)]
+DataDir = Annotated[Path, BeforeValidator(_parse_data_dir)]
+OptionalPath = Annotated[Path | None, BeforeValidator(_parse_optional_path)]
+NonEmptyTrimmedStr = Annotated[str, BeforeValidator(_parse_non_empty_trimmed)]
+NormalizedLogLevel = Annotated[LogLevel, BeforeValidator(_parse_log_level)]
+TaskConfigMap = Annotated[
+    dict[LLMTask, TaskOverride],
+    NoDecode,
+    BeforeValidator(_parse_task_config),
+]
+OptionalJsonObject = Annotated[
+    dict[str, object] | None,
+    NoDecode,
+    BeforeValidator(_parse_extra_body),
+]
+OptionalHeaders = Annotated[
+    dict[str, str] | None,
+    NoDecode,
+    BeforeValidator(_parse_default_headers),
+]
+
+
+class JungSettings(BaseSettings):
+    """Validated operator configuration for Jung runtime and API."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        dotenv_filtering="only_existing",
+        case_sensitive=True,
+        frozen=True,
+        extra="forbid",
+        validate_by_name=True,
+        validate_by_alias=True,
+        hide_input_in_errors=True,
+        allow_inf_nan=False,
     )
 
+    data_dir: DataDir = Field(default=Path("./data"), validation_alias="JUNG_DATA_DIR")
 
-def load_application_settings(
-    environ: Mapping[str, str],
-    *,
-    database_path: str | Path,
-) -> ApplicationSettings:
-    llm_base_url = require_non_empty_string(
-        "LLM_BASE_URL",
-        environ.get("LLM_BASE_URL"),
+    llm_base_url: NonEmptyTrimmedStr = Field(
         default="http://127.0.0.1:8080/v1",
+        validation_alias="LLM_BASE_URL",
     )
-    llm_api_key = optional_string(environ.get("LLM_API_KEY"), default="")
-    default_model = require_non_empty_string(
-        "MODEL_NAME",
-        environ.get("MODEL_NAME"),
+    llm_api_key: str = Field(default="", validation_alias="LLM_API_KEY")
+    model_name: NonEmptyTrimmedStr = Field(
         default="local-model",
+        validation_alias="MODEL_NAME",
     )
-    shutdown_timeout = parse_positive_finite_float(
-        "JUNG_SHUTDOWN_TIMEOUT",
-        environ.get("JUNG_SHUTDOWN_TIMEOUT"),
+    llm_extra_body: OptionalJsonObject = Field(
+        default=None,
+        validation_alias="JUNG_LLM_EXTRA_BODY_JSON",
+    )
+    llm_default_headers: OptionalHeaders = Field(
+        default=None,
+        validation_alias="JUNG_LLM_DEFAULT_HEADERS_JSON",
+    )
+    llm_task_config: TaskConfigMap = Field(
+        default_factory=dict,
+        validation_alias="JUNG_LLM_TASK_CONFIG_JSON",
+    )
+
+    shutdown_timeout_seconds: PositiveFloat = Field(
         default=30.0,
+        validation_alias="JUNG_SHUTDOWN_TIMEOUT",
     )
-    enable_llm_tracing = parse_bool(
-        "JUNG_ENABLE_LLM_TRACING",
-        environ.get("JUNG_ENABLE_LLM_TRACING"),
+    enable_llm_tracing: TightBool = Field(
         default=False,
+        validation_alias="JUNG_ENABLE_LLM_TRACING",
     )
-    debug_run_raw = environ.get("JUNG_DEBUG_RUN_DIR")
-    if debug_run_raw is None or not debug_run_raw.strip():
-        debug_run_dir: Path | None = None
-    else:
-        debug_run_dir = Path(debug_run_raw.strip())
-
-    extra_body = parse_optional_json_object(
-        "JUNG_LLM_EXTRA_BODY_JSON",
-        environ.get("JUNG_LLM_EXTRA_BODY_JSON"),
-    )
-    default_headers = _parse_default_headers(
-        parse_optional_json_object(
-            "JUNG_LLM_DEFAULT_HEADERS_JSON",
-            environ.get("JUNG_LLM_DEFAULT_HEADERS_JSON"),
-        ),
-        env_name="JUNG_LLM_DEFAULT_HEADERS_JSON",
-    )
-    (
-        task_models,
-        task_temperatures,
-        task_timeouts,
-        task_modes,
-        task_max_tokens,
-        task_extra_body,
-    ) = _parse_task_config(
-        parse_optional_json_object(
-            _TASK_CONFIG_ENV,
-            environ.get(_TASK_CONFIG_ENV),
-        ),
+    debug_run_dir: OptionalPath = Field(
+        default=None,
+        validation_alias="JUNG_DEBUG_RUN_DIR",
     )
 
-    return ApplicationSettings(
-        database_path=database_path,
-        llm=LLMSettings(
-            default_model=default_model,
-            base_url=llm_base_url,
-            api_key=llm_api_key,
-            task_models=task_models,
-            task_temperatures=task_temperatures,
-            task_timeouts=task_timeouts,
-            task_structured_modes=task_modes,
-            task_max_completion_tokens=task_max_tokens,
-            extra_body=extra_body or None,
-            task_extra_body=task_extra_body or None,
-            default_headers=default_headers,
-        ),
-        shutdown_timeout_seconds=shutdown_timeout,
-        enable_llm_tracing=enable_llm_tracing,
-        debug_run_dir=debug_run_dir,
+    api_host: NonEmptyTrimmedStr = Field(
+        default="127.0.0.1",
+        validation_alias="JUNG_API_HOST",
+    )
+    api_port: Annotated[int, Field(ge=1, le=65535)] = Field(
+        default=8000,
+        validation_alias="JUNG_API_PORT",
+    )
+    api_log_level: NormalizedLogLevel = Field(
+        default=LogLevel.INFO,
+        validation_alias="JUNG_API_LOG_LEVEL",
+    )
+    api_allowed_origins: CorsOrigins = Field(
+        default=(),
+        validation_alias="JUNG_API_ALLOWED_ORIGINS",
+    )
+    api_allow_remote_bind: TightBool = Field(
+        default=False,
+        validation_alias="JUNG_API_ALLOW_REMOTE_BIND",
     )
 
-
-def build_settings(
-    *,
-    database_path: str | Path,
-    llm_base_url: str,
-    llm_api_key: str,
-    default_model: str,
-) -> ApplicationSettings:
-    return ApplicationSettings(
-        database_path=database_path,
-        llm=LLMSettings(
-            default_model=default_model,
-            base_url=llm_base_url,
-            api_key=llm_api_key,
-        ),
+    websocket_send_timeout: PositiveFloat = Field(
+        default=5.0,
+        validation_alias="JUNG_WS_SEND_TIMEOUT",
     )
+    websocket_close_timeout: PositiveFloat = Field(
+        default=2.0,
+        validation_alias="JUNG_WS_CLOSE_TIMEOUT",
+    )
+
+    @property
+    def database_path(self) -> Path:
+        return self.data_dir / "jung.db"
+
+    @property
+    def llm(self) -> LLMSettings:
+        """Temporary 6D.1 bridge for composition / build_model_policies."""
+        return task_overrides_to_llm_settings(
+            default_model=self.model_name,
+            base_url=self.llm_base_url,
+            api_key=self.llm_api_key,
+            task_overrides=self.llm_task_config,
+            extra_body=self.llm_extra_body,
+            default_headers=self.llm_default_headers,
+        )
+
+    @field_validator("api_port", mode="before")
+    @classmethod
+    def reject_bool_port(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("port must be an integer between 1 and 65535")
+        return value
+
+    @model_validator(mode="after")
+    def _normalize_cors_again(self) -> JungSettings:
+        # Origins already normalized via BeforeValidator; re-check empties
+        # that could arrive via explicit construction with raw empty strings.
+        for origin in self.api_allowed_origins:
+            if not origin.strip():
+                raise ValueError("empty CORS origin entries are not allowed")
+            if origin.strip() == "*":
+                raise ValueError("wildcard CORS origin is not allowed")
+        return self
+
+
+def load_settings() -> JungSettings:
+    """Sole production environment-backed construction path."""
+    return JungSettings()
+
+
+def validate_bind_host(settings: JungSettings) -> None:
+    host = settings.api_host.strip()
+    if host == "localhost":
+        return
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        pass
+    if settings.api_allow_remote_bind:
+        return
+    raise ValueError(
+        "JUNG_API_HOST must be a loopback address unless "
+        "JUNG_API_ALLOW_REMOTE_BIND=true. The API has no authentication or "
+        "transport encryption."
+    )
+

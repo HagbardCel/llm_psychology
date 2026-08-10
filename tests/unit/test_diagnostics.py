@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 import jung.diagnostics as diagnostics
 from jung.composition import application_context
-from jung.config import ApplicationSettings
+from tests.support.settings import make_test_settings
 from jung.diagnostics import (
     DiagnosticRecorder,
     diagnostic_context,
@@ -24,7 +24,6 @@ from jung.diagnostics import (
     snapshot_database,
 )
 from jung.domain.models import Profile
-from jung.llm.gateway import LLMSettings
 from jung.persistence.sqlite_store import SQLiteStore
 
 
@@ -360,13 +359,11 @@ async def test_disabled_mode_creates_no_artifacts(tmp_path: Path) -> None:
         async def aclose(self) -> None:
             return None
 
-    settings = ApplicationSettings(
-        database_path=tmp_path / "jung.db",
-        llm=LLMSettings(
-            base_url="http://127.0.0.1:9/v1",
-            api_key="test-key",
-            default_model="test-model",
-        ),
+    settings = make_test_settings(
+        data_dir=tmp_path,
+        llm_base_url="http://127.0.0.1:9/v1",
+        llm_api_key="test-key",
+        model_name="test-model",
         debug_run_dir=None,
     )
     async with application_context(

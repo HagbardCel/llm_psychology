@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
-from jung.config import ApplicationSettings
+from jung.config import JungSettings
 from jung.diagnostics import (
     DiagnosticRecorder,
     _safe_exception_message,
@@ -103,10 +103,10 @@ def _preflight_json_schema_policies(
             response_format_for_mode(StructuredOutputMode.JSON_SCHEMA, output_type)
 
 
-def _secret_values(settings: ApplicationSettings) -> list[str]:
-    secrets = [settings.llm.api_key]
-    if settings.llm.default_headers:
-        secrets.extend(settings.llm.default_headers.values())
+def _secret_values(settings: JungSettings) -> list[str]:
+    secrets = [settings.llm_api_key]
+    if settings.llm_default_headers:
+        secrets.extend(settings.llm_default_headers.values())
     return [value for value in secrets if value]
 
 
@@ -233,7 +233,7 @@ def _selected_cleanup_error(
 
 @asynccontextmanager
 async def application_context(
-    settings: ApplicationSettings,
+    settings: JungSettings,
     *,
     now: Callable[[], datetime] | None = None,
     new_id: Callable[[], UUID] | None = None,

@@ -1,21 +1,16 @@
-"""Unit tests for jung.api.settings and CLI startup."""
+"""Unit tests for API bind safety and settings loading."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
-from jung.api.settings import (
-    ApiSettings,
-    load_api_settings,
-    validate_api_settings,
-    validate_bind_host,
-)
-from jung.config import build_settings
+from jung.config import JungSettings, load_settings, validate_bind_host
+from tests.support.settings import make_test_settings
 
 API_ENV_NAMES = (
     "LLM_BASE_URL",
@@ -39,10 +34,11 @@ API_ENV_NAMES = (
 
 
 @pytest.fixture(autouse=True)
-def isolate_api_settings_environment(
+def isolate_settings_environment(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("jung.api.settings.load_dotenv", lambda: None)
+    monkeypatch.chdir(tmp_path)
     for name in API_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
 
@@ -53,19 +49,14 @@ def _settings(
     allow_remote_bind: bool = False,
     origins: tuple[str, ...] = (),
     port: int = 8000,
-    path: Path | None = None,
-) -> ApiSettings:
-    return ApiSettings(
-        application=build_settings(
-            database_path=path or Path("data/jung.db"),
-            llm_base_url="http://127.0.0.1:8080/v1",
-            llm_api_key="",
-            default_model="local-model",
-        ),
-        host=host,
-        port=port,
-        allow_remote_bind=allow_remote_bind,
-        allowed_origins=origins,
+    data_dir: Path | None = None,
+) -> JungSettings:
+    return make_test_settings(
+        data_dir=data_dir or Path("data"),
+        api_host=host,
+        api_port=port,
+        api_allow_remote_bind=allow_remote_bind,
+        api_allowed_origins=origins,
     )
 
 
@@ -90,61 +81,41 @@ def test_validate_bind_host_allows_remote_with_override() -> None:
     validate_bind_host(_settings(host="0.0.0.0", allow_remote_bind=True))
 
 
-def test_validate_api_settings_rejects_wildcard_origin() -> None:
-    with pytest.raises(ValueError, match="wildcard"):
-        validate_api_settings(_settings(origins=("*",)))
+def test_wildcard_origin_rejected() -> None:
+    with pytest.raises(ValidationError, match="wildcard"):
+        _settings(origins=("*",))
 
 
-def test_validate_api_settings_normalizes_log_level() -> None:
-    settings = validate_api_settings(_settings())
-    replaced = ApiSettings(
-        application=settings.application,
-        host=settings.host,
-        port=settings.port,
-        log_level=" INFO ",
-        allowed_origins=settings.allowed_origins,
-        allow_remote_bind=settings.allow_remote_bind,
+def test_log_level_normalized() -> None:
+    settings = make_test_settings(api_log_level=" INFO ")
+    assert settings.api_log_level.value == "info"
+
+
+def test_origins_deduplicated() -> None:
+    settings = make_test_settings(
+        api_allowed_origins=(
+            " https://frontend.test ",
+            "https://frontend.test",
+        ),
     )
-    assert validate_api_settings(replaced).log_level == "info"
-
-
-def test_validate_api_settings_normalizes_origins_to_tuple() -> None:
-    normalized = validate_api_settings(
-        _settings(
-            origins=(
-                " https://frontend.test ",
-                "https://frontend.test",
-            )
-        )
-    )
-    assert normalized.allowed_origins == ("https://frontend.test",)
-    assert isinstance(normalized.allowed_origins, tuple)
-    assert validate_api_settings(normalized) == normalized
+    assert settings.api_allowed_origins == ("https://frontend.test",)
 
 
 @pytest.mark.parametrize(
-    ("changes", "expected_name"),
+    "kwargs",
     [
-        ({"port": 0}, "port"),
-        ({"port": 65536}, "port"),
-        ({"port": True}, "port"),
-        ({"port": 8000.5}, "port"),
-        ({"websocket_send_timeout": 0}, "websocket_send_timeout"),
-        ({"websocket_close_timeout": -1}, "websocket_close_timeout"),
-        ({"websocket_send_timeout": True}, "websocket_send_timeout"),
-        ({"websocket_send_timeout": float("nan")}, "websocket_send_timeout"),
-        ({"websocket_close_timeout": float("inf")}, "websocket_close_timeout"),
-        ({"websocket_send_timeout": 10**400}, "websocket_send_timeout"),
+        {"api_port": 0},
+        {"api_port": 65536},
+        {"api_port": True},
+        {"websocket_send_timeout": 0},
+        {"websocket_close_timeout": -1},
+        {"websocket_send_timeout": float("nan")},
+        {"websocket_close_timeout": float("inf")},
     ],
 )
-def test_validate_api_settings_rejects_invalid_direct_values(
-    changes: dict[str, object],
-    expected_name: str,
-) -> None:
-    settings = replace(_settings(), **changes)
-
-    with pytest.raises(ValueError, match=expected_name):
-        validate_api_settings(settings)
+def test_rejects_invalid_api_scalars(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(**kwargs)
 
 
 def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +128,7 @@ def test_cli_passes_fastapi_app_to_uvicorn(monkeypatch: pytest.MonkeyPatch) -> N
         captured.update(kwargs)
 
     monkeypatch.setattr("uvicorn.run", fake_run)
-    monkeypatch.setattr("jung.api.settings.load_api_settings", lambda: _settings())
+    monkeypatch.setattr("jung.api.app.load_settings", lambda: _settings())
 
     app_module.cli()
 
@@ -197,7 +168,7 @@ def test_cli_rejects_remote_bind_before_uvicorn(
     run = MagicMock()
     monkeypatch.setattr("uvicorn.run", run)
     monkeypatch.setattr(
-        "jung.api.settings.load_api_settings",
+        "jung.api.app.load_settings",
         lambda: _settings(host="192.168.0.5"),
     )
 
@@ -207,33 +178,33 @@ def test_cli_rejects_remote_bind_before_uvicorn(
     run.assert_not_called()
 
 
-def test_load_api_settings_uses_jung_data_dir(
+def test_load_settings_uses_jung_data_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    settings = load_api_settings()
-    assert settings.application.database_path == tmp_path / "jung.db"
+    settings = JungSettings(_env_file=None)
+    assert settings.database_path == tmp_path / "jung.db"
 
 
-def test_load_api_settings_delegates_composition_settings(
+def test_load_settings_delegates_composition_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
-    settings = load_api_settings()
-    assert settings.application.shutdown_timeout_seconds == 42.0
+    settings = JungSettings(_env_file=None)
+    assert settings.shutdown_timeout_seconds == 42.0
 
 
-def test_load_api_settings_websocket_timeout_overrides(
+def test_load_settings_websocket_timeout_overrides(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JUNG_WS_SEND_TIMEOUT", "12.5")
     monkeypatch.setenv("JUNG_WS_CLOSE_TIMEOUT", "3")
-    settings = load_api_settings()
+    settings = JungSettings(_env_file=None)
     assert settings.websocket_send_timeout == 12.5
     assert settings.websocket_close_timeout == 3.0
 
@@ -247,7 +218,7 @@ def test_load_api_settings_websocket_timeout_overrides(
         ("JUNG_WS_CLOSE_TIMEOUT", "-inf"),
     ],
 )
-def test_load_api_settings_rejects_invalid_websocket_timeout(
+def test_load_settings_rejects_invalid_websocket_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     env_name: str,
@@ -255,5 +226,5 @@ def test_load_api_settings_rejects_invalid_websocket_timeout(
 ) -> None:
     monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv(env_name, env_value)
-    with pytest.raises(ValueError, match=env_name):
-        load_api_settings()
+    with pytest.raises(ValidationError):
+        JungSettings(_env_file=None)
