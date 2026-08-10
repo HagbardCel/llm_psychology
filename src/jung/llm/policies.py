@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
+from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 
 _DEFAULT_TEMPERATURES: dict[LLMTask, float] = {
     LLMTask.INTAKE_PATCH: 0.1,
@@ -107,69 +107,42 @@ def _assert_finite_json_numbers(value: object, *, path: str) -> None:
             _assert_finite_json_numbers(item, path=f"{path}[{index}]")
 
 
-def task_overrides_to_llm_settings(
+def build_model_policies(
     *,
     default_model: str,
-    base_url: str,
-    api_key: str,
     task_overrides: Mapping[LLMTask, TaskOverride],
-    extra_body: dict[str, object] | None,
-    default_headers: dict[str, str] | None,
-) -> LLMSettings:
-    """Temporary 6D.1 bridge: TaskOverride → six-map LLMSettings."""
-    task_models: dict[LLMTask, str] = {}
-    task_temperatures: dict[LLMTask, float] = {}
-    task_timeouts: dict[LLMTask, float] = {}
-    task_modes: dict[LLMTask, StructuredOutputMode] = {}
-    task_max_tokens: dict[LLMTask, int] = {}
-    task_extra_body: dict[LLMTask, dict[str, object]] = {}
-
-    for task, override in task_overrides.items():
-        if override.model is not None:
-            task_models[task] = override.model
-        if override.temperature is not None:
-            task_temperatures[task] = override.temperature
-        if override.timeout_seconds is not None:
-            task_timeouts[task] = override.timeout_seconds
-        if override.structured_output_mode is not None:
-            task_modes[task] = override.structured_output_mode
-        if override.max_completion_tokens is not None:
-            task_max_tokens[task] = override.max_completion_tokens
-        if override.extra_body:
-            task_extra_body[task] = override.extra_body
-
-    return LLMSettings(
-        default_model=default_model,
-        base_url=base_url,
-        api_key=api_key,
-        task_models=task_models or None,
-        task_temperatures=task_temperatures or None,
-        task_timeouts=task_timeouts or None,
-        task_structured_modes=task_modes or None,
-        task_max_completion_tokens=task_max_tokens or None,
-        extra_body=extra_body,
-        task_extra_body=task_extra_body or None,
-        default_headers=default_headers,
-    )
-
-
-def build_model_policies(settings: LLMSettings) -> dict[LLMTask, ModelPolicy]:
-    if not settings.default_model.strip():
+) -> dict[LLMTask, ModelPolicy]:
+    if not default_model.strip():
         raise ValueError("default_model must be non-empty")
-    if not settings.base_url.strip():
-        raise ValueError("base_url must be non-empty")
 
     policies: dict[LLMTask, ModelPolicy] = {}
     for task in LLMTask:
-        model = (settings.task_models or {}).get(task, settings.default_model)
-        temperature = (settings.task_temperatures or {}).get(
-            task, _DEFAULT_TEMPERATURES[task]
+        override = task_overrides.get(task)
+        model = (
+            override.model
+            if override is not None and override.model is not None
+            else default_model
         )
-        timeout = (settings.task_timeouts or {}).get(task, _DEFAULT_TIMEOUTS[task])
-        mode = (settings.task_structured_modes or {}).get(
-            task, _DEFAULT_STRUCTURED_MODES[task]
+        temperature = (
+            override.temperature
+            if override is not None and override.temperature is not None
+            else _DEFAULT_TEMPERATURES[task]
         )
-        max_tokens = (settings.task_max_completion_tokens or {}).get(task)
+        timeout = (
+            override.timeout_seconds
+            if override is not None and override.timeout_seconds is not None
+            else _DEFAULT_TIMEOUTS[task]
+        )
+        mode = (
+            override.structured_output_mode
+            if override is not None and override.structured_output_mode is not None
+            else _DEFAULT_STRUCTURED_MODES[task]
+        )
+        max_tokens = (
+            override.max_completion_tokens
+            if override is not None
+            else None
+        )
         policies[task] = ModelPolicy(
             task=task,
             model=model,

@@ -18,13 +18,12 @@ from jung.llm.gateway import (
     ChatMessage,
     ChatRole,
     LLMGateway,
-    LLMSettings,
     LLMTask,
     ModelPolicy,
     StructuredOutputMode,
 )
 from jung.llm.openai_compatible import OpenAICompatibleLLM
-from jung.llm.policies import build_model_policies
+from jung.llm.policies import TaskOverride, build_model_policies
 from jung.llm.tracing import ObservedLLMGateway
 
 __all__ = [
@@ -37,7 +36,6 @@ __all__ = [
     "LLMError",
     "LLMGateway",
     "LLMProtocolError",
-    "LLMSettings",
     "LLMTask",
     "LLMTimeout",
     "LLMUnavailable",
@@ -47,5 +45,6 @@ __all__ = [
     "StreamExpectation",
     "StructuredExpectation",
     "StructuredOutputMode",
+    "TaskOverride",
     "build_model_policies",
 ]

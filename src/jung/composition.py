@@ -259,17 +259,25 @@ async def application_context(
         cleanup_error: _ExcInfo | None = None
 
         try:
-            policies = build_model_policies(settings.llm)
+            policies = build_model_policies(
+                default_model=settings.model_name,
+                task_overrides=settings.llm_task_config,
+            )
             _preflight_json_schema_policies(policies)
             store = SQLiteStore(settings.database_path)
             await asyncio.to_thread(store.initialize)
             store_initialized = True
+            task_extra_body = {
+                task: override.extra_body
+                for task, override in settings.llm_task_config.items()
+                if override.extra_body
+            }
             adapter_config = AdapterConfig(
-                base_url=settings.llm.base_url,
-                api_key=settings.llm.api_key,
-                default_headers=settings.llm.default_headers,
-                extra_body=settings.llm.extra_body,
-                task_extra_body=settings.llm.task_extra_body,
+                base_url=settings.llm_base_url,
+                api_key=settings.llm_api_key,
+                default_headers=settings.llm_default_headers,
+                extra_body=settings.llm_extra_body,
+                task_extra_body=task_extra_body or None,
             )
             if llm_factory is not None:
                 llm = llm_factory(adapter_config, recorder)

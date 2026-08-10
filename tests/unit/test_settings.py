@@ -96,7 +96,10 @@ def test_full_override_load() -> None:
     override = settings.llm_task_config[LLMTask.ASSESSMENT]
     assert override.model == "assess-model"
     assert override.temperature == 0.2
-    policies = build_model_policies(settings.llm)
+    policies = build_model_policies(
+        default_model=settings.model_name,
+        task_overrides=settings.llm_task_config,
+    )
     assert policies[LLMTask.ASSESSMENT].model == "assess-model"
     assert (
         policies[LLMTask.ASSESSMENT].structured_output_mode
@@ -267,7 +270,7 @@ def test_task_extra_body_and_global_extra_body() -> None:
             }
         ),
     )
-    assert settings.llm.extra_body == {"global_flag": True}
-    assert settings.llm.task_extra_body == {
-        LLMTask.THERAPY_RESPONSE: {"task_flag": False}
+    assert settings.llm_extra_body == {"global_flag": True}
+    assert settings.llm_task_config[LLMTask.THERAPY_RESPONSE].extra_body == {
+        "task_flag": False
     }

@@ -22,8 +22,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from jung.llm.gateway import LLMSettings, LLMTask, StructuredOutputMode
-from jung.llm.policies import TaskOverride, task_overrides_to_llm_settings
+from jung.llm.gateway import LLMTask, StructuredOutputMode
+from jung.llm.policies import TaskOverride
 
 _STREAMING_TASKS = frozenset(
     {
@@ -338,18 +338,6 @@ class JungSettings(BaseSettings):
     @property
     def database_path(self) -> Path:
         return self.data_dir / "jung.db"
-
-    @property
-    def llm(self) -> LLMSettings:
-        """Temporary 6D.1 bridge for composition / build_model_policies."""
-        return task_overrides_to_llm_settings(
-            default_model=self.model_name,
-            base_url=self.llm_base_url,
-            api_key=self.llm_api_key,
-            task_overrides=self.llm_task_config,
-            extra_body=self.llm_extra_body,
-            default_headers=self.llm_default_headers,
-        )
 
     @field_validator("api_port", mode="before")
     @classmethod
