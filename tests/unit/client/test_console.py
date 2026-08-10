@@ -322,7 +322,6 @@ async def test_chat_turn_builds_send_message_command() -> None:
     await app._handle_chat_turn(snapshot, content="hello")
     assert sent_commands
     assert sent_commands[0].content == "hello"
-    assert sent_commands[0].content == "hello"
     assert sent_commands[0].session_id == session.id
 
 

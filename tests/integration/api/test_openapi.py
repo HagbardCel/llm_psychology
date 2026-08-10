@@ -131,6 +131,22 @@ def test_openapi_schema_property_inventories(api_app) -> None:
     select_style = components["SelectStyleRequest"]
     assert set(select_style["properties"]) == {"style_id"}
 
+    assert set(components["StyleOptionsResponse"]["properties"]) == {
+        "styles",
+        "recommendations",
+    }
+    assert set(components["StyleSummaryResponse"]["properties"]) == {
+        "id",
+        "name",
+        "description",
+    }
+    assert set(components["StyleRecommendationSummaryResponse"]["properties"]) == {
+        "style_id",
+        "score",
+        "rationale",
+        "key_topics",
+    }
+
 
 def test_openapi_bodyless_post_commands_have_no_request_body(api_app) -> None:
     schema = api_app.openapi()

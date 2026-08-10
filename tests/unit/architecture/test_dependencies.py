@@ -163,7 +163,7 @@ def test_domain_has_no_forbidden_dependencies() -> None:
     assert violations == []
 
 
-def test_phases_do_not_import_persistence_api_client_or_application() -> None:
+def test_phases_do_not_import_forbidden_layers() -> None:
     violations: list[str] = []
     for path in _python_files(PHASES_SRC):
         for module in _resolved_imported_modules(path):
