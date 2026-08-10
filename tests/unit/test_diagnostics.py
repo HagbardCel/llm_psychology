@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 import jung.diagnostics as diagnostics
 from jung.composition import application_context
-from tests.support.settings import make_test_settings
 from jung.diagnostics import (
     DiagnosticRecorder,
     diagnostic_context,
@@ -25,6 +24,7 @@ from jung.diagnostics import (
 )
 from jung.domain.models import Profile
 from jung.persistence.sqlite_store import SQLiteStore
+from tests.support.settings import make_test_settings
 
 
 class _Kind(Enum):

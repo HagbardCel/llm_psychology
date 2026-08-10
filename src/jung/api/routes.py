@@ -29,8 +29,8 @@ from jung.api.contracts import (
     to_style_options_response,
 )
 from jung.api.deps import build_error_response, get_application
-from jung.application import TherapyApplication
 from jung.api.errors import not_ready_error_response
+from jung.application import TherapyApplication
 from jung.domain.commands import (
     EndSession,
     SelectStyle,
@@ -135,9 +135,7 @@ async def select_style(
     application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await application.select_style(
-        SelectStyle(style_id=body.style_id)
-    )
+    snapshot = await application.select_style(SelectStyle(style_id=body.style_id))
     return to_snapshot_response(snapshot, context=context)
 
 

@@ -138,11 +138,7 @@ def build_model_policies(
             if override is not None and override.structured_output_mode is not None
             else _DEFAULT_STRUCTURED_MODES[task]
         )
-        max_tokens = (
-            override.max_completion_tokens
-            if override is not None
-            else None
-        )
+        max_tokens = override.max_completion_tokens if override is not None else None
         policies[task] = ModelPolicy(
             task=task,
             model=model,

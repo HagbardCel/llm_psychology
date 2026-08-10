@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
-from jung.config import JungSettings, load_settings, validate_bind_host
+from jung.config import JungSettings, validate_bind_host
 from tests.support.settings import make_test_settings
 
 API_ENV_NAMES = (

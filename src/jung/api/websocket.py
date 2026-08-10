@@ -29,8 +29,8 @@ from jung.api.contracts import (
     to_message_response,
 )
 from jung.api.deps import ApiNotReady, get_websocket_application
-from jung.application import TherapyApplication
 from jung.api.errors import new_request_id, to_error_envelope
+from jung.application import TherapyApplication
 from jung.config import JungSettings
 from jung.diagnostics import diagnostic_context
 from jung.domain.commands import SendMessage

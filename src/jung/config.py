@@ -7,7 +7,7 @@ import json
 import math
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import (
     BeforeValidator,
@@ -199,9 +199,7 @@ def _parse_task_config(
             and override.structured_output_mode is not None
             and override.structured_output_mode is not StructuredOutputMode.PROMPT
         ):
-            raise ValueError(
-                f'{task_name}.structured_output_mode must be "prompt"'
-            )
+            raise ValueError(f'{task_name}.structured_output_mode must be "prompt"')
         overrides[task] = override
     return overrides
 
@@ -379,4 +377,3 @@ def validate_bind_host(settings: JungSettings) -> None:
         "JUNG_API_ALLOW_REMOTE_BIND=true. The API has no authentication or "
         "transport encryption."
     )
-

@@ -32,7 +32,9 @@ def make_test_settings(**overrides: object) -> JungSettings:
     return JungSettings(_env_file=None, **values)
 
 
-def settings_for_database(database_path: Path | str, **overrides: object) -> JungSettings:
+def settings_for_database(
+    database_path: Path | str, **overrides: object
+) -> JungSettings:
     """Settings whose database_path matches the given SQLite file path."""
     path = Path(database_path)
     return make_test_settings(data_dir=path.parent, **overrides)
