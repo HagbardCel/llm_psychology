@@ -24,7 +24,7 @@ from tests.integration.application.scenarios import (
     complete_intake_for_assessment,
     open_intake,
 )
-from tests.support.api import runtime_factory
+from tests.support.api import application_factory
 
 
 @pytest.mark.asyncio
@@ -224,13 +224,13 @@ async def test_retry_operation_returns_accepted_snapshot(
 
     app = create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            application = app.state.api.runtime.application
+            application = app.state.api.application
             await wait_for_operation_status(
                 application,
                 operation_id,

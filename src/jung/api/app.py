@@ -18,7 +18,6 @@ from starlette.responses import Response
 
 from jung.api.deps import (
     ApiNotReady,
-    ApiRuntime,
     build_error_response,
 )
 from jung.api.errors import (
@@ -32,6 +31,7 @@ from jung.api.errors import (
 )
 from jung.api.routes import router
 from jung.api.websocket import router as websocket_router
+from jung.application import TherapyApplication
 from jung.composition import application_context
 from jung.config import JungSettings, load_settings, validate_bind_host
 from jung.diagnostics import diagnostic_context
@@ -39,16 +39,15 @@ from jung.domain.errors import DomainError
 
 logger = logging.getLogger(__name__)
 
-RuntimeFactory = Callable[
+ApplicationFactory = Callable[
     [JungSettings],
-    AbstractAsyncContextManager[ApiRuntime],
+    AbstractAsyncContextManager[TherapyApplication],
 ]
 
 
 @dataclass
 class ApiState:
-    runtime: ApiRuntime | None = None
-    ready: bool = False
+    application: TherapyApplication | None = None
 
 
 def _request_id_from_request(request: Request) -> UUID:
@@ -176,7 +175,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 def create_app(
     settings: JungSettings,
     *,
-    runtime_factory: RuntimeFactory = application_context,
+    application_factory: ApplicationFactory = application_context,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -184,19 +183,18 @@ def create_app(
         runtime_exited = False
 
         try:
-            async with runtime_factory(settings) as runtime:
-                state.runtime = runtime
-                state.ready = True
+            async with application_factory(settings) as application:
+                state.application = application
                 logger.info("api_ready")
 
                 try:
                     yield
                 finally:
-                    state.ready = False
+                    state.application = None
 
             runtime_exited = True
         finally:
-            state.runtime = None
+            state.application = None
             if runtime_exited:
                 logger.info("api_shutdown_complete")
 

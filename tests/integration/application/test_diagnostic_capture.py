@@ -101,13 +101,13 @@ async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
     settings = _settings(tmp_path, run_dir=run_dir)
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
-    ) as runtime:
-        await runtime.application.update_profile(
+    ) as application:
+        await application.update_profile(
             UpdateProfile(
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
-        session = (await runtime.application.get_snapshot()).active_session
+        session = (await application.get_snapshot()).active_session
         assert session is not None
         session_id = session.id
 
@@ -149,16 +149,16 @@ async def test_diagnostic_capture_double_structured_failure(tmp_path: Path) -> N
     client_message_id = uuid4()
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
-    ) as runtime:
-        await runtime.application.update_profile(
+    ) as application:
+        await application.update_profile(
             UpdateProfile(
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
-        session = (await runtime.application.get_snapshot()).active_session
+        session = (await application.get_snapshot()).active_session
         assert session is not None
         items = await collect_stream(
-            runtime.application,
+            application,
             SendMessage(
                 session_id=session.id,
                 client_message_id=client_message_id,
@@ -224,8 +224,8 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
         with pytest.raises(RuntimeError, match="sentinel-primary") as exc_info:
             async with application_context(
                 settings, llm_factory=_llm_factory(handler)
-            ) as runtime:
-                await runtime.application.update_profile(
+            ) as application:
+                await application.update_profile(
                     UpdateProfile(
                         profile=Profile(name="Alex", primary_language="English"),
                     )
@@ -235,8 +235,8 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
     else:
         async with application_context(
             settings, llm_factory=_llm_factory(handler)
-        ) as runtime:
-            await runtime.application.update_profile(
+        ) as application:
+            await application.update_profile(
                 UpdateProfile(
                     profile=Profile(name="Alex", primary_language="English"),
                 )

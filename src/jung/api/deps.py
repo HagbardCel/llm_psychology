@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from fastapi import Request
 from starlette.responses import JSONResponse
 
@@ -11,29 +9,23 @@ from jung.api.contracts import ErrorResponse
 from jung.application import TherapyApplication
 
 
-class ApiRuntime(Protocol):
-    application: TherapyApplication
-
-
-WebSocketRuntime = ApiRuntime
-
-
 class ApiNotReady(RuntimeError):
     pass
 
 
-def get_runtime_from_state(state: object) -> ApiRuntime:
-    if not getattr(state, "ready", False) or getattr(state, "runtime", None) is None:
+def get_application_from_state(state: object) -> TherapyApplication:
+    application = getattr(state, "application", None)
+    if application is None:
         raise ApiNotReady
-    return state.runtime  # type: ignore[return-value]
+    return application
 
 
-def get_runtime(request: Request) -> ApiRuntime:
-    return get_runtime_from_state(request.app.state.api)
+def get_application(request: Request) -> TherapyApplication:
+    return get_application_from_state(request.app.state.api)
 
 
-def get_websocket_runtime(state: object) -> WebSocketRuntime:
-    return get_runtime_from_state(state)
+def get_websocket_application(state: object) -> TherapyApplication:
+    return get_application_from_state(state)
 
 
 def build_error_response(*, status: int, body: ErrorResponse) -> JSONResponse:

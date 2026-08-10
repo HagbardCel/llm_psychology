@@ -369,9 +369,8 @@ async def test_disabled_mode_creates_no_artifacts(tmp_path: Path) -> None:
     async with application_context(
         settings,
         llm_factory=lambda _config, _recorder: _StubLLM(),  # type: ignore[return-value]
-    ) as runtime:
-        assert not hasattr(runtime, "recorder")
-        await runtime.application.get_snapshot()
+    ) as application:
+        await application.get_snapshot()
     assert list(tmp_path.glob("**/trace.jsonl")) == []
 
 

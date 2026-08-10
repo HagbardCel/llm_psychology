@@ -127,7 +127,7 @@ def create_test_api_app(
     )
     app = create_app(
         settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
     return TestApiApp(
         app=app,
@@ -169,7 +169,7 @@ def api_settings(store_path: Path) -> JungSettings:
     )
 
 
-def runtime_factory(
+def application_factory(
     store: SQLiteStore,
     fake_llm: FakeLLM | RecordingFakeLLM,
     runtime_probe: RuntimeProbe | None = None,
@@ -182,7 +182,7 @@ def runtime_factory(
             if runtime_probe is not None:
                 runtime_probe.runtime = runtime
             try:
-                yield runtime
+                yield runtime.application
             finally:
                 if runtime_probe is not None:
                     runtime_probe.runtime = None
@@ -199,7 +199,7 @@ def api_app(
 ):
     return create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm, runtime_probe),
+        application_factory=application_factory(store, fake_llm, runtime_probe),
     )
 
 

@@ -28,7 +28,8 @@ from jung.api.contracts import (
     normalize_public_error_code,
     to_message_response,
 )
-from jung.api.deps import ApiNotReady, ApiRuntime, get_websocket_runtime
+from jung.api.deps import ApiNotReady, get_websocket_application
+from jung.application import TherapyApplication
 from jung.api.errors import new_request_id, to_error_envelope
 from jung.config import JungSettings
 from jung.diagnostics import diagnostic_context
@@ -167,17 +168,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
         return
 
     try:
-        runtime = get_websocket_runtime(websocket.app.state.api)
+        application = get_websocket_application(websocket.app.state.api)
     except ApiNotReady:
         await websocket.close()
         return
 
-    await _handle_chat_connection(websocket, runtime, settings)
+    await _handle_chat_connection(websocket, application, settings)
 
 
 async def _handle_chat_connection(
     websocket: WebSocket,
-    runtime: ApiRuntime,
+    application: TherapyApplication,
     settings: JungSettings,
 ) -> None:
     connection_id = str(uuid4())
@@ -241,7 +242,7 @@ async def _handle_chat_connection(
 
         await _stream_one_command(
             websocket=websocket,
-            runtime=runtime,
+            application=application,
             command=command,
             connection_id=connection_id,
             send_event=send_event,
@@ -261,7 +262,7 @@ async def _handle_chat_connection(
 async def _stream_one_command(
     *,
     websocket: WebSocket,
-    runtime: ApiRuntime,
+    application: TherapyApplication,
     command: SendMessageCommand,
     connection_id: str,
     send_event,
@@ -280,7 +281,7 @@ async def _stream_one_command(
     ):
         preserve_cleanup_cancellation = False
         protocol_violation = False
-        stream = runtime.application.stream_message(domain_command)
+        stream = application.stream_message(domain_command)
         stream_iter = stream.__aiter__()
         receive_task: asyncio.Task[Any] | None = asyncio.create_task(
             websocket.receive(),

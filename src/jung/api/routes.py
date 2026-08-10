@@ -28,7 +28,8 @@ from jung.api.contracts import (
     to_start_session_response,
     to_style_options_response,
 )
-from jung.api.deps import ApiRuntime, build_error_response, get_runtime
+from jung.api.deps import build_error_response, get_application
+from jung.application import TherapyApplication
 from jung.api.errors import not_ready_error_response
 from jung.domain.commands import (
     EndSession,
@@ -67,10 +68,10 @@ def _context(request: Request) -> MappingContext:
 )
 async def get_state(
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.get_snapshot()
+    snapshot = await application.get_snapshot()
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -81,10 +82,10 @@ async def get_state(
 )
 async def get_profile(
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> ProfileResponse:
     context = _context(request)
-    view = await runtime.application.get_profile()
+    view = await application.get_profile()
     return to_profile_response(view, context=context)
 
 
@@ -97,7 +98,7 @@ async def get_profile(
 async def update_profile(
     body: ProfileUpdateRequest,
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
     profile = Profile(
@@ -106,7 +107,7 @@ async def update_profile(
         date_of_birth=body.profile.date_of_birth,
         notes=body.profile.notes,
     )
-    snapshot = await runtime.application.update_profile(UpdateProfile(profile=profile))
+    snapshot = await application.update_profile(UpdateProfile(profile=profile))
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -116,9 +117,9 @@ async def update_profile(
     responses=COMMON_ERROR_RESPONSES,
 )
 async def get_styles(
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> StyleOptionsResponse:
-    options = await runtime.application.get_style_options()
+    options = await application.get_style_options()
     return to_style_options_response(options)
 
 
@@ -131,10 +132,10 @@ async def get_styles(
 async def select_style(
     body: SelectStyleRequest,
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.select_style(
+    snapshot = await application.select_style(
         SelectStyle(style_id=body.style_id)
     )
     return to_snapshot_response(snapshot, context=context)
@@ -146,9 +147,9 @@ async def select_style(
     responses=COMMON_ERROR_RESPONSES,
 )
 async def list_sessions(
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> SessionListResponse:
-    sessions = await runtime.application.list_sessions()
+    sessions = await application.list_sessions()
     return SessionListResponse(
         sessions=[to_session_summary(session) for session in sessions]
     )
@@ -161,9 +162,9 @@ async def list_sessions(
 )
 async def get_session(
     session_id: UUID,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> SessionHistoryResponse:
-    history = await runtime.application.get_session_history(session_id)
+    history = await application.get_session_history(session_id)
     return to_session_history_response(history)
 
 
@@ -175,10 +176,10 @@ async def get_session(
 )
 async def start_session(
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> StartSessionResponse:
     context = _context(request)
-    started = await runtime.application.start_session()
+    started = await application.start_session()
     return to_start_session_response(started, context=context)
 
 
@@ -192,10 +193,10 @@ async def start_session(
 async def end_session(
     session_id: UUID,
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.end_session(EndSession(session_id=session_id))
+    snapshot = await application.end_session(EndSession(session_id=session_id))
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -208,10 +209,10 @@ async def end_session(
 )
 async def retry_operation(
     request: Request,
-    runtime: ApiRuntime = Depends(get_runtime),
+    application: TherapyApplication = Depends(get_application),
 ) -> AppSnapshotResponse:
     context = _context(request)
-    snapshot = await runtime.application.retry_operation()
+    snapshot = await application.retry_operation()
     return to_snapshot_response(snapshot, context=context)
 
 
@@ -222,7 +223,7 @@ async def retry_operation(
 )
 async def health(request: Request):
     state = request.app.state.api
-    if not state.ready:
+    if state.application is None:
         body = not_ready_error_response(request_id=request.state.request_id)
         return build_error_response(status=503, body=body)
     return HealthResponse(status="healthy")

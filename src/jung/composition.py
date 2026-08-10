@@ -6,7 +6,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, nullcontext
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
@@ -70,12 +69,6 @@ def _record_cleanup_failure(
                 "discovered_while_draining": discovered_while_draining,
             },
         )
-
-
-@dataclass(frozen=True, slots=True)
-class ApplicationRuntime:
-    application: TherapyApplication
-    llm: OpenAICompatibleLLM
 
 
 def _default_now() -> datetime:
@@ -240,7 +233,7 @@ async def application_context(
     llm_factory: (
         Callable[[AdapterConfig, DiagnosticRecorder | None], OpenAICompatibleLLM] | None
     ) = None,
-) -> AsyncIterator[ApplicationRuntime]:
+) -> AsyncIterator[TherapyApplication]:
     run_cm: Any
     if settings.debug_run_dir is not None:
         run_cm = DiagnosticRecorder(
@@ -319,12 +312,8 @@ async def application_context(
                 recorder=recorder,
             )
             await application.recover_on_startup()
-            runtime = ApplicationRuntime(
-                application=application,
-                llm=llm,
-            )
             try:
-                yield runtime
+                yield application
             except BaseException as exc:
                 primary = (exc, exc.__traceback__)
         except BaseException as exc:

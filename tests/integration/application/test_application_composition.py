@@ -48,8 +48,8 @@ async def test_application_context_smoke(
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
     settings = _composition_settings(tmp_path)
-    async with application_context(settings) as runtime:
-        snapshot = await runtime.application.get_snapshot()
+    async with application_context(settings) as application:
+        snapshot = await application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
     assert closed is True
 
@@ -139,6 +139,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_config: list[AdapterConfig] = []
+    captured_llms: list[object] = []
     observed_calls: list[tuple[object, bool, object | None]] = []
 
     class RecordingObservedGateway:
@@ -158,6 +159,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     class CapturingLLM(FakeLLM):
         def __init__(self, config: AdapterConfig, **kwargs: object) -> None:
             captured_config.append(config)
+            captured_llms.append(self)
             super().__init__([])
 
         async def aclose(self) -> None:
@@ -180,11 +182,9 @@ async def test_application_context_wires_loaded_llm_configuration(
         ),
     )
 
-    async with application_context(settings) as runtime:
-        raw_llm = runtime.llm
-        snapshot = await runtime.application.get_snapshot()
+    async with application_context(settings) as application:
+        snapshot = await application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
-        assert not hasattr(runtime, "recorder")
 
     assert len(captured_config) == 1
     config = captured_config[0]
@@ -192,7 +192,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     assert config.extra_body == {"global_flag": True}
     assert config.task_extra_body == {LLMTask.THERAPY_RESPONSE: {"task_flag": False}}
     assert len(observed_calls) == 1
-    assert observed_calls[0][0] is raw_llm
+    assert observed_calls[0][0] is captured_llms[0]
     assert observed_calls[0][1] is True
     assert observed_calls[0][2] is None
 
