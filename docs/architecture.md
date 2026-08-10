@@ -42,7 +42,7 @@ The supported runtime is a lean, local-first therapist application that:
 2. **API-only clients**
    - Console, scripts, and workflow probes call `/api/v1` only.
    - Clients never import backend domain, persistence, or workflow implementation types.
-   - `jung-console` is the supported reference frontend for manual sessions, contract integration, and deterministic workflow probes.
+   - `jung-console` is the current reference frontend; `/api/v1` is the interface boundary for future frontends as well.
 
 3. **One backend process**
    - The backend owns workflow state, persistence, LLM execution, concurrency control, and recovery.
@@ -80,10 +80,17 @@ clients → API contracts → API adapter → application → store / LLM ports
 
 The application and phase packages must not import API or client packages.
 
-The supported runtime package is `jung`. `config.py` defines environment-backed
-`ApplicationSettings`, and the composition root constructs the application from
-those settings rather than having runtime components read the environment
-directly.
+The supported runtime package is `jung`. `jung.config.load_settings()` is the
+sole production owner of environment-backed configuration. Runtime components
+receive validated `JungSettings` or resolved runtime objects and do not read
+environment variables themselves. The composition root constructs
+`TherapyApplication` from those settings.
+
+Interfaces reach the application only through the adapter:
+
+```text
+interfaces → /api/v1 → TherapyApplication
+```
 
 ## Source layout
 
@@ -99,7 +106,7 @@ src/jung/
 ├── _application/    private chat/operation/input helpers
 ├── workflow.py      pure workflow policy
 ├── composition.py   composition root
-└── config.py        application configuration
+└── config.py        environment-backed JungSettings
 ```
 
 `TherapyApplication` remains the sole application-facing type. Private helpers under

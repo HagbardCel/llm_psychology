@@ -52,8 +52,10 @@ make run-api
 **Terminal 2:**
 
 ```bash
-make run-console
+jung-console --api-url http://127.0.0.1:8000
 ```
+
+(`make run-console` is equivalent when the API is on the default URL.)
 
 For a disposable manual-test profile, point the API at a separate data
 directory (no special target or env file required):
@@ -64,13 +66,10 @@ JUNG_DATA_DIR=./data/manual-test make run-api
 
 ## Configuration guidance
 
-Do not treat this page as an exhaustive environment-variable catalogue. Explain
-important groups here and use [`.env.example`](../.env.example) as the
-supported example reference. Runtime settings code remains executable truth for
-parsing and defaults:
-
-- [`src/jung/config.py`](../src/jung/config.py) — application settings
-- [`src/jung/api/settings.py`](../src/jung/api/settings.py) — API host/bind/CORS and related defaults
+Do not treat this page as an exhaustive environment-variable catalogue. Use
+[`.env.example`](../.env.example) as the supported example reference.
+`jung.config.load_settings()` / [`src/jung/config.py`](../src/jung/config.py) is
+the sole production environment-backed settings owner.
 
 Common groups:
 

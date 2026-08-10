@@ -246,3 +246,45 @@ def test_private_application_helpers_do_not_leak_outside_application_layer() -> 
             if module == "jung._application" or module.startswith("jung._application."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []
+
+
+def _reads_os_environ(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id == "os"
+                and node.attr == "environ"
+            ):
+                return True
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            if any(alias.name == "environ" for alias in node.names):
+                return True
+    return False
+
+
+def test_only_config_owns_environment_and_pydantic_settings() -> None:
+    """jung.config is the sole production owner of env-backed settings loading."""
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        relative = path.relative_to(JUNG_SRC)
+        if relative == Path("config.py"):
+            continue
+        if _reads_os_environ(path):
+            violations.append(f"{relative} reads os.environ")
+        for module in _resolved_imported_modules(path):
+            if module == "pydantic_settings" or module.startswith("pydantic_settings."):
+                violations.append(f"{relative} imports {module}")
+            if module == "dotenv" or module.startswith("dotenv."):
+                violations.append(f"{relative} imports {module}")
+    assert violations == []
+
+
+def test_llm_does_not_import_config() -> None:
+    violations: list[str] = []
+    for path in _python_files(LLM_SRC):
+        for module in _resolved_imported_modules(path):
+            if module == "jung.config" or module.startswith("jung.config."):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
