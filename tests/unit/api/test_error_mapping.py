@@ -53,16 +53,6 @@ def test_parse_request_id_header_rejects_malformed() -> None:
         parse_request_id_header("not-a-uuid")
 
 
-def test_invalid_command_maps_without_snapshot_fields() -> None:
-    request_id = uuid4()
-    envelope = to_error_envelope(InvalidCommand(), request_id=request_id)
-    assert envelope.code == "invalid_command"
-    assert envelope.request_id == request_id
-    dumped = envelope.model_dump()
-    assert "current" + "_snapshot" not in dumped
-    assert "revision" not in dumped
-
-
 def test_not_ready_error_response() -> None:
     request_id = uuid4()
     response = not_ready_error_response(request_id=request_id)

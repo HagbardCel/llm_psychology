@@ -206,8 +206,6 @@ async def test_one_shot_streams_tokens_then_completion_and_closes() -> None:
 
     types = [item["type"] for item in fake.sent]
     assert types == ["token", "message_completed"]
-    assert "snapshot_changed" not in types
-    assert "message_in_progress" not in types
     assert fake.sent[0]["request_id"] == str(request_id)
     assert fake.sent[0]["session_id"] == str(session_id)
     assert fake.sent[0]["client_message_id"] == str(client_message_id)

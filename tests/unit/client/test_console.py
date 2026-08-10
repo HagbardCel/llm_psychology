@@ -286,7 +286,7 @@ def _app(
     )
 
 
-async def test_chat_turn_builds_message_command_without_revision() -> None:
+async def test_chat_turn_builds_send_message_command() -> None:
     client = _mock_client()
     session = _session()
     snapshot = _snapshot(session=session)
@@ -321,7 +321,7 @@ async def test_chat_turn_builds_message_command_without_revision() -> None:
     app = _app(client)
     await app._handle_chat_turn(snapshot, content="hello")
     assert sent_commands
-    assert "expected" + "_revision" not in type(sent_commands[0]).model_fields
+    assert sent_commands[0].content == "hello"
     assert sent_commands[0].content == "hello"
     assert sent_commands[0].session_id == session.id
 

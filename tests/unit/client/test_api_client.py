@@ -184,7 +184,6 @@ async def test_new_message_command_ids_have_distinct_lifetimes() -> None:
         assert first.client_message_id == second.client_message_id == retained_id
         assert first.request_id != second.request_id
         assert generated.client_message_id != retained_id
-        assert not hasattr(first, "expected" + "_revision")
 
 
 @pytest.mark.asyncio

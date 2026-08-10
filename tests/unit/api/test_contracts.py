@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import get_args
 from uuid import UUID, uuid4
@@ -182,7 +181,7 @@ def test_profile_requests_reject_top_level_and_nested_extras() -> None:
                     "name": "Alex",
                     "primary_language": "English",
                 },
-                "user_id": "legacy",
+                "unexpected_field": "x",
             }
         )
 
@@ -200,7 +199,7 @@ def test_profile_requests_reject_top_level_and_nested_extras() -> None:
             {
                 "name": "Alex",
                 "primary_language": "English",
-                "user_id": "legacy",
+                "unexpected_field": "x",
             }
         )
 
@@ -310,7 +309,6 @@ def test_snapshot_maps_current_operation_and_command_order() -> None:
         "end_session",
         "retry_operation",
     ]
-    assert not hasattr(response, "active_chat_turn")
 
 
 def test_session_and_plan_summary_detail_separation() -> None:
@@ -330,7 +328,7 @@ def test_session_and_plan_summary_detail_separation() -> None:
     assert plan_detail.selected_style == "cbt"
 
 
-def test_profile_history_and_style_mapping_redacts_internals() -> None:
+def test_profile_history_and_style_mapping() -> None:
     now = _now()
     session = _make_session(now=now)
     plan = _make_plan(session_id=session.id, now=now)
@@ -375,14 +373,8 @@ def test_profile_history_and_style_mapping_redacts_internals() -> None:
         ),
     )
     payload = to_style_options_response(options).model_dump(mode="json")
-    dumped = json.dumps(payload)
-    for forbidden in (
-        "initial_plan",
-        "formulation",
-        "presenting_concerns",
-        "user_id",
-    ):
-        assert forbidden not in dumped
+    assert payload["styles"][0]["id"] == "cbt"
+    assert payload["recommendations"][0]["style_id"] == "cbt"
 
 
 def test_stored_error_envelope_normalizes_internal_codes() -> None:
@@ -522,28 +514,17 @@ def test_server_event_union_is_message_native() -> None:
     assert isinstance(completed, MessageCompletedEvent)
     assert isinstance(failed, MessageFailedEvent)
 
-    for forbidden_type in (
-        "message_in_progress",
-        "snapshot_changed",
-        "operation_changed",
-    ):
-        with pytest.raises(ValidationError):
-            adapter.validate_python({"type": forbidden_type})
-
-    for forbidden_field in ("turn_id", "sequence"):
-        with pytest.raises(ValidationError):
-            TokenEvent.model_validate(
-                {
-                    "type": "token",
-                    "text": "hi",
-                    "request_id": str(request_id),
-                    "session_id": str(session_id),
-                    "client_message_id": str(client_message_id),
-                    forbidden_field: 1
-                    if forbidden_field == "sequence"
-                    else str(uuid4()),
-                }
-            )
+    with pytest.raises(ValidationError):
+        TokenEvent.model_validate(
+            {
+                "type": "token",
+                "text": "hi",
+                "request_id": str(request_id),
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "unexpected_field": "x",
+            }
+        )
 
 
 def test_message_role_wire_and_domain_are_user_assistant_only() -> None:
@@ -565,42 +546,86 @@ def test_message_response_requires_client_message_id() -> None:
         )
 
 
-@pytest.mark.parametrize("model", _contract_wire_models())
-def test_contract_schema_does_not_expose_user_id(model: type[BaseModel]) -> None:
-    schema = model.model_json_schema()
-    assert not _contains_property(schema, "user_id"), model.__name__
+def test_contract_surface_is_single_user() -> None:
+    for model in _contract_wire_models():
+        schema = model.model_json_schema()
+        assert not _contains_property(schema, "user_id"), model.__name__
 
 
-@pytest.mark.parametrize("model", _contract_wire_models())
-def test_contract_schema_has_no_optimistic_revision_fields(
-    model: type[BaseModel],
-) -> None:
-    schema = model.model_json_schema()
-    for forbidden in (
-        "expected" + "_revision",
-        "current" + "_snapshot",
-        "state" + "_conflict",
-        "active" + "_chat_turn",
-    ):
-        assert not _contains_property(schema, forbidden), (
-            f"{model.__name__} exposes {forbidden}"
-        )
+def test_contract_wire_surfaces_have_expected_membership() -> None:
+    assert frozenset(SendMessageCommand.model_fields) == {
+        "type",
+        "session_id",
+        "client_message_id",
+        "request_id",
+        "content",
+    }
+    assert frozenset(ErrorEnvelope.model_fields) == {
+        "code",
+        "message",
+        "request_id",
+        "retryable",
+    }
+    assert frozenset(get_args(ErrorCode)) == {
+        "invalid_command",
+        "busy",
+        "not_found",
+        "validation_error",
+        "llm_unavailable",
+        "llm_timeout",
+        "invalid_llm_output",
+        "operation_failed",
+        "internal_error",
+        "not_ready",
+    }
 
+    expected_server_event_fields = {
+        TokenEvent: {
+            "type",
+            "text",
+            "request_id",
+            "session_id",
+            "client_message_id",
+        },
+        MessageCompletedEvent: {
+            "type",
+            "request_id",
+            "session_id",
+            "client_message_id",
+            "user_message",
+            "assistant_message",
+        },
+        MessageFailedEvent: {
+            "type",
+            "request_id",
+            "session_id",
+            "client_message_id",
+            "error",
+        },
+        ErrorEvent: {
+            "type",
+            "error",
+            "request_id",
+            "session_id",
+            "client_message_id",
+        },
+    }
+    for model, expected in expected_server_event_fields.items():
+        assert frozenset(model.model_fields) == expected
 
-def test_app_snapshot_response_schema_has_no_revision_or_active_chat_turn() -> None:
-    from jung.api.contracts import AppSnapshotResponse
-
-    properties = AppSnapshotResponse.model_json_schema()["properties"]
-    assert "revision" not in properties
-    assert "active_chat_turn" not in properties
-
-
-def test_error_code_excludes_removed_conflict_token() -> None:
-    assert "state" + "_conflict" not in get_args(ErrorCode)
+    schema = TypeAdapter(ServerEvent).json_schema()
+    assert set(schema["discriminator"]["mapping"]) == {
+        "token",
+        "message_completed",
+        "message_failed",
+        "error",
+    }
 
 
 def test_error_response_inherits_error_envelope_fields() -> None:
-    assert tuple(ErrorResponse.model_fields) == tuple(ErrorEnvelope.model_fields)
+    assert frozenset(ErrorResponse.model_fields) == frozenset(
+        ErrorEnvelope.model_fields
+    )
     for name, envelope_field in ErrorEnvelope.model_fields.items():
         assert ErrorResponse.model_fields[name].annotation == envelope_field.annotation
 

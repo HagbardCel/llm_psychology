@@ -87,14 +87,11 @@ def _settings(tmp_path: Path, *, run_dir: Path) -> ApplicationSettings:
     )
 
 
-def _assert_no_derived_artifacts(run_dir: Path) -> None:
-    for name in (
-        "manifest.json",
-        "state.json",
-        "transcript.md",
-        "failure_summary.md",
-    ):
-        assert not (run_dir / name).exists()
+def _assert_diagnostic_artifacts(run_dir: Path) -> None:
+    assert {path.name for path in run_dir.iterdir()} == {
+        "trace.jsonl",
+        "db_snapshot.sqlite",
+    }
 
 
 async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
@@ -120,7 +117,7 @@ async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
     snapshot = run_dir / "db_snapshot.sqlite"
     assert snapshot.exists()
     assert (snapshot.stat().st_mode & 0o777) == 0o600
-    _assert_no_derived_artifacts(run_dir)
+    _assert_diagnostic_artifacts(run_dir)
 
     conn = sqlite3.connect(snapshot)
     try:
@@ -128,7 +125,6 @@ async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
         assert (
             conn.execute("PRAGMA user_version").fetchone()[0] == SQLITE_SCHEMA_VERSION
         )
-        assert SQLITE_SCHEMA_VERSION == 6
         profile_name = conn.execute("SELECT name FROM profile LIMIT 1").fetchone()
         assert profile_name is not None
         assert profile_name[0] == "Alex"

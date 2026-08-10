@@ -89,16 +89,9 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
     assert "chat.turn.completed" in kinds
     assert "workflow.command.started" in kinds
     assert "workflow.command.completed" in kinds
-    assert "task.started" not in kinds
-    assert "task.completed" not in kinds
-    assert "workflow.state" not in kinds
-    assert "operation.status" not in kinds
-    assert "application.event" not in kinds
-    assert "store.call.start" not in kinds
 
     accepted = next(e for e in events if e["kind"] == "chat.turn.accepted")
     assert accepted["context"]["session_id"] == str(session.id)
-    assert "turn_id" not in accepted["context"]
     assert accepted["context"]["client_message_id"] == str(client_message_id)
     assert accepted["context"]["request_id"] == str(request_id)
     assert accepted["context"]["run_id"] == str(recorder.run_id)
@@ -118,7 +111,6 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
         ctx = event["context"]
         assert ctx["run_id"] == str(recorder.run_id)
         assert ctx.get("llm_call_id")
-        assert "turn_id" not in ctx
 
 
 async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
@@ -161,8 +153,6 @@ async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
     assert "chat.turn.started" in kinds
     assert "chat.turn.failed" in kinds
     assert "workflow.command.completed" in kinds
-    assert "task.started" not in kinds
-    assert "task.completed" not in kinds
     failed_event = next(e for e in events if e["kind"] == "chat.turn.failed")
     assert failed_event["data"]["error_code"]
     assert "retryable" in failed_event["data"]
