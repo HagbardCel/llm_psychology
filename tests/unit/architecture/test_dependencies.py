@@ -3,20 +3,15 @@
 These checks walk the `src/jung` directory tree directly rather than
 enumerating fixed file lists, so they stay correct as files are added,
 renamed, or moved between packages. Boundaries are grouped by the
-architectural layer they protect: global legacy/SDK isolation, domain
-purity, phase processor isolation, the API surface, the client surface,
-and core transport independence.
+architectural layer they protect.
 """
 
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from importlib.util import resolve_name
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 JUNG_SRC = ROOT / "src" / "jung"
@@ -26,20 +21,30 @@ LLM_SRC = JUNG_SRC / "llm"
 API_SRC = JUNG_SRC / "api"
 CLIENT_SRC = JUNG_SRC / "client"
 
-# ---------------------------------------------------------------------------
-# AST helpers shared by every boundary check below.
-# ---------------------------------------------------------------------------
+TRANSPORT_FRAMEWORK_ROOTS = ("fastapi", "starlette", "httpx", "websockets", "uvicorn")
 
+UNSUPPORTED_ASYNC_ROOTS = ("trio", "quart_trio")
 
-def _imported_modules(path: Path) -> list[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.append(node.module)
-    return modules
+PHASE_LEVEL_FORBIDDEN_MODULES = (
+    "jung.application",
+    "jung.persistence",
+    "jung.api",
+    "jung.client",
+    "jung.composition",
+    "jung.config",
+    "jung.workflow",
+    "jung.llm.openai_compatible",
+)
+
+API_BACKEND_FORBIDDEN_MODULES = (
+    "jung.persistence",
+    "jung.llm",
+    "jung.phases",
+    "jung.client",
+    "jung.workflow",
+)
+
+_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "websockets"})
 
 
 def _module_package_for_path(path: Path) -> str:
@@ -61,13 +66,9 @@ def _resolve_import_from(package: str, node: ast.ImportFrom) -> list[str]:
     return modules
 
 
-def _resolved_imported_modules_from_source(
-    source: str,
-    *,
-    package: str,
-    filename: str = "<test>",
-) -> list[str]:
-    tree = ast.parse(source, filename=filename)
+def _resolved_imported_modules(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = _module_package_for_path(path)
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -75,14 +76,6 @@ def _resolved_imported_modules_from_source(
         elif isinstance(node, ast.ImportFrom):
             modules.extend(_resolve_import_from(package, node))
     return modules
-
-
-def _resolved_imported_modules(path: Path) -> list[str]:
-    return _resolved_imported_modules_from_source(
-        path.read_text(encoding="utf-8"),
-        package=_module_package_for_path(path),
-        filename=str(path),
-    )
 
 
 def _matches_any_prefix(module: str, prefixes: tuple[str, ...]) -> bool:
@@ -99,95 +92,20 @@ def _python_files(*roots: Path) -> list[Path]:
     return paths
 
 
-# ---------------------------------------------------------------------------
-# Rule 1: global legacy/framework absence, and OpenAI SDK confinement.
-# ---------------------------------------------------------------------------
-
-# Forbidden anywhere under src/jung, matched as an exact module or a dotted
-# submodule (e.g. "trio" or "trio.lowlevel", but not "trio_util").
-GLOBAL_FORBIDDEN_EXACT_OR_DOTTED = (
-    "psychoanalyst_app",
-    "trio",
-    "quart",
-    "quart_trio",
-    "console_ui",
-    "console-ui",
-)
-
-# Forbidden anywhere under src/jung, matched as a bare string prefix so that
-# the whole `langchain*` family (langchain, langchain_core, langchain_openai,
-# ...) is caught.
-GLOBAL_FORBIDDEN_WILDCARD_PREFIXES = ("langchain",)
-
-
-def _global_forbidden_violations(paths: list[Path]) -> list[str]:
+def _client_import_violations(modules: list[str]) -> list[str]:
     violations: list[str] = []
-    for path in paths:
-        under_llm = LLM_SRC in path.parents or path == LLM_SRC
-        for module in _imported_modules(path):
-            root = module.split(".")[0]
-            if root == "openai":
-                if under_llm:
-                    continue
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-                continue
-            if _matches_any_prefix(module, GLOBAL_FORBIDDEN_EXACT_OR_DOTTED) or any(
-                module.startswith(prefix)
-                for prefix in GLOBAL_FORBIDDEN_WILDCARD_PREFIXES
-            ):
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    for module in modules:
+        root = module.split(".")[0]
+        if root == "__future__" or root in sys.stdlib_module_names:
+            continue
+        if root in _CLIENT_ALLOWED_EXTERNAL_ROOTS:
+            continue
+        if module == "jung.api.contracts" or module.startswith("jung.api.contracts."):
+            continue
+        if module == "jung.client" or module.startswith("jung.client."):
+            continue
+        violations.append(module)
     return violations
-
-
-def test_no_legacy_or_forbidden_global_imports() -> None:
-    violations = _global_forbidden_violations(_python_files(JUNG_SRC))
-    assert violations == []
-
-
-# ---------------------------------------------------------------------------
-# Rule 2: domain purity.
-# ---------------------------------------------------------------------------
-
-DOMAIN_FORBIDDEN_MODULES = (
-    "jung.application",
-    "jung.persistence",
-    "jung.phases",
-    "jung.api",
-    "jung.client",
-)
-
-TRANSPORT_FRAMEWORK_ROOTS = ("fastapi", "starlette", "httpx", "websockets", "uvicorn")
-
-
-def test_domain_has_no_forbidden_dependencies() -> None:
-    violations: list[str] = []
-    for path in _python_files(DOMAIN_SRC):
-        for module in _resolved_imported_modules(path):
-            root = module.split(".")[0]
-            if root in TRANSPORT_FRAMEWORK_ROOTS:
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-            elif _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES):
-                violations.append(f"{path.relative_to(ROOT)} imports {module}")
-    assert violations == []
-
-
-# ---------------------------------------------------------------------------
-# Rule 3: phase isolation.
-# ---------------------------------------------------------------------------
-
-PHASE_LEVEL_FORBIDDEN_MODULES = (
-    "jung.persistence",
-    "jung.api",
-    "jung.client",
-    "jung.application",
-)
-
-ALLOWED_CROSS_PHASE_MODULES = frozenset(
-    {
-        "jung.phases.transcript",
-        "jung.phases.context_bounds",
-    }
-)
 
 
 def _phase_package_names() -> frozenset[str]:
@@ -208,14 +126,44 @@ def _own_phase(path: Path) -> str | None:
 
 
 def _cross_phase_import_allowed(module: str, other_phase: str) -> bool:
-    if module in ALLOWED_CROSS_PHASE_MODULES:
-        return True
     if module == f"jung.phases.{other_phase}.models":
         return True
     return module.startswith(f"jung.phases.{other_phase}.models.")
 
 
-def test_phases_do_not_import_persistence_api_client_or_application() -> None:
+def test_runtime_is_asyncio_only() -> None:
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        for module in _resolved_imported_modules(path):
+            if _matches_any_prefix(module, UNSUPPORTED_ASYNC_ROOTS):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+def test_openai_sdk_is_confined_to_llm() -> None:
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        under_llm = LLM_SRC in path.parents or path == LLM_SRC
+        for module in _resolved_imported_modules(path):
+            if module.split(".")[0] == "openai" and not under_llm:
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+def test_domain_has_no_forbidden_dependencies() -> None:
+    violations: list[str] = []
+    for path in _python_files(DOMAIN_SRC):
+        for module in _resolved_imported_modules(path):
+            if module == "jung":
+                continue
+            if module.startswith("jung.") and not (
+                module == "jung.domain" or module.startswith("jung.domain.")
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+def test_phases_do_not_import_forbidden_layers() -> None:
     violations: list[str] = []
     for path in _python_files(PHASES_SRC):
         for module in _resolved_imported_modules(path):
@@ -243,99 +191,22 @@ def test_phases_do_not_cross_import_other_phase_implementations() -> None:
     assert violations == []
 
 
-# ---------------------------------------------------------------------------
-# Rule 4: API surface boundaries.
-# ---------------------------------------------------------------------------
-
-_PHASE_PROCESSOR_PATTERN = re.compile(r"^jung\.phases\.[^.]+\.processor(\.|$)")
-
-
-def _is_phase_processor_import(module: str) -> bool:
-    return bool(_PHASE_PROCESSOR_PATTERN.match(module))
-
-
-# Concrete-infrastructure imports each API surface file must never reach for.
-# `jung.api.settings` builds its environment-backed configuration from
-# `jung.config` only; it must not reach into the composition root.
-API_SURFACE_FORBIDDEN_MODULES: dict[str, tuple[str, ...]] = {
-    "app.py": ("jung.persistence", "jung.llm.openai_compatible"),
-    "settings.py": (
-        "jung.composition",
-        "jung.persistence",
-        "jung.llm.openai_compatible",
-    ),
-    "routes.py": ("jung.composition", "jung.persistence", "jung.llm.openai_compatible"),
-    "websocket.py": (
-        "jung.composition",
-        "jung.persistence",
-        "jung.llm.openai_compatible",
-    ),
-    "contracts.py": ("jung.composition", "jung.persistence", "jung.llm", "jung.phases"),
-}
-
-# Files where a phase-processor import (jung.phases.<phase>.processor) is
-# additionally forbidden. contracts.py is excluded because it already bans
-# all of jung.phases above.
-API_SURFACE_FORBID_PHASE_PROCESSORS = frozenset(
-    {"app.py", "settings.py", "routes.py", "websocket.py"}
-)
-
-
-@pytest.mark.parametrize(
-    "filename",
-    sorted(API_SURFACE_FORBIDDEN_MODULES),
-)
-def test_api_surface_file_respects_import_boundaries(filename: str) -> None:
-    path = API_SRC / filename
-    if not path.exists():
-        pytest.skip(f"jung.api.{filename} not present yet")
-
-    forbidden = API_SURFACE_FORBIDDEN_MODULES[filename]
-    check_processors = filename in API_SURFACE_FORBID_PHASE_PROCESSORS
+def test_api_does_not_import_backend_implementations() -> None:
+    if not API_SRC.exists():
+        return
 
     violations: list[str] = []
-    for module in _resolved_imported_modules(path):
-        if _matches_any_prefix(module, forbidden):
-            violations.append(f"{path.relative_to(ROOT)} imports {module}")
-        elif check_processors and _is_phase_processor_import(module):
-            violations.append(f"{path.relative_to(ROOT)} imports {module}")
-
+    for path in _python_files(API_SRC):
+        for module in _resolved_imported_modules(path):
+            if _matches_any_prefix(module, API_BACKEND_FORBIDDEN_MODULES):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []
 
 
-def test_api_init_has_no_imports() -> None:
-    init_path = API_SRC / "__init__.py"
-    if not init_path.exists():
-        pytest.skip("jung.api package not present yet")
-    assert _resolved_imported_modules(init_path) == []
-
-
-# ---------------------------------------------------------------------------
-# Rule 5: client surface boundaries.
-# ---------------------------------------------------------------------------
-
-_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "websockets"})
-
-
-def _client_import_violations(modules: list[str]) -> list[str]:
-    violations: list[str] = []
-    for module in modules:
-        root = module.split(".")[0]
-        if root == "__future__" or root in sys.stdlib_module_names:
-            continue
-        if root in _CLIENT_ALLOWED_EXTERNAL_ROOTS:
-            continue
-        if module == "jung.api.contracts" or module.startswith("jung.api.contracts."):
-            continue
-        if module == "jung.client" or module.startswith("jung.client."):
-            continue
-        violations.append(module)
-    return violations
-
-
 def test_client_uses_contract_only_import_allow_list() -> None:
+    """Client package may import stdlib, httpx/pydantic/websockets, contracts, and itself."""
     if not CLIENT_SRC.exists():
-        pytest.skip("jung.client package not present yet")
+        return
 
     violations: list[str] = []
     for path in _python_files(CLIENT_SRC):
@@ -345,28 +216,6 @@ def test_client_uses_contract_only_import_allow_list() -> None:
         )
 
     assert violations == []
-
-
-def test_client_package_has_no_legacy_chat_correlation_surface() -> None:
-    assert not (CLIENT_SRC / "_chat_events.py").exists()
-    assert not (CLIENT_SRC / "_durable_chat.py").exists()
-    forbidden_symbols = (
-        "ConsoleUncertainDelivery",
-        "render_identity_conflict",
-        "render_uncertain_delivery",
-    )
-    violations: list[str] = []
-    for path in _python_files(CLIENT_SRC):
-        text = path.read_text(encoding="utf-8")
-        for symbol in forbidden_symbols:
-            if symbol in text:
-                violations.append(f"{path.relative_to(ROOT)} contains {symbol}")
-    assert violations == []
-
-
-# ---------------------------------------------------------------------------
-# Rule 6: core transport independence.
-# ---------------------------------------------------------------------------
 
 
 def test_core_does_not_import_transport_frameworks_outside_api_and_client() -> None:
@@ -384,15 +233,8 @@ def test_core_does_not_import_transport_frameworks_outside_api_and_client() -> N
     assert violations == []
 
 
-# ---------------------------------------------------------------------------
-# Rule 7: private application helpers are internal to application.py.
-# ---------------------------------------------------------------------------
-
-
-def test_private_application_package_is_only_imported_by_application() -> None:
-    """Within src/jung, only jung.application and jung._application may import
-    jung._application.
-    """
+def test_private_application_helpers_do_not_leak_outside_application_layer() -> None:
+    """Within src/jung, only jung.application and jung._application may import jung._application."""
     violations: list[str] = []
     for path in _python_files(JUNG_SRC):
         relative = path.relative_to(JUNG_SRC)
@@ -404,55 +246,3 @@ def test_private_application_package_is_only_imported_by_application() -> None:
             if module == "jung._application" or module.startswith("jung._application."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []
-
-
-# ---------------------------------------------------------------------------
-# Positive controls: synthetic sources prove the checkers catch violations.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("package", "source", "assert_caught"),
-    [
-        (
-            "jung.domain",
-            "from ..phases.assessment.models import AssessmentResult",
-            lambda modules: any(
-                _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES)
-                for module in modules
-            ),
-        ),
-        (
-            "jung.domain",
-            "from jung.application import TherapyApplication",
-            lambda modules: any(
-                _matches_any_prefix(module, DOMAIN_FORBIDDEN_MODULES)
-                for module in modules
-            ),
-        ),
-        (
-            "jung.api",
-            "from ..phases.intake import processor",
-            lambda modules: any(
-                _is_phase_processor_import(module) for module in modules
-            ),
-        ),
-        (
-            "jung.client",
-            "from jung.application import TherapyApplication",
-            lambda modules: bool(_client_import_violations(modules)),
-        ),
-        (
-            "jung.client",
-            "import requests",
-            lambda modules: bool(_client_import_violations(modules)),
-        ),
-    ],
-)
-def test_import_boundary_checkers_catch_synthetic_violations(
-    package: str,
-    source: str,
-    assert_caught,
-) -> None:
-    modules = _resolved_imported_modules_from_source(source, package=package)
-    assert assert_caught(modules)

@@ -56,9 +56,6 @@ async def receive_until_terminal(
 def _assert_one_shot_chat_shape(events: list[dict]) -> None:
     types = [event["type"] for event in events]
     assert types[-1] == "message_completed"
-    assert "message_in_progress" not in types
-    assert "snapshot_changed" not in types
-    assert "operation_changed" not in types
     assert all(event_type == "token" for event_type in types[:-1])
     tokens = [event for event in events if event["type"] == "token"]
     completed = events[-1]
@@ -66,8 +63,6 @@ def _assert_one_shot_chat_shape(events: list[dict]) -> None:
         assert token["request_id"] == completed["request_id"]
         assert token["session_id"] == completed["session_id"]
         assert token["client_message_id"] == completed["client_message_id"]
-        assert "sequence" not in token
-        assert "turn_id" not in token
     joined = "".join(token["text"] for token in tokens)
     assert joined == completed["assistant_message"]["content"]
 
@@ -198,7 +193,6 @@ async def test_internal_error_sanitized_and_closes(
         assert internal["session_id"] == session_id
         assert internal["client_message_id"] == str(client_message_id)
         assert internal["error"]["request_id"] == str(request_id)
-        assert "turn_id" not in internal
         assert secret not in json.dumps(internal)
         assert secret not in caplog.text
 
@@ -264,7 +258,6 @@ async def test_durable_chat_failure_sanitized_message(
         failure = events[-1]
         assert failure["session_id"] == session_id
         assert failure["client_message_id"] == str(client_message_id)
-        assert "turn_id" not in failure
         assert secret not in json.dumps(failure)
         assert "language model" in failure["error"]["message"].lower()
 

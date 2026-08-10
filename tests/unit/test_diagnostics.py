@@ -129,8 +129,20 @@ def test_sanitize_value_common_project_types() -> None:
 
 def test_diagnostic_context_rejects_unknown_fields() -> None:
     with pytest.raises(TypeError, match="unknown diagnostic context fields"):
-        with diagnostic_context(task="removed"):
+        with diagnostic_context(unexpected_field="x"):
             pass
+
+
+def test_diagnostic_context_field_inventory() -> None:
+    import jung.diagnostics as diagnostics
+
+    assert frozenset(diagnostics.DiagnosticContext.__dataclass_fields__) == {
+        "request_id",
+        "session_id",
+        "client_message_id",
+        "operation_id",
+        "llm_call_id",
+    }
 
 
 def test_diagnostic_context_nested_merge_and_restore() -> None:
@@ -173,7 +185,6 @@ def test_recorder_envelope_sequence_and_context(tmp_path: Path) -> None:
     assert event["kind"] == "llm.provider.request"
     assert event["context"]["session_id"] == "s1"
     assert event["context"]["operation_id"] == "o1"
-    assert "task" not in event["context"]
     assert "run_id" in event["context"]
     assert event["data"]["attempt"] == "initial"
 

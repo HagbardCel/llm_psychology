@@ -103,30 +103,53 @@ def test_openapi_snapshot_response_contract(api_app) -> None:
         )
 
 
-def _schema_contains(node: object, needle: str) -> bool:
-    if isinstance(node, str):
-        return node == needle
-    if isinstance(node, dict):
-        if needle in node:
-            return True
-        return any(_schema_contains(value, needle) for value in node.values())
-    if isinstance(node, list):
-        return any(_schema_contains(value, needle) for value in node)
-    return False
-
-
-def test_openapi_has_no_optimistic_revision_concurrency(api_app) -> None:
+def test_openapi_schema_property_inventories(api_app) -> None:
     schema = api_app.openapi()
-    for forbidden in (
-        "expected" + "_revision",
-        "state" + "_conflict",
-        "current" + "_snapshot",
-    ):
-        assert not _schema_contains(schema, forbidden), forbidden
+    components = schema["components"]["schemas"]
 
-    snapshot = schema["components"]["schemas"]["AppSnapshotResponse"]
-    assert "revision" not in snapshot.get("properties", {})
+    snapshot = components["AppSnapshotResponse"]
+    assert set(snapshot["properties"]) == {
+        "stage",
+        "profile_complete",
+        "selected_style",
+        "active_session",
+        "operation",
+        "available_commands",
+    }
 
+    profile_update = components["ProfileUpdateRequest"]
+    assert set(profile_update["properties"]) == {"profile"}
+
+    profile_wire = components["ProfileWire"]
+    assert set(profile_wire["properties"]) == {
+        "name",
+        "primary_language",
+        "date_of_birth",
+        "notes",
+    }
+
+    select_style = components["SelectStyleRequest"]
+    assert set(select_style["properties"]) == {"style_id"}
+
+    assert set(components["StyleOptionsResponse"]["properties"]) == {
+        "styles",
+        "recommendations",
+    }
+    assert set(components["StyleSummaryResponse"]["properties"]) == {
+        "id",
+        "name",
+        "description",
+    }
+    assert set(components["StyleRecommendationSummaryResponse"]["properties"]) == {
+        "style_id",
+        "score",
+        "rationale",
+        "key_topics",
+    }
+
+
+def test_openapi_bodyless_post_commands_have_no_request_body(api_app) -> None:
+    schema = api_app.openapi()
     bodyless = (
         ("post", "/api/v1/sessions"),
         ("post", "/api/v1/sessions/{session_id}/end"),
