@@ -38,8 +38,9 @@ tests/
 every real-model suite; suite-specific acceptance policy stays in that suite.
 
 Pytest discovery under `tests/unit` and `tests/integration` is authoritative.
-There is no Makefile path allowlist. Console E2E lives under `tests/e2e` and is
-run separately via `make probe-console`.
+There is no Makefile path allowlist. Console E2E lives under `tests/e2e` and
+runs as part of `make check` after `make test` (also available via
+`make probe-console` alone).
 
 ## Ownership rule
 
@@ -56,6 +57,18 @@ This keeps the failure signal legible: when an invariant breaks, the owning
 layer fails with a precise message, and the boundary layers fail only when the
 boundary itself is the problem.
 
+Tests protect current contracts, invariants, and observable behavior. Do not
+retain permanent tests whose sole purpose is to prove that a superseded module,
+field, dependency, filename, schema version, or architecture remains absent.
+Temporary deletion gates may be used during a cutover and must be removed when
+the cutover closes. Negative assertions remain appropriate when absence itself
+is part of the current contract or behavior. When a superseded-name assertion
+was guarding a bounded current surface, prefer an exact positive inventory of
+that surface's membership rather than leaving the invariant unguarded.
+
+When reviewing a test hit during archaeology, ask: is this a current invariant,
+a positive inventory, or a prove-gone tombstone? Delete only the third category.
+
 ### One-owner examples
 
 | Invariant | Exhaustive owner | Higher layers |
@@ -63,6 +76,7 @@ boundary itself is the problem.
 | Chat message idempotency / unanswered retry | `integration/store/test_store_chat.py` — `(session_id, client_message_id, role)` uniqueness, unanswered-user guards, assistant attach | `stream_message` cases in `integration/application/test_application_chat.py`; one-shot WS round-trip in `integration/api/test_websocket_chat.py` and `JungChatConnection.stream` in `integration/client/`; one journey step in `e2e/` |
 | Error sanitization | `unit/application/test_invariants.py` (`_classify_work_error`) and `unit/api/test_error_mapping.py` | `integration/api/test_http_errors.py` asserts the wire response carries the public code and no internals |
 | Generated HTTP schema and route surface | `integration/api/test_openapi.py` — operation inventory, common headers/error responses, snapshot response types, docs exposure | none; the generated schema is itself the boundary |
+| SQLite schema/CHECK/singleton constraints | `integration/store/test_store_schema.py` — fresh/current init, CHECK constraints, singleton indexes | `integration/store/test_store_chat.py` for message idempotency semantics |
 | Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts a grounded result is persisted and read back intact |
 | Worker-error classification | `unit/application/test_invariants.py` | `integration/application/test_application_operations.py` asserts a failed operation surfaces the classified code |
 | Workflow transitions | `unit/domain/test_workflow.py` — the full legal/illegal transition matrix | `integration/store/test_store_workflow.py` for persisted stage changes; one `e2e/` journey |
@@ -95,6 +109,7 @@ semantic quality; they exist for human review under `logs/evals/`.
 make test                                   # unit + integration (not real_llm)
 make test-unit
 make test-integration
+make check                                  # format, lint, docs-links, test, probe-console
 make probe-console                          # Deterministic jung-console E2E once
 ```
 
@@ -106,5 +121,5 @@ Opt-in real-model entry points and the full release gate are documented in
 - Prefer deterministic fakes over live model calls.
 - Mark opt-in live-model tests with `real_llm`; hard evals also carry `eval`.
 - `real_llm` tests skip unless `--no-mocks` is passed.
-- Keep import-boundary tests durable and directory-discovered.
+- Keep import-boundary tests durable and directory-discovered; express package/layer dependency direction, not filename freezes or private-helper layout rules.
 - Never read environment variables or construct clients at import time.
