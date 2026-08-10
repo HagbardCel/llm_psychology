@@ -19,6 +19,7 @@ from jung.client.terminal import (
     TerminalConsoleOutput,
     _async_cli,
     _build_parser,
+    cli,
 )
 
 
@@ -77,6 +78,16 @@ def test_terminal_output_discard_partial_assistant_message(
     output.discard_partial_assistant_message()
     captured = capsys.readouterr()
     assert captured.out.endswith("\n")
+
+
+def test_cli_runs_async_entrypoint_and_returns_exit_code() -> None:
+    with patch(
+        "jung.client.terminal._async_cli",
+        AsyncMock(return_value=7),
+    ) as async_cli:
+        assert cli() == 7
+
+    async_cli.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

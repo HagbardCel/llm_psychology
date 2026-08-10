@@ -67,8 +67,14 @@ def test_fresh_schema_has_current_version_and_tables(
     assert "UNIQUE (session_id, client_message_id, role)" in message_sql
 
 
-def test_incompatible_user_version_is_rejected(store_path: Path) -> None:
-    version = SCHEMA_VERSION - 1
+@pytest.mark.parametrize(
+    "version",
+    [SCHEMA_VERSION - 1, SCHEMA_VERSION + 1],
+)
+def test_incompatible_user_version_is_rejected(
+    store_path: Path,
+    version: int,
+) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
     with sqlite3.connect(store_path) as conn:
