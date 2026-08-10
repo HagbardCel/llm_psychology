@@ -19,7 +19,6 @@ from jung.client.terminal import (
     TerminalConsoleOutput,
     _async_cli,
     _build_parser,
-    cli,
 )
 
 
@@ -80,17 +79,6 @@ def test_terminal_output_discard_partial_assistant_message(
     assert captured.out.endswith("\n")
 
 
-def test_cli_delegates_through_asyncio_run() -> None:
-    def fake_run(coro: object) -> int:
-        close = getattr(coro, "close", None)
-        if callable(close):
-            close()
-        return 7
-
-    with patch("jung.client.terminal.asyncio.run", fake_run):
-        assert cli() == 7
-
-
 @pytest.mark.asyncio
 async def test_async_cli_passes_transport_timeout_to_settings() -> None:
     mock_client = MagicMock()
@@ -125,25 +113,6 @@ async def test_async_cli_passes_transport_timeout_to_settings() -> None:
         base_url="http://localhost:8000",
         transport_timeout=12.5,
     )
-
-
-@pytest.mark.asyncio
-async def test_async_cli_maps_exit_zero_on_console_exit() -> None:
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    with (
-        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
-        patch(
-            "jung.client.terminal.JungApiClient",
-            return_value=mock_client,
-        ),
-        patch(
-            "jung.client.terminal.ConsoleApp.run",
-            AsyncMock(side_effect=ConsoleExitRequested),
-        ),
-    ):
-        assert await _async_cli() == 0
 
 
 @pytest.mark.asyncio

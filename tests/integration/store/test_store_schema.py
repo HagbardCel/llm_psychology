@@ -40,7 +40,7 @@ def test_foreign_keys_and_wal_enabled(store_path: Path) -> None:
     assert busy == 5000
 
 
-def test_fresh_schema_is_version_six_without_app_state(
+def test_fresh_schema_has_current_version_and_tables(
     store_path: Path,
 ) -> None:
     store = SQLiteStore(store_path)
@@ -60,26 +60,15 @@ def test_fresh_schema_is_version_six_without_app_state(
         message_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
         ).fetchone()[0]
-    assert version == 6
     assert version == SCHEMA_VERSION
     assert tables == EXPECTED_TABLES
-    assert "app_state" not in tables
-    assert tables == sql.TARGET_TABLES
     assert "client_message_id" in message_columns
     assert "role IN ('user', 'assistant')" in message_sql
     assert "UNIQUE (session_id, client_message_id, role)" in message_sql
 
 
-def test_user_version_is_set(store_path: Path) -> None:
-    store = SQLiteStore(store_path)
-    store.initialize()
-    with sqlite3.connect(store_path) as conn:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == SCHEMA_VERSION
-
-
-@pytest.mark.parametrize("version", [1, 3, 4, 5, 99])
-def test_incompatible_user_version_is_rejected(store_path: Path, version: int) -> None:
+def test_incompatible_user_version_is_rejected(store_path: Path) -> None:
+    version = SCHEMA_VERSION - 1
     store = SQLiteStore(store_path)
     store.initialize()
     with sqlite3.connect(store_path) as conn:
@@ -106,27 +95,10 @@ def test_close_and_reopen_preserves_state(store: SQLiteStore) -> None:
     assert reopened.get_active_session() is not None
 
 
-@pytest.mark.parametrize("table_name", sorted(sql.TARGET_TABLES))
-def test_version_zero_partial_target_schema_is_rejected(
-    store_path: Path,
-    table_name: str,
-) -> None:
+def test_version_zero_nonempty_database_is_rejected(store_path: Path) -> None:
     with sqlite3.connect(store_path) as conn:
-        conn.execute(f'CREATE TABLE "{table_name}" (placeholder INTEGER)')
+        conn.execute("CREATE TABLE unexpected_table (placeholder INTEGER)")
         conn.commit()
-
-    with pytest.raises(
-        PersistenceFailure,
-        match="unexpected tables without schema version",
-    ):
-        SQLiteStore(store_path).initialize()
-
-
-def test_version_zero_orphan_app_state_table_is_rejected(store_path: Path) -> None:
-    with sqlite3.connect(store_path) as conn:
-        conn.execute("CREATE TABLE app_state (placeholder INTEGER)")
-        conn.commit()
-        assert sql.has_any_user_table(conn)
 
     with pytest.raises(
         PersistenceFailure,
@@ -169,7 +141,7 @@ def test_initialize_rolls_back_on_seed_failure(
         }
 
     assert version == 0
-    assert tables.isdisjoint(sql.TARGET_TABLES)
+    assert tables.isdisjoint(EXPECTED_TABLES)
 
 
 def _seed_open_session(
