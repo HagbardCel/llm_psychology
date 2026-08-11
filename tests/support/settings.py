@@ -35,6 +35,11 @@ def make_test_settings(**overrides: object) -> JungSettings:
 def settings_for_database(
     database_path: Path | str, **overrides: object
 ) -> JungSettings:
-    """Settings whose database_path matches the given SQLite file path."""
+    """Build settings for a product database path whose filename must be jung.db."""
     path = Path(database_path)
+    if path.name != "jung.db":
+        raise ValueError(
+            "settings_for_database requires the fixed product database "
+            "filename 'jung.db'"
+        )
     return make_test_settings(data_dir=path.parent, **overrides)

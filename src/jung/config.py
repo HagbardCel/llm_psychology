@@ -179,27 +179,35 @@ def _parse_log_level(value: object) -> LogLevel:
 def _parse_task_config(
     value: object,
 ) -> dict[LLMTask, TaskOverride]:
-    raw = _parse_optional_json_object(value)
-    if raw is None:
-        return {}
+    if isinstance(value, str) or value is None:
+        raw = _parse_optional_json_object(value)
+        if raw is None:
+            return {}
+    elif isinstance(value, dict):
+        raw = value
+    else:
+        raise ValueError("task config must be a mapping")
 
     overrides: dict[LLMTask, TaskOverride] = {}
-    for task_name, task_entry in raw.items():
-        if not isinstance(task_name, str):
-            raise ValueError("task config keys must be strings")
+    for task_key, task_value in raw.items():
         try:
-            task = LLMTask(task_name)
-        except ValueError as exc:
-            raise ValueError(f"{task_name} is an unknown task") from exc
-        if not isinstance(task_entry, dict):
-            raise ValueError(f"{task_name} must be a JSON object")
-        override = TaskOverride.model_validate(task_entry)
+            task = task_key if isinstance(task_key, LLMTask) else LLMTask(task_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{task_key} is an unknown task") from exc
+
+        if isinstance(task_value, TaskOverride):
+            override = task_value
+        elif isinstance(task_value, dict):
+            override = TaskOverride.model_validate(task_value)
+        else:
+            raise ValueError(f"{task.value} must be a task override object")
+
         if (
             task in _STREAMING_TASKS
             and override.structured_output_mode is not None
             and override.structured_output_mode is not StructuredOutputMode.PROMPT
         ):
-            raise ValueError(f'{task_name}.structured_output_mode must be "prompt"')
+            raise ValueError(f'{task.value}.structured_output_mode must be "prompt"')
         overrides[task] = override
     return overrides
 
@@ -342,6 +350,18 @@ class JungSettings(BaseSettings):
     def reject_bool_port(cls, value: object) -> object:
         if isinstance(value, bool):
             raise ValueError("port must be an integer between 1 and 65535")
+        return value
+
+    @field_validator(
+        "shutdown_timeout_seconds",
+        "websocket_send_timeout",
+        "websocket_close_timeout",
+        mode="before",
+    )
+    @classmethod
+    def reject_bool_timeout(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("must be a positive finite number")
         return value
 
     @model_validator(mode="after")

@@ -52,10 +52,8 @@ make run-api
 **Terminal 2:**
 
 ```bash
-jung-console --api-url http://127.0.0.1:8000
+make run-console
 ```
-
-(`make run-console` is equivalent when the API is on the default URL.)
 
 For a disposable manual-test profile, point the API at a separate data
 directory (no special target or env file required):

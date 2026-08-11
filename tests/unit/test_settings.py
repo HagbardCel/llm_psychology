@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from jung.config import JungSettings, LogLevel, load_settings
 from jung.llm.gateway import LLMTask, StructuredOutputMode
-from jung.llm.policies import build_model_policies
+from jung.llm.policies import TaskOverride, build_model_policies
 from tests.support.settings import make_test_settings
 
 ALL_ENV_NAMES = (
@@ -110,6 +110,18 @@ def test_full_override_load() -> None:
 def test_llm_api_key_is_not_stripped() -> None:
     settings = make_test_settings(llm_api_key="  secret  ")
     assert settings.llm_api_key == "  secret  "
+
+
+def test_typed_task_override_mapping_accepted() -> None:
+    settings = make_test_settings(
+        llm_task_config={LLMTask.ASSESSMENT: TaskOverride(temperature=0.2)},
+    )
+    assert settings.llm_task_config[LLMTask.ASSESSMENT].temperature == 0.2
+
+
+def test_boolean_timeout_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(websocket_send_timeout=True)
 
 
 def test_blank_optional_json_treated_as_unset() -> None:

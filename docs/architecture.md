@@ -42,7 +42,7 @@ The supported runtime is a lean, local-first therapist application that:
 2. **API-only clients**
    - Console, scripts, and workflow probes call `/api/v1` only.
    - Clients never import backend domain, persistence, or workflow implementation types.
-   - `jung-console` is the current reference frontend; `/api/v1` is the interface boundary for future frontends as well.
+   - `jung-console` is the only currently supported frontend; `/api/v1` is the stable interface boundary for future frontends.
 
 3. **One backend process**
    - The backend owns workflow state, persistence, LLM execution, concurrency control, and recovery.
