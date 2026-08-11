@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID, uuid4
 
 import httpx
@@ -16,6 +17,7 @@ from jung.api.contracts import (
     TokenEvent,
 )
 from jung.client.api_client import ServerEventAdapter
+from jung.domain.errors import InvariantViolation
 from jung.llm.errors import LLMUnavailable
 from jung.llm.fake import (
     FailureExpectation,
@@ -28,7 +30,7 @@ from jung.phases.intake.models import IntakeRecordPatch
 from tests.integration.application.application_fixtures import (
     intake_message_expectations,
 )
-from tests.support.api import HoldingFakeLLM
+from tests.support.api import HoldingFakeLLM, RuntimeProbe
 
 pytestmark = pytest.mark.asyncio
 
@@ -429,9 +431,10 @@ async def test_disconnect_cancels_held_generation_and_is_reconcilable(
             ),
             timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
         ) as response:
-            first_line = await anext(response.aiter_lines())
+            lines = response.aiter_lines()
+            first_line = await anext(lines)
             while not first_line:
-                first_line = await anext(response.aiter_lines())
+                first_line = await anext(lines)
             first = ServerEventAdapter.validate_json(first_line)
             assert isinstance(first, TokenEvent)
             await asyncio.wait_for(holding.first_chunk_emitted.wait(), timeout=5.0)
@@ -465,3 +468,102 @@ async def test_disconnect_cancels_held_generation_and_is_reconcilable(
             events = await _read_events(response)
             assert isinstance(events[-1], MessageCompletedEvent)
             assert events[-1].assistant_message.content == "completed after retry"
+
+
+async def test_internal_domain_error_is_logged_and_sanitized(
+    uvicorn_api_url,
+    runtime_probe: RuntimeProbe,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    http_base = uvicorn_api_url
+    session_id = await _setup_intake_http(http_base)
+    request_id = uuid4()
+    client_message_id = uuid4()
+    secret = "secret-runtime-detail"
+
+    assert runtime_probe.runtime is not None
+    application = runtime_probe.runtime.application
+
+    async def fail_stream(command):
+        if False:
+            yield
+        raise InvariantViolation(secret)
+
+    application.stream_message = fail_stream  # type: ignore[method-assign]
+
+    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
+        with caplog.at_level(logging.ERROR, logger="jung.api.routes"):
+            async with client.stream(
+                "POST",
+                "/api/v1/chat",
+                headers=_chat_headers(request_id),
+                json=_chat_body(
+                    session_id=session_id,
+                    content="hi",
+                    client_message_id=client_message_id,
+                ),
+            ) as response:
+                assert response.status_code == 200
+                events = await _read_events(response)
+
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ErrorEvent)
+    assert event.error.code == "internal_error"
+    assert event.request_id == request_id
+    assert event.session_id == UUID(session_id)
+    assert event.client_message_id == client_message_id
+    assert event.error.request_id == request_id
+    assert secret not in event.model_dump_json()
+    assert secret not in caplog.text
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "jung.api.routes"
+        and record.levelno == logging.ERROR
+        and record.getMessage() == "chat stream failed"
+        and getattr(record, "request_id", None) == str(request_id)
+    ]
+    assert len(records) == 1
+    assert getattr(records[0], "exception_type", None) == "InvariantViolation"
+
+
+async def test_normal_completion_terminal_is_final_then_eof(
+    uvicorn_api_url,
+    fake_llm: FakeLLM,
+) -> None:
+    http_base = uvicorn_api_url
+    fake_llm._expectations = list(intake_message_expectations("eof complete"))
+    session_id = await _setup_intake_http(http_base)
+    request_id = uuid4()
+    client_message_id = uuid4()
+
+    async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
+        async with client.stream(
+            "POST",
+            "/api/v1/chat",
+            headers=_chat_headers(request_id),
+            json=_chat_body(
+                session_id=session_id,
+                content="hi",
+                client_message_id=client_message_id,
+            ),
+        ) as response:
+            assert response.status_code == 200
+            events: list[ServerEvent] = []
+            lines = response.aiter_lines()
+
+            async with asyncio.timeout(5.0):
+                async for line in lines:
+                    if line:
+                        events.append(ServerEventAdapter.validate_json(line))
+
+    terminals = [
+        event
+        for event in events
+        if isinstance(event, (MessageCompletedEvent, MessageFailedEvent, ErrorEvent))
+    ]
+    assert len(terminals) == 1
+    assert events[-1] is terminals[0]
+    _assert_normal_completion_shape(events)

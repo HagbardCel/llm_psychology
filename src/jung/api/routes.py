@@ -110,6 +110,12 @@ async def _stream_chat(
                 yield event.model_dump_json() + "\n"
         except DomainError as exc:
             envelope = to_error_envelope(exc, request_id=context.request_id)
+            if envelope.code == "internal_error":
+                _log_safe_exception(
+                    "chat stream failed",
+                    request_id=context.request_id,
+                    exc=exc,
+                )
             event = build_error_event(
                 envelope,
                 context=context,
