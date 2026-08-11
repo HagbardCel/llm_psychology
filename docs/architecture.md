@@ -2,7 +2,7 @@
 
 > This document governs the supported Jung runtime architecture, dependency
 > direction, and runtime boundaries. Workflow stages and transitions live in
-> [workflow.md](workflow.md). HTTP/WebSocket contract semantics live in
+> [workflow.md](workflow.md). HTTP and NDJSON chat contract semantics live in
 > [api-v1.md](api-v1.md). Persistence tables and invariants live in
 > [database.md](database.md).
 
@@ -12,7 +12,7 @@ The supported runtime is a lean, local-first therapist application that:
 
 - runs on one laptop for one real user;
 - supports a disposable test profile through a separate database/data directory, not multi-user domain plumbing;
-- exposes one stable HTTP/WebSocket API used by every client, including the console;
+- exposes one stable HTTP API (JSON requests/responses and NDJSON chat streaming) used by every client, including the console;
 - keeps the API/application process as the sole product-level SQLite writer; clients never write the database directly;
 - preserves dedicated, independently testable therapeutic phase behavior;
 - minimizes framework-specific concepts and speculative abstractions;
@@ -23,8 +23,7 @@ The supported runtime is a lean, local-first therapist application that:
 | Layer | Technology |
 |---|---|
 | Language/runtime | Python ≥3.11, asyncio |
-| HTTP API | FastAPI + Uvicorn |
-| WebSocket | FastAPI/Starlette server, `websockets` client |
+| HTTP API | FastAPI + Uvicorn (JSON + NDJSON chat streaming) |
 | Models/contracts | Pydantic |
 | Persistence | Python `sqlite3`, SQLite WAL |
 | LLM integration | OpenAI Python SDK against OpenAI-compatible Chat Completions endpoints |
@@ -52,7 +51,7 @@ The supported runtime is a lean, local-first therapist application that:
    - No microservices, message broker, plugin framework, event sourcing, or general-purpose scheduler.
 
 5. **One asyncio runtime**
-   - Use asyncio consistently across API, WebSockets, LLM calls, console networking, background operations, and tests.
+   - Use asyncio consistently across API, LLM calls, console networking, background operations, and tests.
    - Trio adapters are not supported.
 
 6. **One workflow model**
@@ -65,11 +64,11 @@ The supported runtime is a lean, local-first therapist application that:
 ## System shape
 
 ```text
-Console client ── HTTP / WebSocket ── API adapter ── TherapyApplication
-                                                       │
-                                                       ├── SQLiteStore
-                                                       ├── LLMGateway
-                                                       └── phase processors
+Console client ── HTTP ── API adapter ── TherapyApplication
+                                           │
+                                           ├── SQLiteStore
+                                           ├── LLMGateway
+                                           └── phase processors
 ```
 
 Dependency direction:
@@ -96,7 +95,7 @@ interfaces → /api/v1 → TherapyApplication
 
 ```text
 src/jung/
-├── api/             HTTP/WebSocket adapter
+├── api/             HTTP adapter
 ├── client/          typed API client + console
 ├── domain/          domain models, commands, errors
 ├── persistence/     SQLite implementation
@@ -126,26 +125,27 @@ The application:
 - orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transaction boundaries live in `SQLiteStore`);
 - enforces server-side concurrency and idempotency;
 - owns and recovers at most one live owned asyncio operation task; `OperationRuntime` is not a queue or general-purpose scheduler;
-- streams chat generation on the calling connection through `stream_message`;
-- returns domain results, not HTTP/WebSocket payloads.
+- streams chat generation on the calling request through `stream_message`;
+- returns domain results, not HTTP/NDJSON payloads.
 
 Use-case surface (semantic):
 
 - **Reads:** `get_snapshot`, `get_profile`, `get_style_options`, `list_sessions`, `get_session_history`
 - **Mutations:** `update_profile`, `select_style`, `start_session` (returns session plus snapshot), `end_session`, `retry_operation`
-- **Chat:** `stream_message` — connection-owned acceptance, token stream, and terminal result
+- **Chat:** `stream_message` — request-owned acceptance, token stream, and terminal result
 - **Lifecycle:** `recover_on_startup`, `shutdown`
 
-### Connection-owned chat streaming
+### Request-owned chat streaming
 
 Chat is not supervised background work and does not use an in-process event
-fan-out. The WebSocket adapter calls `TherapyApplication.stream_message` on the
-connection that issued `send_message`. That connection owns the stream:
+fan-out. The HTTP adapter calls `TherapyApplication.stream_message` for
+`POST /api/v1/chat` and streams `ServerEvent` records as NDJSON. That request
+owns the stream:
 
-- normally: one command frame → token events → one terminal event → close;
-  active protocol aborts follow the uncertain-delivery behavior defined in
-  [api-v1.md](api-v1.md);
-- disconnect cancels generation for that attempt;
+- normally: `ChatRequest` → token events → one terminal event → EOF;
+  disconnect without a terminal event follows the uncertain-delivery behavior
+  defined in [api-v1.md](api-v1.md);
+- client disconnect or cancellation cancels generation for that attempt;
 - durable truth is messages only (see [workflow.md](workflow.md) and
   [database.md](database.md));
 - a generation lock serializes chat work and masks `available_commands` while
@@ -154,7 +154,7 @@ connection that issued `send_message`. That connection owns the stream:
 `TherapyApplication` schedules assessment and post-session operations as a
 single live owned asyncio task. Teardown rejects new work, waits a bounded
 interval for the currently owned operation task, then closes the LLM client.
-See [api-v1.md](api-v1.md) for the four-event WebSocket wire contract.
+See [api-v1.md](api-v1.md) for the four-event NDJSON stream contract.
 
 No generic service locator or runtime string-based dependency lookup remains.
 
@@ -169,7 +169,7 @@ Therapeutic behavior is implemented by narrow phase processors rather than auton
 - `TherapyProcessor`
 - `PostSessionProcessor`
 
-Each processor owns its prompt strategy, phase-specific policy, and typed output. It does not own persistence, WebSocket messaging, global workflow transitions, or dependency construction.
+Each processor owns its prompt strategy, phase-specific policy, and typed output. It does not own persistence, HTTP messaging, global workflow transitions, or dependency construction.
 
 Processors should not call other workflow processors. A coordinator may call pure/stateless helpers such as `summarize_session()` or `propose_plan_patch()`.
 
@@ -179,9 +179,9 @@ One derived workflow stage and backend-derived command set govern progression.
 See [workflow.md](workflow.md) for stages, transitions, operation lifecycle,
 message-native chat acceptance/retry, and recovery semantics.
 
-Clients use versioned HTTP and WebSocket interfaces under `/api/v1`. See
-[api-v1.md](api-v1.md) for routes, DTOs, public errors, ordering, and WebSocket
-messages.
+Clients use versioned HTTP interfaces under `/api/v1`, including NDJSON chat
+streaming. See [api-v1.md](api-v1.md) for routes, DTOs, public errors, ordering,
+and stream events.
 
 Persistence uses one explicit `SQLiteStore` with immutable plan revisions and
 durable message/operation idempotency. See [database.md](database.md) for tables,
@@ -195,9 +195,9 @@ The console is the reference API client. It must use one reusable `JungApiClient
 console UI → JungApiClient → /api/v1
 ```
 
-Use HTTP for commands and snapshots and a one-shot WebSocket
-(`JungChatConnection.stream`) for each chat message. Console contract tests run
-against an ephemeral real API server.
+Use HTTP for commands, snapshots, and chat. Each chat message uses
+`JungApiClient.stream_message` over `POST /api/v1/chat` (NDJSON). Console
+contract tests run against an ephemeral real API server.
 
 Development priority: backend workflow and persistence correctness, then LLM
 reliability, then `/api/v1` contract stability, then `jung-console` and
@@ -233,7 +233,7 @@ Explicit server-side structure:
 - while generation is active, snapshot assembly masks `available_commands` to empty, and public workflow commands that conflict with generation return `busy`;
 - FastAPI lifespan owns `TherapyApplication`, which schedules at most one assessment or post-session operation task;
 - independent operation failures are persisted locally and must not cancel API lifespan;
-- chat generation is connection-owned and is not scheduled as that owned operation task;
+- chat generation is request-owned and is not scheduled as that owned operation task;
 - detached tasks are prohibited;
 - each synchronous store operation opens and closes its own SQLite connection;
 - async code calls whole store operations via `asyncio.to_thread()`; no connection is shared across threads.

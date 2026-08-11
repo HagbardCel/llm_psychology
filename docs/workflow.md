@@ -87,9 +87,10 @@ row. Each message has role `user` or `assistant`, a required
 A completed exchange is a user message and an assistant message sharing the same
 `client_message_id`.
 
-Generation is connection-owned: the WebSocket that sends `send_message` drives
-`TherapyApplication.stream_message` until a terminal result. Tokens are
-ephemeral. Chat is not scheduled as the application's owned operation task.
+Generation is request-owned: the HTTP `POST /api/v1/chat` stream that issues
+the chat attempt drives `TherapyApplication.stream_message` until a terminal
+result or disconnect. Tokens are ephemeral. Chat is not scheduled as the
+application's owned operation task.
 
 ### Acceptance and streaming
 
@@ -126,7 +127,7 @@ unresolved diagnostic problem.
 
 ### Disconnect and crash
 
-Disconnect cancels the connection-owned generation attempt. The durable user
+Disconnect cancels the request-owned generation attempt. The durable user
 message may remain unanswered on an open session and must be retried with the
 same ID. There is no pending-turn row to convert on startup.
 
@@ -145,7 +146,7 @@ On shutdown:
 - wait a bounded interval for the **currently owned operation task**;
 - leave any durable `PENDING`/in-flight operation recoverable for the next startup;
 - never mark an in-flight operation successful without validated completion;
-- in-flight chat is cancelled with its connection.
+- in-flight chat is cancelled with its HTTP stream request.
 
 ## Post-session grounding
 
