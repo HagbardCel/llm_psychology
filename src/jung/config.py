@@ -14,7 +14,6 @@ from pydantic import (
     Field,
     PositiveFloat,
     field_validator,
-    model_validator,
 )
 from pydantic_settings import (
     BaseSettings,
@@ -363,17 +362,6 @@ class JungSettings(BaseSettings):
         if isinstance(value, bool):
             raise ValueError("must be a positive finite number")
         return value
-
-    @model_validator(mode="after")
-    def _normalize_cors_again(self) -> JungSettings:
-        # Origins already normalized via BeforeValidator; re-check empties
-        # that could arrive via explicit construction with raw empty strings.
-        for origin in self.api_allowed_origins:
-            if not origin.strip():
-                raise ValueError("empty CORS origin entries are not allowed")
-            if origin.strip() == "*":
-                raise ValueError("wildcard CORS origin is not allowed")
-        return self
 
 
 def load_settings() -> JungSettings:
