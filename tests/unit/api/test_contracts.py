@@ -10,12 +10,10 @@ import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from jung.api.contracts import (
-    COMMAND_ORDER,
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
     ErrorResponse,
-    MappingContext,
     MessageCompletedEvent,
     MessageFailedEvent,
     MessageResponse,
@@ -27,6 +25,10 @@ from jung.api.contracts import (
     ServerEvent,
     SessionSummaryResponse,
     TokenEvent,
+)
+from jung.api.mapping import (
+    COMMAND_ORDER,
+    MappingContext,
     build_error_event,
     normalize_public_error_code,
     stored_error_envelope,
@@ -106,6 +108,19 @@ def _assert_datetime_schema(schema: dict[str, object]) -> None:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def test_wire_utc_datetime_normalizes_aware_offsets() -> None:
+    value = SessionSummaryResponse.model_validate(
+        {
+            "id": str(uuid4()),
+            "kind": "intake",
+            "started_at": "2026-01-01T13:00:00+01:00",
+            "ended_at": None,
+            "plan_id": None,
+        }
+    )
+    assert value.started_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _make_session(*, now: datetime | None = None) -> Session:

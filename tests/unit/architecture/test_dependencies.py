@@ -46,6 +46,15 @@ API_BACKEND_FORBIDDEN_MODULES = (
 
 _CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "websockets"})
 
+_CONTRACTS_FORBIDDEN_PREFIXES = (
+    "jung.domain",
+    "jung.application",
+    "jung.persistence",
+    "jung.llm",
+    "jung.phases",
+    "jung.client",
+)
+
 
 def _module_package_for_path(path: Path) -> str:
     relative = path.relative_to(JUNG_SRC.parent).with_suffix("")
@@ -214,6 +223,20 @@ def test_client_uses_contract_only_import_allow_list() -> None:
             f"{path.relative_to(ROOT)} imports {module}"
             for module in _client_import_violations(_resolved_imported_modules(path))
         )
+
+    assert violations == []
+
+
+def test_api_contracts_are_wire_only() -> None:
+    """jung.api.contracts must not import domain/application/backend packages."""
+    contracts_path = API_SRC / "contracts.py"
+    if not contracts_path.exists():
+        return
+
+    violations: list[str] = []
+    for module in _resolved_imported_modules(contracts_path):
+        if _matches_any_prefix(module, _CONTRACTS_FORBIDDEN_PREFIXES):
+            violations.append(module)
 
     assert violations == []
 

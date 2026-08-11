@@ -18,18 +18,20 @@ from jung._async_cleanup import close_awaitable_safely, drain_cancelled_task
 from jung.api.contracts import (
     ErrorCode,
     ErrorEnvelope,
-    MappingContext,
     MessageCompletedEvent,
     MessageFailedEvent,
     SendMessageCommand,
     ServerEvent,
     TokenEvent,
+)
+from jung.api.deps import ApiNotReady, get_websocket_application
+from jung.api.errors import new_request_id, to_error_envelope
+from jung.api.mapping import (
+    MappingContext,
     build_error_event,
     normalize_public_error_code,
     to_message_response,
 )
-from jung.api.deps import ApiNotReady, get_websocket_application
-from jung.api.errors import new_request_id, to_error_envelope
 from jung.application import TherapyApplication
 from jung.config import JungSettings
 from jung.diagnostics import diagnostic_context

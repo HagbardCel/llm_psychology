@@ -8,12 +8,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, status
 
 from jung.api.contracts import (
-    COMMON_ERROR_RESPONSES,
-    CONFLICT_RESPONSES,
-    NOT_FOUND_RESPONSES,
     AppSnapshotResponse,
     HealthResponse,
-    MappingContext,
     ProfileResponse,
     ProfileUpdateRequest,
     SelectStyleRequest,
@@ -21,6 +17,16 @@ from jung.api.contracts import (
     SessionListResponse,
     StartSessionResponse,
     StyleOptionsResponse,
+)
+from jung.api.deps import build_error_response, get_application
+from jung.api.errors import (
+    COMMON_ERROR_RESPONSES,
+    CONFLICT_RESPONSES,
+    NOT_FOUND_RESPONSES,
+    not_ready_error_response,
+)
+from jung.api.mapping import (
+    MappingContext,
     to_profile_response,
     to_session_history_response,
     to_session_summary,
@@ -28,8 +34,6 @@ from jung.api.contracts import (
     to_start_session_response,
     to_style_options_response,
 )
-from jung.api.deps import build_error_response, get_application
-from jung.api.errors import not_ready_error_response
 from jung.application import TherapyApplication
 from jung.domain.commands import (
     EndSession,
