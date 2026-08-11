@@ -412,46 +412,19 @@ class JungApiClient:
         request_id: UUID,
         event: ServerEvent,
     ) -> None:
-        if isinstance(event, ErrorEvent):
-            if event.request_id != request_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
-                    expected_model="ErrorEvent",
-                )
-            if event.session_id is not None and event.session_id != session_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="ErrorEvent",
-                )
-            if (
-                event.client_message_id is not None
-                and event.client_message_id != client_message_id
-            ):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="ErrorEvent",
-                )
-            return
-
-        if isinstance(
-            event,
-            (TokenEvent, MessageCompletedEvent, MessageFailedEvent),
+        if event.request_id != request_id:
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                expected_model=type(event).__name__,
+            )
+        if (
+            event.session_id != session_id
+            or event.client_message_id != client_message_id
         ):
-            if event.request_id != request_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
-                    expected_model=type(event).__name__,
-                )
-            if (
-                event.session_id != session_id
-                or event.client_message_id != client_message_id
-            ):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model=type(event).__name__,
-                )
-            return
-
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                expected_model=type(event).__name__,
+            )
     async def _request(
         self,
         method: str,

@@ -108,8 +108,8 @@ def build_error_event(
     envelope: ErrorEnvelope,
     *,
     context: MappingContext,
-    session_id: UUID | None = None,
-    client_message_id: UUID | None = None,
+    session_id: UUID,
+    client_message_id: UUID,
 ) -> ErrorEvent:
     if envelope.request_id != context.request_id:
         envelope = envelope.model_copy(update={"request_id": context.request_id})

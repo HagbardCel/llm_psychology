@@ -32,9 +32,9 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_typed_reads_profile_update_and_session_history(
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     async with JungApiClient(ClientSettings(http_base)) as client:
         initial = await client.get_state()
         profile = await client.get_profile()
@@ -68,9 +68,9 @@ async def test_typed_reads_profile_update_and_session_history(
 
 async def test_select_style_start_and_end_methods_use_exact_contracts(
     store: SQLiteStore,
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -107,9 +107,9 @@ async def test_select_style_start_and_end_methods_use_exact_contracts(
 
 async def test_retry_current_operation_and_typed_not_found(
     store: SQLiteStore,
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -140,10 +140,10 @@ async def test_retry_current_operation_and_typed_not_found(
 
 
 async def test_one_shot_chat_stream_decodes_typed_events(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
 
     async with JungApiClient(ClientSettings(http_base)) as client:

@@ -23,8 +23,6 @@ ALL_ENV_NAMES = (
     "JUNG_API_LOG_LEVEL",
     "JUNG_API_ALLOWED_ORIGINS",
     "JUNG_API_ALLOW_REMOTE_BIND",
-    "JUNG_WS_SEND_TIMEOUT",
-    "JUNG_WS_CLOSE_TIMEOUT",
     "JUNG_SHUTDOWN_TIMEOUT",
     "JUNG_ENABLE_LLM_TRACING",
     "JUNG_DEBUG_RUN_DIR",
@@ -52,8 +50,6 @@ def test_settings_defaults(clear_jung_env: Path) -> None:
     assert settings.api_port == 8000
     assert settings.api_log_level is LogLevel.INFO
     assert settings.shutdown_timeout_seconds == 30.0
-    assert settings.websocket_send_timeout == 5.0
-    assert settings.websocket_close_timeout == 2.0
     assert settings.enable_llm_tracing is False
     assert settings.debug_run_dir is None
     assert settings.llm_extra_body is None
@@ -121,7 +117,7 @@ def test_typed_task_override_mapping_accepted() -> None:
 
 def test_boolean_timeout_rejected() -> None:
     with pytest.raises(ValidationError):
-        make_test_settings(websocket_send_timeout=True)
+        make_test_settings(shutdown_timeout_seconds=True)
 
 
 def test_blank_optional_json_treated_as_unset() -> None:

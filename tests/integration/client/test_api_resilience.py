@@ -42,7 +42,7 @@ async def test_disconnect_during_generation_leaves_unanswered_user_for_retry(
     recording_fake = RecordingFakeLLM(holding_fake)
     test_app = create_test_api_app(store=store, fake_llm=recording_fake)
 
-    async with run_uvicorn_api(test_app.app) as (http_base, _ws_url):
+    async with run_uvicorn_api(test_app.app) as http_base:
         async with JungApiClient(ClientSettings(http_base)) as client:
             await wait_for_health(client)
             state = await client.update_profile(

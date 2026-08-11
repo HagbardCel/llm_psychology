@@ -15,5 +15,5 @@ from tests.support.api import (  # noqa: F401
     started_api_client,
     store,
     store_path,
-    uvicorn_api_urls,
+    uvicorn_api_url,
 )

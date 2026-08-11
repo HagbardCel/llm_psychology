@@ -29,7 +29,6 @@ from jung.api.errors import (
     validation_error_response,
 )
 from jung.api.routes import router
-from jung.api.websocket import router as websocket_router
 from jung.application import TherapyApplication
 from jung.composition import application_context
 from jung.config import JungSettings, load_settings, validate_bind_host
@@ -180,7 +179,6 @@ def create_app(
         openapi_url="/api/v1/openapi.json",
     )
     app.state.api = ApiState()
-    app.state.api_settings = settings
 
     _register_exception_handlers(app)
     app.add_middleware(RequestIdMiddleware)
@@ -196,7 +194,6 @@ def create_app(
         )
 
     app.include_router(router)
-    app.include_router(websocket_router)
     return app
 
 

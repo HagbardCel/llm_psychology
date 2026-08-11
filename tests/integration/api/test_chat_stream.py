@@ -105,10 +105,10 @@ def _assert_normal_completion_shape(events: list[ServerEvent]) -> None:
 
 
 async def test_successful_stream_tokens_then_completion(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("hello world"))
     session_id = await _setup_intake_http(http_base)
     request_id = uuid4()
@@ -135,10 +135,10 @@ async def test_successful_stream_tokens_then_completion(
 
 
 async def test_request_id_consistency_across_header_and_events(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("ok"))
     session_id = await _setup_intake_http(http_base)
     request_id = uuid4()
@@ -161,10 +161,10 @@ async def test_request_id_consistency_across_header_and_events(
 
 
 async def test_accepted_llm_failure_leaves_unanswered_user(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     secret = "SECRET_PROVIDER_DETAIL"
     fake_llm._expectations = [
         StructuredExpectation(
@@ -203,9 +203,9 @@ async def test_accepted_llm_failure_leaves_unanswered_user(
 
 
 async def test_command_rejection_is_stream_error_event(
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     session_id = await _setup_intake_http(http_base)
     request_id = uuid4()
     # End the session so send_message is invalid for this session context,
@@ -230,8 +230,8 @@ async def test_command_rejection_is_stream_error_event(
             assert events[-1].request_id == request_id
 
 
-async def test_malformed_body_is_ordinary_http_422(uvicorn_api_urls) -> None:
-    http_base, _ = uvicorn_api_urls
+async def test_malformed_body_is_ordinary_http_422(uvicorn_api_url) -> None:
+    http_base = uvicorn_api_url
     request_id = uuid4()
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:
         response = await client.post(
@@ -247,10 +247,10 @@ async def test_malformed_body_is_ordinary_http_422(uvicorn_api_urls) -> None:
 
 
 async def test_duplicate_completed_id_is_idempotent(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("done once"))
     session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
@@ -287,10 +287,10 @@ async def test_duplicate_completed_id_is_idempotent(
 
 
 async def test_duplicate_id_different_content_is_invalid_command(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("first"))
     session_id = await _setup_intake_http(http_base)
     client_message_id = uuid4()
@@ -325,10 +325,10 @@ async def test_duplicate_id_different_content_is_invalid_command(
 
 
 async def test_unicode_and_newlines_in_tokens(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     text = "line1\nline2 — café 你好"
     fake_llm._expectations = list(intake_message_expectations(text))
     session_id = await _setup_intake_http(http_base)
@@ -351,10 +351,10 @@ async def test_unicode_and_newlines_in_tokens(
 
 
 async def test_incremental_delivery_before_llm_release(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     holding = HoldingFakeLLM(list(intake_message_expectations("after release")))
     fake_llm._expectations = holding._expectations
     fake_llm.generate_structured = holding.generate_structured  # type: ignore[method-assign]
@@ -401,10 +401,10 @@ async def test_incremental_delivery_before_llm_release(
 
 
 async def test_disconnect_cancels_held_generation_and_is_reconcilable(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ = uvicorn_api_urls
+    http_base = uvicorn_api_url
     holding = HoldingFakeLLM(list(intake_message_expectations("partial then hold")))
     # Ensure first chunk is observable then hold forever until cancelled.
     holding._expectations = [

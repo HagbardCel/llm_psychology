@@ -254,7 +254,7 @@ async def _wait_for_uvicorn_start(
 
 
 @asynccontextmanager
-async def run_uvicorn_api(api_app) -> AsyncIterator[tuple[str, str]]:
+async def run_uvicorn_api(api_app) -> AsyncIterator[str]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     sock.listen()
@@ -270,11 +270,10 @@ async def run_uvicorn_api(api_app) -> AsyncIterator[tuple[str, str]]:
     serve_task = asyncio.create_task(server.serve(sockets=[sock]))
 
     http_base = f"http://127.0.0.1:{port}"
-    ws_url = f"ws://127.0.0.1:{port}/api/v1/chat"
 
     try:
         await _wait_for_uvicorn_start(server, serve_task, timeout=5.0)
-        yield http_base, ws_url
+        yield http_base
     finally:
         server.should_exit = True
         try:
@@ -290,6 +289,6 @@ async def run_uvicorn_api(api_app) -> AsyncIterator[tuple[str, str]]:
 
 
 @pytest_asyncio.fixture
-async def uvicorn_api_urls(api_app) -> AsyncIterator[tuple[str, str]]:
-    async with run_uvicorn_api(api_app) as urls:
-        yield urls
+async def uvicorn_api_url(api_app) -> AsyncIterator[str]:
+    async with run_uvicorn_api(api_app) as http_base:
+        yield http_base

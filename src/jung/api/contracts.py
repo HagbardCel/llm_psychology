@@ -94,16 +94,6 @@ class ChatRequest(BaseModel):
     content: str
 
 
-class SendMessageCommand(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: Literal["send_message"]
-    session_id: UUID
-    client_message_id: UUID
-    request_id: UUID
-    content: str
-
-
 class StyleSummaryResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -324,8 +314,8 @@ class ErrorEvent(BaseModel):
     type: Literal["error"]
     error: ErrorEnvelope
     request_id: UUID
-    session_id: UUID | None = None
-    client_message_id: UUID | None = None
+    session_id: UUID
+    client_message_id: UUID
 
     @model_validator(mode="after")
     def request_ids_match(self) -> Self:

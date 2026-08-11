@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from jung.api.contracts import (
+    ChatRequest,
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
@@ -21,7 +22,6 @@ from jung.api.contracts import (
     PlanSummaryResponse,
     ProfileUpdateRequest,
     ProfileWire,
-    SendMessageCommand,
     ServerEvent,
     SessionSummaryResponse,
     TokenEvent,
@@ -219,17 +219,15 @@ def test_profile_requests_reject_top_level_and_nested_extras() -> None:
         )
 
 
-def test_send_message_command_validates_complete_payload() -> None:
-    command = SendMessageCommand.model_validate(
+def test_chat_request_validates_complete_payload() -> None:
+    request = ChatRequest.model_validate(
         {
-            "type": "send_message",
             "session_id": str(uuid4()),
             "client_message_id": str(uuid4()),
-            "request_id": str(uuid4()),
             "content": "hello",
         }
     )
-    assert command.type == "send_message"
+    assert request.content == "hello"
 
 
 @pytest.mark.parametrize(
@@ -414,16 +412,23 @@ def test_stored_error_envelope_normalizes_internal_codes() -> None:
 
 def test_error_event_request_id_invariant() -> None:
     context = MappingContext(request_id=uuid4())
+    session_id = uuid4()
+    client_message_id = uuid4()
     matching_envelope = ErrorEnvelope(
         code="invalid_command",
         message="not allowed",
         request_id=context.request_id,
         retryable=False,
     )
-    event = build_error_event(matching_envelope, context=context)
+    event = build_error_event(
+        matching_envelope,
+        context=context,
+        session_id=session_id,
+        client_message_id=client_message_id,
+    )
     assert event.request_id == event.error.request_id == context.request_id
-    assert event.session_id is None
-    assert event.client_message_id is None
+    assert event.session_id == session_id
+    assert event.client_message_id == client_message_id
 
     adapter = TypeAdapter(ServerEvent)
     shared_request_id = uuid4()
@@ -431,6 +436,8 @@ def test_error_event_request_id_invariant() -> None:
         {
             "type": "error",
             "request_id": str(shared_request_id),
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
             "error": {
                 "code": "validation_error",
                 "message": "bad",
@@ -445,10 +452,25 @@ def test_error_event_request_id_invariant() -> None:
             {
                 "type": "error",
                 "request_id": str(uuid4()),
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
                 "error": {
                     "code": "validation_error",
                     "message": "bad",
                     "request_id": str(uuid4()),
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        ErrorEvent.model_validate(
+            {
+                "type": "error",
+                "request_id": str(shared_request_id),
+                "error": {
+                    "code": "validation_error",
+                    "message": "bad",
+                    "request_id": str(shared_request_id),
                 },
             }
         )
@@ -568,11 +590,9 @@ def test_contract_surface_is_single_user() -> None:
 
 
 def test_contract_wire_surfaces_have_expected_membership() -> None:
-    assert frozenset(SendMessageCommand.model_fields) == {
-        "type",
+    assert frozenset(ChatRequest.model_fields) == {
         "session_id",
         "client_message_id",
-        "request_id",
         "content",
     }
     assert frozenset(ErrorEnvelope.model_fields) == {
@@ -580,6 +600,13 @@ def test_contract_wire_surfaces_have_expected_membership() -> None:
         "message",
         "request_id",
         "retryable",
+    }
+    assert frozenset(ErrorEvent.model_fields) == {
+        "type",
+        "error",
+        "request_id",
+        "session_id",
+        "client_message_id",
     }
     assert frozenset(get_args(ErrorCode)) == {
         "invalid_command",

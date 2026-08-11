@@ -21,7 +21,7 @@ LLM_SRC = JUNG_SRC / "llm"
 API_SRC = JUNG_SRC / "api"
 CLIENT_SRC = JUNG_SRC / "client"
 
-TRANSPORT_FRAMEWORK_ROOTS = ("fastapi", "starlette", "httpx", "websockets", "uvicorn")
+TRANSPORT_FRAMEWORK_ROOTS = ("fastapi", "starlette", "httpx", "uvicorn")
 
 UNSUPPORTED_ASYNC_ROOTS = ("trio", "quart_trio")
 
@@ -44,7 +44,7 @@ API_BACKEND_FORBIDDEN_MODULES = (
     "jung.workflow",
 )
 
-_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "websockets"})
+_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic"})
 
 _CONTRACTS_FORBIDDEN_PREFIXES = (
     "jung.domain",
@@ -213,7 +213,7 @@ def test_api_does_not_import_backend_implementations() -> None:
 
 
 def test_client_uses_contract_only_import_allow_list() -> None:
-    """Client package may import stdlib, httpx/pydantic/websockets, contracts, and itself."""
+    """Client package may import stdlib, httpx/pydantic, contracts, and itself."""
     if not CLIENT_SRC.exists():
         return
 
