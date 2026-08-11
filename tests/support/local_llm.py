@@ -17,13 +17,12 @@ from dataclasses import dataclass
 from jung.diagnostics import DiagnosticRecorder
 from jung.llm.gateway import (
     AdapterConfig,
-    LLMSettings,
     LLMTask,
     ModelPolicy,
     StructuredOutputMode,
 )
 from jung.llm.openai_compatible import OpenAICompatibleLLM, ProviderAttemptEvent
-from jung.llm.policies import build_model_policies
+from jung.llm.policies import TaskOverride, build_model_policies
 from jung.llm.tracing import ObservedLLMGateway
 
 BASE_URL_ENV = "LOCAL_LLM_SMOKE_BASE_URL"
@@ -88,34 +87,24 @@ def resolve_local_model_environment() -> LocalModelEnvironment:
     )
 
 
-def build_local_model_settings(
-    environment: LocalModelEnvironment,
-    *,
-    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
-    completion_caps: dict[LLMTask, int] | None = None,
-) -> LLMSettings:
-    return LLMSettings(
-        default_model=environment.model,
-        base_url=environment.base_url,
-        api_key=environment.api_key,
-        task_structured_modes=dict.fromkeys(LLMTask, environment.structured_mode),
-        task_timeouts=dict.fromkeys(LLMTask, request_timeout_seconds),
-        task_max_completion_tokens=completion_caps or None,
-    )
-
-
 def build_local_model_policies(
     environment: LocalModelEnvironment,
     *,
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     completion_caps: dict[LLMTask, int] | None = None,
 ) -> dict[LLMTask, ModelPolicy]:
+    overrides: dict[LLMTask, TaskOverride] = {}
+    for task in LLMTask:
+        fields: dict[str, object] = {
+            "structured_output_mode": environment.structured_mode,
+            "timeout_seconds": request_timeout_seconds,
+        }
+        if completion_caps is not None and task in completion_caps:
+            fields["max_completion_tokens"] = completion_caps[task]
+        overrides[task] = TaskOverride(**fields)
     return build_model_policies(
-        build_local_model_settings(
-            environment,
-            request_timeout_seconds=request_timeout_seconds,
-            completion_caps=completion_caps,
-        )
+        default_model=environment.model,
+        task_overrides=overrides,
     )
 
 

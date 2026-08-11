@@ -14,11 +14,11 @@ import pytest
 from starlette.datastructures import Headers
 
 from jung.api.app import ApiState
-from jung.api.settings import ApiSettings
 from jung.api.websocket import _handle_chat_connection
-from jung.config import build_settings
+from jung.config import JungSettings
 from jung.domain.models import Message, MessageRole
 from jung.domain.results import ChatCompleted, ChatToken
+from tests.support.settings import make_test_settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,15 +28,9 @@ def _default_settings(
     send_timeout: float = 5.0,
     close_timeout: float = 2.0,
     allowed_origins: tuple[str, ...] = (),
-) -> ApiSettings:
-    return ApiSettings(
-        application=build_settings(
-            database_path="data/jung.db",
-            llm_base_url="http://127.0.0.1:8080/v1",
-            llm_api_key="",
-            default_model="local-model",
-        ),
-        allowed_origins=allowed_origins,
+) -> JungSettings:
+    return make_test_settings(
+        api_allowed_origins=allowed_origins,
         websocket_send_timeout=send_timeout,
         websocket_close_timeout=close_timeout,
     )
@@ -47,7 +41,7 @@ class FakeWebSocket:
         self,
         *,
         api_state: ApiState,
-        api_settings: ApiSettings,
+        api_settings: JungSettings,
         headers: dict[str, str] | None = None,
     ) -> None:
         import asyncio
@@ -87,11 +81,6 @@ class MockApplication:
     stream_message: Any = None
 
 
-@dataclass
-class MockRuntime:
-    application: MockApplication
-
-
 FIXED_INVALID_REQUEST_ID = uuid4()
 
 
@@ -126,14 +115,14 @@ async def test_invalid_inbound_produces_validation_error_and_closes(
     text_payload: str,
     expected_request_id: object,
 ) -> None:
-    runtime = MockRuntime(application=MockApplication())
+    application = MockApplication()
     fake = FakeWebSocket(
-        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_state=ApiState(application=application),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
     fake.queue_text(text_payload)
 
-    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    await _handle_chat_connection(fake, application, _default_settings())  # type: ignore[arg-type]
 
     errors = [item for item in fake.sent if item.get("type") == "error"]
     assert len(errors) == 1
@@ -185,9 +174,9 @@ async def test_one_shot_streams_tokens_then_completion_and_closes() -> None:
             assistant_message=assistant,
         )
 
-    runtime = MockRuntime(application=MockApplication(stream_message=stream_message))
+    application = MockApplication(stream_message=stream_message)
     fake = FakeWebSocket(
-        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_state=ApiState(application=application),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
     fake.queue_text(
@@ -202,7 +191,7 @@ async def test_one_shot_streams_tokens_then_completion_and_closes() -> None:
         )
     )
 
-    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    await _handle_chat_connection(fake, application, _default_settings())  # type: ignore[arg-type]
 
     types = [item["type"] for item in fake.sent]
     assert types == ["token", "message_completed"]
@@ -248,9 +237,9 @@ async def test_send_disconnect_after_token_closes_stream() -> None:
                 raise WebSocketDisconnect()
             await super().send_json(data)
 
-    runtime = MockRuntime(application=MockApplication(stream_message=stream_message))
+    application = MockApplication(stream_message=stream_message)
     fake = DisconnectingWebSocket(
-        api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+        api_state=ApiState(application=application),  # type: ignore[arg-type]
         api_settings=_default_settings(),
     )
     fake.queue_text(
@@ -265,7 +254,7 @@ async def test_send_disconnect_after_token_closes_stream() -> None:
         )
     )
 
-    await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+    await _handle_chat_connection(fake, application, _default_settings())  # type: ignore[arg-type]
     assert aclose_called.is_set()
     assert receive_cancelled.is_set()
 
@@ -349,15 +338,13 @@ async def test_active_protocol_abort_closes_without_terminal_event(
                 assert stream_closed.is_set()
                 await super().close(code=code)
 
-        runtime = MockRuntime(
-            application=MockApplication(stream_message=stream_message)
-        )
+        application = MockApplication(stream_message=stream_message)
         fake = ProtocolAbortWebSocket(
-            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_state=ApiState(application=application),  # type: ignore[arg-type]
             api_settings=_default_settings(),
         )
         fake.queue_text(first_payload)
-        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+        await _handle_chat_connection(fake, application, _default_settings())  # type: ignore[arg-type]
     else:
 
         async def stream_message(_command) -> AsyncIterator[object]:
@@ -378,11 +365,9 @@ async def test_active_protocol_abort_closes_without_terminal_event(
                 assert stream_closed.is_set()
                 await super().close(code=code)
 
-        runtime = MockRuntime(
-            application=MockApplication(stream_message=stream_message)
-        )
+        application = MockApplication(stream_message=stream_message)
         fake = ProtocolAbortWebSocket(
-            api_state=ApiState(runtime=runtime, ready=True),  # type: ignore[arg-type]
+            api_state=ApiState(application=application),  # type: ignore[arg-type]
             api_settings=_default_settings(),
         )
         fake.queue_text(first_payload)
@@ -404,7 +389,7 @@ async def test_active_protocol_abort_closes_without_terminal_event(
             return await real_wait(fs, *args, **kwargs)
 
         monkeypatch.setattr(asyncio, "wait", wait_both_ws_tasks)
-        await _handle_chat_connection(fake, runtime, _default_settings())  # type: ignore[arg-type]
+        await _handle_chat_connection(fake, application, _default_settings())  # type: ignore[arg-type]
 
     assert stream_closed.is_set()
     assert fake.closed is True

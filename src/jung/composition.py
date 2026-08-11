@@ -6,7 +6,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, nullcontext
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
@@ -14,7 +13,7 @@ from uuid import UUID, uuid4
 
 from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
-from jung.config import ApplicationSettings
+from jung.config import JungSettings
 from jung.diagnostics import (
     DiagnosticRecorder,
     _safe_exception_message,
@@ -72,12 +71,6 @@ def _record_cleanup_failure(
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ApplicationRuntime:
-    application: TherapyApplication
-    llm: OpenAICompatibleLLM
-
-
 def _default_now() -> datetime:
     return datetime.now(UTC)
 
@@ -103,10 +96,10 @@ def _preflight_json_schema_policies(
             response_format_for_mode(StructuredOutputMode.JSON_SCHEMA, output_type)
 
 
-def _secret_values(settings: ApplicationSettings) -> list[str]:
-    secrets = [settings.llm.api_key]
-    if settings.llm.default_headers:
-        secrets.extend(settings.llm.default_headers.values())
+def _secret_values(settings: JungSettings) -> list[str]:
+    secrets = [settings.llm_api_key]
+    if settings.llm_default_headers:
+        secrets.extend(settings.llm_default_headers.values())
     return [value for value in secrets if value]
 
 
@@ -233,14 +226,14 @@ def _selected_cleanup_error(
 
 @asynccontextmanager
 async def application_context(
-    settings: ApplicationSettings,
+    settings: JungSettings,
     *,
     now: Callable[[], datetime] | None = None,
     new_id: Callable[[], UUID] | None = None,
     llm_factory: (
         Callable[[AdapterConfig, DiagnosticRecorder | None], OpenAICompatibleLLM] | None
     ) = None,
-) -> AsyncIterator[ApplicationRuntime]:
+) -> AsyncIterator[TherapyApplication]:
     run_cm: Any
     if settings.debug_run_dir is not None:
         run_cm = DiagnosticRecorder(
@@ -259,17 +252,25 @@ async def application_context(
         cleanup_error: _ExcInfo | None = None
 
         try:
-            policies = build_model_policies(settings.llm)
+            policies = build_model_policies(
+                default_model=settings.model_name,
+                task_overrides=settings.llm_task_config,
+            )
             _preflight_json_schema_policies(policies)
             store = SQLiteStore(settings.database_path)
             await asyncio.to_thread(store.initialize)
             store_initialized = True
+            task_extra_body = {
+                task: override.extra_body
+                for task, override in settings.llm_task_config.items()
+                if override.extra_body
+            }
             adapter_config = AdapterConfig(
-                base_url=settings.llm.base_url,
-                api_key=settings.llm.api_key,
-                default_headers=settings.llm.default_headers,
-                extra_body=settings.llm.extra_body,
-                task_extra_body=settings.llm.task_extra_body,
+                base_url=settings.llm_base_url,
+                api_key=settings.llm_api_key,
+                default_headers=settings.llm_default_headers,
+                extra_body=settings.llm_extra_body,
+                task_extra_body=task_extra_body or None,
             )
             if llm_factory is not None:
                 llm = llm_factory(adapter_config, recorder)
@@ -311,12 +312,8 @@ async def application_context(
                 recorder=recorder,
             )
             await application.recover_on_startup()
-            runtime = ApplicationRuntime(
-                application=application,
-                llm=llm,
-            )
             try:
-                yield runtime
+                yield application
             except BaseException as exc:
                 primary = (exc, exc.__traceback__)
         except BaseException as exc:

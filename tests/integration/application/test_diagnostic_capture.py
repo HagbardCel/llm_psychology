@@ -14,14 +14,14 @@ from openai import AsyncOpenAI
 
 from jung import composition as composition_module
 from jung.composition import application_context
-from jung.config import ApplicationSettings
 from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.models import MessageRole, Profile
 from jung.domain.results import ChatFailed
-from jung.llm.gateway import AdapterConfig, LLMSettings
+from jung.llm.gateway import AdapterConfig
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.persistence.sqlite_store import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
+from tests.support.settings import make_test_settings
 
 from .application_fixtures import collect_stream
 
@@ -74,14 +74,12 @@ def _llm_factory(
     return factory
 
 
-def _settings(tmp_path: Path, *, run_dir: Path) -> ApplicationSettings:
-    return ApplicationSettings(
-        database_path=tmp_path / "composition.db",
-        llm=LLMSettings(
-            default_model="test-model",
-            base_url="http://testserver/v1",
-            api_key="test-key",
-        ),
+def _settings(tmp_path: Path, *, run_dir: Path):
+    return make_test_settings(
+        data_dir=tmp_path,
+        model_name="test-model",
+        llm_base_url="http://testserver/v1",
+        llm_api_key="test-key",
         shutdown_timeout_seconds=5.0,
         debug_run_dir=run_dir,
     )
@@ -103,13 +101,13 @@ async def test_diagnostic_capture_success_snapshot(tmp_path: Path) -> None:
     settings = _settings(tmp_path, run_dir=run_dir)
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
-    ) as runtime:
-        await runtime.application.update_profile(
+    ) as application:
+        await application.update_profile(
             UpdateProfile(
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
-        session = (await runtime.application.get_snapshot()).active_session
+        session = (await application.get_snapshot()).active_session
         assert session is not None
         session_id = session.id
 
@@ -151,16 +149,16 @@ async def test_diagnostic_capture_double_structured_failure(tmp_path: Path) -> N
     client_message_id = uuid4()
     async with application_context(
         settings, llm_factory=_llm_factory(handler)
-    ) as runtime:
-        await runtime.application.update_profile(
+    ) as application:
+        await application.update_profile(
             UpdateProfile(
                 profile=Profile(name="Alex", primary_language="English"),
             )
         )
-        session = (await runtime.application.get_snapshot()).active_session
+        session = (await application.get_snapshot()).active_session
         assert session is not None
         items = await collect_stream(
-            runtime.application,
+            application,
             SendMessage(
                 session_id=session.id,
                 client_message_id=client_message_id,
@@ -226,8 +224,8 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
         with pytest.raises(RuntimeError, match="sentinel-primary") as exc_info:
             async with application_context(
                 settings, llm_factory=_llm_factory(handler)
-            ) as runtime:
-                await runtime.application.update_profile(
+            ) as application:
+                await application.update_profile(
                     UpdateProfile(
                         profile=Profile(name="Alex", primary_language="English"),
                     )
@@ -237,8 +235,8 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
     else:
         async with application_context(
             settings, llm_factory=_llm_factory(handler)
-        ) as runtime:
-            await runtime.application.update_profile(
+        ) as application:
+            await application.update_profile(
                 UpdateProfile(
                     profile=Profile(name="Alex", primary_language="English"),
                 )

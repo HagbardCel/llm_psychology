@@ -28,9 +28,10 @@ from jung.api.contracts import (
     normalize_public_error_code,
     to_message_response,
 )
-from jung.api.deps import ApiNotReady, ApiRuntime, get_websocket_runtime
+from jung.api.deps import ApiNotReady, get_websocket_application
 from jung.api.errors import new_request_id, to_error_envelope
-from jung.api.settings import ApiSettings
+from jung.application import TherapyApplication
+from jung.config import JungSettings
 from jung.diagnostics import diagnostic_context
 from jung.domain.commands import SendMessage
 from jung.domain.errors import DomainError
@@ -97,13 +98,13 @@ def _log_command_rejected(
         logger.info("websocket_command_rejected", extra=fields)
 
 
-def _origin_is_allowed(websocket: WebSocket, settings: ApiSettings) -> bool:
+def _origin_is_allowed(websocket: WebSocket, settings: JungSettings) -> bool:
     origin = websocket.headers.get("origin")
     if origin is None:
         return True
     if origin == "null":
         return False
-    return origin in settings.allowed_origins
+    return origin in settings.api_allowed_origins
 
 
 def _parse_command(text: str) -> tuple[SendMessageCommand | None, UUID]:
@@ -160,25 +161,25 @@ def _to_server_event(item: ChatStreamResult) -> ServerEvent:
 
 @router.websocket("/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
-    settings: ApiSettings = websocket.app.state.api_settings
+    settings: JungSettings = websocket.app.state.api_settings
 
     if not _origin_is_allowed(websocket, settings):
         await websocket.close(code=1008)
         return
 
     try:
-        runtime = get_websocket_runtime(websocket.app.state.api)
+        application = get_websocket_application(websocket.app.state.api)
     except ApiNotReady:
         await websocket.close()
         return
 
-    await _handle_chat_connection(websocket, runtime, settings)
+    await _handle_chat_connection(websocket, application, settings)
 
 
 async def _handle_chat_connection(
     websocket: WebSocket,
-    runtime: ApiRuntime,
-    settings: ApiSettings,
+    application: TherapyApplication,
+    settings: JungSettings,
 ) -> None:
     connection_id = str(uuid4())
     await websocket.accept()
@@ -241,7 +242,7 @@ async def _handle_chat_connection(
 
         await _stream_one_command(
             websocket=websocket,
-            runtime=runtime,
+            application=application,
             command=command,
             connection_id=connection_id,
             send_event=send_event,
@@ -261,7 +262,7 @@ async def _handle_chat_connection(
 async def _stream_one_command(
     *,
     websocket: WebSocket,
-    runtime: ApiRuntime,
+    application: TherapyApplication,
     command: SendMessageCommand,
     connection_id: str,
     send_event,
@@ -280,7 +281,7 @@ async def _stream_one_command(
     ):
         preserve_cleanup_cancellation = False
         protocol_violation = False
-        stream = runtime.application.stream_message(domain_command)
+        stream = application.stream_message(domain_command)
         stream_iter = stream.__aiter__()
         receive_task: asyncio.Task[Any] | None = asyncio.create_task(
             websocket.receive(),

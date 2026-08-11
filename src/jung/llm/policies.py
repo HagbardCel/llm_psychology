@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
-from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
+from collections.abc import Mapping
+from typing import Annotated, Any
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
+
+from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 
 _DEFAULT_TEMPERATURES: dict[LLMTask, float] = {
     LLMTask.INTAKE_PATCH: 0.1,
@@ -25,23 +37,108 @@ _DEFAULT_STRUCTURED_MODES: dict[LLMTask, StructuredOutputMode] = {
 }
 
 
-def build_model_policies(settings: LLMSettings) -> dict[LLMTask, ModelPolicy]:
-    if not settings.default_model.strip():
+class TaskOverride(BaseModel):
+    """Per-task operator overrides; absence means no override."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+        allow_inf_nan=False,
+    )
+
+    model: str | None = None
+    temperature: Annotated[float, Field(ge=0, le=2)] | None = None
+    timeout_seconds: Annotated[float, Field(gt=0)] | None = None
+    max_completion_tokens: Annotated[StrictInt, Field(gt=0)] | None = None
+    structured_output_mode: StructuredOutputMode | None = None
+    extra_body: dict[str, object] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_nulls(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            for name, field_value in value.items():
+                if field_value is None:
+                    raise ValueError(f"{name} must not be null")
+        return value
+
+    @field_validator("temperature", "timeout_seconds", mode="before")
+    @classmethod
+    def require_json_number(cls, value: object) -> object:
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("must be a number")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("must be non-empty")
+        return value
+
+    @field_validator("extra_body")
+    @classmethod
+    def require_finite_extra_body(
+        cls,
+        value: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        if value is None:
+            return None
+        _assert_finite_json_numbers(value, path="extra_body")
+        return value
+
+
+def _assert_finite_json_numbers(value: object, *, path: str) -> None:
+    import math
+
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must be a finite number")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_finite_json_numbers(item, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_finite_json_numbers(item, path=f"{path}[{index}]")
+
+
+def build_model_policies(
+    *,
+    default_model: str,
+    task_overrides: Mapping[LLMTask, TaskOverride],
+) -> dict[LLMTask, ModelPolicy]:
+    if not default_model.strip():
         raise ValueError("default_model must be non-empty")
-    if not settings.base_url.strip():
-        raise ValueError("base_url must be non-empty")
 
     policies: dict[LLMTask, ModelPolicy] = {}
     for task in LLMTask:
-        model = (settings.task_models or {}).get(task, settings.default_model)
-        temperature = (settings.task_temperatures or {}).get(
-            task, _DEFAULT_TEMPERATURES[task]
+        override = task_overrides.get(task)
+        model = (
+            override.model
+            if override is not None and override.model is not None
+            else default_model
         )
-        timeout = (settings.task_timeouts or {}).get(task, _DEFAULT_TIMEOUTS[task])
-        mode = (settings.task_structured_modes or {}).get(
-            task, _DEFAULT_STRUCTURED_MODES[task]
+        temperature = (
+            override.temperature
+            if override is not None and override.temperature is not None
+            else _DEFAULT_TEMPERATURES[task]
         )
-        max_tokens = (settings.task_max_completion_tokens or {}).get(task)
+        timeout = (
+            override.timeout_seconds
+            if override is not None and override.timeout_seconds is not None
+            else _DEFAULT_TIMEOUTS[task]
+        )
+        mode = (
+            override.structured_output_mode
+            if override is not None and override.structured_output_mode is not None
+            else _DEFAULT_STRUCTURED_MODES[task]
+        )
+        max_tokens = override.max_completion_tokens if override is not None else None
         policies[task] = ModelPolicy(
             task=task,
             model=model,

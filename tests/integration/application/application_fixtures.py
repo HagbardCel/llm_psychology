@@ -18,8 +18,8 @@ from jung.domain.models import (
 )
 from jung.domain.results import ChatStreamResult
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
-from jung.llm.gateway import LLMSettings, LLMTask, ModelPolicy, StructuredOutputMode
-from jung.llm.policies import build_model_policies
+from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
+from jung.llm.policies import TaskOverride, build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
@@ -162,17 +162,21 @@ class TestApplicationRuntime:
 
 def _test_policies() -> dict[LLMTask, ModelPolicy]:
     return build_model_policies(
-        LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-            task_structured_modes={
-                LLMTask.INTAKE_PATCH: StructuredOutputMode.PROMPT,
-                LLMTask.ASSESSMENT: StructuredOutputMode.PROMPT,
-                LLMTask.POST_SESSION_ANALYSIS: StructuredOutputMode.PROMPT,
-                LLMTask.POST_SESSION_UPDATE: StructuredOutputMode.PROMPT,
-            },
-        )
+        default_model="fake",
+        task_overrides={
+            LLMTask.INTAKE_PATCH: TaskOverride(
+                structured_output_mode=StructuredOutputMode.PROMPT,
+            ),
+            LLMTask.ASSESSMENT: TaskOverride(
+                structured_output_mode=StructuredOutputMode.PROMPT,
+            ),
+            LLMTask.POST_SESSION_ANALYSIS: TaskOverride(
+                structured_output_mode=StructuredOutputMode.PROMPT,
+            ),
+            LLMTask.POST_SESSION_UPDATE: TaskOverride(
+                structured_output_mode=StructuredOutputMode.PROMPT,
+            ),
+        },
     )
 
 

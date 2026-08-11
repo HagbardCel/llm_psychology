@@ -76,21 +76,6 @@ class AdapterConfig:
     task_extra_body: dict[LLMTask, dict[str, object]] | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class LLMSettings:
-    default_model: str
-    base_url: str
-    api_key: str
-    task_models: dict[LLMTask, str] | None = None
-    task_temperatures: dict[LLMTask, float] | None = None
-    task_timeouts: dict[LLMTask, float] | None = None
-    task_structured_modes: dict[LLMTask, StructuredOutputMode] | None = None
-    task_max_completion_tokens: dict[LLMTask, int] | None = None
-    extra_body: dict[str, object] | None = None
-    task_extra_body: dict[LLMTask, dict[str, object]] | None = None
-    default_headers: dict[str, str] | None = None
-
-
 class LLMGateway(Protocol):
     async def stream_text(
         self,

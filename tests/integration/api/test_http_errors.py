@@ -11,7 +11,7 @@ from httpx import AsyncClient
 
 from jung.api.app import create_app
 from jung.domain.errors import InvariantViolation
-from tests.support.api import runtime_factory
+from tests.support.api import application_factory
 
 
 def _assert_safe_error_log(
@@ -128,13 +128,13 @@ async def test_unexpected_exception_returns_sanitized_internal_error(
     secret = "secret internal detail"
     app = create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            application = app.state.api.runtime.application
+            application = app.state.api.application
 
             async def failing_get_snapshot():
                 raise RuntimeError(secret)
@@ -167,13 +167,13 @@ async def test_internal_domain_error_is_logged_and_sanitized(
     secret = "invariant secret detail"
     app = create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            application = app.state.api.runtime.application
+            application = app.state.api.application
 
             async def failing_get_snapshot():
                 raise InvariantViolation(secret)

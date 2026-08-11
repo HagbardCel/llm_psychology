@@ -8,18 +8,29 @@ from pathlib import Path
 import pytest
 
 from jung.composition import application_context
-from jung.config import ApplicationSettings, load_application_settings
 from jung.domain.models import Stage
 from jung.llm.fake import FakeLLM
-from jung.llm.gateway import AdapterConfig, LLMSettings, LLMTask
+from jung.llm.gateway import AdapterConfig, LLMTask
 from jung.llm.structured import UnsupportedStrictSchema
 from jung.phases.intake.models import IntakeRecordPatch
+from tests.support.settings import make_test_settings
 
 pytestmark = pytest.mark.asyncio
 
 
 def failing_load_styles() -> None:
     raise RuntimeError("boom")
+
+
+def _composition_settings(tmp_path: Path, **overrides: object):
+    return make_test_settings(
+        data_dir=tmp_path,
+        model_name="fake",
+        llm_base_url="http://fake.test",
+        llm_api_key="fake",
+        shutdown_timeout_seconds=2.0,
+        **overrides,
+    )
 
 
 async def test_application_context_smoke(
@@ -36,17 +47,9 @@ async def test_application_context_smoke(
             closed = True
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
-    settings = ApplicationSettings(
-        database_path=tmp_path / "composition.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
-    async with application_context(settings) as runtime:
-        snapshot = await runtime.application.get_snapshot()
+    settings = _composition_settings(tmp_path)
+    async with application_context(settings) as application:
+        snapshot = await application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
     assert closed is True
 
@@ -73,15 +76,7 @@ async def test_application_context_rejects_unsupported_schema(
         "jung.composition.OpenAICompatibleLLM",
         lambda *args, **kwargs: FakeLLM([]),
     )
-    settings = ApplicationSettings(
-        database_path=tmp_path / "composition-invalid.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
+    settings = _composition_settings(tmp_path)
     with pytest.raises(UnsupportedStrictSchema):
         async with application_context(settings):
             pass
@@ -103,15 +98,7 @@ async def test_application_context_closes_llm_when_load_styles_fails(
 
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", TrackingFakeLLM)
     monkeypatch.setattr("jung.composition.load_styles", failing_load_styles)
-    settings = ApplicationSettings(
-        database_path=tmp_path / "composition-load-styles.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
+    settings = _composition_settings(tmp_path)
     with pytest.raises(RuntimeError, match="boom"):
         async with application_context(settings):
             pass
@@ -140,15 +127,7 @@ async def test_application_context_closes_llm_when_recover_on_startup_fails(
         "jung.application.TherapyApplication.recover_on_startup",
         failing_recover_on_startup,
     )
-    settings = ApplicationSettings(
-        database_path=tmp_path / "composition-recover.db",
-        llm=LLMSettings(
-            default_model="fake",
-            base_url="http://fake.test",
-            api_key="fake",
-        ),
-        shutdown_timeout_seconds=2.0,
-    )
+    settings = _composition_settings(tmp_path)
     with pytest.raises(RuntimeError, match="recover failed"):
         async with application_context(settings):
             pass
@@ -160,6 +139,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_config: list[AdapterConfig] = []
+    captured_llms: list[object] = []
     observed_calls: list[tuple[object, bool, object | None]] = []
 
     class RecordingObservedGateway:
@@ -179,6 +159,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     class CapturingLLM(FakeLLM):
         def __init__(self, config: AdapterConfig, **kwargs: object) -> None:
             captured_config.append(config)
+            captured_llms.append(self)
             super().__init__([])
 
         async def aclose(self) -> None:
@@ -187,29 +168,23 @@ async def test_application_context_wires_loaded_llm_configuration(
     monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", CapturingLLM)
     monkeypatch.setattr("jung.composition.ObservedLLMGateway", RecordingObservedGateway)
 
-    settings = load_application_settings(
-        {
-            "JUNG_ENABLE_LLM_TRACING": "true",
-            "JUNG_LLM_DEFAULT_HEADERS_JSON": json.dumps(
-                {"X-Test-Header": "value"},
-            ),
-            "JUNG_LLM_EXTRA_BODY_JSON": json.dumps({"global_flag": True}),
-            "JUNG_LLM_TASK_CONFIG_JSON": json.dumps(
-                {
-                    "therapy_response": {
-                        "extra_body": {"task_flag": False},
-                    }
+    settings = _composition_settings(
+        tmp_path,
+        enable_llm_tracing=True,
+        llm_default_headers=json.dumps({"X-Test-Header": "value"}),
+        llm_extra_body=json.dumps({"global_flag": True}),
+        llm_task_config=json.dumps(
+            {
+                "therapy_response": {
+                    "extra_body": {"task_flag": False},
                 }
-            ),
-        },
-        database_path=tmp_path / "wired.db",
+            }
+        ),
     )
 
-    async with application_context(settings) as runtime:
-        raw_llm = runtime.llm
-        snapshot = await runtime.application.get_snapshot()
+    async with application_context(settings) as application:
+        snapshot = await application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
-        assert not hasattr(runtime, "recorder")
 
     assert len(captured_config) == 1
     config = captured_config[0]
@@ -217,7 +192,7 @@ async def test_application_context_wires_loaded_llm_configuration(
     assert config.extra_body == {"global_flag": True}
     assert config.task_extra_body == {LLMTask.THERAPY_RESPONSE: {"task_flag": False}}
     assert len(observed_calls) == 1
-    assert observed_calls[0][0] is raw_llm
+    assert observed_calls[0][0] is captured_llms[0]
     assert observed_calls[0][1] is True
     assert observed_calls[0][2] is None
 
@@ -231,11 +206,9 @@ async def test_application_context_rejects_forbidden_extra_body_before_readiness
 
     monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", fail_openai)
 
-    settings = load_application_settings(
-        {
-            "JUNG_LLM_EXTRA_BODY_JSON": json.dumps({"model": "override"}),
-        },
-        database_path=tmp_path / "forbidden.db",
+    settings = _composition_settings(
+        tmp_path,
+        llm_extra_body=json.dumps({"model": "override"}),
     )
 
     with pytest.raises(

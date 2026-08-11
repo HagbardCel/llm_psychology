@@ -9,7 +9,7 @@ import pytest
 from httpx import AsyncClient
 
 from jung.api.app import create_app
-from tests.support.api import runtime_factory
+from tests.support.api import application_factory
 
 
 @pytest.mark.asyncio
@@ -57,8 +57,7 @@ async def test_health_inside_lifespan_returns_healthy(
 
 @pytest.mark.asyncio
 async def test_api_state_initialized_at_construction(api_app) -> None:
-    assert api_app.state.api.ready is False
-    assert api_app.state.api.runtime is None
+    assert api_app.state.api.application is None
 
 
 @pytest.mark.asyncio
@@ -70,7 +69,7 @@ async def test_lifespan_logs_ready_and_shutdown_complete(
 ) -> None:
     app = create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
 
     with caplog.at_level(logging.INFO, logger="jung.api.app"):
@@ -87,7 +86,7 @@ async def test_failed_runtime_exit_does_not_log_shutdown_complete(
     api_settings,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    base_factory = runtime_factory(store, fake_llm)
+    base_factory = application_factory(store, fake_llm)
 
     @asynccontextmanager
     async def failing_exit_factory(settings):
@@ -97,7 +96,7 @@ async def test_failed_runtime_exit_does_not_log_shutdown_complete(
             finally:
                 raise RuntimeError("shutdown failed")
 
-    app = create_app(api_settings, runtime_factory=failing_exit_factory)
+    app = create_app(api_settings, application_factory=failing_exit_factory)
 
     with caplog.at_level(logging.INFO, logger="jung.api.app"):
         with pytest.raises(RuntimeError, match="shutdown failed"):
@@ -112,7 +111,5 @@ async def test_failed_runtime_exit_does_not_log_shutdown_complete(
 @pytest.mark.asyncio
 async def test_runtime_cleared_after_lifespan_exit(api_app) -> None:
     async with api_app.router.lifespan_context(api_app):
-        assert api_app.state.api.ready is True
-        assert api_app.state.api.runtime is not None
-    assert api_app.state.api.ready is False
-    assert api_app.state.api.runtime is None
+        assert api_app.state.api.application is not None
+    assert api_app.state.api.application is None

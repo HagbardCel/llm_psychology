@@ -18,8 +18,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from jung.api.app import create_app
-from jung.api.settings import ApiSettings
-from jung.config import ApplicationSettings, build_settings
+from jung.config import JungSettings
 from jung.llm.fake import Expectation, FakeLLM
 from jung.llm.gateway import ChatMessage, LLMTask, ModelPolicy
 from jung.persistence.sqlite_store import SQLiteStore
@@ -27,6 +26,7 @@ from tests.integration.application.application_fixtures import (
     TestApplicationRuntime,
     build_test_application,
 )
+from tests.support.settings import settings_for_database
 
 T = TypeVar("T", bound=object)
 
@@ -116,20 +116,18 @@ def create_test_api_app(
     *,
     store: SQLiteStore,
     fake_llm: RecordingFakeLLM,
-    api_settings: ApiSettings | None = None,
+    api_settings: JungSettings | None = None,
 ) -> TestApiApp:
-    settings = api_settings or ApiSettings(
-        application=build_settings(
-            database_path=store.database_path,
-            llm_base_url="http://fake.test/v1",
-            llm_api_key="fake",
-            default_model="fake",
-        ),
-        allowed_origins=("http://frontend.test",),
+    settings = api_settings or settings_for_database(
+        store.database_path,
+        llm_base_url="http://fake.test/v1",
+        llm_api_key="fake",
+        model_name="fake",
+        api_allowed_origins=("http://frontend.test",),
     )
     app = create_app(
         settings,
-        runtime_factory=runtime_factory(store, fake_llm),
+        application_factory=application_factory(store, fake_llm),
     )
     return TestApiApp(
         app=app,
@@ -150,7 +148,7 @@ def runtime_probe() -> RuntimeProbe:
 
 @pytest.fixture
 def store_path(tmp_path: Path) -> Path:
-    return tmp_path / "jung-test.db"
+    return tmp_path / "jung.db"
 
 
 @pytest.fixture
@@ -161,32 +159,30 @@ def store(store_path: Path) -> Iterator[SQLiteStore]:
 
 
 @pytest.fixture
-def api_settings(store_path: Path) -> ApiSettings:
-    return ApiSettings(
-        application=build_settings(
-            database_path=store_path,
-            llm_base_url="http://fake.test/v1",
-            llm_api_key="fake",
-            default_model="fake",
-        ),
-        allowed_origins=("http://frontend.test",),
+def api_settings(store_path: Path) -> JungSettings:
+    return settings_for_database(
+        store_path,
+        llm_base_url="http://fake.test/v1",
+        llm_api_key="fake",
+        model_name="fake",
+        api_allowed_origins=("http://frontend.test",),
     )
 
 
-def runtime_factory(
+def application_factory(
     store: SQLiteStore,
     fake_llm: FakeLLM | RecordingFakeLLM,
     runtime_probe: RuntimeProbe | None = None,
-) -> Callable[[ApplicationSettings], Any]:
+) -> Callable[[JungSettings], Any]:
     @asynccontextmanager
     async def factory(
-        _settings: ApplicationSettings,
+        _settings: JungSettings,
     ) -> AsyncIterator[object]:
         async with build_test_application(store, fake_llm) as runtime:
             if runtime_probe is not None:
                 runtime_probe.runtime = runtime
             try:
-                yield runtime
+                yield runtime.application
             finally:
                 if runtime_probe is not None:
                     runtime_probe.runtime = None
@@ -198,12 +194,12 @@ def runtime_factory(
 def api_app(
     store: SQLiteStore,
     fake_llm: FakeLLM,
-    api_settings: ApiSettings,
+    api_settings: JungSettings,
     runtime_probe: RuntimeProbe,
 ):
     return create_app(
         api_settings,
-        runtime_factory=runtime_factory(store, fake_llm, runtime_probe),
+        application_factory=application_factory(store, fake_llm, runtime_probe),
     )
 
 
