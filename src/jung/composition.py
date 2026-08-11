@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
 from uuid import UUID, uuid4
 
-from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
 from jung.config import JungSettings
 from jung.diagnostics import (
@@ -47,16 +46,11 @@ def _record_cleanup_failure(
     *,
     step: str,
     exc: BaseException,
-    selected_as_cleanup_error: bool,
-    discovered_while_draining: bool = False,
 ) -> None:
     logger.warning(
-        "runtime cleanup failed step=%s error_type=%s selected_as_cleanup_error=%s "
-        "discovered_while_draining=%s",
+        "runtime cleanup failed step=%s error_type=%s",
         step,
         type(exc).__name__,
-        selected_as_cleanup_error,
-        discovered_while_draining,
     )
     if recorder is not None:
         recorder.record(
@@ -65,8 +59,6 @@ def _record_cleanup_failure(
                 "phase": f"cleanup:{step}",
                 "error_type": type(exc).__name__,
                 "error_message": _safe_exception_message(exc),
-                "selected_as_cleanup_error": selected_as_cleanup_error,
-                "discovered_while_draining": discovered_while_draining,
             },
         )
 
@@ -101,127 +93,6 @@ def _secret_values(settings: JungSettings) -> list[str]:
     if settings.llm_default_headers:
         secrets.extend(settings.llm_default_headers.values())
     return [value for value in secrets if value]
-
-
-async def _drain_cleanup_step(
-    awaitable: Awaitable[Any],
-    *,
-    on_drained_failure: Callable[[BaseException], None],
-) -> Any:
-    """Await cleanup work; record failures discovered while draining cancellation."""
-    owned_failure: list[BaseException] = []
-
-    async def _owned() -> Any:
-        try:
-            return await awaitable
-        except BaseException as exc:
-            owned_failure.append(exc)
-            raise
-
-    task = asyncio.ensure_future(_owned())
-    caller = asyncio.current_task()
-    cancels_before = caller.cancelling() if caller is not None else 0
-
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError as cancellation:
-        cancels_after = caller.cancelling() if caller is not None else 0
-        ambient_cancellation = cancels_after > cancels_before
-
-        if not ambient_cancellation and task.done() and task.cancelled():
-            # Cleanup operation itself was cancelled. Outer cleanup-precedence
-            # classifies this once (selected_as_cleanup_error, not drained).
-            if owned_failure:
-                raise owned_failure[0] from None
-            raise cancellation
-
-        drained_failure = await drain_cancelled_task(task)
-        if drained_failure is not None:
-            on_drained_failure(drained_failure)
-
-        raise cancellation
-
-
-async def _cleanup_application_runtime(
-    *,
-    recorder: DiagnosticRecorder | None,
-    llm: OpenAICompatibleLLM | None,
-    application: TherapyApplication | None,
-    primary: _ExcInfo | None,
-    cleanup_error: _ExcInfo | None,
-    shutdown_timeout_seconds: float,
-) -> tuple[_ExcInfo | None, _ExcInfo | None]:
-    if application is not None:
-        try:
-            await _drain_cleanup_step(
-                application.shutdown(timeout_seconds=shutdown_timeout_seconds),
-                on_drained_failure=lambda exc: _record_cleanup_failure(
-                    recorder,
-                    step="application.shutdown",
-                    exc=exc,
-                    selected_as_cleanup_error=False,
-                    discovered_while_draining=True,
-                ),
-            )
-        except BaseException as exc:
-            selected_as_cleanup_error = _selected_cleanup_error(
-                exc,
-                primary=primary,
-                cleanup_error=cleanup_error,
-            )
-            if selected_as_cleanup_error:
-                cleanup_error = (exc, exc.__traceback__)
-            _record_cleanup_failure(
-                recorder,
-                step="application.shutdown",
-                exc=exc,
-                selected_as_cleanup_error=selected_as_cleanup_error,
-            )
-
-    if llm is not None:
-        try:
-            await _drain_cleanup_step(
-                llm.aclose(),
-                on_drained_failure=lambda exc: _record_cleanup_failure(
-                    recorder,
-                    step="llm.aclose",
-                    exc=exc,
-                    selected_as_cleanup_error=False,
-                    discovered_while_draining=True,
-                ),
-            )
-        except BaseException as exc:
-            selected_as_cleanup_error = _selected_cleanup_error(
-                exc,
-                primary=primary,
-                cleanup_error=cleanup_error,
-            )
-            if selected_as_cleanup_error:
-                cleanup_error = (exc, exc.__traceback__)
-            _record_cleanup_failure(
-                recorder,
-                step="llm.aclose",
-                exc=exc,
-                selected_as_cleanup_error=selected_as_cleanup_error,
-            )
-
-    return primary, cleanup_error
-
-
-def _selected_cleanup_error(
-    exc: BaseException,
-    *,
-    primary: _ExcInfo | None,
-    cleanup_error: _ExcInfo | None,
-) -> bool:
-    """Whether this failure should become the selected cleanup exception.
-
-    Ambient cancellation during cleanup only becomes the selected cleanup error
-    when there is no runtime primary and no earlier cleanup failure.
-    """
-    if isinstance(exc, asyncio.CancelledError):
-        return primary is None and cleanup_error is None
-    return cleanup_error is None
 
 
 @asynccontextmanager
@@ -320,14 +191,32 @@ async def application_context(
             if primary is None:
                 primary = (exc, exc.__traceback__)
         finally:
-            primary, cleanup_error = await _cleanup_application_runtime(
-                recorder=recorder,
-                llm=llm,
-                application=application,
-                primary=primary,
-                cleanup_error=cleanup_error,
-                shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
-            )
+            if application is not None:
+                try:
+                    await application.shutdown(
+                        timeout_seconds=settings.shutdown_timeout_seconds
+                    )
+                except BaseException as exc:
+                    if primary is None and cleanup_error is None:
+                        cleanup_error = (exc, exc.__traceback__)
+                    _record_cleanup_failure(
+                        recorder,
+                        step="application.shutdown",
+                        exc=exc,
+                    )
+
+            if llm is not None:
+                try:
+                    await llm.aclose()
+                except BaseException as exc:
+                    if primary is None and cleanup_error is None:
+                        cleanup_error = (exc, exc.__traceback__)
+                    _record_cleanup_failure(
+                        recorder,
+                        step="llm.aclose",
+                        exc=exc,
+                    )
+
             if recorder is not None and store is not None and store_initialized:
                 try:
                     # Synchronous by design: shutdown-only; avoid to_thread

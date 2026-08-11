@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from jung.diagnostics import DiagnosticRecorder
 from jung._application.operations import OperationRuntime
+from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import (
     EndSession,
     SendMessage,

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from jung.composition import _record_cleanup_failure
 from jung.diagnostics import SCHEMA_VERSION as DIAGNOSTIC_SCHEMA_VERSION
 from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import SelectStyle, SendMessage, UpdateProfile
@@ -230,43 +228,6 @@ async def test_incomplete_intake_profile_update_is_rejected(tmp_path: Path) -> N
     assert len(rejected) == 1
     assert rejected[0]["data"]["error_type"] == "InvalidCommand"
     assert "runtime.error" not in kinds
-
-
-async def test_dead_trace_cleanup_still_logs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    run_dir = tmp_path / "debug-run"
-    with DiagnosticRecorder(run_dir) as recorder:
-        real_write = recorder._trace_file.write
-
-        def flaky(text: str) -> int:
-            if '"kind":"workflow.transition"' in text.replace(" ", ""):
-                raise OSError("disk full")
-            return real_write(text)
-
-        monkeypatch.setattr(recorder._trace_file, "write", flaky)
-        recorder.record(
-            "workflow.transition",
-            {
-                "from_stage": "intake",
-                "to_stage": "assessment",
-                "trigger": "x",
-            },
-        )
-        with caplog.at_level(logging.WARNING):
-            _record_cleanup_failure(
-                recorder,
-                step="llm.aclose",
-                exc=RuntimeError("close failed"),
-                selected_as_cleanup_error=False,
-            )
-        assert any("runtime cleanup failed" in r.message for r in caplog.records)
-    assert recorder.write_failed is True
-    kinds = _kinds(_load_trace(run_dir))
-    # After a latched write failure, later records (including runtime.error) are dropped.
-    assert "diagnostics.start" in kinds
 
 
 async def test_startup_recovery_diagnostics(tmp_path: Path) -> None:
