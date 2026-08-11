@@ -19,13 +19,13 @@ tests/
 │   ├── application/         # Application invariants and worker-error classification
 │   ├── phases/              # intake / assessment / therapy / post_session logic
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
-│   ├── client/              # Console rendering, one-shot chat stream, correlation
-│   ├── api/                 # Contracts, error mapping, one-shot WS adapter
+│   ├── client/              # Console rendering, NDJSON chat stream, correlation
+│   ├── api/                 # Contracts, error mapping, HTTP chat stream
 │   └── smoke/               # Unit tests for the smoke helpers themselves
 ├── integration/             # Real SQLite, real ASGI app, real client transport
 │   ├── store/               # SQLite persistence semantics
 │   ├── application/         # Use cases over a real store with fake LLMs
-│   ├── api/                 # HTTP + WebSocket over the real app
+│   ├── api/                 # HTTP (including NDJSON chat) over the real app
 │   └── client/              # jung-console API client against the real app
 ├── e2e/                     # Deterministic jung-console workflow probe
 └── smoke/                   # Opt-in local-model compatibility (make smoke-local-llm)
@@ -49,7 +49,7 @@ proves only that the invariant survives its own boundary.**
 
 An owning layer enumerates the cases: edge values, error branches, ordering,
 concurrency, malformed input. A higher layer takes one representative case and
-asserts that its boundary (SQL, use case, HTTP/WS, transport, terminal) does
+asserts that its boundary (SQL, use case, HTTP, transport, terminal) does
 not lose or corrupt the behavior. If a test at a higher layer is re-deriving
 the case matrix of a lower layer, it belongs one layer down.
 
@@ -73,7 +73,7 @@ a positive inventory, or a prove-gone tombstone? Delete only the third category.
 
 | Invariant | Exhaustive owner | Higher layers |
 | --- | --- | --- |
-| Chat message idempotency / unanswered retry | `integration/store/test_store_chat.py` — `(session_id, client_message_id, role)` uniqueness, unanswered-user guards, assistant attach | `stream_message` cases in `integration/application/test_application_chat.py`; one-shot WS round-trip in `integration/api/test_websocket_chat.py` and `JungChatConnection.stream` in `integration/client/`; one journey step in `e2e/` |
+| Chat message idempotency / unanswered retry | `integration/store/test_store_chat.py` — `(session_id, client_message_id, role)` uniqueness, unanswered-user guards, assistant attach | `stream_message` cases in `integration/application/test_application_chat.py`; NDJSON round-trip in `integration/api/test_chat_stream.py` and `JungApiClient.stream_message` in `integration/client/`; one journey step in `e2e/` |
 | Error sanitization | `unit/application/test_invariants.py` (`_classify_work_error`) and `unit/api/test_error_mapping.py` | `integration/api/test_http_errors.py` asserts the wire response carries the public code and no internals |
 | Generated HTTP schema and route surface | `integration/api/test_openapi.py` — operation inventory, common headers/error responses, snapshot response types, docs exposure | none; the generated schema is itself the boundary |
 | SQLite schema/CHECK/singleton constraints | `integration/store/test_store_schema.py` — fresh/current init, CHECK constraints, singleton indexes | `integration/store/test_store_chat.py` for message idempotency semantics |

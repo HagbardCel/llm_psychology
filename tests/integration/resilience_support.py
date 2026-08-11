@@ -55,7 +55,7 @@ def style_selection_projection(
 
 
 def expected_style_options_response() -> StyleOptionsResponse:
-    from jung.api.contracts import to_style_options_response
+    from jung.api.mapping import to_style_options_response
     from jung.domain.results import StyleOptions, StyleRecommendationView, StyleSummary
     from jung.styles import load_styles
     from tests.integration.application.application_fixtures import assessment_result

@@ -108,7 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--transport-timeout",
         type=float,
         default=None,
-        help="HTTP/WebSocket transport timeout in seconds",
+        help="HTTP transport timeout in seconds",
     )
     return parser
 

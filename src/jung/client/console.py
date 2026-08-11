@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from jung.api.contracts import (
     AppSnapshotResponse,
@@ -25,7 +25,6 @@ from jung.api.contracts import (
 from jung.client.api_client import (
     JungApiClient,
     JungApiError,
-    JungConnectionClosed,
     JungProtocolError,
     JungTransportError,
     ProtocolErrorKind,
@@ -442,28 +441,30 @@ class ConsoleApp:
                 expected_model="active session for chat",
             )
         self._observer.record("user_message", content=content)
-        command = self._client.new_message_command(
-            session.id,
-            content,
-            client_message_id=client_message_id,
-        )
+        client_message_id = client_message_id or uuid4()
+        request_id = uuid4()
         self._observer.record(
             "chat_send",
-            session_id=str(command.session_id),
-            client_message_id=str(command.client_message_id),
-            request_id=str(command.request_id),
+            session_id=str(session.id),
+            client_message_id=str(client_message_id),
+            request_id=str(request_id),
         )
 
         render_state = ChatRenderState()
 
         try:
-            async with self._client.open_chat() as chat:
-                self._locally_submitted_client_ids.add(command.client_message_id)
+            async with self._client.stream_message(
+                session.id,
+                content,
+                client_message_id=client_message_id,
+                request_id=request_id,
+            ) as events:
+                self._locally_submitted_client_ids.add(client_message_id)
                 try:
-                    async for event in chat.stream(command):
+                    async for event in events:
                         if isinstance(event, TokenEvent):
                             self._append_token(render_state, event)
-                            self._observer.record("ws_event", type=event.type)
+                            self._observer.record("chat_event", type=event.type)
                             continue
 
                         if isinstance(event, MessageCompletedEvent):
@@ -478,7 +479,7 @@ class ConsoleApp:
                         if isinstance(event, ErrorEvent):
                             self._discard_partial(render_state)
                             self._locally_submitted_client_ids.discard(
-                                command.client_message_id
+                                client_message_id
                             )
                             self._output.render_command_rejection(event.error)
                             return await self._client.get_state()
@@ -490,11 +491,16 @@ class ConsoleApp:
                 except asyncio.CancelledError:
                     self._discard_partial(render_state)
                     raise
-                except (JungConnectionClosed, JungTransportError):
+                except JungTransportError:
                     self._discard_partial(render_state)
                     return await self._client.get_state()
+                except JungProtocolError as exc:
+                    if exc.kind is ProtocolErrorKind.INCOMPLETE_STREAM:
+                        self._discard_partial(render_state)
+                        return await self._client.get_state()
+                    raise
         except JungTransportError:
-            self._locally_submitted_client_ids.discard(command.client_message_id)
+            self._locally_submitted_client_ids.discard(client_message_id)
             raise
 
         raise JungProtocolError(
@@ -543,7 +549,7 @@ class ConsoleApp:
         )
         self._locally_submitted_client_ids.discard(completion.client_message_id)
         self._observer.record(
-            "ws_event",
+            "chat_event",
             type=completion.type,
             client_message_id=str(completion.client_message_id),
         )

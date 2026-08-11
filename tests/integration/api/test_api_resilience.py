@@ -63,7 +63,7 @@ async def test_assessment_failure_retry_preserves_operation_identity(
     )
     test_app = create_test_api_app(store=store, fake_llm=recording)
 
-    async with run_uvicorn_api(test_app.app) as (http_base, _ws_url):
+    async with run_uvicorn_api(test_app.app) as http_base:
         async with JungApiClient(ClientSettings(http_base)) as client:
             await wait_for_health(client)
             failed = await wait_for_snapshot(
@@ -129,7 +129,7 @@ async def test_completed_work_survives_server_restart_without_recomputation(
     )
     server_a = create_test_api_app(store=store, fake_llm=server_a_recording)
 
-    async with run_uvicorn_api(server_a.app) as (http_base_a, _ws_url):
+    async with run_uvicorn_api(server_a.app) as http_base_a:
         async with JungApiClient(ClientSettings(http_base_a)) as client_a:
             await wait_for_health(client_a)
             snapshot_a = await wait_for_snapshot(
@@ -145,7 +145,7 @@ async def test_completed_work_survives_server_restart_without_recomputation(
     server_b_recording = RecordingFakeLLM(FakeLLM(()))
     server_b = create_test_api_app(store=store, fake_llm=server_b_recording)
 
-    async with run_uvicorn_api(server_b.app) as (http_base_b, _ws_url):
+    async with run_uvicorn_api(server_b.app) as http_base_b:
         async with JungApiClient(ClientSettings(http_base_b)) as client_b:
             await wait_for_health(client_b)
             snapshot_b = await client_b.get_state()
@@ -184,7 +184,7 @@ async def test_stale_running_operation_recovers_on_startup(
     )
     test_app = create_test_api_app(store=store, fake_llm=recording)
 
-    async with run_uvicorn_api(test_app.app) as (http_base, _ws_url):
+    async with run_uvicorn_api(test_app.app) as http_base:
         async with JungApiClient(ClientSettings(http_base)) as client:
             await wait_for_health(client)
             snapshot = await wait_for_snapshot(

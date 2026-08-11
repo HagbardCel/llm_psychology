@@ -32,9 +32,9 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_typed_reads_profile_update_and_session_history(
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     async with JungApiClient(ClientSettings(http_base)) as client:
         initial = await client.get_state()
         profile = await client.get_profile()
@@ -68,9 +68,9 @@ async def test_typed_reads_profile_update_and_session_history(
 
 async def test_select_style_start_and_end_methods_use_exact_contracts(
     store: SQLiteStore,
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -107,9 +107,9 @@ async def test_select_style_start_and_end_methods_use_exact_contracts(
 
 async def test_retry_current_operation_and_typed_not_found(
     store: SQLiteStore,
-    uvicorn_api_urls,
+    uvicorn_api_url,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -140,10 +140,10 @@ async def test_retry_current_operation_and_typed_not_found(
 
 
 async def test_one_shot_chat_stream_decodes_typed_events(
-    uvicorn_api_urls,
+    uvicorn_api_url,
     fake_llm: FakeLLM,
 ) -> None:
-    http_base, _ws_url = uvicorn_api_urls
+    http_base = uvicorn_api_url
     fake_llm._expectations = list(intake_message_expectations("assistant reply"))
 
     async with JungApiClient(ClientSettings(http_base)) as client:
@@ -153,40 +153,40 @@ async def test_one_shot_chat_stream_decodes_typed_events(
             )
         )
         assert state.active_session is not None
-        command = client.new_message_command(state.active_session.id, "hello")
+        session_id = state.active_session.id
+        client_message_id = uuid4()
+        request_id = uuid4()
 
         saw_token = False
-        async with client.open_chat() as chat:
-            async for event in chat.stream(command):
+        async with client.stream_message(
+            session_id,
+            "hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        ) as events:
+            async for event in events:
                 if isinstance(event, TokenEvent):
                     saw_token = True
-                    assert event.session_id == command.session_id
-                    assert event.client_message_id == command.client_message_id
-                    assert event.request_id == command.request_id
+                    assert event.session_id == session_id
+                    assert event.client_message_id == client_message_id
+                    assert event.request_id == request_id
                     continue
                 if isinstance(event, MessageCompletedEvent):
                     assert event.assistant_message.content == "assistant reply"
-                    assert event.client_message_id == command.client_message_id
+                    assert event.client_message_id == client_message_id
                     break
             else:
                 pytest.fail("expected MessageCompletedEvent")
         assert saw_token
 
-        async with client.open_chat() as chat:
-            async for event in chat.stream(
-                client.new_message_command(
-                    state.active_session.id,
-                    "hello",
-                    client_message_id=command.client_message_id,
-                )
-            ):
+        async with client.stream_message(
+            session_id,
+            "hello",
+            client_message_id=client_message_id,
+            request_id=uuid4(),
+        ) as events:
+            async for event in events:
                 if isinstance(event, MessageCompletedEvent):
                     break
             else:
                 pytest.fail("expected idempotent MessageCompletedEvent")
-            with pytest.raises(RuntimeError):
-                await anext(
-                    chat.stream(
-                        client.new_message_command(state.active_session.id, "again")
-                    )
-                )

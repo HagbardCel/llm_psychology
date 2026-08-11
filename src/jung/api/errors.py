@@ -19,6 +19,22 @@ from jung.domain.errors import (
     PersistenceFailure,
 )
 
+COMMON_ERROR_RESPONSES = {
+    422: {"model": ErrorResponse, "description": "Validation error"},
+    500: {"model": ErrorResponse, "description": "Unexpected server error"},
+    503: {"model": ErrorResponse, "description": "Service not ready"},
+}
+
+CONFLICT_RESPONSES = {
+    **COMMON_ERROR_RESPONSES,
+    409: {"model": ErrorResponse, "description": "Command rejected"},
+}
+
+NOT_FOUND_RESPONSES = {
+    **COMMON_ERROR_RESPONSES,
+    404: {"model": ErrorResponse, "description": "Resource not found"},
+}
+
 
 class RequestIdError(ValueError):
     """Raised when a supplied request ID header is malformed."""

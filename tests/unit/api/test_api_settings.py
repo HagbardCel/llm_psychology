@@ -22,8 +22,6 @@ API_ENV_NAMES = (
     "JUNG_API_LOG_LEVEL",
     "JUNG_API_ALLOWED_ORIGINS",
     "JUNG_API_ALLOW_REMOTE_BIND",
-    "JUNG_WS_SEND_TIMEOUT",
-    "JUNG_WS_CLOSE_TIMEOUT",
     "JUNG_SHUTDOWN_TIMEOUT",
     "JUNG_ENABLE_LLM_TRACING",
     "JUNG_DEBUG_RUN_DIR",
@@ -107,10 +105,6 @@ def test_origins_deduplicated() -> None:
         {"api_port": 0},
         {"api_port": 65536},
         {"api_port": True},
-        {"websocket_send_timeout": 0},
-        {"websocket_close_timeout": -1},
-        {"websocket_send_timeout": float("nan")},
-        {"websocket_close_timeout": float("inf")},
     ],
 )
 def test_rejects_invalid_api_scalars(kwargs: dict[str, object]) -> None:
@@ -195,36 +189,3 @@ def test_load_settings_delegates_composition_settings(
     monkeypatch.setenv("JUNG_SHUTDOWN_TIMEOUT", "42")
     settings = JungSettings(_env_file=None)
     assert settings.shutdown_timeout_seconds == 42.0
-
-
-def test_load_settings_websocket_timeout_overrides(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("JUNG_WS_SEND_TIMEOUT", "12.5")
-    monkeypatch.setenv("JUNG_WS_CLOSE_TIMEOUT", "3")
-    settings = JungSettings(_env_file=None)
-    assert settings.websocket_send_timeout == 12.5
-    assert settings.websocket_close_timeout == 3.0
-
-
-@pytest.mark.parametrize(
-    ("env_name", "env_value"),
-    [
-        ("JUNG_WS_SEND_TIMEOUT", "not-a-float"),
-        ("JUNG_WS_SEND_TIMEOUT", "nan"),
-        ("JUNG_WS_CLOSE_TIMEOUT", "inf"),
-        ("JUNG_WS_CLOSE_TIMEOUT", "-inf"),
-    ],
-)
-def test_load_settings_rejects_invalid_websocket_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    env_name: str,
-    env_value: str,
-) -> None:
-    monkeypatch.setenv("JUNG_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv(env_name, env_value)
-    with pytest.raises(ValidationError):
-        JungSettings(_env_file=None)

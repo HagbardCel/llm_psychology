@@ -24,10 +24,6 @@ def get_application(request: Request) -> TherapyApplication:
     return get_application_from_state(request.app.state.api)
 
 
-def get_websocket_application(state: object) -> TherapyApplication:
-    return get_application_from_state(state)
-
-
 def build_error_response(*, status: int, body: ErrorResponse) -> JSONResponse:
     return JSONResponse(
         status_code=status,

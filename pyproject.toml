@@ -15,7 +15,6 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "httpx",
-    "websockets",
 ]
 
 [project.scripts]

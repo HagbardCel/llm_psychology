@@ -331,15 +331,6 @@ class JungSettings(BaseSettings):
         validation_alias="JUNG_API_ALLOW_REMOTE_BIND",
     )
 
-    websocket_send_timeout: PositiveFloat = Field(
-        default=5.0,
-        validation_alias="JUNG_WS_SEND_TIMEOUT",
-    )
-    websocket_close_timeout: PositiveFloat = Field(
-        default=2.0,
-        validation_alias="JUNG_WS_CLOSE_TIMEOUT",
-    )
-
     @property
     def database_path(self) -> Path:
         return self.data_dir / "jung.db"
@@ -353,8 +344,6 @@ class JungSettings(BaseSettings):
 
     @field_validator(
         "shutdown_timeout_seconds",
-        "websocket_send_timeout",
-        "websocket_close_timeout",
         mode="before",
     )
     @classmethod

@@ -28,6 +28,7 @@ EXPECTED_OPERATIONS = {
     ("get", "/api/v1/sessions/{session_id}"),
     ("post", "/api/v1/sessions/{session_id}/end"),
     ("post", "/api/v1/operations/current/retry"),
+    ("post", "/api/v1/chat"),
     ("get", "/api/v1/health"),
 }
 
@@ -131,6 +132,13 @@ def test_openapi_schema_property_inventories(api_app) -> None:
     select_style = components["SelectStyleRequest"]
     assert set(select_style["properties"]) == {"style_id"}
 
+    chat_request = components["ChatRequest"]
+    assert set(chat_request["properties"]) == {
+        "session_id",
+        "client_message_id",
+        "content",
+    }
+
     assert set(components["StyleOptionsResponse"]["properties"]) == {
         "styles",
         "recommendations",
@@ -146,6 +154,18 @@ def test_openapi_schema_property_inventories(api_app) -> None:
         "rationale",
         "key_topics",
     }
+
+
+def test_openapi_chat_stream_response_media_type(api_app) -> None:
+    schema = api_app.openapi()
+    operation = schema["paths"]["/api/v1/chat"]["post"]
+    assert "requestBody" in operation
+    request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["$ref"].endswith("ChatRequest")
+
+    content = operation["responses"]["200"]["content"]
+    assert "application/x-ndjson" in content
+    assert "application/json" not in content
 
 
 def test_openapi_bodyless_post_commands_have_no_request_body(api_app) -> None:

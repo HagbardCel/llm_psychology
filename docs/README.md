@@ -5,4 +5,4 @@
 - [Architecture](architecture.md) — runtime architecture, tech stack, and source layout
 - [Workflow Specification](workflow.md) — stages, recovery, and command-conflict semantics
 - [Database](database.md) — persistence model, invariants, and schema compatibility
-- [API v1 Contract](api-v1.md) — supported `/api/v1` HTTP semantics and WebSocket wire contract
+- [API v1 Contract](api-v1.md) — supported `/api/v1` HTTP semantics and NDJSON chat stream contract

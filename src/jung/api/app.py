@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -30,7 +29,6 @@ from jung.api.errors import (
     validation_error_response,
 )
 from jung.api.routes import router
-from jung.api.websocket import router as websocket_router
 from jung.application import TherapyApplication
 from jung.composition import application_context
 from jung.config import JungSettings, load_settings, validate_bind_host
@@ -110,32 +108,12 @@ def _register_exception_handlers(app: FastAPI) -> None:
         )
 
 
-def _log_http_completion(
-    request: Request,
-    response: Response,
-    *,
-    request_id: UUID,
-    started: float,
-) -> None:
-    logger.info(
-        "HTTP request completed",
-        extra={
-            "request_id": str(request_id),
-            "method": request.method,
-            "path": request.url.path,
-            "status": response.status_code,
-            "duration_ms": round((time.monotonic() - started) * 1000, 1),
-        },
-    )
-
-
 class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self,
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        started = time.monotonic()
         request_id = new_request_id()
 
         try:
@@ -163,12 +141,6 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 )
 
         response.headers["X-Request-ID"] = str(request_id)
-        _log_http_completion(
-            request,
-            response,
-            request_id=request_id,
-            started=started,
-        )
         return response
 
 
@@ -207,7 +179,6 @@ def create_app(
         openapi_url="/api/v1/openapi.json",
     )
     app.state.api = ApiState()
-    app.state.api_settings = settings
 
     _register_exception_handlers(app)
     app.add_middleware(RequestIdMiddleware)
@@ -223,7 +194,6 @@ def create_app(
         )
 
     app.include_router(router)
-    app.include_router(websocket_router)
     return app
 
 

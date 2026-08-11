@@ -309,7 +309,7 @@ async def _run_scenario(
     failure: BaseException | None = None
     try:
         async with asyncio.timeout(SCENARIO_TIMEOUT):
-            async with run_uvicorn_api(api_app) as (http_base, _ws_url):
+            async with run_uvicorn_api(api_app) as http_base:
                 try:
                     await _run_console(http_base, inputs, recorder)
                 except ConsoleExitRequested:

@@ -25,8 +25,6 @@ def make_test_settings(**overrides: object) -> JungSettings:
         "api_log_level": LogLevel.INFO,
         "api_allowed_origins": (),
         "api_allow_remote_bind": False,
-        "websocket_send_timeout": 5.0,
-        "websocket_close_timeout": 2.0,
     }
     values.update(overrides)
     return JungSettings(_env_file=None, **values)

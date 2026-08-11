@@ -1,9 +1,7 @@
-"""Async typed client for the local Jung HTTP and WebSocket API."""
+"""Async typed client for the local Jung HTTP API."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import math
 import re
 from collections.abc import AsyncIterator, Iterator
@@ -21,11 +19,10 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
 )
-from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from jung.api.contracts import (
     AppSnapshotResponse,
+    ChatRequest,
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
@@ -36,7 +33,6 @@ from jung.api.contracts import (
     ProfileResponse,
     ProfileUpdateRequest,
     SelectStyleRequest,
-    SendMessageCommand,
     ServerEvent,
     SessionHistoryResponse,
     SessionListResponse,
@@ -48,6 +44,7 @@ from jung.api.contracts import (
 
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+_NDJSON_MEDIA_TYPE = "application/x-ndjson"
 
 _ALLOWED_HTTP_ERROR_STATUSES: dict[ErrorCode, frozenset[int]] = {
     "invalid_command": frozenset({409}),
@@ -89,6 +86,12 @@ def _validated_timeout(value: float, *, name: str) -> float:
     return normalized
 
 
+def _normalized_media_type(content_type: str | None) -> str | None:
+    if content_type is None:
+        return None
+    return content_type.split(";", 1)[0].strip().lower()
+
+
 @dataclass(frozen=True, slots=True)
 class ClientSettings:
     base_url: str
@@ -107,8 +110,10 @@ class ProtocolErrorKind(StrEnum):
     REQUEST_ID_MISMATCH = "request_id_mismatch"
     UNEXPECTED_STATUS = "unexpected_status"
     ERROR_STATUS_CODE_MISMATCH = "error_status_code_mismatch"
-    INVALID_WEBSOCKET_FRAME = "invalid_websocket_frame"
+    INVALID_STREAM_RESPONSE = "invalid_stream_response"
+    INVALID_STREAM_EVENT = "invalid_stream_event"
     INVALID_SERVER_EVENT = "invalid_server_event"
+    INCOMPLETE_STREAM = "incomplete_stream"
     IMPOSSIBLE_HISTORY = "impossible_history"
 
 
@@ -186,19 +191,6 @@ class JungTransportError(JungClientError):
         super().__init__(f"Jung transport error during {operation}")
 
 
-class JungConnectionClosed(JungTransportError):
-    def __init__(self, *, code: int | None, reason: str | None) -> None:
-        self.code = code
-        self.reason = reason
-        super().__init__("WebSocket communication")
-
-    def __str__(self) -> str:
-        return f"Jung WebSocket connection closed code={self.code}"
-
-    def __repr__(self) -> str:
-        return f"JungConnectionClosed(code={self.code!r})"
-
-
 def _safe_location(location: tuple[Any, ...]) -> tuple[str | int, ...]:
     safe: list[str | int] = []
     for item in location:
@@ -239,146 +231,6 @@ def _nested_error_envelopes(value: object) -> Iterator[ErrorEnvelope]:
     if isinstance(value, (list, tuple)):
         for item in value:
             yield from _nested_error_envelopes(item)
-
-
-class JungChatConnection:
-    def __init__(self, websocket: ClientConnection) -> None:
-        self._websocket = websocket
-        self._used = False
-        self._unusable = False
-        self._close_attempted = False
-
-    def _ensure_open(self) -> None:
-        if self._unusable:
-            raise RuntimeError("chat connection is unusable")
-
-    async def stream(self, command: SendMessageCommand) -> AsyncIterator[ServerEvent]:
-        """One-shot stream: send command, yield events until terminal, then stop."""
-        self._ensure_open()
-        if self._used:
-            raise RuntimeError("chat connection already used")
-        self._used = True
-        try:
-            await self._websocket.send(command.model_dump_json())
-        except ConnectionClosed as exc:
-            self._unusable = True
-            raise JungConnectionClosed(code=exc.code, reason=exc.reason) from None
-        except (OSError, WebSocketException):
-            self._unusable = True
-            raise JungTransportError("WebSocket send") from None
-
-        while True:
-            try:
-                raw = await self._websocket.recv()
-            except ConnectionClosed as exc:
-                self._unusable = True
-                raise JungConnectionClosed(
-                    code=exc.code,
-                    reason=exc.reason,
-                ) from None
-            except (OSError, WebSocketException):
-                self._unusable = True
-                raise JungTransportError("WebSocket receive") from None
-
-            if not isinstance(raw, str):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
-                    expected_model="JSON text frame",
-                )
-            try:
-                payload = json.loads(raw)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_WEBSOCKET_FRAME,
-                    expected_model="ServerEvent",
-                ) from None
-            try:
-                event = ServerEventAdapter.validate_python(payload)
-            except ValidationError as exc:
-                issues = _sanitize_validation_issues(
-                    exc,
-                    expected_model="ServerEvent",
-                )
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="ServerEvent",
-                    issues=issues,
-                ) from None
-
-            self._validate_event_matches_command(command, event)
-
-            if isinstance(
-                event,
-                (MessageCompletedEvent, MessageFailedEvent, ErrorEvent),
-            ):
-                self._unusable = True
-                yield event
-                return
-            if isinstance(event, TokenEvent):
-                yield event
-                continue
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                expected_model="ServerEvent",
-            )
-
-    def _validate_event_matches_command(
-        self,
-        command: SendMessageCommand,
-        event: ServerEvent,
-    ) -> None:
-        if isinstance(event, ErrorEvent):
-            if event.request_id != command.request_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
-                    expected_model="ErrorEvent",
-                )
-            if event.session_id is not None and event.session_id != command.session_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="ErrorEvent",
-                )
-            if (
-                event.client_message_id is not None
-                and event.client_message_id != command.client_message_id
-            ):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model="ErrorEvent",
-                )
-            return
-
-        if isinstance(
-            event,
-            (TokenEvent, MessageCompletedEvent, MessageFailedEvent),
-        ):
-            if event.request_id != command.request_id:
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
-                    expected_model=type(event).__name__,
-                )
-            if (
-                event.session_id != command.session_id
-                or event.client_message_id != command.client_message_id
-            ):
-                raise JungProtocolError(
-                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
-                    expected_model=type(event).__name__,
-                )
-            return
-
-    async def aclose(self) -> None:
-        if self._close_attempted:
-            return
-        self._close_attempted = True
-        self._unusable = True
-        try:
-            await self._websocket.close()
-        except asyncio.CancelledError:
-            self._close_attempted = False
-            raise
-        except (OSError, WebSocketException):
-            return
 
 
 ServerEventAdapter = TypeAdapter(ServerEvent)
@@ -430,24 +282,12 @@ class JungApiClient:
     def _url(self, route: str) -> httpx.URL:
         return self._base_url.join(route.removeprefix("/"))
 
-    def _websocket_url(self) -> str:
-        scheme = "wss" if self._base_url.scheme == "https" else "ws"
-        return str(self._base_url.copy_with(scheme=scheme).join("api/v1/chat"))
-
-    def new_message_command(
-        self,
-        session_id: UUID,
-        content: str,
-        *,
-        client_message_id: UUID | None = None,
-        request_id: UUID | None = None,
-    ) -> SendMessageCommand:
-        return SendMessageCommand(
-            type="send_message",
-            session_id=session_id,
-            client_message_id=client_message_id or uuid4(),
-            request_id=request_id or uuid4(),
-            content=content,
+    def _stream_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            connect=self._transport_timeout,
+            read=None,
+            write=self._transport_timeout,
+            pool=self._transport_timeout,
         )
 
     def _response_request_id(
@@ -482,14 +322,15 @@ class JungApiClient:
 
     def _decode_model(
         self,
-        response: httpx.Response,
+        content: bytes,
         model: type[_ModelT],
         *,
         kind: ProtocolErrorKind,
         route: str,
+        status: int,
     ) -> _ModelT:
         try:
-            return model.model_validate_json(response.content)
+            return model.model_validate_json(content)
         except ValidationError as exc:
             issues = _sanitize_validation_issues(
                 exc,
@@ -498,7 +339,7 @@ class JungApiClient:
             raise JungProtocolError(
                 kind=kind,
                 route=route,
-                status=response.status_code,
+                status=status,
                 expected_model=model.__name__,
                 issues=issues,
             ) from None
@@ -525,6 +366,64 @@ class JungApiClient:
                 kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
                 route=route,
                 status=status,
+            )
+
+    def _raise_http_error_response(
+        self,
+        *,
+        content: bytes,
+        status_code: int,
+        returned_request_id: UUID,
+        route: str,
+    ) -> None:
+        error_kind = (
+            ProtocolErrorKind.UNEXPECTED_STATUS
+            if 200 <= status_code < 300
+            else ProtocolErrorKind.INVALID_ERROR_BODY
+        )
+        error = self._decode_model(
+            content,
+            ErrorResponse,
+            kind=error_kind,
+            route=route,
+            status=status_code,
+        )
+        self._validate_nested_request_ids(
+            error,
+            request_id=returned_request_id,
+            route=route,
+            status=status_code,
+        )
+        allowed_statuses = _ALLOWED_HTTP_ERROR_STATUSES.get(error.code)
+        if allowed_statuses is None or status_code not in allowed_statuses:
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
+                route=route,
+                status=status_code,
+                expected_model=f"error code {error.code!r}",
+            )
+        raise JungApiError(status=status_code, error=error)
+
+    def _validate_event_matches_request(
+        self,
+        *,
+        session_id: UUID,
+        client_message_id: UUID,
+        request_id: UUID,
+        event: ServerEvent,
+    ) -> None:
+        if event.request_id != request_id:
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.REQUEST_ID_MISMATCH,
+                expected_model=type(event).__name__,
+            )
+        if (
+            event.session_id != session_id
+            or event.client_message_id != client_message_id
+        ):
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                expected_model=type(event).__name__,
             )
 
     async def _request(
@@ -555,10 +454,11 @@ class JungApiClient:
         )
         if response.status_code == expected_status:
             decoded = self._decode_model(
-                response,
+                response.content,
                 response_model,
                 kind=ProtocolErrorKind.INVALID_RESPONSE_BODY,
                 route=route,
+                status=response.status_code,
             )
             self._validate_nested_request_ids(
                 decoded,
@@ -568,32 +468,12 @@ class JungApiClient:
             )
             return decoded
 
-        error_kind = (
-            ProtocolErrorKind.UNEXPECTED_STATUS
-            if 200 <= response.status_code < 300
-            else ProtocolErrorKind.INVALID_ERROR_BODY
-        )
-        error = self._decode_model(
-            response,
-            ErrorResponse,
-            kind=error_kind,
+        self._raise_http_error_response(
+            content=response.content,
+            status_code=response.status_code,
+            returned_request_id=returned_request_id,
             route=route,
         )
-        self._validate_nested_request_ids(
-            error,
-            request_id=returned_request_id,
-            route=route,
-            status=response.status_code,
-        )
-        allowed_statuses = _ALLOWED_HTTP_ERROR_STATUSES.get(error.code)
-        if allowed_statuses is None or response.status_code not in allowed_statuses:
-            raise JungProtocolError(
-                kind=ProtocolErrorKind.ERROR_STATUS_CODE_MISMATCH,
-                route=route,
-                status=response.status_code,
-                expected_model=f"error code {error.code!r}",
-            )
-        raise JungApiError(status=response.status_code, error=error)
 
     async def get_state(self) -> AppSnapshotResponse:
         return await self._request(
@@ -693,21 +573,121 @@ class JungApiClient:
         )
 
     @asynccontextmanager
-    async def open_chat(self) -> AsyncIterator[JungChatConnection]:
+    async def stream_message(
+        self,
+        session_id: UUID,
+        content: str,
+        *,
+        client_message_id: UUID,
+        request_id: UUID,
+    ) -> AsyncIterator[AsyncIterator[ServerEvent]]:
         self._ensure_open()
-        try:
-            websocket = await connect(
-                self._websocket_url(),
-                open_timeout=self._transport_timeout,
-                close_timeout=self._transport_timeout,
-            )
-        except asyncio.CancelledError:
-            raise
-        except (TimeoutError, OSError, WebSocketException):
-            raise JungTransportError("WebSocket handshake") from None
+        route = "/api/v1/chat"
+        body = ChatRequest(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            content=content,
+        )
 
-        chat = JungChatConnection(websocket)
         try:
-            yield chat
-        finally:
-            await chat.aclose()
+            async with self._http.stream(
+                "POST",
+                self._url(route),
+                headers={
+                    "X-Request-ID": str(request_id),
+                    "Accept": _NDJSON_MEDIA_TYPE,
+                },
+                json=body.model_dump(mode="json"),
+                timeout=self._stream_timeout(),
+            ) as response:
+                returned_request_id = self._response_request_id(
+                    response,
+                    sent_request_id=request_id,
+                    route=route,
+                )
+                if response.status_code == 200:
+                    if (
+                        _normalized_media_type(response.headers.get("content-type"))
+                        != _NDJSON_MEDIA_TYPE
+                    ):
+                        raise JungProtocolError(
+                            kind=ProtocolErrorKind.INVALID_STREAM_RESPONSE,
+                            route=route,
+                            status=response.status_code,
+                            expected_model=_NDJSON_MEDIA_TYPE,
+                        )
+
+                    async def events() -> AsyncIterator[ServerEvent]:
+                        try:
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    continue
+                                try:
+                                    event = ServerEventAdapter.validate_json(line)
+                                except ValidationError as exc:
+                                    issues = _sanitize_validation_issues(
+                                        exc,
+                                        expected_model="ServerEvent",
+                                    )
+                                    raise JungProtocolError(
+                                        kind=ProtocolErrorKind.INVALID_STREAM_EVENT,
+                                        route=route,
+                                        expected_model="ServerEvent",
+                                        issues=issues,
+                                    ) from None
+
+                                self._validate_event_matches_request(
+                                    session_id=session_id,
+                                    client_message_id=client_message_id,
+                                    request_id=returned_request_id,
+                                    event=event,
+                                )
+
+                                if isinstance(
+                                    event,
+                                    (
+                                        MessageCompletedEvent,
+                                        MessageFailedEvent,
+                                        ErrorEvent,
+                                    ),
+                                ):
+                                    yield event
+                                    return
+                                if isinstance(event, TokenEvent):
+                                    yield event
+                                    continue
+                                raise JungProtocolError(
+                                    kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
+                                    route=route,
+                                    expected_model="ServerEvent",
+                                )
+                        except httpx.HTTPError:
+                            raise JungTransportError(
+                                f"HTTP POST {route} stream"
+                            ) from None
+
+                        raise JungProtocolError(
+                            kind=ProtocolErrorKind.INCOMPLETE_STREAM,
+                            route=route,
+                            expected_model="terminal ServerEvent",
+                        )
+
+                    yield events()
+                    return
+
+                if 200 <= response.status_code < 300:
+                    raise JungProtocolError(
+                        kind=ProtocolErrorKind.UNEXPECTED_STATUS,
+                        route=route,
+                        status=response.status_code,
+                    )
+
+                content_bytes = await response.aread()
+                self._raise_http_error_response(
+                    content=content_bytes,
+                    status_code=response.status_code,
+                    returned_request_id=returned_request_id,
+                    route=route,
+                )
+        except httpx.HTTPError:
+            raise JungTransportError(f"HTTP POST {route}") from None
