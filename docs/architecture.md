@@ -125,7 +125,7 @@ The application:
 - coordinates phase processors;
 - orchestrates use cases and selects workflow behavior (transition policy lives in workflow; SQL transaction boundaries live in `SQLiteStore`);
 - enforces server-side concurrency and idempotency;
-- owns and recovers at most one long-running assessment or post-session operation task;
+- owns and recovers at most one live owned asyncio operation task; `OperationRuntime` is not a queue or general-purpose scheduler;
 - streams chat generation on the calling connection through `stream_message`;
 - returns domain results, not HTTP/WebSocket payloads.
 
@@ -152,8 +152,9 @@ connection that issued `send_message`. That connection owns the stream:
   generation is active (conflicting workflow commands return `busy`).
 
 `TherapyApplication` schedules assessment and post-session operations as a
-single owned asyncio task. See [api-v1.md](api-v1.md) for the four-event
-WebSocket wire contract.
+single live owned asyncio task. Teardown rejects new work, waits a bounded
+interval for the currently owned operation task, then closes the LLM client.
+See [api-v1.md](api-v1.md) for the four-event WebSocket wire contract.
 
 No generic service locator or runtime string-based dependency lookup remains.
 

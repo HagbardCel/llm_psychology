@@ -72,11 +72,12 @@ PENDING → RUNNING → COMPLETE
 ```
 
 1. **Creation transaction**: persist workflow mutation, create `PENDING` operation keyed by `(kind, source_session_id)`.
-2. **Start**: the application marks `RUNNING` outside the acceptance transaction.
-3. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable.
-4. **Failure**: persist stable error code and retryability; leave stage unchanged.
-5. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
-6. **Idempotency**: `(kind, source_session_id)` is unique; duplicate acceptance returns the existing operation.
+2. **Runtime scheduling**: best-effort after durable acceptance; a `PENDING` operation remains authoritative and recoverable if immediate task creation is unavailable.
+3. **Start**: the application marks `RUNNING` outside the acceptance transaction.
+4. **Completion transaction**: validate structured result; atomically persist result artifacts, mark `COMPLETE`, advance stage when applicable.
+5. **Failure**: persist stable error code and retryability; leave stage unchanged.
+6. **Retry**: eligible only for `llm_unavailable`, `llm_timeout`, or classified transient infrastructure failures; increments attempt on the same operation row; never duplicates plan/result rows.
+7. **Idempotency**: `(kind, source_session_id)` is unique; duplicate acceptance returns the existing operation.
 
 ## Message-native chat
 
@@ -141,8 +142,8 @@ At startup, before accepting mutations:
 On shutdown:
 
 - stop accepting new commands;
-- wait a bounded interval for accepted **operation** work;
-- leave in-flight durable operations recoverable;
+- wait a bounded interval for the **currently owned operation task**;
+- leave any durable `PENDING`/in-flight operation recoverable for the next startup;
 - never mark an in-flight operation successful without validated completion;
 - in-flight chat is cancelled with its connection.
 

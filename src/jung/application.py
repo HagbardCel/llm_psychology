@@ -515,7 +515,7 @@ class TherapyApplication:
                 return snapshot
             finally:
                 if operation is not None:
-                    self._operations.schedule(operation)
+                    self._operations.schedule_retry(operation)
         except _COMMAND_REJECT_TYPES as exc:
             diag.record_command_rejected(self._recorder, "retry_operation", exc)
             raise
