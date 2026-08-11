@@ -11,6 +11,7 @@ from types import TracebackType
 from typing import Any
 from uuid import UUID, uuid4
 
+from jung._async_cleanup import drain_cancelled_task
 from jung.application import TherapyApplication
 from jung.config import JungSettings
 from jung.diagnostics import (
@@ -207,7 +208,20 @@ async def application_context(
 
             if llm is not None:
                 try:
-                    await llm.aclose()
+                    close_task = asyncio.ensure_future(llm.aclose())
+                    try:
+                        await asyncio.shield(close_task)
+                    except asyncio.CancelledError:
+                        drained = await drain_cancelled_task(close_task)
+                        if drained is not None and not isinstance(
+                            drained, asyncio.CancelledError
+                        ):
+                            _record_cleanup_failure(
+                                recorder,
+                                step="llm.aclose",
+                                exc=drained,
+                            )
+                        raise
                 except BaseException as exc:
                     if primary is None and cleanup_error is None:
                         cleanup_error = (exc, exc.__traceback__)

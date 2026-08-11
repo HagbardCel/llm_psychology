@@ -59,6 +59,7 @@ async def test_application_context_smoke(
     async with application_context(settings) as application:
         snapshot = await application.get_snapshot()
         assert snapshot.stage is Stage.SETUP
+    assert application.is_shutdown is True
     assert closed is True
 
 
@@ -257,11 +258,14 @@ async def test_primary_failure_wins_over_shutdown_failure(
             async with application_context(settings):
                 raise RuntimeError("body-A")
     assert llm_closed is True
-    assert any(
-        "runtime cleanup failed" in record.message
-        and "application.shutdown" in record.message
+    cleanup_messages = [
+        record.getMessage()
         for record in caplog.records
-    )
+        if "runtime cleanup failed" in record.getMessage()
+    ]
+    assert cleanup_messages
+    assert any("application.shutdown" in message for message in cleanup_messages)
+    assert all("shutdown-B" not in message for message in cleanup_messages)
 
 
 async def test_shutdown_failure_propagates_and_marks_diagnostics_end_failed(
@@ -295,10 +299,17 @@ async def test_shutdown_failure_propagates_and_marks_diagnostics_end_failed(
                 snapshot = await application.get_snapshot()
                 assert snapshot.stage is Stage.SETUP
     assert any(
-        "runtime cleanup failed" in record.message
-        and "application.shutdown" in record.message
+        "runtime cleanup failed" in record.getMessage()
+        and "application.shutdown" in record.getMessage()
         for record in caplog.records
     )
+    cleanup_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "runtime cleanup failed" in record.getMessage()
+    ]
+    assert cleanup_messages
+    assert all("shutdown-B" not in message for message in cleanup_messages)
     events = _load_trace(run_dir)
     end = next(event for event in events if event["kind"] == "diagnostics.end")
     assert end["data"]["status"] == "failed"
@@ -327,10 +338,14 @@ async def test_llm_close_failure_propagates(
             async with application_context(settings) as application:
                 snapshot = await application.get_snapshot()
                 assert snapshot.stage is Stage.SETUP
-    assert any(
-        "runtime cleanup failed" in record.message and "llm.aclose" in record.message
+    cleanup_messages = [
+        record.getMessage()
         for record in caplog.records
-    )
+        if "runtime cleanup failed" in record.getMessage()
+    ]
+    assert cleanup_messages
+    assert any("llm.aclose" in message for message in cleanup_messages)
+    assert all("close-B" not in message for message in cleanup_messages)
 
 
 async def test_first_cleanup_failure_wins_when_both_cleanup_steps_fail(
@@ -364,11 +379,13 @@ async def test_first_cleanup_failure_wins_when_both_cleanup_steps_fail(
                 snapshot = await application.get_snapshot()
                 assert snapshot.stage is Stage.SETUP
     cleanup_logs = [
-        record.message
+        record.getMessage()
         for record in caplog.records
-        if "runtime cleanup failed" in record.message
+        if "runtime cleanup failed" in record.getMessage()
     ]
     assert len(cleanup_logs) == 2
+    assert all("shutdown-B" not in message for message in cleanup_logs)
+    assert all("close-C" not in message for message in cleanup_logs)
 
 
 async def test_context_cancellation_remains_primary_outcome(
@@ -392,3 +409,102 @@ async def test_context_cancellation_remains_primary_outcome(
 
     with pytest.raises(asyncio.CancelledError):
         await run_context()
+
+
+async def test_cancel_during_blocked_llm_close_still_finishes_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_entered = asyncio.Event()
+    allow_close = asyncio.Event()
+    closed = False
+
+    class HoldingCloseLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            close_entered.set()
+            await allow_close.wait()
+            closed = True
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", HoldingCloseLLM)
+    settings = _composition_settings(tmp_path)
+
+    async def run_context() -> None:
+        async with application_context(settings) as application:
+            await application.get_snapshot()
+
+    task = asyncio.create_task(run_context())
+    await asyncio.wait_for(close_entered.wait(), timeout=2.0)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert closed is False
+
+    allow_close.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed is True
+
+
+async def test_drained_llm_close_failure_keeps_cancellation_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    close_entered = asyncio.Event()
+    allow_close = asyncio.Event()
+    close_error = RuntimeError("close-while-draining")
+
+    class FailingHeldCloseLLM(FakeLLM):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__([])
+
+        async def aclose(self) -> None:
+            close_entered.set()
+            await allow_close.wait()
+            raise close_error
+
+    monkeypatch.setattr("jung.composition.OpenAICompatibleLLM", FailingHeldCloseLLM)
+    settings = _composition_settings(tmp_path, debug_run_dir=run_dir)
+
+    async def run_context() -> None:
+        async with application_context(settings) as application:
+            await application.get_snapshot()
+
+    task = asyncio.create_task(run_context())
+    await asyncio.wait_for(close_entered.wait(), timeout=2.0)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+
+    with caplog.at_level(logging.WARNING):
+        allow_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    cleanup_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "runtime cleanup failed" in record.getMessage()
+    ]
+    assert any("llm.aclose" in message for message in cleanup_messages)
+    assert all("close-while-draining" not in message for message in cleanup_messages)
+
+    events = _load_trace(run_dir)
+    drained_errors = [
+        event
+        for event in events
+        if event["kind"] == "runtime.error"
+        and event["data"].get("phase") == "cleanup:llm.aclose"
+        and event["data"].get("error_type") == "RuntimeError"
+    ]
+    assert drained_errors
+    end = next(event for event in events if event["kind"] == "diagnostics.end")
+    assert end["data"]["status"] == "failed"
+    assert end["data"]["error_type"] == "CancelledError"
