@@ -425,6 +425,7 @@ class JungApiClient:
                 kind=ProtocolErrorKind.INVALID_SERVER_EVENT,
                 expected_model=type(event).__name__,
             )
+
     async def _request(
         self,
         method: str,

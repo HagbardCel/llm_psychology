@@ -171,7 +171,8 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "chat_event" and entry.get("type") == "message_completed"
+        entry.get("category") == "chat_event"
+        and entry.get("type") == "message_completed"
         for entry in timeline
     )
     assert any(

@@ -206,10 +206,9 @@ async def test_command_rejection_is_stream_error_event(
     uvicorn_api_url,
 ) -> None:
     http_base = uvicorn_api_url
-    session_id = await _setup_intake_http(http_base)
+    await _setup_intake_http(http_base)
     request_id = uuid4()
-    # End the session so send_message is invalid for this session context,
-    # or use a nonexistent session — NotFound/InvalidCommand as stream event.
+    # Use a nonexistent session — command rejection surfaces as an in-stream ErrorEvent.
     missing_session = uuid4()
 
     async with httpx.AsyncClient(base_url=http_base, timeout=10.0) as client:

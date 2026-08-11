@@ -478,7 +478,9 @@ class ConsoleApp:
 
                         if isinstance(event, ErrorEvent):
                             self._discard_partial(render_state)
-                            self._locally_submitted_client_ids.discard(client_message_id)
+                            self._locally_submitted_client_ids.discard(
+                                client_message_id
+                            )
                             self._output.render_command_rejection(event.error)
                             return await self._client.get_state()
 

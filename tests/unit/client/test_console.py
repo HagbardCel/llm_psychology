@@ -610,7 +610,9 @@ async def test_message_failed_renders_chat_failure_without_raising() -> None:
 
     def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
-            failure.model_copy(update={"client_message_id": kwargs["client_message_id"]})
+            failure.model_copy(
+                update={"client_message_id": kwargs["client_message_id"]}
+            )
         )
 
     client.stream_message = _stream_message_from_events(build_events)
