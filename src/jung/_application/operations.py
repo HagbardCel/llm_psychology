@@ -103,6 +103,23 @@ class OperationRuntime:
             coro.close()
             raise
 
+    def _record_scheduling_invariant(self, operation: Operation) -> None:
+        exc = InvariantViolation(
+            "cannot schedule a second operation while another operation task is live"
+        )
+        logger.error(
+            "operation scheduling invariant violated "
+            "owned_operation_id=%s requested_operation_id=%s",
+            self._operation_task_id,
+            operation.id,
+        )
+        diag.record_runtime_error(
+            self._recorder,
+            phase="operation_schedule",
+            exc=exc,
+            operation_id=str(operation.id),
+        )
+
     def schedule(self, operation: Operation) -> None:
         if self._shutdown_started.is_set():
             return
@@ -110,12 +127,7 @@ class OperationRuntime:
         if task is not None and not task.done():
             if self._operation_task_id == operation.id:
                 return
-            pending = operation
-
-            def _defer(_done: asyncio.Task[None]) -> None:
-                self.schedule(pending)
-
-            task.add_done_callback(_defer)
+            self._record_scheduling_invariant(operation)
             return
 
         try:
@@ -134,6 +146,18 @@ class OperationRuntime:
             return
         self._operation_task = created
         self._operation_task_id = operation.id
+
+    def schedule_retry(self, operation: Operation) -> None:
+        if self._shutdown_started.is_set():
+            return
+        task = self._operation_task
+        if task is not None and not task.done():
+            if self._operation_task_id != operation.id:
+                self._record_scheduling_invariant(operation)
+                return
+            task.add_done_callback(lambda _done: self.schedule(operation))
+            return
+        self.schedule(operation)
 
     async def _run_owned_operation(self, operation_id: UUID) -> None:
         try:

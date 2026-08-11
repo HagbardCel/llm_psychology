@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from jung.diagnostics import DiagnosticRecorder
+from jung._application.operations import OperationRuntime
 from jung.domain.commands import (
     EndSession,
     SendMessage,
@@ -370,7 +371,10 @@ async def test_permanent_operation_failure_is_not_retryable(store: SQLiteStore) 
     fake.assert_exhausted()
 
 
-async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> None:
+async def test_retry_handoff_survives_shutdown_and_recovers_on_next_startup(
+    store: SQLiteStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
     complete_intake_for_assessment(
@@ -379,31 +383,26 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
         now=now,
         operation_id=operation_id,
     )
-    gate = asyncio.Event()
+    failed_persisted = asyncio.Event()
+    allow_worker_exit = asyncio.Event()
+    original_persist = OperationRuntime._persist_operation_failure_if_running
 
-    class HoldingAssessmentFake(FakeLLM):
-        def __init__(self, expectations: list[object]) -> None:
-            super().__init__(expectations)
-            self._structured_calls = 0
+    async def gated_persist(
+        self: OperationRuntime,
+        failed_operation_id,
+        exc: Exception,
+    ) -> None:
+        await original_persist(self, failed_operation_id, exc)
+        failed_persisted.set()
+        await allow_worker_exit.wait()
 
-        async def generate_structured(
-            self,
-            messages,
-            output_type,
-            policy,
-            validate_result=None,
-        ):
-            self._structured_calls += 1
-            if self._structured_calls > 1:
-                await gate.wait()
-            return await super().generate_structured(
-                messages,
-                output_type,
-                policy,
-                validate_result=validate_result,
-            )
+    monkeypatch.setattr(
+        OperationRuntime,
+        "_persist_operation_failure_if_running",
+        gated_persist,
+    )
 
-    fake = HoldingAssessmentFake(
+    fake = FakeLLM(
         [
             FailureExpectation(
                 task=LLMTask.ASSESSMENT,
@@ -416,19 +415,40 @@ async def test_operation_retry_during_teardown_completes(store: SQLiteStore) -> 
             ),
         ]
     )
-    async with build_test_application(store, fake) as runtime:
+    async with build_test_application(store, fake, recover=False) as runtime:
+        app = runtime.application
+        await app.recover_on_startup()
         await wait_for_operation_status(
-            runtime.application,
+            app,
             operation_id,
             OperationStatus.FAILED,
         )
-        await runtime.application.retry_operation()
-        shutdown_task = asyncio.create_task(
-            runtime.application.shutdown(timeout_seconds=5.0)
-        )
-        gate.set()
-        await wait_for_stage(runtime.application, Stage.STYLE_SELECTION)
+        await asyncio.wait_for(failed_persisted.wait(), timeout=2.0)
+
+        await app.retry_operation()
+        operation = store.get_operation(operation_id)
+        assert operation is not None
+        assert operation.status is OperationStatus.PENDING
+        assert operation.attempt == 1
+
+        shutdown_task = asyncio.create_task(app.shutdown(timeout_seconds=5.0))
+        await asyncio.wait_for(app._shutdown_started.wait(), timeout=2.0)
+
+        allow_worker_exit.set()
         await shutdown_task
+
+        operation = store.get_operation(operation_id)
+        assert operation is not None
+        assert operation.status is OperationStatus.PENDING
+        assert operation.attempt == 1
+
+    async with build_test_application(store, fake) as runtime_b:
+        await wait_for_stage(runtime_b.application, Stage.STYLE_SELECTION)
+
+    completed = store.get_operation(operation_id)
+    assert completed is not None
+    assert completed.status is OperationStatus.COMPLETE
+    assert completed.attempt == 2
     fake.assert_exhausted()
 
 

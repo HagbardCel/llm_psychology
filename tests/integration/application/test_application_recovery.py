@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from jung._application.operations import OperationRuntime
 from jung.domain.commands import SendMessage, UpdateProfile
 from jung.domain.errors import Busy
 from jung.domain.models import (
@@ -220,7 +221,7 @@ async def test_duplicate_recover_on_startup_leaves_live_running_operation(
     fake.assert_exhausted()
 
 
-async def test_retry_after_failed_clears_owned_task_before_reschedule(
+async def test_retry_after_failed_completes_on_second_attempt(
     store: SQLiteStore,
 ) -> None:
     intake_id, now = open_intake(store)
@@ -271,9 +272,6 @@ async def test_retry_after_failed_clears_owned_task_before_reschedule(
             operation_id,
             OperationStatus.FAILED,
         )
-        assert not app._operations.has_live_task
-        assert app._operations._operation_task is None
-        assert app._operations._operation_task_id is None
 
         await app.retry_operation()
         await wait_for_stage(app, Stage.STYLE_SELECTION)
@@ -287,8 +285,9 @@ async def test_retry_after_failed_clears_owned_task_before_reschedule(
     fake.assert_exhausted()
 
 
-async def test_schedule_defers_when_different_owned_task_is_live(
+async def test_retry_handoff_completes_while_old_worker_still_exiting(
     store: SQLiteStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     intake_id, now = open_intake(store)
     operation_id = uuid4()
@@ -298,12 +297,25 @@ async def test_schedule_defers_when_different_owned_task_is_live(
         now=now,
         operation_id=operation_id,
     )
-    operation_b = store.get_operation(operation_id)
-    assert operation_b is not None
-    assert operation_b.status is OperationStatus.PENDING
-
-    release_a = asyncio.Event()
+    failed_persisted = asyncio.Event()
+    allow_worker_exit = asyncio.Event()
     assessment_calls = 0
+    original_persist = OperationRuntime._persist_operation_failure_if_running
+
+    async def gated_persist(
+        self: OperationRuntime,
+        failed_operation_id,
+        exc: Exception,
+    ) -> None:
+        await original_persist(self, failed_operation_id, exc)
+        failed_persisted.set()
+        await allow_worker_exit.wait()
+
+    monkeypatch.setattr(
+        OperationRuntime,
+        "_persist_operation_failure_if_running",
+        gated_persist,
+    )
 
     class CountingFake(FakeLLM):
         async def generate_structured(
@@ -325,6 +337,90 @@ async def test_schedule_defers_when_different_owned_task_is_live(
 
     fake = CountingFake(
         [
+            FailureExpectation(
+                task=LLMTask.ASSESSMENT,
+                error=LLMTimeout("timeout"),
+            ),
+            StructuredExpectation(
+                task=LLMTask.ASSESSMENT,
+                output_type=AssessmentResult,
+                response=assessment_result(),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        app = runtime.application
+        await wait_for_operation_status(
+            app,
+            operation_id,
+            OperationStatus.FAILED,
+        )
+        await asyncio.wait_for(failed_persisted.wait(), timeout=2.0)
+
+        failed = store.get_operation(operation_id)
+        assert failed is not None
+        assert failed.status is OperationStatus.FAILED
+
+        await app.retry_operation()
+
+        pending = store.get_operation(operation_id)
+        assert pending is not None
+        assert pending.id == operation_id
+        assert pending.status is OperationStatus.PENDING
+        assert pending.attempt == 1
+
+        allow_worker_exit.set()
+        await wait_for_stage(app, Stage.STYLE_SELECTION)
+
+        completed = store.get_operation(operation_id)
+        assert completed is not None
+        assert completed.status is OperationStatus.COMPLETE
+        assert completed.attempt == 2
+        assert assessment_calls == 2
+    fake.assert_exhausted()
+
+
+async def test_schedule_is_idempotent_while_operation_is_running(
+    store: SQLiteStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intake_id, now = open_intake(store)
+    operation_id = uuid4()
+    complete_intake_for_assessment(
+        store,
+        intake_session_id=intake_id,
+        now=now,
+        operation_id=operation_id,
+    )
+    spawn_calls = 0
+    original_spawn = OperationRuntime._spawn_operation_task
+
+    def counting_spawn(self: OperationRuntime, operation):  # type: ignore[no-untyped-def]
+        nonlocal spawn_calls
+        spawn_calls += 1
+        return original_spawn(self, operation)
+
+    monkeypatch.setattr(OperationRuntime, "_spawn_operation_task", counting_spawn)
+    gate = asyncio.Event()
+
+    class HoldingAssessmentFake(FakeLLM):
+        async def generate_structured(
+            self,
+            messages,
+            output_type,
+            policy,
+            validate_result=None,
+        ):
+            await gate.wait()
+            return await super().generate_structured(
+                messages,
+                output_type,
+                policy,
+                validate_result=validate_result,
+            )
+
+    fake = HoldingAssessmentFake(
+        [
             StructuredExpectation(
                 task=LLMTask.ASSESSMENT,
                 output_type=AssessmentResult,
@@ -334,28 +430,24 @@ async def test_schedule_defers_when_different_owned_task_is_live(
     )
     async with build_test_application(store, fake, recover=False) as runtime:
         app = runtime.application
+        await app.recover_on_startup()
+        await wait_for_operation_status(
+            app,
+            operation_id,
+            OperationStatus.RUNNING,
+        )
 
-        async def hold() -> None:
-            await release_a.wait()
+        operation = store.get_operation(operation_id)
+        assert operation is not None
+        assert spawn_calls == 1
 
-        holding_task = asyncio.create_task(hold(), name="synthetic-ownership")
-        app._operations._operation_task = holding_task
-        app._operations._operation_task_id = uuid4()
+        app._operations.schedule(operation)
+        app._operations.schedule(operation)
+        assert spawn_calls == 1
 
-        app._operations.schedule(operation_b)
-        pending = store.get_operation(operation_id)
-        assert pending is not None
-        assert pending.status is OperationStatus.PENDING
-        assert assessment_calls == 0
-
-        release_a.set()
-        await holding_task
+        gate.set()
         await wait_for_stage(app, Stage.STYLE_SELECTION)
-
-        completed = store.get_operation(operation_id)
-        assert completed is not None
-        assert completed.status is OperationStatus.COMPLETE
-        assert assessment_calls == 1
+        assert spawn_calls == 1
     fake.assert_exhausted()
 
 
