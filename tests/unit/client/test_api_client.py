@@ -1,41 +1,36 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import traceback
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import get_args
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from websockets.exceptions import ConnectionClosed
 
 from jung.api.contracts import (
     AppSnapshotResponse,
     ErrorCode,
     ErrorEnvelope,
     HealthResponse,
+    MessageCompletedEvent,
     MessageResponse,
     OperationSummaryResponse,
-    SendMessageCommand,
-    SessionDetailResponse,
-    SessionHistoryResponse,
+    TokenEvent,
 )
 from jung.client.api_client import (
     _ALLOWED_HTTP_ERROR_STATUSES,
     ClientSettings,
     JungApiClient,
     JungApiError,
-    JungChatConnection,
-    JungConnectionClosed,
     JungProtocolError,
     JungTransportError,
     ProtocolErrorKind,
 )
+
+_NDJSON = "application/x-ndjson"
 
 
 def _snapshot() -> AppSnapshotResponse:
@@ -65,47 +60,6 @@ def _message(
     )
 
 
-def _history(
-    *,
-    session_id: UUID,
-    client_message_id: UUID,
-    user_contents: tuple[str, ...] = (),
-    assistant_contents: tuple[str, ...] = (),
-) -> SessionHistoryResponse:
-    messages = [
-        _message(
-            session_id=session_id,
-            client_message_id=client_message_id,
-            role="user",
-            content=content,
-            sequence=index,
-        )
-        for index, content in enumerate(user_contents, start=1)
-    ]
-    messages.extend(
-        _message(
-            session_id=session_id,
-            client_message_id=client_message_id,
-            role="assistant",
-            content=content,
-            sequence=index,
-        )
-        for index, content in enumerate(
-            assistant_contents,
-            start=len(messages) + 1,
-        )
-    )
-    return SessionHistoryResponse(
-        session=SessionDetailResponse(
-            id=session_id,
-            kind="intake",
-            started_at=datetime.now(UTC),
-        ),
-        messages=messages,
-        plans=[],
-    )
-
-
 def _client_with_handler(
     handler,
     *,
@@ -117,14 +71,83 @@ def _client_with_handler(
     )
 
 
-def _command(*, content: str = "hello") -> SendMessageCommand:
-    return SendMessageCommand(
-        type="send_message",
-        request_id=uuid4(),
-        session_id=uuid4(),
-        client_message_id=uuid4(),
-        content=content,
-    )
+def _ndjson_headers(request: httpx.Request, **extra: str) -> dict[str, str]:
+    return {
+        "X-Request-ID": request.headers["X-Request-ID"],
+        "Content-Type": _NDJSON,
+        **extra,
+    }
+
+
+def _token_line(
+    *,
+    request_id: UUID,
+    session_id: UUID,
+    client_message_id: UUID,
+    text: str = "hi",
+) -> bytes:
+    return (
+        TokenEvent(
+            type="token",
+            text=text,
+            request_id=request_id,
+            session_id=session_id,
+            client_message_id=client_message_id,
+        ).model_dump_json()
+        + "\n"
+    ).encode()
+
+
+def _completion_line(
+    *,
+    request_id: UUID,
+    session_id: UUID,
+    client_message_id: UUID,
+    content: str = "reply",
+) -> bytes:
+    return (
+        MessageCompletedEvent(
+            type="message_completed",
+            request_id=request_id,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            user_message=_message(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                role="user",
+                content="hello",
+                sequence=1,
+            ),
+            assistant_message=_message(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                role="assistant",
+                content=content,
+                sequence=2,
+            ),
+        ).model_dump_json()
+        + "\n"
+    ).encode()
+
+
+async def _collect_stream(
+    client: JungApiClient,
+    *,
+    session_id: UUID | None = None,
+    content: str = "hello",
+    client_message_id: UUID | None = None,
+    request_id: UUID | None = None,
+) -> list[object]:
+    session_id = session_id or uuid4()
+    client_message_id = client_message_id or uuid4()
+    request_id = request_id or uuid4()
+    async with client.stream_message(
+        session_id,
+        content,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    ) as events:
+        return [event async for event in events]
 
 
 @pytest.mark.parametrize(
@@ -158,28 +181,6 @@ def test_client_settings_reject_non_string_origins(base_url: object) -> None:
 def test_client_settings_reject_invalid_timeouts(value: float) -> None:
     with pytest.raises(ValueError):
         ClientSettings("http://localhost:8000", transport_timeout=value)
-
-
-@pytest.mark.asyncio
-async def test_new_message_command_ids_have_distinct_lifetimes() -> None:
-    async with JungApiClient(ClientSettings("https://localhost:8443")) as client:
-        session_id = uuid4()
-        retained_id = uuid4()
-        first = client.new_message_command(
-            session_id,
-            "hello",
-            client_message_id=retained_id,
-        )
-        second = client.new_message_command(
-            session_id,
-            "hello",
-            client_message_id=retained_id,
-        )
-        generated = client.new_message_command(session_id, "hello")
-
-        assert first.client_message_id == second.client_message_id == retained_id
-        assert first.request_id != second.request_id
-        assert generated.client_message_id != retained_id
 
 
 @pytest.mark.asyncio
@@ -392,231 +393,6 @@ async def test_invalid_body_diagnostics_do_not_retain_secret_content() -> None:
     await client.aclose()
 
 
-@pytest.mark.asyncio
-async def test_invalid_websocket_frame_diagnostics_are_sanitized() -> None:
-    secret = "private websocket disclosure"
-
-    class FakeWebSocket:
-        async def send(self, _payload: str) -> None:
-            return None
-
-        async def recv(self):
-            return f'{{"type":"token","text":"{secret}"'
-
-        async def close(self):
-            return None
-
-    chat = JungChatConnection(FakeWebSocket())  # type: ignore[arg-type]
-    stream = chat.stream(_command())
-    with pytest.raises(JungProtocolError) as raised:
-        await anext(stream)
-    error = raised.value
-    formatted = "".join(traceback.format_exception(error))
-    assert error.kind is ProtocolErrorKind.INVALID_WEBSOCKET_FRAME
-    assert secret not in str(error)
-    assert secret not in repr(error)
-    assert secret not in formatted
-    assert error.__cause__ is None
-    await chat.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ("send", "receive"))
-async def test_transport_failure_makes_chat_unusable_and_still_closes(
-    operation: str,
-) -> None:
-    class FailingWebSocket:
-        def __init__(self) -> None:
-            self.close = AsyncMock()
-
-        async def send(self, _payload: str) -> None:
-            raise OSError("transport failed")
-
-        async def recv(self) -> str:
-            raise OSError("transport failed")
-
-    websocket = FailingWebSocket()
-    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
-    command = _command()
-
-    stream = chat.stream(command)
-    with pytest.raises(JungTransportError):
-        if operation == "send":
-            await anext(stream)
-        else:
-            # Force receive path after a successful send.
-            websocket.send = AsyncMock()  # type: ignore[method-assign]
-            await anext(stream)
-
-    with pytest.raises(RuntimeError):
-        await anext(chat.stream(command))
-    await chat.aclose()
-    await chat.aclose()
-    websocket.close.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ("send", "receive"))
-async def test_remote_closure_makes_chat_unusable_and_still_closes(
-    operation: str,
-) -> None:
-    class RemoteClosedWebSocket:
-        def __init__(self) -> None:
-            self.close = AsyncMock()
-
-        async def send(self, _payload: str) -> None:
-            raise ConnectionClosed(None, None, None)
-
-        async def recv(self) -> str:
-            raise ConnectionClosed(None, None, None)
-
-    websocket = RemoteClosedWebSocket()
-    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
-    command = _command()
-
-    stream = chat.stream(command)
-    with pytest.raises(JungConnectionClosed):
-        if operation == "send":
-            await anext(stream)
-        else:
-            websocket.send = AsyncMock()  # type: ignore[method-assign]
-            await anext(stream)
-
-    with pytest.raises(RuntimeError):
-        await anext(chat.stream(command))
-    await chat.aclose()
-    await chat.aclose()
-    websocket.close.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_explicit_chat_close_makes_connection_unusable() -> None:
-    websocket = SimpleNamespace(close=AsyncMock())
-    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
-    command = _command()
-
-    await chat.aclose()
-    await chat.aclose()
-    with pytest.raises(RuntimeError):
-        await anext(chat.stream(command))
-    websocket.close.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_chat_close_retries_after_cancellation() -> None:
-    close_attempts = 0
-
-    class CancellingWebSocket:
-        async def close(self) -> None:
-            nonlocal close_attempts
-            close_attempts += 1
-            if close_attempts == 1:
-                raise asyncio.CancelledError
-
-    websocket = CancellingWebSocket()
-    chat = JungChatConnection(websocket)  # type: ignore[arg-type]
-    command = _command()
-
-    with pytest.raises(asyncio.CancelledError):
-        await chat.aclose()
-
-    with pytest.raises(RuntimeError, match="chat connection is unusable"):
-        await anext(chat.stream(command))
-
-    await chat.aclose()
-    assert close_attempts == 2
-
-    await chat.aclose()
-    assert close_attempts == 2
-
-
-@pytest.mark.asyncio
-async def test_second_stream_on_same_connection_raises_runtime_error() -> None:
-    class ScriptedWebSocket:
-        def __init__(self) -> None:
-            self.close = AsyncMock()
-            self._sent = False
-
-        async def send(self, _payload: str) -> None:
-            self._sent = True
-
-        async def recv(self) -> str:
-            command = _command()
-            # unreachable; stream ends after terminal event below
-            return (
-                '{"type":"error","request_id":"'
-                + str(command.request_id)
-                + '","error":{"code":"validation_error","message":"bad",'
-                + '"request_id":"'
-                + str(command.request_id)
-                + '"}}'
-            )
-
-    # Use a fixed command so the terminal error request_id matches if needed.
-    request_id = uuid4()
-    session_id = uuid4()
-    client_message_id = uuid4()
-    command = SendMessageCommand(
-        type="send_message",
-        request_id=request_id,
-        session_id=session_id,
-        client_message_id=client_message_id,
-        content="hello",
-    )
-
-    class TerminalWebSocket:
-        def __init__(self) -> None:
-            self.close = AsyncMock()
-
-        async def send(self, _payload: str) -> None:
-            return None
-
-        async def recv(self) -> str:
-            return (
-                '{"type":"error","request_id":"'
-                + str(request_id)
-                + '","error":{"code":"validation_error","message":"bad",'
-                + '"request_id":"'
-                + str(request_id)
-                + '"}}'
-            )
-
-    chat = JungChatConnection(TerminalWebSocket())  # type: ignore[arg-type]
-    events = [event async for event in chat.stream(command)]
-    assert len(events) == 1
-
-    # Terminal event marks the connection unusable; a second stream must fail.
-    with pytest.raises(
-        RuntimeError, match="chat connection (already used|is unusable)"
-    ):
-        await anext(chat.stream(_command()))
-
-    # Fresh connection: mark used without consuming a terminal event.
-    class NeverRecvWebSocket:
-        def __init__(self) -> None:
-            self.close = AsyncMock()
-            self._sent = False
-
-        async def send(self, _payload: str) -> None:
-            self._sent = True
-
-        async def recv(self) -> str:
-            await asyncio.sleep(3600)
-            raise AssertionError("unreachable")
-
-    chat2 = JungChatConnection(NeverRecvWebSocket())  # type: ignore[arg-type]
-    stream1 = chat2.stream(command)
-    recv_task = asyncio.create_task(anext(stream1))
-    await asyncio.sleep(0)
-    with pytest.raises(RuntimeError, match="chat connection already used"):
-        await anext(chat2.stream(_command()))
-    recv_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await recv_task
-    await chat.aclose()
-    await chat2.aclose()
-
-
 def test_allowed_http_error_statuses_are_exact_subset() -> None:
     assert _ALLOWED_HTTP_ERROR_STATUSES == {
         "invalid_command": frozenset({409}),
@@ -712,62 +488,267 @@ async def test_fresh_internal_error_accepts_500_status() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_message_decodes_valid_ndjson_events() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/chat")
+        assert request.method == "POST"
+        assert request.headers["Accept"] == _NDJSON
+        assert request.headers["X-Request-ID"] == str(request_id)
+        body = json.loads(request.content)
+        assert body == {
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "content": "hello",
+        }
+        content = _token_line(
+            request_id=request_id,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            text="hi",
+        ) + _completion_line(
+            request_id=request_id,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            content="hi there",
+        )
+        return httpx.Response(200, headers=_ndjson_headers(request), content=content)
+
+    client = _client_with_handler(handler)
+    events = await _collect_stream(
+        client,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    assert len(events) == 2
+    assert isinstance(events[0], TokenEvent)
+    assert events[0].text == "hi"
+    assert isinstance(events[1], MessageCompletedEvent)
+    assert events[1].assistant_message.content == "hi there"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_invalid_stream_json_line_is_protocol_error() -> None:
+    secret = "private stream disclosure"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=_ndjson_headers(request),
+            content=f'{{"type":"token","text":"{secret}"\n'.encode(),
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await _collect_stream(client)
+    error = raised.value
+    formatted = "".join(traceback.format_exception(error))
+    assert error.kind is ProtocolErrorKind.INVALID_STREAM_EVENT
+    assert secret not in str(error)
+    assert secret not in repr(error)
+    assert secret not in formatted
+    assert error.__cause__ is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_invalid_server_event_payload_is_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=_ndjson_headers(request),
+            content=b'{"type":"token","text":1}\n',
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await _collect_stream(client)
+    assert raised.value.kind is ProtocolErrorKind.INVALID_STREAM_EVENT
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wrong_stream_content_type_is_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "X-Request-ID": request.headers["X-Request-ID"],
+                "Content-Type": "application/json",
+            },
+            content=b"{}\n",
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await _collect_stream(client)
+    assert raised.value.kind is ProtocolErrorKind.INVALID_STREAM_RESPONSE
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mutate", "expected_kind"),
     [
         (
-            lambda event, command: {
-                **event,
-                "request_id": str(uuid4()),
-            },
+            lambda event, _ids: {**event, "request_id": str(uuid4())},
             ProtocolErrorKind.REQUEST_ID_MISMATCH,
         ),
         (
-            lambda event, command: {
-                **event,
-                "session_id": str(uuid4()),
-            },
+            lambda event, _ids: {**event, "session_id": str(uuid4())},
             ProtocolErrorKind.INVALID_SERVER_EVENT,
         ),
         (
-            lambda event, command: {
-                **event,
-                "client_message_id": str(uuid4()),
-            },
+            lambda event, _ids: {**event, "client_message_id": str(uuid4())},
             ProtocolErrorKind.INVALID_SERVER_EVENT,
         ),
     ],
 )
-async def test_chat_stream_rejects_mismatched_event_ids(
+async def test_stream_rejects_mismatched_event_ids(
     mutate,
     expected_kind: ProtocolErrorKind,
 ) -> None:
-    command = _command()
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
     token_payload = {
         "type": "token",
         "text": "hi",
-        "request_id": str(command.request_id),
-        "session_id": str(command.session_id),
-        "client_message_id": str(command.client_message_id),
+        "request_id": str(request_id),
+        "session_id": str(session_id),
+        "client_message_id": str(client_message_id),
     }
-    payload = mutate(token_payload, command)
+    payload = mutate(
+        token_payload,
+        (session_id, client_message_id, request_id),
+    )
 
-    class FakeWebSocket:
-        async def send(self, _payload: str) -> None:
-            return None
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=_ndjson_headers(request),
+            content=(json.dumps(payload) + "\n").encode(),
+        )
 
-        async def recv(self) -> str:
-            return json.dumps(payload)
-
-        async def close(self) -> None:
-            return None
-
-    chat = JungChatConnection(FakeWebSocket())  # type: ignore[arg-type]
+    client = _client_with_handler(handler)
     with pytest.raises(JungProtocolError) as raised:
-        await anext(chat.stream(command))
+        await _collect_stream(
+            client,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
     assert raised.value.kind is expected_kind
     summary = str(raised.value)
-    assert str(command.request_id) not in summary
-    assert str(command.session_id) not in summary
-    assert str(command.client_message_id) not in summary
-    await chat.aclose()
+    assert str(request_id) not in summary
+    assert str(session_id) not in summary
+    assert str(client_message_id) not in summary
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_eof_before_terminal_is_incomplete_stream() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=_ndjson_headers(request),
+            content=_token_line(
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await _collect_stream(
+            client,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert raised.value.kind is ProtocolErrorKind.INCOMPLETE_STREAM
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_non_200_error_response_is_api_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            422,
+            headers={"X-Request-ID": request_id},
+            json={
+                "code": "validation_error",
+                "message": "invalid chat request",
+                "request_id": request_id,
+                "retryable": False,
+            },
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungApiError) as raised:
+        await _collect_stream(client)
+    assert raised.value.status == 422
+    assert raised.value.code == "validation_error"
+    assert "invalid chat request" not in str(raised.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_unexpected_2xx_is_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            headers={"X-Request-ID": request.headers["X-Request-ID"]},
+            content=b"",
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungProtocolError) as raised:
+        await _collect_stream(client)
+    assert raised.value.kind is ProtocolErrorKind.UNEXPECTED_STATUS
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_httpx_failure_is_transport_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+
+    class FailingByteStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield _token_line(
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            )
+            raise httpx.ReadError("connection reset")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=_ndjson_headers(request),
+            stream=FailingByteStream(),
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(JungTransportError) as raised:
+        await _collect_stream(
+            client,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert "stream" in raised.value.operation
+    await client.aclose()

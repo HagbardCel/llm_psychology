@@ -23,7 +23,6 @@ from jung.api.contracts import (
     ProfileUpdateRequest,
     ProfileWire,
     SelectStyleRequest,
-    SendMessageCommand,
     SessionDetailResponse,
     SessionHistoryResponse,
     SessionSummaryResponse,
@@ -36,9 +35,9 @@ from jung.client.api_client import (
     ClientSettings,
     JungApiClient,
     JungApiError,
-    JungConnectionClosed,
     JungProtocolError,
     JungTransportError,
+    ProtocolErrorKind,
 )
 from jung.client.console import (
     ChatRenderState,
@@ -53,24 +52,29 @@ from jung.client.console import (
 pytestmark = pytest.mark.asyncio
 
 
-def _open_chat_from_stream(build_events):
-    """Build chat.stream from the outbound SendMessageCommand."""
+def _stream_message_from_events(build_events):
+    """Build stream_message from outbound stream args."""
 
     @asynccontextmanager
-    async def open_chat():
-        chat = MagicMock()
-        sent: list[SendMessageCommand] = []
-
-        async def stream(command: SendMessageCommand) -> AsyncIterator[object]:
-            sent.append(command)
-            async for event in build_events(command):
+    async def stream_message(
+        session_id,
+        content,
+        *,
+        client_message_id,
+        request_id,
+    ):
+        async def events() -> AsyncIterator[object]:
+            async for event in build_events(
+                session_id=session_id,
+                content=content,
+                client_message_id=client_message_id,
+                request_id=request_id,
+            ):
                 yield event
 
-        chat.stream = stream
-        chat.sent = sent
-        yield chat
+        yield events()
 
-    return open_chat
+    return stream_message
 
 
 class RecordingOutput:
@@ -217,7 +221,6 @@ def _history(
 def _mock_client() -> MagicMock:
     client = MagicMock(spec=JungApiClient)
     client.settings = ClientSettings("http://localhost:8000")
-    client.new_message_command = JungApiClient.new_message_command.__get__(client)
     return client
 
 
@@ -286,43 +289,33 @@ def _app(
     )
 
 
-async def test_chat_turn_builds_send_message_command() -> None:
+async def test_chat_turn_calls_stream_message_with_content() -> None:
     client = _mock_client()
     session = _session()
     snapshot = _snapshot(session=session)
-    sent_commands: list[SendMessageCommand] = []
+    sent: list[dict[str, object]] = []
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
+        sent.append(kwargs)
         return _event_stream(
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
             )
         )
 
-    @asynccontextmanager
-    async def tracking_open_chat():
-        async with _open_chat_from_stream(build_events)() as chat:
-            original = chat.stream
-
-            async def tracked(command: SendMessageCommand):
-                sent_commands.append(command)
-                async for event in original(command):
-                    yield event
-
-            chat.stream = tracked
-            yield chat
-
-    client.open_chat = tracking_open_chat
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(
         return_value=_snapshot(stage="assessment", session=session, commands=[])
     )
     app = _app(client)
     await app._handle_chat_turn(snapshot, content="hello")
-    assert sent_commands
-    assert sent_commands[0].content == "hello"
-    assert sent_commands[0].session_id == session.id
+    assert sent
+    assert sent[0]["content"] == "hello"
+    assert sent[0]["session_id"] == session.id
+    assert isinstance(sent[0]["client_message_id"], UUID)
+    assert isinstance(sent[0]["request_id"], UUID)
 
 
 async def test_stage_alone_does_not_authorize_mutation() -> None:
@@ -346,19 +339,19 @@ async def test_unanswered_user_retry_reuses_client_message_id() -> None:
     client.get_session = AsyncMock(
         return_value=_history(session_id=session.id, messages=[unanswered])
     )
-    sent: list[SendMessageCommand] = []
+    sent: list[dict[str, object]] = []
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
-        sent.append(command)
+    def build_events(**kwargs) -> AsyncIterator[object]:
+        sent.append(kwargs)
         return _event_stream(
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
             )
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
     output = RecordingOutput()
     app = _app(client, inputs=ScriptedInput("/retry"), output=output)
@@ -366,8 +359,8 @@ async def test_unanswered_user_retry_reuses_client_message_id() -> None:
     result = await app._handle_unanswered_user(snapshot, unanswered)
     assert result == snapshot
     assert len(sent) == 1
-    assert sent[0].client_message_id == client_message_id
-    assert sent[0].content == "prior user"
+    assert sent[0]["client_message_id"] == client_message_id
+    assert sent[0]["content"] == "prior user"
 
 
 async def test_unanswered_user_exit_raises() -> None:
@@ -412,12 +405,12 @@ async def test_run_prompts_retry_for_trailing_user_before_new_input() -> None:
         ],
     )
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 content="ok",
             )
         )
@@ -431,7 +424,7 @@ async def test_run_prompts_retry_for_trailing_user_before_new_input() -> None:
             completed_history,  # render before new intake prompt
         ]
     )
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     output = RecordingOutput()
     app = _app(
         client,
@@ -615,12 +608,12 @@ async def test_message_failed_renders_chat_failure_without_raising() -> None:
         ),
     )
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
-            failure.model_copy(update={"client_message_id": command.client_message_id})
+            failure.model_copy(update={"client_message_id": kwargs["client_message_id"]})
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
     output = RecordingOutput()
     app = _app(client, output=output)
@@ -635,23 +628,23 @@ async def test_error_event_renders_command_rejection() -> None:
     session = _session()
     snapshot = _snapshot(session=session)
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
             ErrorEvent(
                 type="error",
-                request_id=command.request_id,
+                request_id=kwargs["request_id"],
                 session_id=session.id,
-                client_message_id=command.client_message_id,
+                client_message_id=kwargs["client_message_id"],
                 error=ErrorEnvelope(
                     code="invalid_command",
                     message="not allowed",
-                    request_id=command.request_id,
+                    request_id=kwargs["request_id"],
                     retryable=False,
                 ),
             )
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
     output = RecordingOutput()
     app = _app(client, output=output)
@@ -666,18 +659,48 @@ async def test_disconnect_during_stream_refreshes_state() -> None:
     snapshot = _snapshot(session=session)
     refreshed = _snapshot(session=session, stage="intake")
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         async def events():
             yield _token_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
             )
-            raise JungConnectionClosed(code=1006, reason=None)
+            raise JungTransportError("HTTP POST /api/v1/chat stream")
 
         return events()
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
+    client.get_state = AsyncMock(return_value=refreshed)
+    output = RecordingOutput()
+    app = _app(client, output=output)
+    result = await app._handle_chat_turn(snapshot, content="hello")
+    assert result == refreshed
+    assert output.assistant_discards == 1
+
+
+async def test_incomplete_stream_refreshes_state() -> None:
+    client = _mock_client()
+    session = _session()
+    snapshot = _snapshot(session=session)
+    refreshed = _snapshot(session=session, stage="intake")
+
+    def build_events(**kwargs) -> AsyncIterator[object]:
+        async def events():
+            yield _token_event(
+                session_id=session.id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
+            )
+            raise JungProtocolError(
+                kind=ProtocolErrorKind.INCOMPLETE_STREAM,
+                route="/api/v1/chat",
+                expected_model="terminal ServerEvent",
+            )
+
+        return events()
+
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=refreshed)
     output = RecordingOutput()
     app = _app(client, output=output)
@@ -724,36 +747,38 @@ async def test_token_then_matching_completion_renders_stream() -> None:
     session = _session()
     snapshot = _snapshot(session=session)
     output = RecordingOutput()
+    observer = RecordingObserver()
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
             _token_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 text="re",
             ),
             _token_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 text="ply",
             ),
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 content="reply",
             ),
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
-    app = _app(client, output=output)
+    app = _app(client, output=output, observer=observer)
     await app._handle_chat_turn(snapshot, content="hello")
     assert output.assistant_begins == 1
     assert output.assistant_tokens == ["re", "ply"]
     assert output.assistant_finishes == 1
+    assert any(event == "chat_event" for event, _ in observer.events)
 
 
 async def test_completion_without_tokens_renders_direct() -> None:
@@ -762,17 +787,17 @@ async def test_completion_without_tokens_renders_direct() -> None:
     snapshot = _snapshot(session=session)
     output = RecordingOutput()
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 content="direct",
             )
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -786,23 +811,23 @@ async def test_streamed_text_differs_uses_correction() -> None:
     snapshot = _snapshot(session=session)
     output = RecordingOutput()
 
-    def build_events(command: SendMessageCommand) -> AsyncIterator[object]:
+    def build_events(**kwargs) -> AsyncIterator[object]:
         return _event_stream(
             _token_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 text="partial",
             ),
             _completion_event(
                 session_id=session.id,
-                client_message_id=command.client_message_id,
-                request_id=command.request_id,
+                client_message_id=kwargs["client_message_id"],
+                request_id=kwargs["request_id"],
                 content="canonical",
             ),
         )
 
-    client.open_chat = _open_chat_from_stream(build_events)
+    client.stream_message = _stream_message_from_events(build_events)
     client.get_state = AsyncMock(return_value=snapshot)
     app = _app(client, output=output)
     await app._handle_chat_turn(snapshot, content="hello")
@@ -871,11 +896,18 @@ async def test_chat_input_recorded_before_transport_failure() -> None:
     observer = RecordingObserver()
 
     @asynccontextmanager
-    async def failing_open_chat():
-        raise JungTransportError("handshake")
+    async def failing_stream_message(
+        session_id,
+        content,
+        *,
+        client_message_id,
+        request_id,
+    ):
+        del session_id, content, client_message_id, request_id
+        raise JungTransportError("HTTP POST /api/v1/chat")
         yield  # pragma: no cover
 
-    client.open_chat = failing_open_chat
+    client.stream_message = failing_stream_message
     app = _app(client, observer=observer)
     with pytest.raises(JungTransportError):
         await app._handle_chat_turn(snapshot, content="spoken aloud")

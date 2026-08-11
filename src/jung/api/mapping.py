@@ -12,12 +12,15 @@ from jung.api.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ErrorEvent,
+    MessageCompletedEvent,
+    MessageFailedEvent,
     MessageResponse,
     OperationSummaryResponse,
     PlanDetailResponse,
     PlanSummaryResponse,
     ProfileResponse,
     ProfileWire,
+    ServerEvent,
     SessionDetailResponse,
     SessionHistoryResponse,
     SessionSummaryResponse,
@@ -25,7 +28,9 @@ from jung.api.contracts import (
     StyleOptionsResponse,
     StyleRecommendationSummaryResponse,
     StyleSummaryResponse,
+    TokenEvent,
 )
+from jung.domain.errors import InvariantViolation
 from jung.domain.models import (
     AppSnapshot,
     CommandName,
@@ -36,6 +41,10 @@ from jung.domain.models import (
     Session,
 )
 from jung.domain.results import (
+    ChatCompleted,
+    ChatFailed,
+    ChatStreamResult,
+    ChatToken,
     ProfileView,
     SessionHistory,
     StartedSession,
@@ -270,3 +279,46 @@ def to_start_session_response(
         session=to_session_summary(started.session),
         snapshot=to_snapshot_response(started.snapshot, context=context),
     )
+
+
+def to_server_event(
+    item: ChatStreamResult,
+    *,
+    context: MappingContext,
+) -> ServerEvent:
+    if item.request_id is not None and item.request_id != context.request_id:
+        raise InvariantViolation(
+            "chat stream request_id does not match HTTP MappingContext"
+        )
+    request_id = context.request_id
+    if isinstance(item, ChatToken):
+        return TokenEvent(
+            type="token",
+            session_id=item.session_id,
+            client_message_id=item.client_message_id,
+            request_id=request_id,
+            text=item.text,
+        )
+    if isinstance(item, ChatCompleted):
+        return MessageCompletedEvent(
+            type="message_completed",
+            session_id=item.session_id,
+            client_message_id=item.client_message_id,
+            request_id=request_id,
+            user_message=to_message_response(item.user_message),
+            assistant_message=to_message_response(item.assistant_message),
+        )
+    if isinstance(item, ChatFailed):
+        return MessageFailedEvent(
+            type="message_failed",
+            session_id=item.session_id,
+            client_message_id=item.client_message_id,
+            request_id=request_id,
+            error=ErrorEnvelope(
+                code=normalize_public_error_code(item.code),
+                message=item.message,
+                request_id=request_id,
+                retryable=None,
+            ),
+        )
+    raise TypeError(f"unexpected chat stream result: {type(item)!r}")

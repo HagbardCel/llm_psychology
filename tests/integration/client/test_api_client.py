@@ -153,40 +153,40 @@ async def test_one_shot_chat_stream_decodes_typed_events(
             )
         )
         assert state.active_session is not None
-        command = client.new_message_command(state.active_session.id, "hello")
+        session_id = state.active_session.id
+        client_message_id = uuid4()
+        request_id = uuid4()
 
         saw_token = False
-        async with client.open_chat() as chat:
-            async for event in chat.stream(command):
+        async with client.stream_message(
+            session_id,
+            "hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        ) as events:
+            async for event in events:
                 if isinstance(event, TokenEvent):
                     saw_token = True
-                    assert event.session_id == command.session_id
-                    assert event.client_message_id == command.client_message_id
-                    assert event.request_id == command.request_id
+                    assert event.session_id == session_id
+                    assert event.client_message_id == client_message_id
+                    assert event.request_id == request_id
                     continue
                 if isinstance(event, MessageCompletedEvent):
                     assert event.assistant_message.content == "assistant reply"
-                    assert event.client_message_id == command.client_message_id
+                    assert event.client_message_id == client_message_id
                     break
             else:
                 pytest.fail("expected MessageCompletedEvent")
         assert saw_token
 
-        async with client.open_chat() as chat:
-            async for event in chat.stream(
-                client.new_message_command(
-                    state.active_session.id,
-                    "hello",
-                    client_message_id=command.client_message_id,
-                )
-            ):
+        async with client.stream_message(
+            session_id,
+            "hello",
+            client_message_id=client_message_id,
+            request_id=uuid4(),
+        ) as events:
+            async for event in events:
                 if isinstance(event, MessageCompletedEvent):
                     break
             else:
                 pytest.fail("expected idempotent MessageCompletedEvent")
-            with pytest.raises(RuntimeError):
-                await anext(
-                    chat.stream(
-                        client.new_message_command(state.active_session.id, "again")
-                    )
-                )

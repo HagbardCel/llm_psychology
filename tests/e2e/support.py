@@ -167,11 +167,11 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
     assert "snapshot" in categories
     assert "chat_send" in categories
     assert any(
-        entry.get("category") == "ws_event" and entry.get("type") == "token"
+        entry.get("category") == "chat_event" and entry.get("type") == "token"
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "ws_event" and entry.get("type") == "message_completed"
+        entry.get("category") == "chat_event" and entry.get("type") == "message_completed"
         for entry in timeline
     )
     assert any(
@@ -185,7 +185,7 @@ def assert_successful_timeline(timeline: list[dict[str, Any]]) -> None:
         for entry in timeline
     )
     assert any(
-        entry.get("category") == "ws_event"
+        entry.get("category") == "chat_event"
         and entry.get("type") == "message_completed"
         and entry.get("client_message_id")
         for entry in timeline

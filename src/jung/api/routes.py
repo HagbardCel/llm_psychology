@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, status
+from starlette.responses import StreamingResponse
 
 from jung.api.contracts import (
     AppSnapshotResponse,
+    ChatRequest,
     HealthResponse,
     ProfileResponse,
     ProfileUpdateRequest,
@@ -24,10 +28,13 @@ from jung.api.errors import (
     CONFLICT_RESPONSES,
     NOT_FOUND_RESPONSES,
     not_ready_error_response,
+    to_error_envelope,
 )
 from jung.api.mapping import (
     MappingContext,
+    build_error_event,
     to_profile_response,
+    to_server_event,
     to_session_history_response,
     to_session_summary,
     to_snapshot_response,
@@ -35,12 +42,17 @@ from jung.api.mapping import (
     to_style_options_response,
 )
 from jung.application import TherapyApplication
+from jung.diagnostics import diagnostic_context
 from jung.domain.commands import (
     EndSession,
     SelectStyle,
+    SendMessage,
     UpdateProfile,
 )
+from jung.domain.errors import DomainError
 from jung.domain.models import Profile
+
+logger = logging.getLogger(__name__)
 
 RequestIdHeader = Annotated[
     str | None,
@@ -62,6 +74,63 @@ router = APIRouter(
 
 def _context(request: Request) -> MappingContext:
     return MappingContext(request_id=request.state.request_id)
+
+
+def _log_safe_exception(
+    message: str,
+    *,
+    request_id: UUID,
+    exc: Exception,
+) -> None:
+    logger.error(
+        message,
+        extra={
+            "request_id": str(request_id),
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+
+async def _stream_chat(
+    application: TherapyApplication,
+    command: SendMessage,
+    *,
+    context: MappingContext,
+    session_id: UUID,
+    client_message_id: UUID,
+) -> AsyncIterator[str]:
+    with diagnostic_context(
+        request_id=str(context.request_id),
+        session_id=str(session_id),
+        client_message_id=str(client_message_id),
+    ):
+        try:
+            async for item in application.stream_message(command):
+                event = to_server_event(item, context=context)
+                yield event.model_dump_json() + "\n"
+        except DomainError as exc:
+            envelope = to_error_envelope(exc, request_id=context.request_id)
+            event = build_error_event(
+                envelope,
+                context=context,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            )
+            yield event.model_dump_json() + "\n"
+        except Exception as exc:
+            _log_safe_exception(
+                "chat stream failed",
+                request_id=context.request_id,
+                exc=exc,
+            )
+            envelope = to_error_envelope(exc, request_id=context.request_id)
+            event = build_error_event(
+                envelope,
+                context=context,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            )
+            yield event.model_dump_json() + "\n"
 
 
 @router.get(
@@ -216,6 +285,45 @@ async def retry_operation(
     context = _context(request)
     snapshot = await application.retry_operation()
     return to_snapshot_response(snapshot, context=context)
+
+
+@router.post(
+    "/chat",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "NDJSON chat event stream",
+            "content": {
+                "application/x-ndjson": {
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        **COMMON_ERROR_RESPONSES,
+    },
+)
+async def chat(
+    body: ChatRequest,
+    request: Request,
+    application: TherapyApplication = Depends(get_application),
+) -> StreamingResponse:
+    context = _context(request)
+    command = SendMessage(
+        session_id=body.session_id,
+        client_message_id=body.client_message_id,
+        content=body.content,
+        request_id=context.request_id,
+    )
+    return StreamingResponse(
+        _stream_chat(
+            application,
+            command,
+            context=context,
+            session_id=body.session_id,
+            client_message_id=body.client_message_id,
+        ),
+        media_type="application/x-ndjson",
+    )
 
 
 @router.get(

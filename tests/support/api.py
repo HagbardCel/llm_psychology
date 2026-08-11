@@ -87,6 +87,7 @@ class HoldingFakeLLM(FakeLLM):
         super().__init__(expectations)
         self._release_event = release_event or asyncio.Event()
         self.first_chunk_emitted = asyncio.Event()
+        self.stream_closed = asyncio.Event()
 
     def release(self) -> None:
         self._release_event.set()
@@ -97,12 +98,15 @@ class HoldingFakeLLM(FakeLLM):
         policy: ModelPolicy,
     ) -> AsyncIterator[str]:
         held = False
-        async for chunk in super().stream_text(messages, policy):
-            yield chunk
-            if not held:
-                held = True
-                self.first_chunk_emitted.set()
-                await self._release_event.wait()
+        try:
+            async for chunk in super().stream_text(messages, policy):
+                yield chunk
+                if not held:
+                    held = True
+                    self.first_chunk_emitted.set()
+                    await self._release_event.wait()
+        finally:
+            self.stream_closed.set()
 
 
 @dataclass(frozen=True)

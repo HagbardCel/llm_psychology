@@ -86,6 +86,14 @@ class SelectStyleRequest(BaseModel):
     style_id: str
 
 
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: UUID
+    client_message_id: UUID
+    content: str
+
+
 class SendMessageCommand(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
