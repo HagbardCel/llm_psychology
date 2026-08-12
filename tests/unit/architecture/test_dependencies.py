@@ -44,7 +44,7 @@ API_BACKEND_FORBIDDEN_MODULES = (
     "jung.workflow",
 )
 
-_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic"})
+_CLIENT_ALLOWED_EXTERNAL_ROOTS = frozenset({"httpx", "pydantic", "prompt_toolkit"})
 
 _CONTRACTS_FORBIDDEN_PREFIXES = (
     "jung.domain",
@@ -222,7 +222,7 @@ def test_api_does_not_import_backend_implementations() -> None:
 
 
 def test_client_uses_contract_only_import_allow_list() -> None:
-    """Client package may import stdlib, httpx/pydantic, contracts, and itself."""
+    """Client may import stdlib, approved client libraries, API contracts, and itself."""
     if not CLIENT_SRC.exists():
         return
 

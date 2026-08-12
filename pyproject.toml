@@ -15,6 +15,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "httpx",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.scripts]
