@@ -90,18 +90,29 @@ async def running_local_api(
                 raise
 
         serve_task = asyncio.create_task(_serve())
-        body_error: BaseException | None = None
+        primary_error: BaseException | None = None
 
         try:
             await _wait_for_uvicorn_start(server, serve_task)
             try:
                 yield f"http://{_MANAGED_API_HOST}:{port}"
             except BaseException as exc:
-                body_error = exc
+                primary_error = exc
                 raise
         finally:
             server.should_exit = True
-            shutdown_failure = await _shutdown_owned_serve_task(serve_task)
+            shutdown_failure: BaseException | None = None
 
-            if body_error is None and shutdown_failure is not None:
+            try:
+                shutdown_failure = await _shutdown_owned_serve_task(serve_task)
+            except asyncio.CancelledError as exc:
+                if primary_error is None:
+                    raise
+                shutdown_failure = exc
+            except Exception as exc:
+                if primary_error is None:
+                    raise
+                shutdown_failure = exc
+
+            if primary_error is None and shutdown_failure is not None:
                 raise shutdown_failure

@@ -34,6 +34,32 @@ def _probe_application_factory(store, fake_llm):
     return factory
 
 
+def _gated_application_factory(
+    store,
+    fake_llm,
+    *,
+    teardown_started: asyncio.Event,
+    release_teardown: asyncio.Event,
+    teardown_completed: asyncio.Event,
+):
+    base_factory = application_factory(store, fake_llm)
+
+    @asynccontextmanager
+    async def factory(settings: JungSettings):
+        try:
+            async with base_factory(settings) as application:
+                try:
+                    yield application
+                finally:
+                    teardown_started.set()
+                    _FactoryExitProbe.exited = True
+                    await release_teardown.wait()
+        finally:
+            teardown_completed.set()
+
+    return factory
+
+
 async def _connection_refused(base_url: str) -> bool:
     host, port_text = base_url.removeprefix("http://").split(":", 1)
     port = int(port_text)
@@ -141,28 +167,88 @@ async def test_running_local_api_body_cancellation_survives_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_running_local_api_repeated_cancellation_preserves_primary(
+async def test_running_local_api_body_exception_survives_cleanup_cancellation(
     store,
     fake_llm,
     api_settings: JungSettings,
 ) -> None:
     _FactoryExitProbe.exited = False
+    teardown_started = asyncio.Event()
+    release_teardown = asyncio.Event()
+    teardown_completed = asyncio.Event()
+    base_url_holder: list[str] = []
 
-    async def cancel_during_body() -> None:
+    async def runner() -> None:
         async with running_local_api(
             api_settings,
-            application_factory=_probe_application_factory(store, fake_llm),
-        ):
-            current = asyncio.current_task()
-            assert current is not None
-            current.cancel()
-            await asyncio.sleep(0)
-            raise asyncio.CancelledError()
+            application_factory=_gated_application_factory(
+                store,
+                fake_llm,
+                teardown_started=teardown_started,
+                release_teardown=release_teardown,
+                teardown_completed=teardown_completed,
+            ),
+        ) as base_url:
+            base_url_holder.append(base_url)
+            raise ValueError("primary")
+
+    runner_task = asyncio.create_task(runner())
+    await teardown_started.wait()
+    runner_task.cancel()
+    release_teardown.set()
+
+    with pytest.raises(ValueError, match="primary"):
+        await runner_task
+
+    assert teardown_completed.is_set()
+    assert _FactoryExitProbe.exited is True
+    assert base_url_holder
+    assert await _connection_refused(base_url_holder[0]) is True
+
+
+@pytest.mark.asyncio
+async def test_running_local_api_repeated_cancellation_during_real_teardown(
+    store,
+    fake_llm,
+    api_settings: JungSettings,
+) -> None:
+    _FactoryExitProbe.exited = False
+    body_started = asyncio.Event()
+    body_block = asyncio.Event()
+    teardown_started = asyncio.Event()
+    release_teardown = asyncio.Event()
+    teardown_completed = asyncio.Event()
+    base_url_holder: list[str] = []
+
+    async def runner() -> None:
+        async with running_local_api(
+            api_settings,
+            application_factory=_gated_application_factory(
+                store,
+                fake_llm,
+                teardown_started=teardown_started,
+                release_teardown=release_teardown,
+                teardown_completed=teardown_completed,
+            ),
+        ) as base_url:
+            base_url_holder.append(base_url)
+            body_started.set()
+            await body_block.wait()
+
+    runner_task = asyncio.create_task(runner())
+    await body_started.wait()
+    runner_task.cancel()
+    await teardown_started.wait()
+    runner_task.cancel()
+    release_teardown.set()
 
     with pytest.raises(asyncio.CancelledError):
-        await cancel_during_body()
+        await runner_task
 
+    assert teardown_completed.is_set()
     assert _FactoryExitProbe.exited is True
+    assert base_url_holder
+    assert await _connection_refused(base_url_holder[0]) is True
 
 
 @pytest.mark.asyncio

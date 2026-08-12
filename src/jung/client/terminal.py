@@ -31,19 +31,41 @@ _DEDICATED_STDIN_EXECUTOR = ThreadPoolExecutor(
     thread_name_prefix="jung-stdin",
 )
 
+_UNSUPPORTED_STDIN = object()
+
+
+class _StdinReaderUnsupported(Exception):
+    """Raised when the event-loop reader backend cannot be registered."""
+
 
 class TerminalOutput(ConsoleOutput, Protocol):
     def render_client_error(self, error: JungClientError) -> None: ...
 
 
+async def _read_stdin_line_blocking() -> str:
+    line = await asyncio.to_thread(sys.stdin.readline)
+    if line == "":
+        raise EOFError
+    return line.rstrip("\r\n")
+
+
 async def _read_stdin_line_cancellable() -> str:
     loop = asyncio.get_running_loop()
-    fd = sys.stdin.fileno()
+
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, ValueError, OSError):
+        return await _read_stdin_line_blocking()
 
     try:
         return await _read_stdin_line_with_reader(loop, fd)
-    except (NotImplementedError, RuntimeError, ValueError, OSError):
-        return await _read_stdin_line_with_select_thread()
+    except _StdinReaderUnsupported:
+        pass
+
+    result = await _read_stdin_line_with_select_thread()
+    if result is _UNSUPPORTED_STDIN:
+        return await _read_stdin_line_blocking()
+    return result
 
 
 async def _read_stdin_line_with_reader(loop: asyncio.AbstractEventLoop, fd: int) -> str:
@@ -64,7 +86,11 @@ async def _read_stdin_line_with_reader(loop: asyncio.AbstractEventLoop, fd: int)
             else:
                 future.set_result(line.rstrip("\r\n"))
 
-    loop.add_reader(fd, on_readable)
+    try:
+        loop.add_reader(fd, on_readable)
+    except (NotImplementedError, RuntimeError, ValueError, OSError) as exc:
+        raise _StdinReaderUnsupported from exc
+
     try:
         return await future
     except asyncio.CancelledError:
@@ -75,35 +101,32 @@ async def _read_stdin_line_with_reader(loop: asyncio.AbstractEventLoop, fd: int)
         raise
 
 
-async def _read_stdin_line_with_select_thread() -> str:
+async def _read_stdin_line_with_select_thread() -> str | object:
     loop = asyncio.get_running_loop()
     cancel = threading.Event()
 
-    def worker() -> str | None:
+    def worker() -> str | object:
         while not cancel.is_set():
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.1)
             except (ValueError, OSError):
-                return None
+                return _UNSUPPORTED_STDIN
+            if cancel.is_set():
+                break
             if ready:
                 line = sys.stdin.readline()
                 if line == "":
                     raise EOFError
                 return line.rstrip("\r\n")
-        return None
+        raise RuntimeError("stdin select worker stopped")
 
     read_task = loop.run_in_executor(_DEDICATED_STDIN_EXECUTOR, worker)
     try:
-        line = await read_task
+        return await read_task
     except asyncio.CancelledError:
         cancel.set()
         read_task.cancel()
         raise
-
-    if line is None:
-        raise asyncio.CancelledError()
-
-    return line
 
 
 class HumanInputProvider:
