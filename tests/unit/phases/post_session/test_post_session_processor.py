@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from jung.domain.models import Plan, Profile
 from jung.llm.errors import InvalidLLMOutput
-from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.post_session.models import (
     InterventionCitation,
@@ -24,6 +23,7 @@ from jung.phases.post_session.models import (
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
+from tests.support.fake_llm import FailureExpectation, FakeLLM, StructuredExpectation
 
 
 def _plan() -> Plan:

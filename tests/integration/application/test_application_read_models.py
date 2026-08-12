@@ -11,8 +11,8 @@ import pytest
 from jung.domain.commands import UpdateProfile
 from jung.domain.errors import InvariantViolation
 from jung.domain.models import Profile, Stage
-from jung.llm.fake import FakeLLM
 from jung.persistence.sqlite_store import SQLiteStore
+from tests.support.fake_llm import FakeLLM
 
 from .application_fixtures import build_test_application
 from .assessment_test_data import assessment_result_data

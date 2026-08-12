@@ -22,9 +22,9 @@ from jung.domain.models import (
 )
 from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.errors import LLMUnavailable
-from jung.llm.fake import FailureExpectation, FakeLLM
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
+from tests.support.fake_llm import FailureExpectation, FakeLLM
 
 from .application_fixtures import (
     build_test_application,

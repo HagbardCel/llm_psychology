@@ -11,9 +11,9 @@ import pytest
 from jung.domain.commands import SendMessage
 from jung.domain.models import MessageRole
 from jung.domain.results import ChatCompleted
-from jung.llm.fake import FakeLLM, StreamExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
+from tests.support.fake_llm import FakeLLM, StreamExpectation
 
 from .application_fixtures import build_test_application, collect_stream
 from .scenarios import advance_to_ready

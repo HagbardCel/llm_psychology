@@ -16,10 +16,10 @@ from jung.domain.models import (
     Stage,
 )
 from jung.llm.errors import LLMTimeout
-from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
+from tests.support.fake_llm import FailureExpectation, FakeLLM, StructuredExpectation
 
 from .application_fixtures import (
     assessment_result,

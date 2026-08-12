@@ -18,11 +18,11 @@ from jung.domain.models import (
     Stage,
 )
 from jung.domain.results import ChatCompleted
-from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
+from tests.support.fake_llm import FakeLLM, StreamExpectation, StructuredExpectation
 
 from .application_fixtures import (
     assessment_result,

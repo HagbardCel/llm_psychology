@@ -19,13 +19,13 @@ from httpx import ASGITransport
 
 from jung.api.app import create_app
 from jung.config import JungSettings
-from jung.llm.fake import Expectation, FakeLLM
 from jung.llm.gateway import ChatMessage, LLMTask, ModelPolicy
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.application.application_fixtures import (
     TestApplicationRuntime,
     build_test_application,
 )
+from tests.support.fake_llm import Expectation, FakeLLM
 from tests.support.settings import settings_for_database
 
 T = TypeVar("T", bound=object)

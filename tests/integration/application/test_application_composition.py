@@ -12,10 +12,10 @@ import pytest
 from jung.application import TherapyApplication
 from jung.composition import application_context
 from jung.domain.models import Stage
-from jung.llm.fake import FakeLLM
 from jung.llm.gateway import AdapterConfig, LLMTask
 from jung.llm.structured import UnsupportedStrictSchema
 from jung.phases.intake.models import IntakeRecordPatch
+from tests.support.fake_llm import FakeLLM
 from tests.support.settings import make_test_settings
 
 pytestmark = pytest.mark.asyncio

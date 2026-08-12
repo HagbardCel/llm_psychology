@@ -26,16 +26,16 @@ from jung.domain.models import (
 )
 from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
-from jung.llm.fake import (
+from jung.llm.gateway import LLMTask
+from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.assessment.models import AssessmentResult
+from jung.phases.intake.models import IntakeRecordPatch
+from tests.support.fake_llm import (
     FailureExpectation,
     FakeLLM,
     StreamExpectation,
     StructuredExpectation,
 )
-from jung.llm.gateway import LLMTask
-from jung.persistence.sqlite_store import SQLiteStore
-from jung.phases.assessment.models import AssessmentResult
-from jung.phases.intake.models import IntakeRecordPatch
 
 from .application_fixtures import (
     assessment_result,

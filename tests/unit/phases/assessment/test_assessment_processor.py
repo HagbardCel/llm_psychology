@@ -6,7 +6,6 @@ import pytest
 
 from jung.domain.models import PlanContent, Profile
 from jung.llm.errors import InvalidLLMOutput
-from jung.llm.fake import FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.assessment.models import (
     AssessmentInput,
@@ -16,6 +15,7 @@ from jung.phases.assessment.models import (
 from jung.phases.assessment.processor import AssessmentProcessor
 from jung.phases.intake.models import IntakeRecord
 from jung.styles import load_styles
+from tests.support.fake_llm import FakeLLM, StructuredExpectation
 
 
 def _plan() -> PlanContent:
