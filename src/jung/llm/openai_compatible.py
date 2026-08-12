@@ -466,7 +466,6 @@ class OpenAICompatibleLLM:
             try:
                 await self._close_sdk_stream(
                     sdk_stream,
-                    provider_attempt_id=provider_attempt_id,
                     policy=policy,
                     status=status,
                 )
@@ -510,7 +509,6 @@ class OpenAICompatibleLLM:
         self,
         sdk_stream: object | None,
         *,
-        provider_attempt_id: str | None,
         policy: ModelPolicy,
         status: str,
     ) -> None:
