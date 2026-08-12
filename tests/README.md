@@ -12,13 +12,15 @@ the `real_llm` gate.
 
 ```
 tests/
-├── support/                 # Cross-suite helpers (API fixtures, local-model clients)
+├── support/                 # Cross-suite helpers (API fixtures, FakeLLM, local-model clients)
+│   └── fake_llm.py          # Scripted LLMGateway for deterministic tests
 ├── unit/                    # Fast, deterministic, no I/O
 │   ├── architecture/        # Import-boundary checks over src/jung
 │   ├── domain/              # Domain models, workflow transitions, grounding types
 │   ├── application/         # Application invariants and worker-error classification
 │   ├── phases/              # intake / assessment / therapy / post_session logic
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
+│   ├── support/             # Tests for test-support helpers (FakeLLM)
 │   ├── client/              # Console rendering, NDJSON chat stream, correlation
 │   ├── api/                 # Contracts, error mapping, HTTP chat stream
 │   └── smoke/               # Unit tests for the smoke helpers themselves
@@ -34,8 +36,10 @@ tests/
 `evals/` sits beside `tests/` and holds the opt-in real-model suites. See
 [`evals/README.md`](../evals/README.md).
 
-`tests/support/local_llm.py` owns connection and client construction shared by
-every real-model suite; suite-specific acceptance policy stays in that suite.
+`tests/support/fake_llm.py` owns the scripted `FakeLLM` gateway used by
+deterministic unit, integration, and E2E tests. `tests/support/local_llm.py`
+owns connection and client construction shared by every real-model suite;
+suite-specific acceptance policy stays in that suite.
 
 Pytest discovery under `tests/unit` and `tests/integration` is authoritative.
 There is no Makefile path allowlist. Console E2E lives under `tests/e2e` and

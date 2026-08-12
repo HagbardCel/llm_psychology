@@ -28,6 +28,7 @@ The supported runtime is a lean, local-first therapist application that:
 | Persistence | Python `sqlite3`, SQLite WAL |
 | LLM integration | OpenAI Python SDK against OpenAI-compatible Chat Completions endpoints |
 | HTTP client | HTTPX |
+| Console input | prompt_toolkit |
 | Package management | uv |
 | Tests | pytest + pytest-asyncio |
 | Quality | Ruff |
