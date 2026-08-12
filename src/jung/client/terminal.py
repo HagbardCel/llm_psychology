@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import select
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Protocol
 
 from jung.api.contracts import (
     AppSnapshotResponse,
@@ -16,18 +20,96 @@ from jung.client.console import (
     ConsoleApp,
     ConsoleExitRequested,
     ConsoleOperationFailed,
+    ConsoleOutput,
     ErrorDisplay,
+    InputProvider,
     PromptSpec,
 )
+
+_DEDICATED_STDIN_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="jung-stdin",
+)
+
+
+class TerminalOutput(ConsoleOutput, Protocol):
+    def render_client_error(self, error: JungClientError) -> None: ...
+
+
+async def _read_stdin_line_cancellable() -> str:
+    loop = asyncio.get_running_loop()
+    fd = sys.stdin.fileno()
+
+    try:
+        return await _read_stdin_line_with_reader(loop, fd)
+    except (NotImplementedError, RuntimeError, ValueError, OSError):
+        return await _read_stdin_line_with_select_thread()
+
+
+async def _read_stdin_line_with_reader(loop: asyncio.AbstractEventLoop, fd: int) -> str:
+    future: asyncio.Future[str] = loop.create_future()
+
+    def on_readable() -> None:
+        loop.remove_reader(fd)
+        try:
+            line = sys.stdin.readline()
+        except Exception as exc:
+            if not future.done():
+                future.set_exception(exc)
+            return
+
+        if not future.done():
+            if line == "":
+                future.set_exception(EOFError())
+            else:
+                future.set_result(line.rstrip("\r\n"))
+
+    loop.add_reader(fd, on_readable)
+    try:
+        return await future
+    except asyncio.CancelledError:
+        try:
+            loop.remove_reader(fd)
+        except (NotImplementedError, RuntimeError, ValueError, OSError):
+            pass
+        raise
+
+
+async def _read_stdin_line_with_select_thread() -> str:
+    loop = asyncio.get_running_loop()
+    cancel = threading.Event()
+
+    def worker() -> str | None:
+        while not cancel.is_set():
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            except (ValueError, OSError):
+                return None
+            if ready:
+                line = sys.stdin.readline()
+                if line == "":
+                    raise EOFError
+                return line.rstrip("\r\n")
+        return None
+
+    read_task = loop.run_in_executor(_DEDICATED_STDIN_EXECUTOR, worker)
+    try:
+        line = await read_task
+    except asyncio.CancelledError:
+        cancel.set()
+        read_task.cancel()
+        raise
+
+    if line is None:
+        raise asyncio.CancelledError()
+
+    return line
 
 
 class HumanInputProvider:
     async def read(self, prompt: PromptSpec) -> str:
         print(prompt.text, end="", flush=True)
-        line = await asyncio.to_thread(sys.stdin.readline)
-        if line == "":
-            raise EOFError
-        return line.rstrip("\r\n")
+        return await _read_stdin_line_cancellable()
 
 
 class TerminalConsoleOutput:
@@ -117,6 +199,33 @@ def cli() -> int:
     return asyncio.run(_async_cli())
 
 
+async def run_console(
+    settings: ClientSettings,
+    *,
+    input_provider: InputProvider | None = None,
+    output: TerminalOutput | None = None,
+) -> int:
+    console_input = input_provider or HumanInputProvider()
+    console_output = output or TerminalConsoleOutput()
+
+    try:
+        async with JungApiClient(settings) as client:
+            await ConsoleApp(
+                client=client,
+                input=console_input,
+                output=console_output,
+            ).run()
+    except ConsoleExitRequested:
+        return 0
+    except ConsoleOperationFailed:
+        return 1
+    except JungClientError as exc:
+        console_output.render_client_error(exc)
+        return 3
+
+    return 0
+
+
 async def _async_cli() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -124,24 +233,7 @@ async def _async_cli() -> int:
     if args.transport_timeout is not None:
         settings_kwargs["transport_timeout"] = args.transport_timeout
     settings = ClientSettings(**settings_kwargs)
-    output = TerminalConsoleOutput()
-
-    try:
-        async with JungApiClient(settings) as client:
-            await ConsoleApp(
-                client=client,
-                input=HumanInputProvider(),
-                output=output,
-            ).run()
-    except ConsoleExitRequested:
-        return 0
-    except ConsoleOperationFailed:
-        return 1
-    except JungClientError as exc:
-        output.render_client_error(exc)
-        return 3
-
-    return 0
+    return await run_console(settings)
 
 
 if __name__ == "__main__":
