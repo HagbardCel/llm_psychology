@@ -14,7 +14,6 @@ from jung.api.contracts import (
     TokenEvent,
 )
 from jung.client.api_client import ClientSettings, JungApiClient
-from jung.llm.fake import FakeLLM
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.application.application_fixtures import (
@@ -27,6 +26,7 @@ from tests.support.api import (
     create_test_api_app,
     run_uvicorn_api,
 )
+from tests.support.fake_llm import FakeLLM
 
 pytestmark = pytest.mark.asyncio
 

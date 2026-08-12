@@ -19,18 +19,18 @@ from jung.api.contracts import (
 from jung.client.api_client import ServerEventAdapter
 from jung.domain.errors import InvariantViolation
 from jung.llm.errors import LLMUnavailable
-from jung.llm.fake import (
-    FailureExpectation,
-    FakeLLM,
-    StreamExpectation,
-    StructuredExpectation,
-)
 from jung.llm.gateway import LLMTask
 from jung.phases.intake.models import IntakeRecordPatch
 from tests.integration.application.application_fixtures import (
     intake_message_expectations,
 )
 from tests.support.api import HoldingFakeLLM, RuntimeProbe
+from tests.support.fake_llm import (
+    FailureExpectation,
+    FakeLLM,
+    StreamExpectation,
+    StructuredExpectation,
+)
 
 pytestmark = pytest.mark.asyncio
 

@@ -10,7 +10,6 @@ from httpx import AsyncClient
 
 from jung.domain.models import OperationStatus, Stage
 from jung.llm.errors import LLMTimeout
-from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
@@ -25,6 +24,7 @@ from tests.integration.application.scenarios import (
     open_intake,
 )
 from tests.support.api import application_factory
+from tests.support.fake_llm import FailureExpectation, FakeLLM, StructuredExpectation
 
 
 @pytest.mark.asyncio

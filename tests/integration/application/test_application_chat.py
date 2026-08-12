@@ -13,15 +13,15 @@ from jung.domain.errors import Busy, InvalidCommand
 from jung.domain.models import CommandName, MessageRole, Profile, Stage
 from jung.domain.results import ChatCompleted, ChatFailed, ChatStreamResult, ChatToken
 from jung.llm.errors import LLMTimeout
-from jung.llm.fake import (
+from jung.llm.gateway import LLMTask
+from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.intake.models import IntakeRecordPatch
+from tests.support.fake_llm import (
     FailureExpectation,
     FakeLLM,
     StreamExpectation,
     StructuredExpectation,
 )
-from jung.llm.gateway import LLMTask
-from jung.persistence.sqlite_store import SQLiteStore
-from jung.phases.intake.models import IntakeRecordPatch
 
 from .application_fixtures import (
     build_test_application,

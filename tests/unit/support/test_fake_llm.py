@@ -10,13 +10,11 @@ from pydantic import BaseModel
 from jung.llm import (
     ChatMessage,
     ChatRole,
-    FakeLLM,
     LLMTask,
     ModelPolicy,
-    StreamExpectation,
-    StructuredExpectation,
     StructuredOutputMode,
 )
+from tests.support.fake_llm import FakeLLM, StreamExpectation, StructuredExpectation
 
 
 class _SampleOutput(BaseModel):

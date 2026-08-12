@@ -1,4 +1,4 @@
-"""Project-owned LLM gateway and test doubles."""
+"""Project-owned LLM gateway and provider infrastructure."""
 
 from jung.llm.errors import (
     InvalidLLMOutput,
@@ -6,12 +6,6 @@ from jung.llm.errors import (
     LLMProtocolError,
     LLMTimeout,
     LLMUnavailable,
-)
-from jung.llm.fake import (
-    FailureExpectation,
-    FakeLLM,
-    StreamExpectation,
-    StructuredExpectation,
 )
 from jung.llm.gateway import (
     AdapterConfig,
@@ -30,8 +24,6 @@ __all__ = [
     "AdapterConfig",
     "ChatMessage",
     "ChatRole",
-    "FailureExpectation",
-    "FakeLLM",
     "InvalidLLMOutput",
     "LLMError",
     "LLMGateway",
@@ -42,8 +34,6 @@ __all__ = [
     "ModelPolicy",
     "ObservedLLMGateway",
     "OpenAICompatibleLLM",
-    "StreamExpectation",
-    "StructuredExpectation",
     "StructuredOutputMode",
     "TaskOverride",
     "build_model_policies",

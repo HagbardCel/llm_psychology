@@ -19,7 +19,6 @@ from jung.client.api_client import ClientSettings, JungApiClient
 from jung.client.console import ConsoleApp, ConsoleExitRequested
 from jung.client.terminal import TerminalConsoleOutput, run_console
 from jung.domain.models import OperationKind, OperationStatus, SessionKind
-from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
@@ -36,6 +35,7 @@ from tests.integration.application.application_fixtures import (
     post_session_expectations,
 )
 from tests.support.api import application_factory, run_uvicorn_api
+from tests.support.fake_llm import FakeLLM, StreamExpectation, StructuredExpectation
 
 pytestmark = pytest.mark.asyncio
 

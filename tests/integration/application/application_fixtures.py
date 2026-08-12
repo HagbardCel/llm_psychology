@@ -17,7 +17,6 @@ from jung.domain.models import (
     Stage,
 )
 from jung.domain.results import ChatStreamResult
-from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.policies import TaskOverride, build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
@@ -43,6 +42,7 @@ from jung.phases.post_session.models import (
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
+from tests.support.fake_llm import FakeLLM, StreamExpectation, StructuredExpectation
 
 from .assessment_test_data import assessment_result_data, plan_content
 

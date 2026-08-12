@@ -9,7 +9,6 @@ import pytest
 from jung.client.api_client import ClientSettings, JungApiClient
 from jung.domain.models import OperationStatus
 from jung.llm.errors import LLMTimeout
-from jung.llm.fake import FailureExpectation, FakeLLM, StructuredExpectation
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
@@ -31,6 +30,7 @@ from tests.support.api import (
     create_test_api_app,
     run_uvicorn_api,
 )
+from tests.support.fake_llm import FailureExpectation, FakeLLM, StructuredExpectation
 
 pytestmark = pytest.mark.asyncio
 

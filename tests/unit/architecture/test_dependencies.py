@@ -149,6 +149,15 @@ def test_runtime_is_asyncio_only() -> None:
     assert violations == []
 
 
+def test_production_does_not_import_test_support() -> None:
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        for module in _resolved_imported_modules(path):
+            if module == "tests" or module.startswith("tests."):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
 def test_openai_sdk_is_confined_to_llm() -> None:
     violations: list[str] = []
     for path in _python_files(JUNG_SRC):

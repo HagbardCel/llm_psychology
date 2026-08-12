@@ -14,12 +14,6 @@ from pydantic import BaseModel
 
 from jung.diagnostics import DiagnosticRecorder
 from jung.llm.errors import LLMTimeout
-from jung.llm.fake import (
-    FailureExpectation,
-    FakeLLM,
-    StreamExpectation,
-    StructuredExpectation,
-)
 from jung.llm.gateway import (
     ChatMessage,
     ChatRole,
@@ -28,6 +22,12 @@ from jung.llm.gateway import (
     StructuredOutputMode,
 )
 from jung.llm.tracing import ObservedLLMGateway
+from tests.support.fake_llm import (
+    FailureExpectation,
+    FakeLLM,
+    StreamExpectation,
+    StructuredExpectation,
+)
 
 
 class _Answer(BaseModel):

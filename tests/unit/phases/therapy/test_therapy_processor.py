@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from jung.domain.models import Plan, Profile
-from jung.llm.fake import FakeLLM, StreamExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy
 from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.therapy.processor import TherapyProcessor
 from jung.styles import load_styles
+from tests.support.fake_llm import FakeLLM, StreamExpectation
 
 
 def _plan() -> Plan:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from jung.domain.models import Profile
-from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.phases.intake.models import (
     IntakeEvidence,
@@ -15,6 +14,7 @@ from jung.phases.intake.models import (
 )
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.transcript import TranscriptTurn
+from tests.support.fake_llm import FakeLLM, StreamExpectation, StructuredExpectation
 
 
 def _policies() -> tuple[ModelPolicy, ModelPolicy]:

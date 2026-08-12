@@ -17,7 +17,6 @@ from jung.client.api_client import (
     JungApiClient,
     JungApiError,
 )
-from jung.llm.fake import FakeLLM
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.application.application_fixtures import (
     intake_message_expectations,
@@ -27,6 +26,7 @@ from tests.integration.application.scenarios import (
     complete_intake_for_assessment,
     open_intake,
 )
+from tests.support.fake_llm import FakeLLM
 
 pytestmark = pytest.mark.asyncio
 
