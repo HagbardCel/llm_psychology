@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from jung.client.terminal import (
     _async_cli,
     _build_parser,
     cli,
+    run_console,
 )
 
 
@@ -41,7 +43,10 @@ def test_build_parser_accepts_transport_timeout() -> None:
 @pytest.mark.asyncio
 async def test_human_input_provider_reads_line() -> None:
     provider = HumanInputProvider()
-    with patch("sys.stdin.readline", return_value="hello\n"):
+    with patch(
+        "jung.client.terminal._read_stdin_line_cancellable",
+        AsyncMock(return_value="hello"),
+    ):
         result = await provider.read(PromptSpec(text="> "))
     assert result == "hello"
 
@@ -49,9 +54,31 @@ async def test_human_input_provider_reads_line() -> None:
 @pytest.mark.asyncio
 async def test_human_input_provider_eof_raises() -> None:
     provider = HumanInputProvider()
-    with patch("sys.stdin.readline", return_value=""):
+    with patch(
+        "jung.client.terminal._read_stdin_line_cancellable",
+        AsyncMock(side_effect=EOFError()),
+    ):
         with pytest.raises(EOFError):
             await provider.read(PromptSpec(text="> "))
+
+
+@pytest.mark.asyncio
+async def test_human_input_provider_cancel_pending_read_completes_promptly() -> None:
+    provider = HumanInputProvider()
+
+    async def hang() -> str:
+        await asyncio.Event().wait()
+        return "never"
+
+    with patch(
+        "jung.client.terminal._read_stdin_line_cancellable",
+        side_effect=hang,
+    ):
+        read_task = asyncio.create_task(provider.read(PromptSpec(text="> ")))
+        await asyncio.sleep(0)
+        read_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(read_task, timeout=0.5)
 
 
 def test_terminal_output_assistant_stream_lifecycle(
@@ -176,3 +203,57 @@ async def test_async_cli_maps_jung_client_errors_to_exit_three(
     ):
         assert await _async_cli() == 3
     assert "Client error:" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_console_maps_exit_codes() -> None:
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    settings = MagicMock()
+
+    with patch("jung.client.terminal.JungApiClient", return_value=mock_client):
+        with patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleExitRequested),
+        ):
+            assert await run_console(settings) == 0
+
+        with patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(side_effect=ConsoleOperationFailed()),
+        ):
+            assert await run_console(settings) == 1
+
+        with patch(
+            "jung.client.terminal.ConsoleApp.run",
+            AsyncMock(
+                side_effect=JungApiError(
+                    status=503,
+                    error=ErrorResponse(
+                        code="not_ready",
+                        message="x",
+                        request_id=uuid4(),
+                        retryable=True,
+                    ),
+                )
+            ),
+        ):
+            output = TerminalConsoleOutput()
+            assert await run_console(settings, output=output) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_cli_delegates_to_run_console() -> None:
+    with (
+        patch("sys.argv", ["jung-console", "--api-url", "http://localhost:8000"]),
+        patch(
+            "jung.client.terminal.run_console",
+            AsyncMock(return_value=0),
+        ) as run_console_mock,
+    ):
+        assert await _async_cli() == 0
+
+    run_console_mock.assert_awaited_once()
+    settings = run_console_mock.await_args.args[0]
+    assert settings.base_url == "http://localhost:8000"
