@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
-from jung._async_cleanup import close_awaitable_safely
 from jung.llm.gateway import LLMGateway, ModelPolicy
 from jung.phases.intake.completion import intake_record_completion_decision
 from jung.phases.intake.merge import merge_intake_record_patch_with_diagnostics
@@ -21,8 +18,6 @@ from jung.phases.intake.prompts import (
     build_patch_extraction_messages,
     build_response_messages,
 )
-
-logger = logging.getLogger(__name__)
 
 _FAILURE_STATUSES = frozenset(
     {"empty_after_validation", "merge_failure"},
@@ -112,33 +107,11 @@ class IntakeProcessor:
             response_messages=response_messages,
         )
 
-    async def stream_response(self, plan: IntakeTurnPlan) -> AsyncIterator[str]:
-        preserve_close_cancellation = False
-        inner = self._gateway.stream_text(
+    def stream_response(self, plan: IntakeTurnPlan) -> AsyncGenerator[str, None]:
+        return self._gateway.stream_text(
             plan.response_messages,
             self._response_policy,
         )
-        try:
-            async for chunk in inner:
-                yield chunk
-        except asyncio.CancelledError:
-            preserve_close_cancellation = True
-            raise
-        finally:
-            close = getattr(inner, "aclose", None)
-            if close is not None:
-
-                def _record_close_failure(exc: BaseException) -> None:
-                    logger.debug(
-                        "intake gateway stream aclose failed error_type=%s",
-                        type(exc).__name__,
-                    )
-
-                await close_awaitable_safely(
-                    close,
-                    record_failure=_record_close_failure,
-                    preserve_existing_cancellation=preserve_close_cancellation,
-                )
 
     def _latest_user_turn(self, input: IntakeTurnInput) -> TranscriptTurn | None:
         if not input.transcript:

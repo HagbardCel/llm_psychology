@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -83,7 +83,7 @@ class FakeLLM:
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         if self._expectations and isinstance(self._expectations[0], FailureExpectation):
             failure = self._expectations.pop(0)
             assert failure.task == policy.task

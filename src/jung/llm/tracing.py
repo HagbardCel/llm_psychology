@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -42,7 +42,7 @@ class ObservedLLMGateway:
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         call_id = self._recorder.next_id("llm") if self._recorder is not None else None
         started = time.perf_counter()
         first_chunk_at: float | None = None

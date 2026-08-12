@@ -30,16 +30,6 @@ SCHEMA_VERSION = 6
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-TARGET_TABLES = frozenset(
-    {
-        "profile",
-        "sessions",
-        "messages",
-        "plans",
-        "operations",
-    }
-)
-
 
 @contextmanager
 def connect(database_path: Path) -> Iterator[sqlite3.Connection]:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, TypeVar
@@ -77,11 +77,11 @@ class AdapterConfig:
 
 
 class LLMGateway(Protocol):
-    async def stream_text(
+    def stream_text(
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncGenerator[str, None]: ...
 
     async def generate_structured(
         self,
