@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeVar
 
@@ -308,7 +308,7 @@ class OpenAICompatibleLLM:
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         if not messages:
             raise LLMProtocolError("messages must not be empty")
         request = self._base_request(messages, policy)

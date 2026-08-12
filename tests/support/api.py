@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +61,7 @@ class RecordingFakeLLM:
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         self._recorded_tasks.append(policy.task)
         async for chunk in self._delegate.stream_text(messages, policy):
             yield chunk
@@ -96,7 +96,7 @@ class HoldingFakeLLM(FakeLLM):
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         held = False
         try:
             async for chunk in super().stream_text(messages, policy):
