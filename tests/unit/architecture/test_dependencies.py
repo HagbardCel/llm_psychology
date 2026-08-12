@@ -311,3 +311,58 @@ def test_llm_does_not_import_config() -> None:
             if module == "jung.config" or module.startswith("jung.config."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []
+
+
+_LOCAL_LAUNCHER_ALLOWED_JUNG_PREFIXES = (
+    "jung.api.server",
+    "jung.client",
+    "jung.config",
+)
+
+
+def test_only_local_may_import_api_server_outside_api_package() -> None:
+    server_module = "jung.api.server"
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        relative = path.relative_to(JUNG_SRC)
+        if relative.parts[0] == "api":
+            continue
+        if relative == Path("local.py"):
+            continue
+        for module in _resolved_imported_modules(path):
+            if module == server_module or module.startswith(f"{server_module}."):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+def test_only_local_may_import_client_outside_client_package() -> None:
+    violations: list[str] = []
+    for path in _python_files(JUNG_SRC):
+        relative = path.relative_to(JUNG_SRC)
+        if relative.parts[0] == "client":
+            continue
+        if relative == Path("local.py"):
+            continue
+        for module in _resolved_imported_modules(path):
+            if module == "jung.client" or module.startswith("jung.client."):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
+
+
+def test_local_launcher_is_outer_shell_only() -> None:
+    local_path = JUNG_SRC / "local.py"
+    if not local_path.exists():
+        return
+
+    violations: list[str] = []
+    for module in _resolved_imported_modules(local_path):
+        if not module.startswith("jung."):
+            continue
+        if any(
+            module == prefix or module.startswith(f"{prefix}.")
+            for prefix in _LOCAL_LAUNCHER_ALLOWED_JUNG_PREFIXES
+        ):
+            continue
+        violations.append(module)
+
+    assert violations == []

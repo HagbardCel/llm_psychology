@@ -105,8 +105,14 @@ src/jung/
 ├── _application/    private chat/operation/input helpers
 ├── workflow.py      pure workflow policy
 ├── composition.py   composition root
+├── local.py         local foreground operator shell
 └── config.py        environment-backed JungSettings
 ```
+
+`jung` is the canonical local operator entry point. It manages a private
+loopback API instance and the console in one foreground invocation, but the
+console still communicates exclusively through `/api/v1`. `jung-api` remains
+the standalone server entry point.
 
 `TherapyApplication` remains the sole application-facing type. Private helpers under
 `_application/` implement chat generation, durable operation tasks, phase-input

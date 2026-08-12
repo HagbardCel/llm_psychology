@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+import socket
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -13,9 +14,10 @@ from uuid import UUID
 
 import pytest
 
+from jung.api.server import running_local_api
 from jung.client.api_client import ClientSettings, JungApiClient
 from jung.client.console import ConsoleApp, ConsoleExitRequested
-from jung.client.terminal import TerminalConsoleOutput
+from jung.client.terminal import TerminalConsoleOutput, run_console
 from jung.domain.models import OperationKind, OperationStatus, SessionKind
 from jung.llm.fake import FakeLLM, StreamExpectation, StructuredExpectation
 from jung.llm.gateway import LLMTask
@@ -33,7 +35,7 @@ from tests.integration.application.application_fixtures import (
     completing_intake_patch,
     post_session_expectations,
 )
-from tests.support.api import run_uvicorn_api
+from tests.support.api import application_factory, run_uvicorn_api
 
 pytestmark = pytest.mark.asyncio
 
@@ -392,3 +394,34 @@ async def test_therapy_to_ready_deterministic(
         assert_timeline=assert_therapy_timeline,
         probe_root=probe_root,
     )
+
+
+@pytest.mark.asyncio
+async def test_managed_local_launcher_runs_console_over_http(
+    store: SQLiteStore,
+    fake_llm: FakeLLM,
+    api_settings,
+) -> None:
+    """Managed path uses running_local_api + run_console over real HTTP."""
+    async with running_local_api(
+        api_settings,
+        application_factory=application_factory(store, fake_llm),
+    ) as base_url:
+        exit_code = await run_console(
+            ClientSettings(base_url=base_url),
+            input_provider=ScriptedInputProvider.from_lines("/exit"),
+        )
+        assert exit_code == 0
+
+        async with JungApiClient(ClientSettings(base_url=base_url)) as client:
+            health = await client.get_health()
+        assert health.status == "healthy"
+
+    host, port_text = base_url.removeprefix("http://").split(":", 1)
+    port = int(port_text)
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.2)
+    try:
+        assert probe.connect_ex((host, port)) != 0
+    finally:
+        probe.close()
