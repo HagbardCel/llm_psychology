@@ -41,7 +41,28 @@ MODEL_NAME=<your-server-model-name>
 
 Leave `.env.example` unchanged; adjust the copied `.env` as needed.
 
-Run the API and console in separate terminals (`make run-api` is blocking):
+## Normal local use
+
+```bash
+make run
+```
+
+Native equivalent:
+
+```bash
+uv run --locked jung
+```
+
+For a disposable manual-test profile, point the runtime at a separate data
+directory (no special target or env file required):
+
+```bash
+JUNG_DATA_DIR=./data/manual-test make run
+```
+
+## Separate server/client development
+
+Use these when developing or debugging the API or console independently:
 
 **Terminal 1:**
 
@@ -55,11 +76,11 @@ make run-api
 make run-console
 ```
 
-For a disposable manual-test profile, point the API at a separate data
-directory (no special target or env file required):
+Native equivalents:
 
 ```bash
-JUNG_DATA_DIR=./data/manual-test make run-api
+uv run --locked jung-api
+uv run --locked jung-console --api-url http://127.0.0.1:8000
 ```
 
 ## Configuration guidance
@@ -73,31 +94,17 @@ Common groups:
 
 - **LLM gateway:** `LLM_BASE_URL`, optional `LLM_API_KEY`, `MODEL_NAME`
 - **Data directory:** `JUNG_DATA_DIR` (SQLite at `{JUNG_DATA_DIR}/jung.db`; default `./data`)
-- **API bind / CORS:** `JUNG_API_HOST`, `JUNG_API_PORT`, `JUNG_API_ALLOWED_ORIGINS`, `JUNG_API_ALLOW_REMOTE_BIND`
+- **Standalone API bind:** `JUNG_API_HOST`, `JUNG_API_PORT`, `JUNG_API_ALLOW_REMOTE_BIND` — parsed as part of shared `JungSettings` but used for socket binding only by standalone `jung-api`; the managed `jung` listener always uses an ephemeral IPv4 loopback port
+- **API logging / CORS:** `JUNG_API_LOG_LEVEL`, `JUNG_API_ALLOWED_ORIGINS` — still affect the managed runtime (Uvicorn logging and `create_app()` middleware respectively)
 - **Diagnostics:** optional `JUNG_DEBUG_RUN_DIR` (see [safety-and-data.md](safety-and-data.md))
 
 ## Run commands
 
 ```bash
 make sync
-```
-
-**Terminal 1:** `make run-api`
-
-**Terminal 2:** `make run-console`
-
-Native equivalents:
-
-**Terminal 1:**
-
-```bash
-uv run --locked jung-api
-```
-
-**Terminal 2:**
-
-```bash
-uv run --locked jung-console --api-url http://127.0.0.1:8000
+make run          # normal local application
+make run-api      # standalone API
+make run-console  # standalone console (requires --api-url when invoked via uv)
 ```
 
 ## Tests and release gate
@@ -130,6 +137,12 @@ for suite ownership and hard-versus-diagnostic semantics.
 - Ordinary logs under the process logger / `./logs` as configured
 - Opt-in diagnostic capture via `JUNG_DEBUG_RUN_DIR` — see
   [safety-and-data.md](safety-and-data.md)
+
+```bash
+JUNG_DEBUG_RUN_DIR=./logs/debug-runs/example make run
+```
+
+Standalone API equivalent:
 
 ```bash
 JUNG_DEBUG_RUN_DIR=./logs/debug-runs/example make run-api

@@ -1,5 +1,5 @@
 .PHONY: help sync format format-check lint docs-links test probe-console \
-	smoke-local-llm run-api run-console check \
+	smoke-local-llm run run-api run-console check \
 	clean test-unit test-integration \
 	evals eval-report
 
@@ -19,7 +19,8 @@ help:
 	@echo "  test                 - unit + integration (not real_llm)"
 	@echo "  probe-console        - deterministic console E2E once"
 	@echo "  check                - deterministic release gate (native)"
-	@echo "  run-api / run-console"
+	@echo "  run                  - normal local application"
+	@echo "  run-api / run-console - standalone API / console client"
 	@echo "  smoke-local-llm      - manual local-model smoke"
 	@echo "  evals                - hard real-model invariants (pass/fail)"
 	@echo "  eval-report          - diagnostic behavioral report under logs/evals"
@@ -48,6 +49,9 @@ probe-console:
 	@mkdir -p "$(PROBE_ABS_OUTPUT_DIR)"
 	PROBE_OUTPUT_DIR="$(PROBE_ABS_OUTPUT_DIR)" \
 		uv run --locked pytest $(CONSOLE_E2E_TEST) -v
+
+run:
+	uv run --locked jung
 
 run-api:
 	uv run --locked jung-api

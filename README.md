@@ -1,8 +1,11 @@
 # Local Therapist Tool
 
 Local-laptop therapy workflow research tool backed by an asyncio FastAPI
-`/api/v1` service (`jung-api`), SQLite persistence, and the maintained
-`jung-console` client.
+`/api/v1` service, SQLite persistence, and the maintained console client.
+
+Normal operation is through `jung` or `make run`, which starts a private
+loopback API and the console in one foreground process. `jung-api` and
+`jung-console` remain independently executable for server/client development.
 
 This is a research tool, not emergency support or a substitute for professional
 care. Review the [safety and data-handling guidance](docs/safety-and-data.md)
@@ -39,18 +42,10 @@ The port depends on your model server. Leave `.env.example` itself unchanged.
 uv sync --locked
 ```
 
-5. Run the API and console in two terminals (`make run-api` is blocking):
-
-**Terminal 1:**
+5. Run the application:
 
 ```bash
-make run-api
-```
-
-**Terminal 2:**
-
-```bash
-make run-console
+make run
 ```
 
 ## Next steps
