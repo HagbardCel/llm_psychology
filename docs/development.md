@@ -92,11 +92,31 @@ the sole production environment-backed settings owner.
 
 Common groups:
 
-- **LLM gateway:** `LLM_BASE_URL`, optional `LLM_API_KEY`, `MODEL_NAME`
+- **Session LLM gateway:** `LLM_BASE_URL`, optional `LLM_API_KEY`, `MODEL_NAME`
+- **Optional supervisor LLM:** `JUNG_SUPERVISOR_LLM_BASE_URL`, `JUNG_SUPERVISOR_MODEL_NAME`, `JUNG_SUPERVISOR_LLM_API_KEY`, `JUNG_SUPERVISOR_LLM_EXTRA_BODY_JSON`, `JUNG_SUPERVISOR_LLM_DEFAULT_HEADERS_JSON` — omitted values inherit session settings; an explicitly empty supervisor API key clears the inherited credential (it does not mean a different SDK auth mode); `{}` clears inherited role-level headers/extra body while task-specific `extra_body` in `JUNG_LLM_TASK_CONFIG_JSON` still applies
 - **Data directory:** `JUNG_DATA_DIR` (SQLite at `{JUNG_DATA_DIR}/jung.db`; default `./data`)
 - **Standalone API bind:** `JUNG_API_HOST`, `JUNG_API_PORT`, `JUNG_API_ALLOW_REMOTE_BIND` — parsed as part of shared `JungSettings` but used for socket binding only by standalone `jung-api`; the managed `jung` listener always uses an ephemeral IPv4 loopback port
 - **API logging / CORS:** `JUNG_API_LOG_LEVEL`, `JUNG_API_ALLOWED_ORIGINS` — still affect the managed runtime (Uvicorn logging and `create_app()` middleware respectively)
 - **Diagnostics:** optional `JUNG_DEBUG_RUN_DIR` (see [safety-and-data.md](safety-and-data.md))
+
+One-model setup (default):
+
+```dotenv
+LLM_BASE_URL=http://127.0.0.1:8080/v1
+MODEL_NAME=local-model
+LLM_API_KEY=
+```
+
+Optional stronger supervisor:
+
+```dotenv
+LLM_BASE_URL=http://127.0.0.1:8080/v1
+MODEL_NAME=session-model
+
+JUNG_SUPERVISOR_LLM_BASE_URL=http://127.0.0.1:8081/v1
+JUNG_SUPERVISOR_MODEL_NAME=stronger-model
+JUNG_SUPERVISOR_LLM_API_KEY=
+```
 
 ## Run commands
 

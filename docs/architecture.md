@@ -68,7 +68,8 @@ The supported runtime is a lean, local-first therapist application that:
 Console client ── HTTP ── API adapter ── TherapyApplication
                                            │
                                            ├── SQLiteStore
-                                           ├── LLMGateway
+                                           ├── session LLM gateway
+                                           ├── supervisor LLM gateway
                                            └── phase processors
 ```
 
@@ -160,7 +161,8 @@ owns the stream:
 
 `TherapyApplication` schedules assessment and post-session operations as a
 single live owned asyncio task. Teardown rejects new work, waits a bounded
-interval for the currently owned operation task, then closes the LLM client.
+interval for the currently owned operation task, then closes both session and
+supervisor LLM clients before the optional diagnostic DB snapshot.
 See [api-v1.md](api-v1.md) for the four-event NDJSON stream contract.
 
 No generic service locator or runtime string-based dependency lookup remains.
@@ -220,6 +222,36 @@ and structured-output libraries. Provider-specific types must not leak into
 production `src/jung` domain, application, phase, API, or client code.
 Adapter-focused tests may use provider test types.
 
+Jung uses exactly two fixed production LLM roles. There is no dynamic router,
+provider registry, or runtime role selector.
+
+```text
+                  model policy
+                       │
+             ┌─────────┴─────────┐
+             │                   │
+        SESSION role        SUPERVISOR role
+             │                   │
+       endpoint/model A       endpoint/model B
+             │                   │
+       intake + therapy     assessment + review
+```
+
+By default A and B are the same configured endpoint/model. Optional
+`JUNG_SUPERVISOR_*` settings may point the supervisor role at a different
+endpoint or model. Role ownership of each `LLMTask` is fixed in source:
+
+| Role | Tasks |
+|---|---|
+| SESSION | `intake_patch`, `intake_response`, `therapy_response` |
+| SUPERVISOR | `assessment`, `post_session_analysis`, `post_session_update` |
+
+Composition always constructs two adapters and injects the session gateway into
+intake/therapy processors and the supervisor gateway into assessment/post-session
+processors. Task-level `JUNG_LLM_TASK_CONFIG_JSON` overrides inference policy
+(temperature, timeouts, token caps, structured mode, extra body) only — not the
+model. Model selection belongs to the role.
+
 Structured-output capability is configuration-driven (`json_schema`,
 `json_object`, or `prompt`), not inferred from provider identity. The adapter
 uses Chat Completions-compatible behavior only and makes one correction attempt
@@ -260,7 +292,9 @@ transport errors.
 Diagnostics observe the system and must not become workflow state or API
 contract fields. Application command, chat, operation, and recovery paths
 record schema-v5 events directly into an opt-in `DiagnosticRecorder`.
-Chat correlation uses `client_message_id` (no `turn_id` or `task` context field).
+Chat correlation uses `client_message_id` (no `turn_id` context field).
+LLM calls add additive context keys `llm_role`, `llm_task`, and `llm_model`
+(physical gateway role, task name, and model) without a schema bump.
 
 Ordinary logs may include safe LLM metadata when enabled. Opt-in
 `JUNG_DEBUG_RUN_DIR` captures two primary evidence sources for local debugging:

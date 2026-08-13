@@ -22,6 +22,19 @@ operation rows. It is not independently mutable persistent state.
 
 Intake is complete only when the durable record meets the processor's required slot/evidence policy. Intake completion is an internal application transition caused by an accepted intake chat result, not a client command.
 
+## LLM roles by phase
+
+Live interactive phases use the **session** LLM role; offline structured phases use the **supervisor** role. The mapping is fixed in source and is not configurable:
+
+| Phase / task | Role |
+|---|---|
+| Intake (`intake_patch`, `intake_response`) | session |
+| Therapy (`therapy_response`) | session |
+| Assessment (`assessment`) | supervisor |
+| Post-session (`post_session_analysis`, `post_session_update`) | supervisor |
+
+See [architecture.md](architecture.md) for dual-endpoint configuration. This section does not change briefing or review persistence.
+
 ## Command matrix
 
 | Stage | `update_profile` | `send_message` | `select_style` | `start_session` | `end_session` | `retry_operation` |
