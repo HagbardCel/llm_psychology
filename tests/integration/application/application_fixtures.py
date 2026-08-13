@@ -162,7 +162,8 @@ class TestApplicationRuntime:
 
 def _test_policies() -> dict[LLMTask, ModelPolicy]:
     return build_model_policies(
-        default_model="fake",
+        session_model="fake",
+        supervisor_model="fake",
         task_overrides={
             LLMTask.INTAKE_PATCH: TaskOverride(
                 structured_output_mode=StructuredOutputMode.PROMPT,

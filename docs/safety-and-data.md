@@ -33,7 +33,13 @@ including profile details, session transcripts, and derived clinical-style
 notes. Protect database files, backups, and any copied exports accordingly.
 
 Treat `.env` as sensitive because it may contain provider credentials or
-authorization headers.
+authorization headers. Both session (`LLM_API_KEY`,
+`JUNG_LLM_DEFAULT_HEADERS_JSON`) and supervisor
+(`JUNG_SUPERVISOR_LLM_API_KEY`, `JUNG_SUPERVISOR_LLM_DEFAULT_HEADERS_JSON`)
+credentials and custom header values are secrets. Diagnostic capture redacts
+values from both endpoints. Role/task/model metadata recorded in diagnostic
+context (`llm_role`, `llm_task`, `llm_model`) is non-secret; raw prompts and
+model responses remain sensitive as before.
 
 ## Remote model providers
 
@@ -103,7 +109,9 @@ instructions to execute.
 
 `DiagnosticRecorder` owns a `run_id` that is merged into every event
 `context`. Diagnostic schema version is **5** (correlation uses
-`client_message_id`; there is no `turn_id` or `task` context field). Layers own kinds as follows:
+`client_message_id`; there is no `turn_id` context field). LLM calls may also
+carry additive `llm_role`, `llm_task`, and `llm_model` context keys without a
+schema bump. Layers own kinds as follows:
 
 | Owner | Example kinds |
 | --- | --- |

@@ -41,6 +41,25 @@ class LLMTask(StrEnum):
     POST_SESSION_UPDATE = "post_session_update"
 
 
+class LLMRole(StrEnum):
+    SESSION = "session"
+    SUPERVISOR = "supervisor"
+
+
+_TASK_ROLE: dict[LLMTask, LLMRole] = {
+    LLMTask.INTAKE_PATCH: LLMRole.SESSION,
+    LLMTask.INTAKE_RESPONSE: LLMRole.SESSION,
+    LLMTask.THERAPY_RESPONSE: LLMRole.SESSION,
+    LLMTask.ASSESSMENT: LLMRole.SUPERVISOR,
+    LLMTask.POST_SESSION_ANALYSIS: LLMRole.SUPERVISOR,
+    LLMTask.POST_SESSION_UPDATE: LLMRole.SUPERVISOR,
+}
+
+
+def role_for_task(task: LLMTask) -> LLMRole:
+    return _TASK_ROLE[task]
+
+
 class StructuredOutputMode(StrEnum):
     JSON_SCHEMA = "json_schema"
     JSON_OBJECT = "json_object"

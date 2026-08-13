@@ -17,6 +17,7 @@ from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import (
     ChatMessage,
     ChatRole,
+    LLMRole,
     LLMTask,
     ModelPolicy,
     StructuredOutputMode,
@@ -545,3 +546,51 @@ async def test_observed_gateway_close_failure_without_recorder_logs_safe_warning
     assert "close boom" not in message
     assert "http" not in message.lower()
     assert "api_key" not in message.lower()
+
+
+async def test_observed_gateway_records_physical_role_not_task_expectation(
+    tmp_path: Path,
+) -> None:
+    """Miswired observer role must surface in diagnostics, not inferred task role."""
+    policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="session-model",
+        temperature=0.7,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+    run_dir = tmp_path / "physical-role"
+    with DiagnosticRecorder(run_dir) as recorder:
+        gateway = ObservedLLMGateway(
+            FakeLLM(
+                [
+                    StreamExpectation(
+                        task=LLMTask.THERAPY_RESPONSE,
+                        chunks=("hello",),
+                    )
+                ]
+            ),
+            role=LLMRole.SUPERVISOR,
+            recorder=recorder,
+        )
+        chunks: list[str] = []
+        async for chunk in gateway.stream_text(
+            [ChatMessage(role=ChatRole.USER, content="hi")],
+            policy,
+        ):
+            chunks.append(chunk)
+        assert chunks == ["hello"]
+
+    events = [
+        json.loads(line)
+        for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    started = next(e for e in events if e["kind"] == "llm.call.started")
+    completed = next(e for e in events if e["kind"] == "llm.call.completed")
+    assert started["context"]["llm_role"] == "supervisor"
+    assert started["context"]["llm_task"] == "therapy_response"
+    assert started["context"]["llm_model"] == "session-model"
+    assert completed["context"]["llm_role"] == "supervisor"
+    assert completed["context"]["llm_task"] == "therapy_response"
+    assert completed["context"]["llm_model"] == "session-model"

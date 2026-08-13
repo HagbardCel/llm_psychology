@@ -141,6 +141,9 @@ def test_diagnostic_context_field_inventory() -> None:
         "client_message_id",
         "operation_id",
         "llm_call_id",
+        "llm_role",
+        "llm_task",
+        "llm_model",
     }
 
 

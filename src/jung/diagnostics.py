@@ -69,6 +69,9 @@ class DiagnosticContext:
     client_message_id: str | None = None
     operation_id: str | None = None
     llm_call_id: str | None = None
+    llm_role: str | None = None
+    llm_task: str | None = None
+    llm_model: str | None = None
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -79,6 +82,9 @@ class DiagnosticContext:
                 ("client_message_id", self.client_message_id),
                 ("operation_id", self.operation_id),
                 ("llm_call_id", self.llm_call_id),
+                ("llm_role", self.llm_role),
+                ("llm_task", self.llm_task),
+                ("llm_model", self.llm_model),
             )
             if value is not None
         }

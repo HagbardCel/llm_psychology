@@ -84,6 +84,7 @@ a positive inventory, or a prove-gone tombstone? Delete only the third category.
 | Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts a grounded result is persisted and read back intact |
 | Worker-error classification | `unit/application/test_invariants.py` | `integration/application/test_application_operations.py` asserts a failed operation surfaces the classified code |
 | Workflow transitions | `unit/domain/test_workflow.py` — the full legal/illegal transition matrix | `integration/store/test_store_workflow.py` for persisted stage changes; one `e2e/` journey |
+| Session/supervisor LLM role routing | `integration/application/test_llm_role_composition.py` — dual adapters, effective AdapterConfig resolution, lifecycle task and model ownership | `unit/llm/test_policies.py` for role→model policy mapping; `unit/llm/test_tracing.py` for physical gateway role in diagnostics |
 
 ### Do not test Pydantic at every layer
 

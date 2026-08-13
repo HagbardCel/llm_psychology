@@ -180,6 +180,17 @@ async def test_diagnostic_capture_double_structured_failure(tmp_path: Path) -> N
     assert kinds.count("llm.call.failed") == 1
     assert kinds.count("chat.turn.failed") == 1
 
+    started = next(e for e in events if e["kind"] == "llm.call.started")
+    assert started["context"]["llm_role"] == "session"
+    assert started["context"]["llm_task"] == "intake_patch"
+    assert started["context"]["llm_model"] == "test-model"
+    provider_request = next(e for e in events if e["kind"] == "llm.provider.request")
+    assert provider_request["context"]["llm_role"] == "session"
+    assert provider_request["context"]["llm_task"] == "intake_patch"
+    correction = next(e for e in events if e["kind"] == "llm.correction.started")
+    assert correction["context"]["llm_role"] == "session"
+    assert correction["context"]["llm_task"] == "intake_patch"
+
     snapshot = run_dir / "db_snapshot.sqlite"
     assert snapshot.exists()
     conn = sqlite3.connect(snapshot)
@@ -261,3 +272,72 @@ async def test_diagnostic_snapshot_failure_preserves_outcome(
     else:
         assert end["data"]["status"] == "success"
         assert "error_type" not in end["data"]
+
+
+async def test_dual_role_secrets_redacted_from_provider_errors(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "debug-run"
+    session_secret = "session-secret-UNIQUE-aaa"
+    supervisor_secret = "supervisor-secret-UNIQUE-bbb"
+    session_header = "session-header-UNIQUE-ccc"
+    supervisor_header = "supervisor-header-UNIQUE-ddd"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": (
+                        f"auth failed for {session_secret} / {supervisor_secret} "
+                        f"/ {session_header} / {supervisor_header}"
+                    )
+                }
+            },
+        )
+
+    settings = make_test_settings(
+        data_dir=tmp_path,
+        model_name="session-model",
+        supervisor_model_name="supervisor-model",
+        llm_base_url="http://session.test/v1",
+        supervisor_llm_base_url="http://supervisor.test/v1",
+        llm_api_key=session_secret,
+        supervisor_llm_api_key=supervisor_secret,
+        llm_default_headers={"X-Session-Auth": session_header},
+        supervisor_llm_default_headers={"X-Supervisor-Auth": supervisor_header},
+        shutdown_timeout_seconds=5.0,
+        debug_run_dir=run_dir,
+    )
+    client_message_id = uuid4()
+    async with application_context(
+        settings, llm_factory=_llm_factory(handler)
+    ) as application:
+        await application.update_profile(
+            UpdateProfile(
+                profile=Profile(name="Alex", primary_language="English"),
+            )
+        )
+        session = (await application.get_snapshot()).active_session
+        assert session is not None
+        items = await collect_stream(
+            application,
+            SendMessage(
+                session_id=session.id,
+                client_message_id=client_message_id,
+                content="I feel anxious.",
+            ),
+        )
+        assert isinstance(items[-1], ChatFailed)
+
+    trace_text = (run_dir / "trace.jsonl").read_text(encoding="utf-8")
+    assert session_secret not in trace_text
+    assert supervisor_secret not in trace_text
+    assert session_header not in trace_text
+    assert supervisor_header not in trace_text
+
+    events = _load_trace(run_dir)
+    started = next(e for e in events if e["kind"] == "llm.call.started")
+    assert started["context"]["llm_role"] == "session"
+    assert started["context"]["llm_task"] == "intake_patch"
+    assert started["context"]["llm_model"] == "session-model"

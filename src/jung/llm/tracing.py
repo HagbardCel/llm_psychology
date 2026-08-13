@@ -13,7 +13,13 @@ from pydantic import BaseModel
 from jung._async_cleanup import close_awaitable_safely
 from jung.diagnostics import DiagnosticRecorder, diagnostic_context
 from jung.llm.errors import LLMTimeout
-from jung.llm.gateway import ChatMessage, LLMGateway, ModelPolicy
+from jung.llm.gateway import (
+    ChatMessage,
+    LLMGateway,
+    LLMRole,
+    ModelPolicy,
+    role_for_task,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -27,12 +33,26 @@ class ObservedLLMGateway:
         self,
         inner: LLMGateway,
         *,
+        role: LLMRole | None = None,
         log_metadata: bool = False,
         recorder: DiagnosticRecorder | None = None,
     ) -> None:
         self._inner = inner
+        self._role = role
         self._log_metadata = log_metadata
         self._recorder = recorder
+
+    def _call_diagnostic_fields(self, policy: ModelPolicy) -> dict[str, str]:
+        role = (
+            self._role.value
+            if self._role is not None
+            else role_for_task(policy.task).value
+        )
+        return {
+            "llm_role": role,
+            "llm_task": policy.task.value,
+            "llm_model": policy.model,
+        }
 
     def _record(self, kind: str, data: dict[str, object]) -> None:
         if self._recorder is not None:
@@ -52,7 +72,10 @@ class ObservedLLMGateway:
         terminal_recorded = False
         preserve_close_cancellation = False
 
-        with diagnostic_context(llm_call_id=call_id):
+        with diagnostic_context(
+            llm_call_id=call_id,
+            **self._call_diagnostic_fields(policy),
+        ):
             self._log_call_start(policy, "stream_text", messages)
             self._record(
                 "llm.call.started",
@@ -170,7 +193,10 @@ class ObservedLLMGateway:
         started = time.perf_counter()
         status = "started"
 
-        with diagnostic_context(llm_call_id=call_id):
+        with diagnostic_context(
+            llm_call_id=call_id,
+            **self._call_diagnostic_fields(policy),
+        ):
             self._log_call_start(
                 policy,
                 "generate_structured",
