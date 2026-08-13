@@ -19,7 +19,14 @@ from jung.diagnostics import (
     _safe_exception_message,
     snapshot_database,
 )
-from jung.llm.gateway import AdapterConfig, LLMTask, ModelPolicy, StructuredOutputMode
+from jung.llm.gateway import (
+    AdapterConfig,
+    LLMRole,
+    LLMTask,
+    ModelPolicy,
+    StructuredOutputMode,
+    role_for_task,
+)
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.llm.policies import build_model_policies
 from jung.llm.structured import response_format_for_mode
@@ -91,9 +98,65 @@ def _preflight_json_schema_policies(
 
 def _secret_values(settings: JungSettings) -> list[str]:
     secrets = [settings.llm_api_key]
+    if settings.supervisor_llm_api_key is not None:
+        secrets.append(settings.supervisor_llm_api_key)
     if settings.llm_default_headers:
         secrets.extend(settings.llm_default_headers.values())
+    if settings.supervisor_llm_default_headers:
+        secrets.extend(settings.supervisor_llm_default_headers.values())
     return [value for value in secrets if value]
+
+
+def _task_extra_body_for_role(
+    settings: JungSettings,
+    role: LLMRole,
+) -> dict[LLMTask, dict[str, object]] | None:
+    filtered = {
+        task: override.extra_body
+        for task, override in settings.llm_task_config.items()
+        if override.extra_body and role_for_task(task) is role
+    }
+    return filtered or None
+
+
+async def _close_llm(
+    llm: OpenAICompatibleLLM,
+    *,
+    step: str,
+    recorder: DiagnosticRecorder | None,
+    primary: _ExcInfo | None,
+    cleanup_error: _ExcInfo | None,
+) -> _ExcInfo | None:
+    """Close one LLM client without aborting the rest of aggregate teardown."""
+    try:
+        close_task = asyncio.ensure_future(llm.aclose())
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError as cancel_exc:
+            drained = await drain_cancelled_task(close_task)
+            if drained is not None and not isinstance(drained, asyncio.CancelledError):
+                _record_cleanup_failure(
+                    recorder,
+                    step=step,
+                    exc=drained,
+                )
+            if primary is None and cleanup_error is None:
+                cleanup_error = (cancel_exc, cancel_exc.__traceback__)
+            _record_cleanup_failure(
+                recorder,
+                step=step,
+                exc=cancel_exc,
+            )
+            return cleanup_error
+    except BaseException as exc:
+        if primary is None and cleanup_error is None:
+            cleanup_error = (exc, exc.__traceback__)
+        _record_cleanup_failure(
+            recorder,
+            step=step,
+            exc=exc,
+        )
+    return cleanup_error
 
 
 @asynccontextmanager
@@ -118,42 +181,83 @@ async def application_context(
     with run_cm as recorder:
         store: SQLiteStore | None = None
         store_initialized = False
-        llm: OpenAICompatibleLLM | None = None
+        session_llm: OpenAICompatibleLLM | None = None
+        supervisor_llm: OpenAICompatibleLLM | None = None
         application: TherapyApplication | None = None
         primary: _ExcInfo | None = None
         cleanup_error: _ExcInfo | None = None
 
         try:
+            supervisor_base_url = (
+                settings.supervisor_llm_base_url or settings.llm_base_url
+            )
+            supervisor_model = settings.supervisor_model_name or settings.model_name
+            supervisor_api_key = (
+                settings.llm_api_key
+                if settings.supervisor_llm_api_key is None
+                else settings.supervisor_llm_api_key
+            )
+            supervisor_extra_body = (
+                settings.llm_extra_body
+                if settings.supervisor_llm_extra_body is None
+                else settings.supervisor_llm_extra_body
+            )
+            supervisor_headers = (
+                settings.llm_default_headers
+                if settings.supervisor_llm_default_headers is None
+                else settings.supervisor_llm_default_headers
+            )
+
             policies = build_model_policies(
                 session_model=settings.model_name,
-                supervisor_model=settings.model_name,
+                supervisor_model=supervisor_model,
                 task_overrides=settings.llm_task_config,
             )
             _preflight_json_schema_policies(policies)
             store = SQLiteStore(settings.database_path)
             await asyncio.to_thread(store.initialize)
             store_initialized = True
-            task_extra_body = {
-                task: override.extra_body
-                for task, override in settings.llm_task_config.items()
-                if override.extra_body
-            }
-            adapter_config = AdapterConfig(
+
+            session_adapter_config = AdapterConfig(
                 base_url=settings.llm_base_url,
                 api_key=settings.llm_api_key,
                 default_headers=settings.llm_default_headers,
                 extra_body=settings.llm_extra_body,
-                task_extra_body=task_extra_body or None,
+                task_extra_body=_task_extra_body_for_role(settings, LLMRole.SESSION),
             )
-            if llm_factory is not None:
-                llm = llm_factory(adapter_config, recorder)
-            else:
-                llm = OpenAICompatibleLLM(adapter_config, recorder=recorder)
+            supervisor_adapter_config = AdapterConfig(
+                base_url=supervisor_base_url,
+                api_key=supervisor_api_key,
+                default_headers=supervisor_headers,
+                extra_body=supervisor_extra_body,
+                task_extra_body=_task_extra_body_for_role(settings, LLMRole.SUPERVISOR),
+            )
 
-            gateway: OpenAICompatibleLLM | ObservedLLMGateway = llm
+            if llm_factory is not None:
+                session_llm = llm_factory(session_adapter_config, recorder)
+                supervisor_llm = llm_factory(supervisor_adapter_config, recorder)
+            else:
+                session_llm = OpenAICompatibleLLM(
+                    session_adapter_config, recorder=recorder
+                )
+                supervisor_llm = OpenAICompatibleLLM(
+                    supervisor_adapter_config, recorder=recorder
+                )
+
+            session_gateway: OpenAICompatibleLLM | ObservedLLMGateway = session_llm
+            supervisor_gateway: OpenAICompatibleLLM | ObservedLLMGateway = (
+                supervisor_llm
+            )
             if settings.enable_llm_tracing or recorder is not None:
-                gateway = ObservedLLMGateway(
-                    llm,
+                session_gateway = ObservedLLMGateway(
+                    session_llm,
+                    role=LLMRole.SESSION,
+                    log_metadata=settings.enable_llm_tracing,
+                    recorder=recorder,
+                )
+                supervisor_gateway = ObservedLLMGateway(
+                    supervisor_llm,
+                    role=LLMRole.SUPERVISOR,
                     log_metadata=settings.enable_llm_tracing,
                     recorder=recorder,
                 )
@@ -162,20 +266,20 @@ async def application_context(
             application = TherapyApplication(
                 store=store,
                 intake=IntakeProcessor(
-                    gateway,
+                    session_gateway,
                     patch_policy=policies[LLMTask.INTAKE_PATCH],
                     response_policy=policies[LLMTask.INTAKE_RESPONSE],
                 ),
                 assessment=AssessmentProcessor(
-                    gateway,
+                    supervisor_gateway,
                     assessment_policy=policies[LLMTask.ASSESSMENT],
                 ),
                 therapy=TherapyProcessor(
-                    gateway,
+                    session_gateway,
                     response_policy=policies[LLMTask.THERAPY_RESPONSE],
                 ),
                 post_session=PostSessionProcessor(
-                    gateway,
+                    supervisor_gateway,
                     analysis_policy=policies[LLMTask.POST_SESSION_ANALYSIS],
                     update_policy=policies[LLMTask.POST_SESSION_UPDATE],
                 ),
@@ -207,30 +311,22 @@ async def application_context(
                         exc=exc,
                     )
 
-            if llm is not None:
-                try:
-                    close_task = asyncio.ensure_future(llm.aclose())
-                    try:
-                        await asyncio.shield(close_task)
-                    except asyncio.CancelledError:
-                        drained = await drain_cancelled_task(close_task)
-                        if drained is not None and not isinstance(
-                            drained, asyncio.CancelledError
-                        ):
-                            _record_cleanup_failure(
-                                recorder,
-                                step="llm.aclose",
-                                exc=drained,
-                            )
-                        raise
-                except BaseException as exc:
-                    if primary is None and cleanup_error is None:
-                        cleanup_error = (exc, exc.__traceback__)
-                    _record_cleanup_failure(
-                        recorder,
-                        step="llm.aclose",
-                        exc=exc,
-                    )
+            if session_llm is not None:
+                cleanup_error = await _close_llm(
+                    session_llm,
+                    step="session_llm.aclose",
+                    recorder=recorder,
+                    primary=primary,
+                    cleanup_error=cleanup_error,
+                )
+            if supervisor_llm is not None:
+                cleanup_error = await _close_llm(
+                    supervisor_llm,
+                    step="supervisor_llm.aclose",
+                    recorder=recorder,
+                    primary=primary,
+                    cleanup_error=cleanup_error,
+                )
 
             if recorder is not None and store is not None and store_initialized:
                 try:

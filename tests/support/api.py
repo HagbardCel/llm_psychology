@@ -19,60 +19,16 @@ from httpx import ASGITransport
 
 from jung.api.app import create_app
 from jung.config import JungSettings
-from jung.llm.gateway import ChatMessage, LLMTask, ModelPolicy
+from jung.llm.gateway import ChatMessage, ModelPolicy
 from jung.persistence.sqlite_store import SQLiteStore
 from tests.integration.application.application_fixtures import (
     TestApplicationRuntime,
     build_test_application,
 )
-from tests.support.fake_llm import Expectation, FakeLLM
+from tests.support.fake_llm import Expectation, FakeLLM, RecordingFakeLLM
 from tests.support.settings import settings_for_database
 
 T = TypeVar("T", bound=object)
-
-
-class RecordingFakeLLM:
-    """Test-only wrapper; records LLMTask at outermost client-facing entry only."""
-
-    def __init__(self, delegate: FakeLLM) -> None:
-        self._delegate = delegate
-        self._recorded_tasks: list[LLMTask] = []
-
-    @property
-    def recorded_tasks(self) -> tuple[LLMTask, ...]:
-        return tuple(self._recorded_tasks)
-
-    async def generate_structured(
-        self,
-        messages: Sequence[ChatMessage],
-        output_type: type[T],
-        policy: ModelPolicy,
-        validate_result: Callable[[T], T] | None = None,
-    ) -> T:
-        self._recorded_tasks.append(policy.task)
-        return await self._delegate.generate_structured(
-            messages=messages,
-            output_type=output_type,
-            policy=policy,
-            validate_result=validate_result,
-        )
-
-    async def stream_text(
-        self,
-        messages: Sequence[ChatMessage],
-        policy: ModelPolicy,
-    ) -> AsyncGenerator[str, None]:
-        self._recorded_tasks.append(policy.task)
-        async for chunk in self._delegate.stream_text(messages, policy):
-            yield chunk
-
-    def assert_exhausted(self) -> None:
-        self._delegate.assert_exhausted()
-
-    async def aclose(self) -> None:
-        close = getattr(self._delegate, "aclose", None)
-        if close is not None:
-            await close()
 
 
 class HoldingFakeLLM(FakeLLM):

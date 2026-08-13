@@ -117,9 +117,7 @@ def build_model_policies(
     for task in LLMTask:
         override = task_overrides.get(task)
         role = role_for_task(task)
-        model = (
-            session_model if role is LLMRole.SESSION else supervisor_model
-        )
+        model = session_model if role is LLMRole.SESSION else supervisor_model
         temperature = (
             override.temperature
             if override is not None and override.temperature is not None

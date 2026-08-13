@@ -51,6 +51,9 @@ class FakeLLM:
             remaining = [type(item).__name__ for item in self._expectations]
             raise AssertionError(f"FakeLLM has unused expectations: {remaining}")
 
+    async def aclose(self) -> None:
+        return None
+
     def _pop(self, *, kind: type[Expectation], task: LLMTask) -> Expectation:
         if not self._expectations:
             raise AssertionError(f"FakeLLM received unexpected {task.value} call")
@@ -128,3 +131,47 @@ class FakeLLM:
             raise
         except (ValueError, ValidationError) as exc:
             raise InvalidLLMOutput(format_semantic_error(exc)) from exc
+
+
+class RecordingFakeLLM:
+    """Test-only wrapper; records LLMTask at outermost client-facing entry only."""
+
+    def __init__(self, delegate: FakeLLM) -> None:
+        self._delegate = delegate
+        self._recorded_tasks: list[LLMTask] = []
+
+    @property
+    def recorded_tasks(self) -> tuple[LLMTask, ...]:
+        return tuple(self._recorded_tasks)
+
+    async def generate_structured(
+        self,
+        messages: Sequence[ChatMessage],
+        output_type: type[T],
+        policy: ModelPolicy,
+        validate_result: Callable[[T], T] | None = None,
+    ) -> T:
+        self._recorded_tasks.append(policy.task)
+        return await self._delegate.generate_structured(
+            messages=messages,
+            output_type=output_type,
+            policy=policy,
+            validate_result=validate_result,
+        )
+
+    async def stream_text(
+        self,
+        messages: Sequence[ChatMessage],
+        policy: ModelPolicy,
+    ) -> AsyncGenerator[str, None]:
+        self._recorded_tasks.append(policy.task)
+        async for chunk in self._delegate.stream_text(messages, policy):
+            yield chunk
+
+    def assert_exhausted(self) -> None:
+        self._delegate.assert_exhausted()
+
+    async def aclose(self) -> None:
+        close = getattr(self._delegate, "aclose", None)
+        if close is not None:
+            await close()
