@@ -211,22 +211,16 @@ def build_untrusted_therapy_document(
         transcript_source,
         historical_limit=historical_limit,
     )
-    if input.session_briefing is not None:
+    if input.latest_supervisor_briefing is not None:
         _pack_historical_briefing(
             historical,
-            input.session_briefing,
+            input.latest_supervisor_briefing,
             historical_limit=historical_limit,
         )
     if input.grounded_patient_messages:
         _pack_historical_grounded_messages(
             historical,
             input.grounded_patient_messages,
-            historical_limit=historical_limit,
-        )
-    if input.recent_session_summaries:
-        _pack_historical_summaries(
-            historical,
-            input.recent_session_summaries,
             historical_limit=historical_limit,
         )
 

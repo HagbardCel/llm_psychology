@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from jung.domain.models import Plan, Profile
+from jung.domain.models import Plan
 from jung.domain.session_artifacts import (
     InterventionCitation,
     PatientTurnCitation,
@@ -44,7 +44,6 @@ def _input(
     return PostSessionInput(
         transcript=transcript,
         current_plan=_plan(),
-        profile=Profile(name="Alex", primary_language="English"),
         selected_style=load_styles()["cbt"],
     )
 
@@ -61,7 +60,6 @@ def test_post_session_input_rejects_mismatched_style() -> None:
                 ),
             ),
             current_plan=_plan(),
-            profile=Profile(name="Alex", primary_language="English"),
             selected_style=load_styles()["jung"],
         )
 

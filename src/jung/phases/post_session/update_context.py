@@ -362,9 +362,9 @@ def build_update_user_message(
         if packed is not None:
             document["derived_profile"] = packed.document
 
-    # 5. Prior session briefing.
-    if input.prior_session_briefing is not None:
-        briefing: SessionBriefing = input.prior_session_briefing
+    # 5. Latest prior supervisor briefing from completed reviews.
+    if input.prior_reviews:
+        briefing = input.prior_reviews[-1].briefing
 
         def briefing_fits(briefing_doc: dict[str, object]) -> bool:
             candidate = dict(document)
@@ -374,19 +374,6 @@ def build_update_user_message(
         packed_briefing = compact_session_briefing(briefing, fits=briefing_fits)
         if packed_briefing is not None:
             document["prior_session_briefing"] = packed_briefing.document
-
-    # 6. Recent session summaries (character-bounded interpretive prose).
-    if input.recent_session_summaries:
-        selected: list[str] = []
-        for summary in reversed(input.recent_session_summaries):
-            text = bounded_text(str(summary), 400)
-            if not text.strip():
-                continue
-            candidate_list = [text, *selected]
-            if _try_set(document, "recent_session_summaries", candidate_list):
-                selected = candidate_list
-            else:
-                break
 
     final = render_context_user_message(document, task=_UPDATE_TASK)
     if len(final) > _UPDATE_USER_MESSAGE_LIMIT:

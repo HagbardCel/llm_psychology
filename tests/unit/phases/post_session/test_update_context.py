@@ -8,8 +8,13 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.models import Message, MessageRole, Plan, Profile
-from jung.domain.session_artifacts import SessionAnalysis, SessionBriefing
+from jung.domain.models import Message, MessageRole, Plan
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
+)
 from jung.llm.gateway import ChatRole
 from jung.phases.post_session.models import (
     InterventionEvidence,
@@ -88,6 +93,22 @@ def _briefing(**overrides: object) -> SessionBriefing:
     return SessionBriefing(**values)  # type: ignore[arg-type]
 
 
+def _review(**briefing_overrides: object) -> SessionReview:
+    briefing_values: dict[str, object] = {
+        "narrative_handoff": "Continue with sleep.",
+        "recommended_opening_focus": "sleep readiness",
+    }
+    briefing_values.update(briefing_overrides)
+    return SessionReview(
+        analysis=SessionAnalysis(
+            summary="Prior session summary.",
+            key_themes=("sleep",),
+        ),
+        briefing=SessionBriefing(**briefing_values),  # type: ignore[arg-type]
+        plan_recommendation=PlanPatch(),
+    )
+
+
 def _input(**overrides: object) -> PostSessionInput:
     style = load_styles()["cbt"]
     values: dict[str, object] = {
@@ -106,7 +127,6 @@ def _input(**overrides: object) -> PostSessionInput:
             ),
         ),
         "current_plan": _plan(),
-        "profile": Profile(name="Alex", primary_language="English"),
         "selected_style": style,
     }
     values.update(overrides)
@@ -203,9 +223,8 @@ def test_intervention_payload_derives_status_for_prompt_projection() -> None:
 def test_builder_rendered_output_never_exceeds_update_limit() -> None:
     message = build_update_user_message(
         _input(
-            prior_session_briefing=_briefing(narrative_handoff="b" * 5000),
-            recent_session_summaries=tuple(
-                f"summary-{index}" * 200 for index in range(20)
+            prior_reviews=(
+                _review(narrative_handoff="b" * 5000),
             ),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
@@ -220,10 +239,9 @@ def test_builder_rendered_output_never_exceeds_update_limit() -> None:
 def test_optional_sections_drop_before_plan_and_analysis() -> None:
     document = build_update_context_document(
         _input(
-            prior_session_briefing=_briefing(
-                narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
+            prior_reviews=(
+                _review(narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200),
             ),
-            recent_session_summaries=("old " * 2000, "new " * 2000),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
@@ -382,29 +400,15 @@ def test_plan_section_retains_all_semantic_field_names() -> None:
     assert plan["planned_interventions"]
 
 
-def test_newest_summaries_preferred() -> None:
-    document = build_update_context_document(
-        _input(
-            recent_session_summaries=(
-                "old summary",
-                "middle-too-large " * 400,
-                "newest summary",
-            )
-        ),
-        _resolved(),
-    )
-    summaries = document["recent_session_summaries"]
-    assert summaries[0] == "newest summary" or "newest summary" in summaries
-    assert "newest summary" in summaries
-
-
 def test_prior_briefing_handoff_complete_or_omit() -> None:
     negation = "I am not ready to do that."
     document = build_update_context_document(
         _input(
-            prior_session_briefing=_briefing(
-                narrative_handoff=negation,
-                continuity_points=(negation,),
+            prior_reviews=(
+                _review(
+                    narrative_handoff=negation,
+                    continuity_points=(negation,),
+                ),
             )
         ),
         _resolved(),

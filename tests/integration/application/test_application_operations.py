@@ -354,7 +354,7 @@ async def test_prior_session_briefing_reaches_next_session_without_plan_revision
         )
         inputs = PhaseInputs(store=runtime.store, styles=load_styles())
         turn_input = await inputs.build_therapy_turn_input(second.session.id)
-        assert turn_input.session_briefing == briefing_b
+        assert turn_input.latest_supervisor_briefing == briefing_b
     fake.assert_exhausted()
 
 

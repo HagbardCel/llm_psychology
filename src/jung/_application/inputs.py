@@ -16,7 +16,7 @@ from jung.domain.models import (
     Session,
     SessionKind,
 )
-from jung.domain.session_artifacts import SessionBriefing
+from jung.domain.session_artifacts import SessionReview
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentInput
 from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
@@ -24,8 +24,6 @@ from jung.phases.post_session.models import PostSessionInput
 from jung.phases.therapy.models import TherapyTurnInput
 from jung.phases.transcript import messages_to_transcript
 from jung.styles import StyleDefinition
-
-_RECENT_SUMMARY_LIMIT = 5
 
 
 class PhaseInputs:
@@ -81,7 +79,7 @@ class PhaseInputs:
             raise InvariantViolation("therapy turn requires a user message")
         all_sessions = await self._run_store(self._store.list_sessions)
         grounded = await self._run_store(self._store.list_grounded_patient_messages)
-        summaries = _recent_session_summaries(
+        prior_reviews = _prior_therapy_reviews(
             all_sessions,
             exclude_session_id=session_id,
         )
@@ -89,11 +87,9 @@ class PhaseInputs:
             profile=stored.profile,
             grounded_patient_messages=tuple(grounded),
             current_plan=plan,
-            session_briefing=_latest_prior_briefing(
-                all_sessions,
-                exclude_session_id=session_id,
+            latest_supervisor_briefing=(
+                prior_reviews[-1].briefing if prior_reviews else None
             ),
-            recent_session_summaries=summaries,
             transcript=transcript,
             latest_user_message=latest_user,
             is_opening_turn=False,
@@ -124,8 +120,7 @@ class PhaseInputs:
             self._store.get_session,
             operation.source_session_id,
         )
-        stored = await self._run_store(self._store.get_profile)
-        if session is None or stored is None or session.plan_id is None:
+        if session is None or session.plan_id is None:
             raise NotFound(f"session {operation.source_session_id}")
         plan = await self.load_plan_for_session(
             operation.source_session_id,
@@ -143,13 +138,8 @@ class PhaseInputs:
         return PostSessionInput(
             transcript=messages_to_transcript(messages),
             current_plan=plan,
-            profile=stored.profile,
             grounded_patient_messages=tuple(grounded),
-            prior_session_briefing=_latest_prior_briefing(
-                sessions,
-                exclude_session_id=operation.source_session_id,
-            ),
-            recent_session_summaries=_recent_session_summaries(
+            prior_reviews=_prior_therapy_reviews(
                 sessions,
                 exclude_session_id=operation.source_session_id,
             ),
@@ -193,13 +183,12 @@ def _load_intake_record(session: Session) -> IntakeRecord:
     return IntakeRecord()
 
 
-def _recent_session_summaries(
+def _prior_therapy_reviews(
     sessions: list[Session],
     *,
     exclude_session_id: UUID,
-    limit: int = _RECENT_SUMMARY_LIMIT,
-) -> tuple[str, ...]:
-    summaries: list[str] = []
+) -> tuple[SessionReview, ...]:
+    candidates: list[Session] = []
     for session in sessions:
         if session.id == exclude_session_id:
             continue
@@ -207,22 +196,6 @@ def _recent_session_summaries(
             continue
         if session.ended_at is None or session.review is None:
             continue
-        summaries.append(session.review.analysis.summary)
-        if len(summaries) >= limit:
-            break
-    return tuple(summaries)
-
-
-def _latest_prior_briefing(
-    sessions: list[Session],
-    *,
-    exclude_session_id: UUID,
-) -> SessionBriefing | None:
-    for session in sessions:
-        if session.id == exclude_session_id:
-            continue
-        if session.kind is not SessionKind.THERAPY:
-            continue
-        if session.ended_at is not None and session.review is not None:
-            return session.review.briefing
-    return None
+        candidates.append(session)
+    candidates.sort(key=lambda item: (item.started_at, str(item.id)))
+    return tuple(session.review for session in candidates if session.review is not None)
