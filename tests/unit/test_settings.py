@@ -29,6 +29,11 @@ ALL_ENV_NAMES = (
     "JUNG_LLM_EXTRA_BODY_JSON",
     "JUNG_LLM_TASK_CONFIG_JSON",
     "JUNG_LLM_DEFAULT_HEADERS_JSON",
+    "JUNG_SUPERVISOR_LLM_BASE_URL",
+    "JUNG_SUPERVISOR_MODEL_NAME",
+    "JUNG_SUPERVISOR_LLM_API_KEY",
+    "JUNG_SUPERVISOR_LLM_EXTRA_BODY_JSON",
+    "JUNG_SUPERVISOR_LLM_DEFAULT_HEADERS_JSON",
 )
 
 
@@ -55,6 +60,11 @@ def test_settings_defaults(clear_jung_env: Path) -> None:
     assert settings.llm_extra_body is None
     assert settings.llm_default_headers is None
     assert settings.llm_task_config == {}
+    assert settings.supervisor_llm_base_url is None
+    assert settings.supervisor_model_name is None
+    assert settings.supervisor_llm_api_key is None
+    assert settings.supervisor_llm_extra_body is None
+    assert settings.supervisor_llm_default_headers is None
 
 
 def test_full_override_load() -> None:
@@ -295,3 +305,87 @@ def test_task_extra_body_and_global_extra_body() -> None:
     assert settings.llm_task_config[LLMTask.THERAPY_RESPONSE].extra_body == {
         "task_flag": False
     }
+
+
+def test_empty_headers_json_preserved_as_empty_mapping() -> None:
+    settings = make_test_settings(llm_default_headers="{}")
+    assert settings.llm_default_headers == {}
+
+
+def test_supervisor_settings_defaults_are_none() -> None:
+    settings = make_test_settings()
+    assert settings.supervisor_llm_base_url is None
+    assert settings.supervisor_model_name is None
+    assert settings.supervisor_llm_api_key is None
+    assert settings.supervisor_llm_extra_body is None
+    assert settings.supervisor_llm_default_headers is None
+
+
+def test_supervisor_overrides_accepted() -> None:
+    settings = make_test_settings(
+        supervisor_llm_base_url="http://supervisor.test/v1",
+        supervisor_model_name="supervisor-model",
+        supervisor_llm_api_key="supervisor-secret",
+        supervisor_llm_extra_body={"thinking": False},
+        supervisor_llm_default_headers={"X-Supervisor": "1"},
+    )
+    assert settings.supervisor_llm_base_url == "http://supervisor.test/v1"
+    assert settings.supervisor_model_name == "supervisor-model"
+    assert settings.supervisor_llm_api_key == "supervisor-secret"
+    assert settings.supervisor_llm_extra_body == {"thinking": False}
+    assert settings.supervisor_llm_default_headers == {"X-Supervisor": "1"}
+
+
+def test_supervisor_blank_url_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(supervisor_llm_base_url="   ")
+
+
+def test_supervisor_blank_model_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(supervisor_model_name="   ")
+
+
+def test_supervisor_api_key_unset_via_environ(
+    clear_jung_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JUNG_SUPERVISOR_LLM_API_KEY", raising=False)
+    settings = JungSettings(_env_file=None)
+    assert settings.supervisor_llm_api_key is None
+
+
+def test_supervisor_api_key_empty_via_environ(
+    clear_jung_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JUNG_SUPERVISOR_LLM_API_KEY", "")
+    settings = JungSettings(_env_file=None)
+    assert settings.supervisor_llm_api_key == ""
+
+
+def test_supervisor_empty_json_objects_via_environ(
+    clear_jung_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JUNG_SUPERVISOR_LLM_DEFAULT_HEADERS_JSON", "{}")
+    monkeypatch.setenv("JUNG_SUPERVISOR_LLM_EXTRA_BODY_JSON", "{}")
+    settings = JungSettings(_env_file=None)
+    assert settings.supervisor_llm_default_headers == {}
+    assert settings.supervisor_llm_extra_body == {}
+
+
+def test_make_test_settings_ignores_ambient_supervisor_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "JUNG_SUPERVISOR_LLM_BASE_URL",
+        "http://ambient-supervisor.test/v1",
+    )
+    monkeypatch.setenv("JUNG_SUPERVISOR_MODEL_NAME", "ambient-model")
+    monkeypatch.setenv("JUNG_SUPERVISOR_LLM_API_KEY", "ambient-secret")
+    settings = make_test_settings()
+    assert settings.supervisor_llm_base_url is None
+    assert settings.supervisor_model_name is None
+    assert settings.supervisor_llm_api_key is None
+

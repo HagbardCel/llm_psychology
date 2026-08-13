@@ -164,6 +164,17 @@ def _parse_non_empty_trimmed(value: object) -> str:
     return stripped
 
 
+def _parse_optional_non_empty_trimmed(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("must be a non-empty string")
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("must be non-empty")
+    return stripped
+
+
 def _parse_log_level(value: object) -> LogLevel:
     if isinstance(value, LogLevel):
         return value
@@ -222,7 +233,7 @@ def _parse_default_headers(value: object) -> dict[str, str] | None:
         if not isinstance(item, str):
             raise ValueError(f"{key} must be a string")
         headers[key] = item
-    return headers or None
+    return headers
 
 
 def _parse_extra_body(value: object) -> dict[str, object] | None:
@@ -239,6 +250,10 @@ TightBool = Annotated[bool, BeforeValidator(_parse_tight_bool)]
 DataDir = Annotated[Path, BeforeValidator(_parse_data_dir)]
 OptionalPath = Annotated[Path | None, BeforeValidator(_parse_optional_path)]
 NonEmptyTrimmedStr = Annotated[str, BeforeValidator(_parse_non_empty_trimmed)]
+OptionalNonEmptyTrimmedStr = Annotated[
+    str | None,
+    BeforeValidator(_parse_optional_non_empty_trimmed),
+]
 NormalizedLogLevel = Annotated[LogLevel, BeforeValidator(_parse_log_level)]
 TaskConfigMap = Annotated[
     dict[LLMTask, TaskOverride],
@@ -295,6 +310,27 @@ class JungSettings(BaseSettings):
     llm_task_config: TaskConfigMap = Field(
         default_factory=dict,
         validation_alias="JUNG_LLM_TASK_CONFIG_JSON",
+    )
+
+    supervisor_llm_base_url: OptionalNonEmptyTrimmedStr = Field(
+        default=None,
+        validation_alias="JUNG_SUPERVISOR_LLM_BASE_URL",
+    )
+    supervisor_model_name: OptionalNonEmptyTrimmedStr = Field(
+        default=None,
+        validation_alias="JUNG_SUPERVISOR_MODEL_NAME",
+    )
+    supervisor_llm_api_key: str | None = Field(
+        default=None,
+        validation_alias="JUNG_SUPERVISOR_LLM_API_KEY",
+    )
+    supervisor_llm_extra_body: OptionalJsonObject = Field(
+        default=None,
+        validation_alias="JUNG_SUPERVISOR_LLM_EXTRA_BODY_JSON",
+    )
+    supervisor_llm_default_headers: OptionalHeaders = Field(
+        default=None,
+        validation_alias="JUNG_SUPERVISOR_LLM_DEFAULT_HEADERS_JSON",
     )
 
     shutdown_timeout_seconds: PositiveFloat = Field(
