@@ -405,6 +405,40 @@ def test_reconstruct_supervisor_call_requires_paired_attempts() -> None:
     assert errors
 
 
+def test_reconstruct_rejects_extra_attempt_missing_llm_call_id() -> None:
+    events = copy.deepcopy(_valid_supervisor_events())
+    events.extend(
+        [
+            {
+                "sequence": 100,
+                "kind": "llm.provider.request",
+                "context": {"session_id": "sess-1"},
+                "data": {
+                    "task": "post_session_analysis",
+                    "provider_attempt_id": "orphan-extra",
+                    "model": "supervisor-model",
+                    "messages": [],
+                },
+            },
+            {
+                "sequence": 101,
+                "kind": "llm.provider.response",
+                "context": {"session_id": "sess-1"},
+                "data": {
+                    "task": "post_session_analysis",
+                    "provider_attempt_id": "orphan-extra",
+                    "status": "success",
+                },
+            },
+        ]
+    )
+    reconstruction, errors = reconstruct_supervisor_call(
+        events, task="post_session_analysis", session_id="sess-1"
+    )
+    assert reconstruction is None
+    assert any("missing llm_call_id" in error for error in errors)
+
+
 def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None:
     run_dir = allocate_run_directory(tmp_path / "run-bad-trace")
     runtime = run_dir / "runtime"

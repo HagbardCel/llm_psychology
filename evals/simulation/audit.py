@@ -430,19 +430,26 @@ def reconstruct_supervisor_call(
             or (event.get("context") or {}).get("session_id") == session_id
         )
     ]
-    call_ids = {
-        call_id
-        for event in scoped
-        if (call_id := _event_llm_call_id(event)) is not None
+    logical_kinds = {
+        "llm.provider.request",
+        "llm.provider.response",
+        "llm.provider.error",
+        "llm.output.accepted",
     }
+    logical_events = [event for event in scoped if event.get("kind") in logical_kinds]
+    if any(_event_llm_call_id(event) is None for event in logical_events):
+        errors.append(f"{task}: provider/accepted event missing llm_call_id")
+        return None, errors
+    call_ids = {_event_llm_call_id(event) for event in logical_events}
     if len(call_ids) != 1:
         errors.append(
             f"{task}: expected exactly one llm_call_id, got {sorted(call_ids)!r}"
         )
         return None, errors
     llm_call_id = next(iter(call_ids))
+    assert llm_call_id is not None
     call_events = [
-        event for event in scoped if _event_llm_call_id(event) == llm_call_id
+        event for event in logical_events if _event_llm_call_id(event) == llm_call_id
     ]
 
     accepted = [
