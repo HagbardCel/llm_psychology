@@ -1,4 +1,4 @@
-"""Post-session model semantics: chronology, evidence pairs, status, completeness."""
+"""Post-session model semantics: chronology, evidence pairs, completeness."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def test_empty_transcript_is_valid_input() -> None:
     assert _input(()).transcript == ()
 
 
-def test_status_is_response_cited_not_responded() -> None:
+def test_intervention_evidence_has_no_status_field() -> None:
     evidence = InterventionEvidence(
         intervention_description="Exploratory questioning",
         therapist_sequence=2,
@@ -140,14 +140,15 @@ def test_status_is_response_cited_not_responded() -> None:
         patient_content="I kept waking up.",
     )
     dumped = evidence.model_dump(mode="json")
-    assert dumped["status"] == "response_cited"
-    assert dumped["status"] != "responded"
+    assert "status" not in dumped
+    assert "status" not in InterventionEvidence.model_fields
     delivered = InterventionEvidence(
         intervention_description="Exploratory questioning",
         therapist_sequence=2,
         therapist_content="What feels unclear?",
     )
-    assert delivered.model_dump(mode="json")["status"] == "delivered"
+    assert delivered.patient_sequence is None
+    assert delivered.patient_content is None
 
 
 def test_intervention_evidence_pair_invariants() -> None:

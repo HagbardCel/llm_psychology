@@ -16,7 +16,7 @@ tests/
 │   └── fake_llm.py          # Scripted LLMGateway for deterministic tests
 ├── unit/                    # Fast, deterministic, no I/O
 │   ├── architecture/        # Import-boundary checks over src/jung
-│   ├── domain/              # Domain models, workflow transitions, grounding types
+│   ├── domain/              # Domain models, workflow transitions, session review artifacts
 │   ├── application/         # Application invariants and worker-error classification
 │   ├── phases/              # intake / assessment / therapy / post_session logic
 │   ├── llm/                 # Gateway, policies, structured output, adapter, tracing
@@ -80,10 +80,11 @@ a positive inventory, or a prove-gone tombstone? Delete only the third category.
 | Chat message idempotency / unanswered retry | `integration/store/test_store_chat.py` — `(session_id, client_message_id, role)` uniqueness, unanswered-user guards, assistant attach | `stream_message` cases in `integration/application/test_application_chat.py`; NDJSON round-trip in `integration/api/test_chat_stream.py` and `JungApiClient.stream_message` in `integration/client/`; one journey step in `e2e/` |
 | Error sanitization | `unit/application/test_invariants.py` (`_classify_work_error`) and `unit/api/test_error_mapping.py` | `integration/api/test_http_errors.py` asserts the wire response carries the public code and no internals |
 | Generated HTTP schema and route surface | `integration/api/test_openapi.py` — operation inventory, common headers/error responses, snapshot response types, docs exposure | none; the generated schema is itself the boundary |
-| SQLite schema/CHECK/singleton constraints | `integration/store/test_store_schema.py` — fresh/current init, CHECK constraints, singleton indexes | `integration/store/test_store_chat.py` for message idempotency semantics |
-| Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts a grounded result is persisted and read back intact |
+| SQLite schema/CHECK/singleton constraints | `integration/store/test_store_schema.py` — fresh/current init, CHECK constraints, singleton indexes, schema v7 review/grounding columns | `integration/store/test_store_chat.py` for message idempotency semantics |
+| Session review + grounding persistence | `integration/store/test_store_workflow.py` — review round-trip, no-op plan, grounding validation/order, atomic rollback | `integration/application/` asserts review/grounding survive use-case boundaries; `PhaseInputs` owns latest-briefing selection |
+| Citation grounding | `unit/phases/post_session/test_evidence_validation.py` — every rejection and resolution rule | `integration/application/` asserts selected grounded IDs are persisted and read back intact |
 | Worker-error classification | `unit/application/test_invariants.py` | `integration/application/test_application_operations.py` asserts a failed operation surfaces the classified code |
-| Workflow transitions | `unit/domain/test_workflow.py` — the full legal/illegal transition matrix | `integration/store/test_store_workflow.py` for persisted stage changes; one `e2e/` journey |
+| Workflow transitions | `unit/domain/test_workflow.py` — the full legal/illegal transition matrix (including POST_SESSION source-plan equality) | `integration/store/test_store_workflow.py` for persisted stage changes; one `e2e/` journey |
 | Session/supervisor LLM role routing | `integration/application/test_llm_role_composition.py` — dual adapters, effective AdapterConfig resolution, lifecycle task and model ownership | `unit/llm/test_policies.py` for role→model policy mapping; `unit/llm/test_tracing.py` for physical gateway role in diagnostics |
 
 ### Do not test Pydantic at every layer

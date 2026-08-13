@@ -109,14 +109,16 @@ async def _intervention_section(runner: EvalRunner) -> ReportSection:
         transcript=transcript,
     )
 
+    turns_by_id = {turn.message_id: turn for turn in transcript}
     delivered = [turn.sequence for turn in transcript if turn.role == "assistant"]
     cited = [
         item.therapist_sequence
-        for item in result.session_briefing.intervention_evidence
+        for item in result.review.analysis.intervention_citations
     ]
     grounded = [
-        turn.source_sequence
-        for turn in result.derived_profile_patch.grounded_patient_turns
+        turns_by_id[message_id].sequence
+        for message_id in result.grounded_patient_message_ids
+        if message_id in turns_by_id
     ]
     integrity = citation_integrity_failures(result, transcript)
 
@@ -131,8 +133,8 @@ async def _intervention_section(runner: EvalRunner) -> ReportSection:
         review_focus=scenario.review_focus,
         observations=observations,
         excerpts=[
-            ("Session summary", result.session_summary),
-            ("Narrative handoff", result.session_briefing.narrative_handoff),
+            ("Session summary", result.review.analysis.summary),
+            ("Narrative handoff", result.review.briefing.narrative_handoff),
         ],
     )
 

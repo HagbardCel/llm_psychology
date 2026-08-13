@@ -37,7 +37,7 @@ from jung.phases.post_session.models import (
     PlanPatch,
     PostSessionUpdateResult,
     SessionAnalysisResult,
-    SessionBriefingDraft,
+    SessionBriefing,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
@@ -78,7 +78,7 @@ def post_session_expectations(
             task=LLMTask.POST_SESSION_UPDATE,
             output_type=PostSessionUpdateResult,
             response=PostSessionUpdateResult(
-                session_briefing=SessionBriefingDraft(
+                session_briefing=SessionBriefing(
                     narrative_handoff="Session focused on sleep.",
                     recommended_opening_focus="sleep routine",
                 ),

@@ -261,7 +261,7 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
                 selected_style=load_styles()["cbt"],
             )
         )
-        assert result.session_summary
+        assert result.review.analysis.summary
         return SmokeOperationResult(value=result)
 
     result = await run_smoke_path(
@@ -275,7 +275,9 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
     # Grounding and negation behavior are owned by the hard evals
     # (`make evals`); smoke only proves the structured post-session result
     # parses against the supported schema.
-    result_shape_valid = bool(result.session_summary and result.session_briefing)
+    result_shape_valid = bool(
+        result.review.analysis.summary and result.review.briefing.narrative_handoff
+    )
 
     path = COLLECTOR.post_session
     assert path is not None

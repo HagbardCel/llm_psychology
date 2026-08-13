@@ -8,7 +8,6 @@ from uuid import uuid4
 import pytest
 
 import jung.phases.post_session.prompts as prompts
-from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import ChatRole
 from jung.llm.prompt_context import (
@@ -26,6 +25,8 @@ from jung.phases.post_session.models import (
     SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import (
+    ANALYSIS_PROMPT_VERSION,
+    UPDATE_PROMPT_VERSION,
     build_analysis_request,
     build_update_messages,
 )
@@ -76,13 +77,18 @@ def _resolved(
     analysis: SessionAnalysisResult,
     *,
     intervention_evidence: tuple[InterventionEvidence, ...] = (),
-    grounded_patient_turns: tuple[GroundedPatientTurn, ...] = (),
+    selected_patient_turns: tuple[TranscriptTurn, ...] = (),
 ) -> ResolvedSessionAnalysis:
     return ResolvedSessionAnalysis(
         analysis=analysis,
         intervention_evidence=intervention_evidence,
-        grounded_patient_turns=grounded_patient_turns,
+        selected_patient_turns=selected_patient_turns,
     )
+
+
+def test_prompt_versions_are_post_session_v6() -> None:
+    assert ANALYSIS_PROMPT_VERSION == "post-session-v6"
+    assert UPDATE_PROMPT_VERSION == "post-session-v6"
 
 
 def test_analysis_prompt_puts_style_and_untrusted_rule_in_system() -> None:
@@ -142,6 +148,12 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
         ),
         patient_turn_citations=(PatientTurnCitation(patient_sequence=2),),
     )
+    patient_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=2,
+        role="user",
+        content="I slept badly.",
+    )
     resolved = _resolved(
         analysis,
         intervention_evidence=(
@@ -153,13 +165,7 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
                 patient_content="I slept badly.",
             ),
         ),
-        grounded_patient_turns=(
-            GroundedPatientTurn(
-                source_message_id=uuid4(),
-                source_sequence=2,
-                content="I slept badly.",
-            ),
-        ),
+        selected_patient_turns=(patient_turn,),
     )
     messages = build_update_messages(_input(), resolved)
     combined = "\n".join(message.content for message in messages)

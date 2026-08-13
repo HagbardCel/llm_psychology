@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from jung.domain.errors import InvariantViolation, PersistenceFailure
 from jung.domain.models import (
     CommandName,
+    MessageRole,
     NewPlanRevision,
     OperationKind,
     OperationStatus,
@@ -21,14 +22,17 @@ from jung.domain.models import (
     SessionKind,
     Stage,
 )
+from jung.domain.session_artifacts import PlanPatch
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 from tests.integration.application.scenarios import (
+    PostSessionScenario,
     advance_to_post_session,
     advance_to_ready,
     complete_intake_for_assessment,
     open_intake,
 )
+from tests.support.session_review import sample_review
 
 
 def _plan_content(**overrides: object) -> PlanContent:
@@ -198,24 +202,66 @@ def test_initial_plan_uses_intake_session_source(store: SQLiteStore) -> None:
     assert plan.source_session_id == ready.intake_session_id
 
 
-def test_initial_plan_stores_sql_null_for_briefing_and_supersedes(
+def _post_session_with_user_message(
+    store: SQLiteStore,
+    *,
+    include_assistant: bool = False,
+) -> tuple[PostSessionScenario, UUID, UUID | None]:
+    ready = advance_to_ready(store)
+    therapy_id = uuid4()
+    store.start_therapy_session(session_id=therapy_id, now=ready.now)
+    user_message_id = uuid4()
+    client_message_id = uuid4()
+    store.append_user_message(
+        session_id=therapy_id,
+        client_message_id=client_message_id,
+        user_message_id=user_message_id,
+        content="patient turn",
+        now=ready.now,
+    )
+    assistant_message_id: UUID | None = None
+    if include_assistant:
+        assistant_message_id = uuid4()
+        store.complete_chat_response(
+            session_id=therapy_id,
+            client_message_id=client_message_id,
+            assistant_message_id=assistant_message_id,
+            content="therapist reply",
+            now=ready.now,
+        )
+    post_op_id = uuid4()
+    store.end_therapy_session(
+        session_id=therapy_id,
+        operation_id=post_op_id,
+        now=ready.now,
+    )
+    scenario = PostSessionScenario(
+        intake_session_id=ready.intake_session_id,
+        therapy_session_id=therapy_id,
+        current_plan_id=ready.initial_plan_id,
+        post_session_operation_id=post_op_id,
+        now=ready.now,
+    )
+    return scenario, user_message_id, assistant_message_id
+
+
+def test_initial_plan_stores_sql_null_for_supersedes(
     store: SQLiteStore,
 ) -> None:
     ready = advance_to_ready(store)
     plan = store.get_current_plan()
     assert plan is not None
-    assert plan.session_briefing is None
     assert plan.supersedes_plan_id is None
     with sqlite3.connect(store.database_path) as conn:
         row = conn.execute(
             """
-            SELECT session_briefing_json IS NULL, supersedes_plan_id IS NULL
+            SELECT supersedes_plan_id IS NULL
             FROM plans
             WHERE id = ?
             """,
             (str(plan.id),),
         ).fetchone()
-    assert row == (1, 1)
+    assert row == (1,)
     assert ready.intake_session_id is not None
 
 
@@ -227,7 +273,6 @@ def test_insert_plan_stores_sql_null_for_source_session_id(
         version=1,
         selected_style="test-style",
         **_plan_content().model_dump(),
-        session_briefing=None,
         source_session_id=None,
         supersedes_plan_id=None,
         created_at=datetime(2026, 8, 9, 12, 0, tzinfo=UTC),
@@ -290,16 +335,65 @@ def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> Non
     assert running.attempt == 2
 
 
-def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None:
+def test_complete_post_session_persists_review_round_trip(store: SQLiteStore) -> None:
     scenario = advance_to_post_session(store)
-    new_plan_id = uuid4()
-    briefing = {"summary": "session notes"}
+    review = sample_review()
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
     stage = store.complete_post_session(
         scenario.post_session_operation_id,
-        summary="good session",
-        briefing=briefing,
-        derived_profile={"insight": "progress"},
+        review=review,
+        grounded_patient_message_ids=(),
+        new_plan=None,
+        now=scenario.now,
+    )
+    assert stage == Stage.READY
+    session = store.get_session(scenario.therapy_session_id)
+    assert session is not None
+    assert session.review == review
+
+
+def test_complete_post_session_without_plan_revision_persists_review_only(
+    store: SQLiteStore,
+) -> None:
+    scenario = advance_to_post_session(store)
+    review = sample_review(
+        plan_recommendation=PlanPatch(),
+    )
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    stage = store.complete_post_session(
+        scenario.post_session_operation_id,
+        review=review,
+        grounded_patient_message_ids=(),
+        new_plan=None,
+        now=scenario.now,
+    )
+    assert stage == Stage.READY
+    session = store.get_session(scenario.therapy_session_id)
+    assert session is not None
+    assert session.review == review
+    plan = store.get_current_plan()
+    assert plan is not None
+    assert plan.id == scenario.current_plan_id
+    assert plan.version == 1
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.result == {
+        "plan_id": None,
+        "plan_version": None,
+    }
+
+
+def test_complete_post_session_with_plan_revision_persists_review_and_lineage(
+    store: SQLiteStore,
+) -> None:
+    scenario = advance_to_post_session(store)
+    review = sample_review()
+    new_plan_id = uuid4()
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    stage = store.complete_post_session(
+        scenario.post_session_operation_id,
+        review=review,
+        grounded_patient_message_ids=(),
         new_plan=NewPlanRevision(
             plan_id=new_plan_id,
             content=_plan_content(
@@ -314,60 +408,205 @@ def test_complete_post_session_commits_all_artifacts(store: SQLiteStore) -> None
     assert stage == Stage.READY
     session = store.get_session(scenario.therapy_session_id)
     assert session is not None
-    assert session.summary == "good session"
-    assert session.briefing == briefing
+    assert session.review == review
     plan = store.get_current_plan()
     assert plan is not None
     assert plan.id == new_plan_id
     assert plan.version == 2
     assert plan.selected_style == "cbt"
     assert plan.supersedes_plan_id == scenario.current_plan_id
-    assert plan.session_briefing == briefing
     assert plan.source_session_id == scenario.therapy_session_id
-
-
-def test_complete_post_session_without_plan_revision(store: SQLiteStore) -> None:
-    scenario = advance_to_post_session(store)
-    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    stage = store.complete_post_session(
-        scenario.post_session_operation_id,
-        summary="steady session",
-        briefing={"summary": "no plan change"},
-        derived_profile={"insight": "progress"},
-        new_plan=None,
-        now=scenario.now,
-    )
-    assert stage == Stage.READY
-    plan = store.get_current_plan()
-    assert plan is not None
-    assert plan.id == scenario.current_plan_id
-    assert plan.version == 1
     operation = store.get_operation(scenario.post_session_operation_id)
     assert operation is not None
     assert operation.result == {
-        "plan_id": None,
-        "plan_version": None,
-        "profile_changed": True,
+        "plan_id": str(new_plan_id),
+        "plan_version": 2,
     }
 
 
-def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> None:
+def test_complete_post_session_requires_post_session_stage_with_matching_plan(
+    store: SQLiteStore,
+) -> None:
     scenario = advance_to_post_session(store)
-    stored_profile = store.get_profile()
-    assert stored_profile is not None
-    original_derived_profile = stored_profile.derived_profile
+    decoy_plan_id = uuid4()
+    decoy_plan = Plan(
+        id=decoy_plan_id,
+        version=99,
+        selected_style="cbt",
+        **_plan_content().model_dump(),
+        source_session_id=scenario.therapy_session_id,
+        supersedes_plan_id=None,
+        created_at=scenario.now,
+    )
+    store._write(lambda conn: store._insert_plan(conn, decoy_plan))
+    with sqlite3.connect(store.database_path) as conn:
+        conn.execute(
+            """
+            UPDATE profile
+            SET current_plan_id = ?, updated_at = ?
+            WHERE singleton_id = 1
+            """,
+            (str(decoy_plan_id), scenario.now.isoformat()),
+        )
+        conn.commit()
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    with pytest.raises(
+        InvariantViolation,
+        match="plan_id must match profile.current_plan_id",
+    ):
+        store.complete_post_session(
+            scenario.post_session_operation_id,
+            review=sample_review(),
+            grounded_patient_message_ids=(),
+            new_plan=None,
+            now=scenario.now,
+        )
+
+
+def test_complete_post_session_grounding_accepts_current_session_user(
+    store: SQLiteStore,
+) -> None:
+    scenario, user_message_id, _assistant_message_id = _post_session_with_user_message(
+        store
+    )
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    store.complete_post_session(
+        scenario.post_session_operation_id,
+        review=sample_review(),
+        grounded_patient_message_ids=(user_message_id,),
+        new_plan=None,
+        now=scenario.now,
+    )
+    grounded = store.list_grounded_patient_messages()
+    assert len(grounded) == 1
+    assert grounded[0].id == user_message_id
+    assert grounded[0].content == "patient turn"
+
+
+@pytest.mark.parametrize(
+    ("grounded_ids", "match"),
+    [
+        ("duplicate", "grounded patient message IDs must be unique"),
+        ("assistant", "must be a user message"),
+        ("other_session", "must belong to the source session"),
+        ("missing", "does not exist"),
+    ],
+)
+def test_complete_post_session_grounding_rejects_invalid_message_ids(
+    store: SQLiteStore,
+    grounded_ids: str,
+    match: str,
+) -> None:
+    scenario, user_message_id, assistant_message_id = _post_session_with_user_message(
+        store,
+        include_assistant=True,
+    )
+    assert assistant_message_id is not None
+    intake_messages = store.list_messages(scenario.intake_session_id)
+    other_user_message_id = next(
+        message.id for message in intake_messages if message.role is MessageRole.USER
+    )
+    if grounded_ids == "duplicate":
+        ids = (user_message_id, user_message_id)
+    elif grounded_ids == "assistant":
+        ids = (assistant_message_id,)
+    elif grounded_ids == "other_session":
+        ids = (other_user_message_id,)
+    else:
+        ids = (uuid4(),)
+    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
+    with pytest.raises(InvariantViolation, match=match):
+        store.complete_post_session(
+            scenario.post_session_operation_id,
+            review=sample_review(),
+            grounded_patient_message_ids=ids,
+            new_plan=None,
+            now=scenario.now,
+        )
+
+
+def test_list_grounded_patient_messages_orders_by_session_then_sequence(
+    store: SQLiteStore,
+) -> None:
+    _ready = advance_to_ready(store)
+    first_session_id = uuid4()
+    first_started = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    store.start_therapy_session(session_id=first_session_id, now=first_started)
+    first_user_id = uuid4()
+    store.append_user_message(
+        session_id=first_session_id,
+        client_message_id=uuid4(),
+        user_message_id=first_user_id,
+        content="first session turn",
+        now=first_started,
+    )
+    first_post_op = uuid4()
+    store.end_therapy_session(
+        session_id=first_session_id,
+        operation_id=first_post_op,
+        now=first_started,
+    )
+    store.mark_operation_running(first_post_op, now=first_started)
+    store.complete_post_session(
+        first_post_op,
+        review=sample_review(),
+        grounded_patient_message_ids=(first_user_id,),
+        new_plan=None,
+        now=first_started,
+    )
+
+    second_session_id = uuid4()
+    second_started = datetime(2026, 1, 2, 10, 0, tzinfo=UTC)
+    store.start_therapy_session(session_id=second_session_id, now=second_started)
+    second_user_id = uuid4()
+    store.append_user_message(
+        session_id=second_session_id,
+        client_message_id=uuid4(),
+        user_message_id=second_user_id,
+        content="second session turn",
+        now=second_started,
+    )
+    second_post_op = uuid4()
+    store.end_therapy_session(
+        session_id=second_session_id,
+        operation_id=second_post_op,
+        now=second_started,
+    )
+    store.mark_operation_running(second_post_op, now=second_started)
+    store.complete_post_session(
+        second_post_op,
+        review=sample_review(),
+        grounded_patient_message_ids=(second_user_id,),
+        new_plan=None,
+        now=second_started,
+    )
+
+    grounded = store.list_grounded_patient_messages()
+    assert [message.id for message in grounded] == [first_user_id, second_user_id]
+    assert [message.content for message in grounded] == [
+        "first session turn",
+        "second session turn",
+    ]
+
+
+def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> None:
+    scenario, user_message_id, _assistant_message_id = _post_session_with_user_message(
+        store
+    )
     original_plan_id = scenario.current_plan_id
 
     with sqlite3.connect(store.database_path) as conn:
         original_plan_count = conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
+        original_grounded_count = conn.execute(
+            "SELECT COUNT(*) FROM grounded_patient_turns"
+        ).fetchone()[0]
 
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
     with pytest.raises(PersistenceFailure):
         store.complete_post_session(
             scenario.post_session_operation_id,
-            summary="good session",
-            briefing={"summary": "session notes"},
-            derived_profile={"insight": "changed"},
+            review=sample_review(),
+            grounded_patient_message_ids=(user_message_id,),
             new_plan=NewPlanRevision(
                 plan_id=scenario.current_plan_id,
                 content=_plan_content(
@@ -380,17 +619,14 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
             now=scenario.now,
         )
 
-    state = store.load_snapshot_facts()
-    assert state.stage == Stage.POST_SESSION
+    assert store.load_snapshot_facts().stage == Stage.POST_SESSION
 
     session = store.get_session(scenario.therapy_session_id)
     assert session is not None
-    assert session.summary is None
-    assert session.briefing is None
+    assert session.review is None
 
     stored_profile = store.get_profile()
     assert stored_profile is not None
-    assert stored_profile.derived_profile == original_derived_profile
     assert stored_profile.current_plan_id == original_plan_id
 
     current_plan = store.get_current_plan()
@@ -404,7 +640,12 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
 
     with sqlite3.connect(store.database_path) as conn:
         plan_count = conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
+        grounded_count = conn.execute(
+            "SELECT COUNT(*) FROM grounded_patient_turns"
+        ).fetchone()[0]
     assert plan_count == original_plan_count
+    assert grounded_count == original_grounded_count
+    assert store.list_grounded_patient_messages() == []
 
 
 def test_complete_assessment_rejects_invalid_json_before_persistence(
@@ -508,9 +749,8 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
     with pytest.raises(InvariantViolation):
         store.complete_post_session(
             scenario.post_session_operation_id,
-            summary="too early",
-            briefing={},
-            derived_profile={"insight": "x"},
+            review=sample_review(),
+            grounded_patient_message_ids=(),
             new_plan=None,
             now=scenario.now,
         )
@@ -672,97 +912,14 @@ def test_invalid_plan_fields_raise_invariant_violation(
     with pytest.raises(ValidationError):
         store.complete_post_session(
             post_op_id,
-            summary="good session",
-            briefing={"summary": "notes"},
-            derived_profile={"insight": "progress"},
+            review=sample_review(),
+            grounded_patient_message_ids=(),
             new_plan=NewPlanRevision(
                 plan_id=uuid4(),
                 content=PlanContent(**post_content_kwargs),
             ),
             now=now,
         )
-
-
-def test_complete_post_session_empty_profile_patch_preserves_none(
-    store: SQLiteStore,
-) -> None:
-    scenario = advance_to_post_session(store)
-    stored_before = store.get_profile()
-    assert stored_before is not None
-    assert stored_before.derived_profile is None
-    updated_before = stored_before.updated_at
-
-    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    store.complete_post_session(
-        scenario.post_session_operation_id,
-        summary="steady session",
-        briefing={"summary": "no profile change"},
-        derived_profile=None,
-        new_plan=None,
-        now=scenario.now,
-    )
-
-    stored_after = store.get_profile()
-    assert stored_after is not None
-    assert stored_after.derived_profile is None
-    assert stored_after.updated_at == updated_before
-    operation = store.get_operation(scenario.post_session_operation_id)
-    assert operation is not None
-    assert operation.result == {
-        "plan_id": None,
-        "plan_version": None,
-        "profile_changed": False,
-    }
-
-
-def test_complete_post_session_store_persists_opaque_derived_profile_json(
-    store: SQLiteStore,
-) -> None:
-    """SQLiteStore treats derived_profile as opaque JSON (no shape policy).
-
-    Canonicalization belongs in merge_derived_profile before persistence.
-    """
-    scenario = advance_to_post_session(store)
-    sparse = {"custom_observation": "existing"}
-    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    store.complete_post_session(
-        scenario.post_session_operation_id,
-        summary="first session",
-        briefing={"summary": "seed"},
-        derived_profile=sparse,
-        new_plan=None,
-        now=scenario.now,
-    )
-    stored_before = store.get_profile()
-    assert stored_before is not None
-    updated_before = stored_before.updated_at
-
-    post_op_id = uuid4()
-    therapy_id = uuid4()
-    store.start_therapy_session(
-        session_id=therapy_id,
-        now=scenario.now,
-    )
-    store.end_therapy_session(
-        session_id=therapy_id,
-        operation_id=post_op_id,
-        now=scenario.now,
-    )
-    store.mark_operation_running(post_op_id, now=scenario.now)
-    store.complete_post_session(
-        post_op_id,
-        summary="second session",
-        briefing={"summary": "no profile change"},
-        derived_profile=sparse,
-        new_plan=None,
-        now=scenario.now,
-    )
-
-    stored_after = store.get_profile()
-    assert stored_after is not None
-    assert stored_after.derived_profile == sparse
-    assert "observations" not in (stored_after.derived_profile or {})
-    assert stored_after.updated_at == updated_before
 
 
 def test_complete_final_intake_rolls_back_all_artifacts(store: SQLiteStore) -> None:

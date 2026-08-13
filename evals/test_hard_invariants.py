@@ -77,7 +77,7 @@ async def test_post_session_citations_resolve_to_authoritative_turns(
 
     result = await runner.post_session(style=eval_style("cbt"), transcript=transcript)
 
-    assert result.session_summary
+    assert result.review.analysis.summary
     assert citation_integrity_failures(result, transcript) == []
 
 
@@ -90,11 +90,13 @@ async def test_post_session_retains_safety_relevant_negation_verbatim(
     result = await runner.post_session(style=eval_style("cbt"), transcript=transcript)
 
     assert citation_integrity_failures(result, transcript) == []
+    turns_by_id = {turn.message_id: turn for turn in transcript}
     selected = next(
         (
-            turn
-            for turn in result.derived_profile_patch.grounded_patient_turns
-            if turn.source_sequence == NEGATION_SEQUENCE
+            turns_by_id[message_id]
+            for message_id in result.grounded_patient_message_ids
+            if turns_by_id.get(message_id) is not None
+            and turns_by_id[message_id].sequence == NEGATION_SEQUENCE
         ),
         None,
     )
