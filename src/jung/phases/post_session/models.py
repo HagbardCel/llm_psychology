@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import pairwise
-from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -14,36 +13,19 @@ from pydantic import (
     model_validator,
 )
 
+from jung.domain import session_artifacts as _artifacts
 from jung.domain.models import Message, Plan, Profile
-from jung.domain.session_artifacts import (
-    InterventionCitation,
-    PatientTurnCitation,
-    PlanPatch,
-    SessionAnalysis,
-    SessionBriefing,
-    SessionReview,
-)
 from jung.domain.text import normalize_content
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import StyleDefinition
 
 __all__ = [
-    "InterventionCitation",
     "InterventionEvidence",
-    "PatientTurnCitation",
-    "PlanPatch",
     "PostSessionInput",
     "PostSessionResult",
     "PostSessionUpdateResult",
     "ResolvedSessionAnalysis",
-    "SessionAnalysis",
-    "SessionAnalysisResult",
-    "SessionBriefing",
-    "SessionReview",
 ]
-
-# Structured-output alias: LLM analysis schema equals durable SessionAnalysis.
-SessionAnalysisResult = SessionAnalysis
 
 
 def _non_empty_required_text(value: str) -> str:
@@ -108,7 +90,7 @@ class InterventionEvidence(BaseModel):
 class ResolvedSessionAnalysis:
     """Internal orchestration value after citation resolution."""
 
-    analysis: SessionAnalysis
+    analysis: _artifacts.SessionAnalysis
     intervention_evidence: tuple[InterventionEvidence, ...]
     selected_patient_turns: tuple[TranscriptTurn, ...]
 
@@ -118,15 +100,14 @@ class PostSessionUpdateResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    session_briefing: SessionBriefing
-    plan_patch: PlanPatch
+    session_briefing: _artifacts.SessionBriefing
+    plan_patch: _artifacts.PlanPatch
 
 
 class PostSessionResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    review: SessionReview
-    grounded_patient_message_ids: tuple[UUID, ...] = ()
+    review: _artifacts.SessionReview
 
 
 class PostSessionInput(BaseModel):
@@ -136,7 +117,7 @@ class PostSessionInput(BaseModel):
     current_plan: Plan
     profile: Profile
     grounded_patient_messages: tuple[Message, ...] = ()
-    prior_session_briefing: SessionBriefing | None = None
+    prior_session_briefing: _artifacts.SessionBriefing | None = None
     recent_session_summaries: tuple[str, ...] = ()
     selected_style: StyleDefinition
 

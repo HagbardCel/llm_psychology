@@ -6,14 +6,14 @@ from uuid import uuid4
 
 import pytest
 
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    SessionAnalysis,
+)
 from jung.phases.post_session.evidence_validation import (
     resolve_session_analysis,
     validate_session_analysis,
-)
-from jung.phases.post_session.models import (
-    InterventionCitation,
-    PatientTurnCitation,
-    SessionAnalysisResult,
 )
 from jung.phases.transcript import TranscriptTurn
 
@@ -33,13 +33,13 @@ def _turn(
     )
 
 
-def _analysis(**overrides: object) -> SessionAnalysisResult:
+def _analysis(**overrides: object) -> SessionAnalysis:
     values: dict[str, object] = {
         "summary": "Session summary",
         "key_themes": ("sleep",),
     }
     values.update(overrides)
-    return SessionAnalysisResult(**values)  # type: ignore[arg-type]
+    return SessionAnalysis(**values)  # type: ignore[arg-type]
 
 
 def _conversational_transcript() -> tuple[TranscriptTurn, ...]:

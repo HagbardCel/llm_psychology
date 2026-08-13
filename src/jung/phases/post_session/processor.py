@@ -20,7 +20,6 @@ from jung.phases.post_session.models import (
     PostSessionResult,
     PostSessionUpdateResult,
     ResolvedSessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import (
     ANALYSIS_PROMPT_VERSION,
@@ -76,7 +75,6 @@ def _minimal_session_result(input: PostSessionInput) -> PostSessionResult:
             plan_recommendation=PlanPatch(),
             generation=None,
         ),
-        grounded_patient_message_ids=(),
     )
 
 
@@ -98,9 +96,6 @@ def _compose_result(
                 update_model=update_policy.model,
                 update_prompt_version=UPDATE_PROMPT_VERSION,
             ),
-        ),
-        grounded_patient_message_ids=tuple(
-            turn.message_id for turn in resolved.selected_patient_turns
         ),
     )
 
@@ -124,7 +119,7 @@ class PostSessionProcessor:
         request = build_analysis_request(input)
         analysis = await self._gateway.generate_structured(
             list(request.messages),
-            SessionAnalysisResult,
+            SessionAnalysis,
             self._analysis_policy,
             validate_result=lambda result: validate_session_analysis(
                 result,

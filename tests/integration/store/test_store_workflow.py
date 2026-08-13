@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from jung.domain.errors import InvariantViolation, PersistenceFailure
 from jung.domain.models import (
     CommandName,
-    MessageRole,
     NewPlanRevision,
     OperationKind,
     OperationStatus,
@@ -22,7 +21,7 @@ from jung.domain.models import (
     SessionKind,
     Stage,
 )
-from jung.domain.session_artifacts import PlanPatch
+from jung.domain.session_artifacts import PatientTurnCitation
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 from tests.integration.application.scenarios import (
@@ -32,7 +31,16 @@ from tests.integration.application.scenarios import (
     complete_intake_for_assessment,
     open_intake,
 )
-from tests.support.session_review import sample_review
+from tests.support.session_review import (
+    SAMPLE_PLAN_FOCUS,
+    SAMPLE_PLAN_GOALS,
+    SAMPLE_PLAN_INTERVENTIONS,
+    SAMPLE_PLAN_PROGRESS,
+    SAMPLE_PLAN_REVISIONS,
+    SAMPLE_PLAN_THEMES,
+    minimal_review,
+    sample_review,
+)
 
 
 def _plan_content(**overrides: object) -> PlanContent:
@@ -335,35 +343,68 @@ def test_operation_retry_reuses_row_and_clears_errors(store: SQLiteStore) -> Non
     assert running.attempt == 2
 
 
-def test_complete_post_session_persists_review_round_trip(store: SQLiteStore) -> None:
-    scenario = advance_to_post_session(store)
+def _plan_content_from_sample_patch() -> PlanContent:
+    return PlanContent(
+        focus=SAMPLE_PLAN_FOCUS,
+        themes=list(SAMPLE_PLAN_THEMES),
+        goals=list(SAMPLE_PLAN_GOALS),
+        current_progress=SAMPLE_PLAN_PROGRESS,
+        planned_interventions=list(SAMPLE_PLAN_INTERVENTIONS),
+        revision_recommendations=list(SAMPLE_PLAN_REVISIONS),
+    )
+
+
+def test_complete_post_session_persists_review_grounding_and_plan_revision(
+    store: SQLiteStore,
+) -> None:
+    scenario, user_message_id, _assistant_message_id = _post_session_with_user_message(
+        store,
+        include_assistant=True,
+    )
     review = sample_review()
+    new_plan_id = uuid4()
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
     stage = store.complete_post_session(
         scenario.post_session_operation_id,
         review=review,
-        grounded_patient_message_ids=(),
-        new_plan=None,
+        new_plan=NewPlanRevision(
+            plan_id=new_plan_id,
+            content=_plan_content_from_sample_patch(),
+        ),
         now=scenario.now,
     )
     assert stage == Stage.READY
     session = store.get_session(scenario.therapy_session_id)
     assert session is not None
     assert session.review == review
+    grounded = store.list_grounded_patient_messages()
+    assert len(grounded) == 1
+    assert grounded[0].id == user_message_id
+    assert grounded[0].content == "patient turn"
+    plan = store.get_current_plan()
+    assert plan is not None
+    assert plan.id == new_plan_id
+    assert plan.version == 2
+    assert plan.selected_style == "cbt"
+    assert plan.supersedes_plan_id == scenario.current_plan_id
+    assert plan.source_session_id == scenario.therapy_session_id
+    operation = store.get_operation(scenario.post_session_operation_id)
+    assert operation is not None
+    assert operation.result == {
+        "plan_id": str(new_plan_id),
+        "plan_version": 2,
+    }
 
 
 def test_complete_post_session_without_plan_revision_persists_review_only(
     store: SQLiteStore,
 ) -> None:
     scenario = advance_to_post_session(store)
-    review = sample_review(
-        plan_recommendation=PlanPatch(),
-    )
+    review = minimal_review()
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
     stage = store.complete_post_session(
         scenario.post_session_operation_id,
         review=review,
-        grounded_patient_message_ids=(),
         new_plan=None,
         now=scenario.now,
     )
@@ -380,47 +421,6 @@ def test_complete_post_session_without_plan_revision_persists_review_only(
     assert operation.result == {
         "plan_id": None,
         "plan_version": None,
-    }
-
-
-def test_complete_post_session_with_plan_revision_persists_review_and_lineage(
-    store: SQLiteStore,
-) -> None:
-    scenario = advance_to_post_session(store)
-    review = sample_review()
-    new_plan_id = uuid4()
-    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    stage = store.complete_post_session(
-        scenario.post_session_operation_id,
-        review=review,
-        grounded_patient_message_ids=(),
-        new_plan=NewPlanRevision(
-            plan_id=new_plan_id,
-            content=_plan_content(
-                goals=["sleep better"],
-                current_progress="improved",
-                planned_interventions=["homework"],
-                revision_recommendations=["continue tracking"],
-            ),
-        ),
-        now=scenario.now,
-    )
-    assert stage == Stage.READY
-    session = store.get_session(scenario.therapy_session_id)
-    assert session is not None
-    assert session.review == review
-    plan = store.get_current_plan()
-    assert plan is not None
-    assert plan.id == new_plan_id
-    assert plan.version == 2
-    assert plan.selected_style == "cbt"
-    assert plan.supersedes_plan_id == scenario.current_plan_id
-    assert plan.source_session_id == scenario.therapy_session_id
-    operation = store.get_operation(scenario.post_session_operation_id)
-    assert operation is not None
-    assert operation.result == {
-        "plan_id": str(new_plan_id),
-        "plan_version": 2,
     }
 
 
@@ -456,70 +456,44 @@ def test_complete_post_session_requires_post_session_stage_with_matching_plan(
     ):
         store.complete_post_session(
             scenario.post_session_operation_id,
-            review=sample_review(),
-            grounded_patient_message_ids=(),
+            review=minimal_review(),
             new_plan=None,
             now=scenario.now,
         )
 
 
-def test_complete_post_session_grounding_accepts_current_session_user(
-    store: SQLiteStore,
-) -> None:
-    scenario, user_message_id, _assistant_message_id = _post_session_with_user_message(
-        store
-    )
-    store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
-    store.complete_post_session(
-        scenario.post_session_operation_id,
-        review=sample_review(),
-        grounded_patient_message_ids=(user_message_id,),
-        new_plan=None,
-        now=scenario.now,
-    )
-    grounded = store.list_grounded_patient_messages()
-    assert len(grounded) == 1
-    assert grounded[0].id == user_message_id
-    assert grounded[0].content == "patient turn"
-
-
 @pytest.mark.parametrize(
-    ("grounded_ids", "match"),
+    ("citation_sequences", "match"),
     [
-        ("duplicate", "grounded patient message IDs must be unique"),
-        ("assistant", "must be a user message"),
-        ("other_session", "must belong to the source session"),
-        ("missing", "does not exist"),
+        ((2,), "must identify a user message"),
+        ((99,), "does not exist in the source session"),
+        ((1, 1), "patient turn citation sequences must be unique"),
     ],
 )
-def test_complete_post_session_grounding_rejects_invalid_message_ids(
+def test_complete_post_session_grounding_rejects_invalid_citations(
     store: SQLiteStore,
-    grounded_ids: str,
+    citation_sequences: tuple[int, ...],
     match: str,
 ) -> None:
-    scenario, user_message_id, assistant_message_id = _post_session_with_user_message(
+    scenario, _user_message_id, _assistant_message_id = _post_session_with_user_message(
         store,
         include_assistant=True,
     )
-    assert assistant_message_id is not None
-    intake_messages = store.list_messages(scenario.intake_session_id)
-    other_user_message_id = next(
-        message.id for message in intake_messages if message.role is MessageRole.USER
+    review = sample_review(
+        analysis=sample_review().analysis.model_copy(
+            update={
+                "patient_turn_citations": tuple(
+                    PatientTurnCitation(patient_sequence=sequence)
+                    for sequence in citation_sequences
+                ),
+            }
+        ),
     )
-    if grounded_ids == "duplicate":
-        ids = (user_message_id, user_message_id)
-    elif grounded_ids == "assistant":
-        ids = (assistant_message_id,)
-    elif grounded_ids == "other_session":
-        ids = (other_user_message_id,)
-    else:
-        ids = (uuid4(),)
     store.mark_operation_running(scenario.post_session_operation_id, now=scenario.now)
     with pytest.raises(InvariantViolation, match=match):
         store.complete_post_session(
             scenario.post_session_operation_id,
-            review=sample_review(),
-            grounded_patient_message_ids=ids,
+            review=review,
             new_plan=None,
             now=scenario.now,
         )
@@ -550,7 +524,6 @@ def test_list_grounded_patient_messages_orders_by_session_then_sequence(
     store.complete_post_session(
         first_post_op,
         review=sample_review(),
-        grounded_patient_message_ids=(first_user_id,),
         new_plan=None,
         now=first_started,
     )
@@ -576,7 +549,6 @@ def test_list_grounded_patient_messages_orders_by_session_then_sequence(
     store.complete_post_session(
         second_post_op,
         review=sample_review(),
-        grounded_patient_message_ids=(second_user_id,),
         new_plan=None,
         now=second_started,
     )
@@ -590,8 +562,9 @@ def test_list_grounded_patient_messages_orders_by_session_then_sequence(
 
 
 def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> None:
-    scenario, user_message_id, _assistant_message_id = _post_session_with_user_message(
-        store
+    scenario, _user_message_id, _assistant_message_id = _post_session_with_user_message(
+        store,
+        include_assistant=True,
     )
     original_plan_id = scenario.current_plan_id
 
@@ -606,15 +579,9 @@ def test_complete_post_session_rolls_back_all_artifacts(store: SQLiteStore) -> N
         store.complete_post_session(
             scenario.post_session_operation_id,
             review=sample_review(),
-            grounded_patient_message_ids=(user_message_id,),
             new_plan=NewPlanRevision(
                 plan_id=scenario.current_plan_id,
-                content=_plan_content(
-                    goals=["sleep better"],
-                    current_progress="improved",
-                    planned_interventions=["homework"],
-                    revision_recommendations=["continue tracking"],
-                ),
+                content=_plan_content_from_sample_patch(),
             ),
             now=scenario.now,
         )
@@ -749,8 +716,7 @@ def test_complete_post_session_requires_running_operation(store: SQLiteStore) ->
     with pytest.raises(InvariantViolation):
         store.complete_post_session(
             scenario.post_session_operation_id,
-            review=sample_review(),
-            grounded_patient_message_ids=(),
+            review=minimal_review(),
             new_plan=None,
             now=scenario.now,
         )
@@ -912,8 +878,7 @@ def test_invalid_plan_fields_raise_invariant_violation(
     with pytest.raises(ValidationError):
         store.complete_post_session(
             post_op_id,
-            review=sample_review(),
-            grounded_patient_message_ids=(),
+            review=minimal_review(),
             new_plan=NewPlanRevision(
                 plan_id=uuid4(),
                 content=PlanContent(**post_content_kwargs),

@@ -26,16 +26,18 @@ from jung.domain.models import (
     Stage,
 )
 from jung.domain.results import ChatCompleted, ChatFailed
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+)
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.post_session.models import (
-    PlanPatch,
     PostSessionUpdateResult,
-    SessionAnalysisResult,
-    SessionBriefing,
 )
 from jung.styles import load_styles
 from tests.support.fake_llm import (
@@ -44,7 +46,7 @@ from tests.support.fake_llm import (
     StreamExpectation,
     StructuredExpectation,
 )
-from tests.support.session_review import sample_review
+from tests.support.session_review import minimal_review
 
 from .application_fixtures import (
     assessment_result,
@@ -208,8 +210,7 @@ async def test_malformed_review_json_fails_therapy_as_internal_error(
     store.mark_operation_running(first_post_op, now=ready.now)
     store.complete_post_session(
         first_post_op,
-        review=sample_review(),
-        grounded_patient_message_ids=(),
+        review=minimal_review(),
         new_plan=None,
         now=ready.now,
     )
@@ -252,8 +253,7 @@ async def test_malformed_review_json_fails_post_session_as_internal_error(
     store.mark_operation_running(first_post_op, now=ready.now)
     store.complete_post_session(
         first_post_op,
-        review=sample_review(),
-        grounded_patient_message_ids=(),
+        review=minimal_review(),
         new_plan=None,
         now=ready.now,
     )
@@ -307,8 +307,8 @@ async def test_prior_session_briefing_reaches_next_session_without_plan_revision
             ),
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                 ),

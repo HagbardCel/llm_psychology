@@ -715,7 +715,6 @@ class SQLiteStore:
         operation_id: UUID,
         *,
         review: SessionReview,
-        grounded_patient_message_ids: tuple[UUID, ...],
         new_plan: NewPlanRevision | None,
         now: datetime,
     ) -> Stage:
@@ -731,31 +730,35 @@ class SQLiteStore:
             source_session_id = operation.source_session_id
             current_plan = self._require_current_plan(conn)
 
-            if len(grounded_patient_message_ids) != len(
-                set(grounded_patient_message_ids)
-            ):
-                raise InvariantViolation("grounded patient message IDs must be unique")
-            for message_id in grounded_patient_message_ids:
+            citations = review.analysis.patient_turn_citations
+            sequences = tuple(item.patient_sequence for item in citations)
+            if len(sequences) != len(set(sequences)):
+                raise InvariantViolation(
+                    "patient turn citation sequences must be unique"
+                )
+
+            grounded_message_ids: list[UUID] = []
+            for sequence in sequences:
                 row = conn.execute(
                     """
-                    SELECT role, session_id FROM messages WHERE id = ?
+                    SELECT id, role
+                    FROM messages
+                    WHERE session_id = ? AND sequence = ?
                     """,
-                    (str(message_id),),
+                    (str(source_session_id), sequence),
                 ).fetchone()
                 if row is None:
                     raise InvariantViolation(
-                        f"grounded patient message {message_id} does not exist"
+                        f"patient turn citation sequence {sequence} "
+                        "does not exist in the source session"
                     )
-                role, session_id = row[0], UUID(row[1])
+                message_id, role = UUID(row[0]), row[1]
                 if role != MessageRole.USER.value:
                     raise InvariantViolation(
-                        f"grounded patient message {message_id} must be a user message"
+                        f"patient turn citation sequence {sequence} "
+                        "must identify a user message"
                     )
-                if session_id != source_session_id:
-                    raise InvariantViolation(
-                        f"grounded patient message {message_id} must belong to "
-                        "the source session"
-                    )
+                grounded_message_ids.append(message_id)
 
             conn.execute(
                 """
@@ -766,7 +769,7 @@ class SQLiteStore:
                 (review_json, str(source_session_id)),
             )
 
-            for message_id in grounded_patient_message_ids:
+            for message_id in grounded_message_ids:
                 conn.execute(
                     """
                     INSERT INTO grounded_patient_turns (message_id)

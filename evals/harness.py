@@ -193,14 +193,12 @@ def citation_integrity_failures(
     result: PostSessionResult,
     transcript: tuple[TranscriptTurn, ...],
 ) -> list[str]:
-    """Return integrity violations for durable review citations and grounding.
+    """Return integrity violations for durable review citations.
 
-    Emitting no citations is not a violation. Every emitted citation or grounded
-    message id must resolve to a real transcript turn with the correct role and
-    chronology. Content is not compared here.
+    Every emitted citation must resolve to a real transcript turn with the
+    correct role and intervention chronology.
     """
     turns_by_sequence = {turn.sequence: turn for turn in transcript}
-    turns_by_id = {turn.message_id: turn for turn in transcript}
     failures: list[str] = []
     review = result.review
 
@@ -249,14 +247,6 @@ def citation_integrity_failures(
                     f"does not follow therapist sequence "
                     f"{citation.therapist_sequence}"
                 )
-
-    for message_id in result.grounded_patient_message_ids:
-        source = turns_by_id.get(message_id)
-        if source is None:
-            failures.append(f"grounded message id {message_id} is not in transcript")
-            continue
-        if source.role != "user":
-            failures.append(f"grounded message id {message_id} is not a patient turn")
 
     return failures
 

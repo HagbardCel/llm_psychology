@@ -208,7 +208,7 @@ authoritative.
 | Validator | Verifies turn identity, role, and chronology; one intervention per therapist turn |
 | Resolver | Ephemeral full-turn evidence for the update prompt only |
 | Durable review | Sequence citations and interpretive fields inside `SessionReview` (no copied message text) |
-| Durable grounding | Message IDs only in `grounded_patient_turns` |
+| Durable grounding | Message IDs in `grounded_patient_turns`, written only via persist-time resolution of `patient_turn_citations` |
 | LLM-facing historical context | Normalized turn content projected from authoritative messages; temporary prompt keys `derived_profile` / `grounded_patient_turns` remain until Phase 7D |
 
 **Normalized** means whitespace-collapsed (`" ".join(text.split())`), not byte-for-byte identical source text.
@@ -228,7 +228,9 @@ Patient-turn citations select patient-authored turns whose complete wording
 should be retained as durable cross-session context; cite sparingly, especially
 safety-relevant clarifications or negations where partial wording could reverse
 meaning, and omit when nothing qualifies. Patient-turn citations are unique by
-patient sequence. Durable grounding references are unique by message ID.
+patient sequence. The production application write path into
+`grounded_patient_turns` is exclusively persist-time resolution of those
+citations against source-session messages.
 
 The latest next-session briefing for therapy/post-session input comes from the
 latest completed prior therapy session's `review.briefing`, whether or not that

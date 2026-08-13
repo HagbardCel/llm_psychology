@@ -9,13 +9,12 @@ from uuid import uuid4
 import pytest
 
 from jung.domain.models import Message, MessageRole, Plan, Profile
-from jung.domain.session_artifacts import SessionBriefing
+from jung.domain.session_artifacts import SessionAnalysis, SessionBriefing
 from jung.llm.gateway import ChatRole
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
     ResolvedSessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import build_update_messages
 from jung.phases.post_session.update_context import (
@@ -144,7 +143,7 @@ def _resolved(**overrides: object) -> ResolvedSessionAnalysis:
     }
     analysis_values.update(analysis_overrides)
     return ResolvedSessionAnalysis(
-        analysis=SessionAnalysisResult(**analysis_values),  # type: ignore[arg-type]
+        analysis=SessionAnalysis(**analysis_values),  # type: ignore[arg-type]
         intervention_evidence=overrides.get("intervention_evidence", ()),  # type: ignore[arg-type]
         selected_patient_turns=overrides.get("selected_patient_turns", ()),  # type: ignore[arg-type]
     )

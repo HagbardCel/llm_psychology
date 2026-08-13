@@ -9,6 +9,11 @@ import pytest
 
 import jung.phases.post_session.prompts as prompts
 from jung.domain.models import Plan, Profile
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    SessionAnalysis,
+)
 from jung.llm.gateway import ChatRole
 from jung.llm.prompt_context import (
     UNTRUSTED_CONTEXT_RULE,
@@ -17,12 +22,9 @@ from jung.llm.prompt_context import (
 from jung.phases.context_projection import transcript_turn_payload
 from jung.phases.post_session.evidence_validation import validate_session_analysis
 from jung.phases.post_session.models import (
-    InterventionCitation,
     InterventionEvidence,
-    PatientTurnCitation,
     PostSessionInput,
     ResolvedSessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import (
     ANALYSIS_PROMPT_VERSION,
@@ -74,7 +76,7 @@ def _input(*, patient_content: str = "I slept badly.") -> PostSessionInput:
 
 
 def _resolved(
-    analysis: SessionAnalysisResult,
+    analysis: SessionAnalysis,
     *,
     intervention_evidence: tuple[InterventionEvidence, ...] = (),
     selected_patient_turns: tuple[TranscriptTurn, ...] = (),
@@ -136,7 +138,7 @@ def test_analysis_system_defines_patient_turn_citation_selection() -> None:
 
 
 def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None:
-    analysis = SessionAnalysisResult(
+    analysis = SessionAnalysis(
         summary="Sleep difficulties explored.",
         key_themes=("sleep",),
         intervention_citations=(
@@ -186,7 +188,7 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
 def test_update_prompt_puts_style_in_system_and_plan_in_user() -> None:
     messages = build_update_messages(
         _input(),
-        _resolved(SessionAnalysisResult(summary="summary", key_themes=("sleep",))),
+        _resolved(SessionAnalysis(summary="summary", key_themes=("sleep",))),
     )
     system = next(
         message.content for message in messages if message.role is ChatRole.SYSTEM
@@ -340,7 +342,7 @@ def test_citation_of_non_visible_sequence_rejected() -> None:
         ),
         TranscriptTurn(message_id=uuid4(), sequence=4, role="user", content="later"),
     )
-    analysis = SessionAnalysisResult(
+    analysis = SessionAnalysis(
         summary="summary",
         key_themes=("sleep",),
         intervention_citations=(

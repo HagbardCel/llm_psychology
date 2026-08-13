@@ -266,9 +266,6 @@ class OperationRuntime:
                             self._store.complete_post_session,
                             operation_id,
                             review=result.review,
-                            grounded_patient_message_ids=(
-                                result.grounded_patient_message_ids
-                            ),
                             new_plan=new_plan,
                             now=self._now(),
                         )

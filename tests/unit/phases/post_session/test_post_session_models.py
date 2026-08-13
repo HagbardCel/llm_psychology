@@ -9,12 +9,14 @@ import pytest
 from pydantic import ValidationError
 
 from jung.domain.models import Plan, Profile
-from jung.phases.post_session.models import (
+from jung.domain.session_artifacts import (
     InterventionCitation,
-    InterventionEvidence,
     PatientTurnCitation,
+    SessionAnalysis,
+)
+from jung.phases.post_session.models import (
+    InterventionEvidence,
     PostSessionInput,
-    SessionAnalysisResult,
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
@@ -201,7 +203,7 @@ def test_intervention_evidence_normalizes_content() -> None:
 
 def test_session_analysis_caps_citation_lists() -> None:
     with pytest.raises(ValidationError):
-        SessionAnalysisResult(
+        SessionAnalysis(
             summary="summary",
             key_themes=("theme",),
             intervention_citations=tuple(
@@ -213,7 +215,7 @@ def test_session_analysis_caps_citation_lists() -> None:
             ),
         )
     with pytest.raises(ValidationError):
-        SessionAnalysisResult(
+        SessionAnalysis(
             summary="summary",
             key_themes=("theme",),
             patient_turn_citations=tuple(

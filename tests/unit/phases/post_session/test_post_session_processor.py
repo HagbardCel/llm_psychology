@@ -9,16 +9,18 @@ import pytest
 from pydantic import ValidationError
 
 from jung.domain.models import Plan, Profile
-from jung.domain.session_artifacts import SessionBriefing
-from jung.llm.errors import InvalidLLMOutput
-from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
-from jung.phases.post_session.models import (
+from jung.domain.session_artifacts import (
     InterventionCitation,
     PatientTurnCitation,
     PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+)
+from jung.llm.errors import InvalidLLMOutput
+from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
+from jung.phases.post_session.models import (
     PostSessionInput,
     PostSessionUpdateResult,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.post_session.prompts import (
@@ -111,7 +113,7 @@ def _input(
 
 
 def test_llm_schemas_omit_generation_provenance() -> None:
-    analysis_schema = SessionAnalysisResult.model_json_schema()
+    analysis_schema = SessionAnalysis.model_json_schema()
     update_schema = PostSessionUpdateResult.model_json_schema()
     assert "generation" not in analysis_schema.get("properties", {})
     assert "generation" not in update_schema.get("properties", {})
@@ -132,7 +134,7 @@ async def test_empty_transcript_makes_zero_llm_calls() -> None:
     assert result.review.briefing.continuity_points == ()
     assert result.review.plan_recommendation == PlanPatch()
     assert result.review.generation is None
-    assert result.grounded_patient_message_ids == ()
+    assert result.review.analysis.patient_turn_citations == ()
     gateway.assert_exhausted()
 
 
@@ -173,7 +175,7 @@ async def test_user_only_transcript_uses_generic_summary_without_message_text() 
         result.review.briefing.recommended_opening_focus
     )
     assert result.review.generation is None
-    assert result.grounded_patient_message_ids == ()
+    assert result.review.analysis.patient_turn_citations == ()
     gateway.assert_exhausted()
 
 
@@ -252,8 +254,8 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
         [
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                     intervention_citations=(
@@ -293,7 +295,10 @@ async def test_post_session_processor_makes_two_structured_calls() -> None:
     assert result.review.analysis.summary == "Patient explored sleep difficulties."
     assert result.review.briefing.narrative_handoff == "Session focused on sleep."
     assert result.review.plan_recommendation.current_progress == "some progress"
-    assert result.grounded_patient_message_ids == (user_message_id,)
+    assert tuple(
+        citation.patient_sequence
+        for citation in result.review.analysis.patient_turn_citations
+    ) == (1,)
     generation = result.review.generation
     assert generation is not None
     assert generation.analysis_model == "analysis-model-a"
@@ -310,8 +315,8 @@ async def test_post_session_processor_records_differing_analysis_and_update_mode
         [
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                 ),
@@ -349,8 +354,8 @@ async def test_post_session_processor_rejects_invalid_plan_patch() -> None:
         [
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                 ),
@@ -401,8 +406,8 @@ async def test_invalid_analysis_citations_raise_without_update_call() -> None:
         [
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                     intervention_citations=(
@@ -431,8 +436,8 @@ async def test_post_session_processor_raises_when_update_fails() -> None:
         [
             StructuredExpectation(
                 task=LLMTask.POST_SESSION_ANALYSIS,
-                output_type=SessionAnalysisResult,
-                response=SessionAnalysisResult(
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
                     summary="Patient explored sleep difficulties.",
                     key_themes=("sleep",),
                 ),

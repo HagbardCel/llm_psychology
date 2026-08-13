@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from jung.domain.session_artifacts import InterventionCitation, PatientTurnCitation
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    SessionAnalysis,
+)
 from jung.domain.text import normalize_content
 from jung.phases.post_session.models import (
     InterventionEvidence,
     ResolvedSessionAnalysis,
-    SessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.transcript import TranscriptTurn
 
@@ -60,11 +62,11 @@ def _validate_patient_turn_citation(
 
 
 def validate_session_analysis(
-    result: SessionAnalysisResult,
+    result: SessionAnalysis,
     transcript: tuple[TranscriptTurn, ...],
     *,
     allowed_sequences: frozenset[int] | None = None,
-) -> SessionAnalysisResult:
+) -> SessionAnalysis:
     """Validate sequence-only analysis citations.
 
     Raises ``ValueError`` for model-correctable semantic failures. Transcript

@@ -49,12 +49,11 @@ assertions for semantic quality.
   still passes.
 - **Citation integrity (if emitted).** Every emitted intervention or patient-turn
   citation must resolve to a real transcript turn with the correct role and
-  chronology. Selected grounded message IDs must match the authoritative
-  messages for those patient citations. Durable reviews no longer copy turn
-  text, so the eval does not compare copied content.
-- **Safety-relevant negation retained verbatim.** A transcript whose meaning
-  reverses under partial quotation must have that turn retained as a grounded
-  message ID whose authoritative transcript content matches exactly.
+  chronology.
+- **Safety-relevant negation selection.** A transcript whose meaning reverses
+  under partial quotation must have that patient turn selected via
+  `patient_turn_citation`. Citation-to-message-ID materialization belongs to
+  store integration; the hard eval verifies model selection only.
 - **No style-instruction leakage into durable artifacts.** A canary in the
   style's reflection instructions must not appear in any model-authored
   `SessionReview` string or plan recommendation (generation metadata is
@@ -77,9 +76,9 @@ be selected as an intervention.
 
 The negation eval is the one deliberate exception, transferred here from the
 strict local-model smoke. It requires a specific patient turn to be selected
-and retained verbatim. That is a *model-behavior* requirement, not a production
-schema requirement: the runtime will accept an empty selection, but a model
-that drops a safety-relevant negation from durable memory is not one we are
+via `patient_turn_citation`. That is a *model-behavior* requirement, not a
+production schema requirement: the runtime will accept an empty selection, but a
+model that drops a safety-relevant negation from durable memory is not one we are
 willing to run. Read a failure as "this model is unsuitable", not "the backend
 is broken". Any future requirement of this kind must be documented here with
 the same explicit reasoning.

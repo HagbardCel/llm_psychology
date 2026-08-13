@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from jung.domain.models import Plan
+from jung.domain.session_artifacts import PlanPatch
 from jung.phases.post_session.merge import merge_plan_content, plan_patch_is_noop
-from jung.phases.post_session.models import PlanPatch
 
 
 def _plan() -> Plan:
