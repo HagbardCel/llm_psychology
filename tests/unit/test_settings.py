@@ -72,7 +72,6 @@ def test_full_override_load() -> None:
         llm_task_config=json.dumps(
             {
                 "assessment": {
-                    "model": "  assess-model  ",
                     "temperature": 0.2,
                     "timeout_seconds": 90,
                     "max_completion_tokens": 4096,
@@ -90,13 +89,13 @@ def test_full_override_load() -> None:
     assert settings.llm_extra_body == {"global": True}
     assert settings.llm_default_headers == {"X-Test": "1"}
     override = settings.llm_task_config[LLMTask.ASSESSMENT]
-    assert override.model == "assess-model"
     assert override.temperature == 0.2
     policies = build_model_policies(
-        default_model=settings.model_name,
+        session_model=settings.model_name,
+        supervisor_model=settings.model_name,
         task_overrides=settings.llm_task_config,
     )
-    assert policies[LLMTask.ASSESSMENT].model == "assess-model"
+    assert policies[LLMTask.ASSESSMENT].model == "custom-model"
     assert (
         policies[LLMTask.ASSESSMENT].structured_output_mode
         is StructuredOutputMode.JSON_OBJECT
@@ -153,7 +152,21 @@ def test_streaming_task_rejects_non_prompt_structured_mode() -> None:
 def test_typed_null_task_field_rejected() -> None:
     with pytest.raises(ValidationError):
         make_test_settings(
-            llm_task_config=json.dumps({"assessment": {"model": None}}),
+            llm_task_config=json.dumps({"assessment": {"temperature": None}}),
+        )
+
+
+def test_task_config_rejects_model_field() -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(
+            llm_task_config=json.dumps({"assessment": {"model": "assess-model"}}),
+        )
+
+
+def test_task_config_rejects_role_field() -> None:
+    with pytest.raises(ValidationError):
+        make_test_settings(
+            llm_task_config=json.dumps({"assessment": {"role": "supervisor"}}),
         )
 
 

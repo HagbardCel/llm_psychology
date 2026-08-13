@@ -14,7 +14,13 @@ from pydantic import (
     model_validator,
 )
 
-from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
+from jung.llm.gateway import (
+    LLMRole,
+    LLMTask,
+    ModelPolicy,
+    StructuredOutputMode,
+    role_for_task,
+)
 
 _DEFAULT_TEMPERATURES: dict[LLMTask, float] = {
     LLMTask.INTAKE_PATCH: 0.1,
@@ -47,7 +53,6 @@ class TaskOverride(BaseModel):
         allow_inf_nan=False,
     )
 
-    model: str | None = None
     temperature: Annotated[float, Field(ge=0, le=2)] | None = None
     timeout_seconds: Annotated[float, Field(gt=0)] | None = None
     max_completion_tokens: Annotated[StrictInt, Field(gt=0)] | None = None
@@ -70,16 +75,6 @@ class TaskOverride(BaseModel):
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("must be a number")
-        return value
-
-    @field_validator("model")
-    @classmethod
-    def normalize_model(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        value = value.strip()
-        if not value:
-            raise ValueError("must be non-empty")
         return value
 
     @field_validator("extra_body")
@@ -109,19 +104,21 @@ def _assert_finite_json_numbers(value: object, *, path: str) -> None:
 
 def build_model_policies(
     *,
-    default_model: str,
+    session_model: str,
+    supervisor_model: str,
     task_overrides: Mapping[LLMTask, TaskOverride],
 ) -> dict[LLMTask, ModelPolicy]:
-    if not default_model.strip():
-        raise ValueError("default_model must be non-empty")
+    if not session_model.strip():
+        raise ValueError("session_model must be non-empty")
+    if not supervisor_model.strip():
+        raise ValueError("supervisor_model must be non-empty")
 
     policies: dict[LLMTask, ModelPolicy] = {}
     for task in LLMTask:
         override = task_overrides.get(task)
+        role = role_for_task(task)
         model = (
-            override.model
-            if override is not None and override.model is not None
-            else default_model
+            session_model if role is LLMRole.SESSION else supervisor_model
         )
         temperature = (
             override.temperature

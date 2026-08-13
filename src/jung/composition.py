@@ -125,7 +125,8 @@ async def application_context(
 
         try:
             policies = build_model_policies(
-                default_model=settings.model_name,
+                session_model=settings.model_name,
+                supervisor_model=settings.model_name,
                 task_overrides=settings.llm_task_config,
             )
             _preflight_json_schema_policies(policies)

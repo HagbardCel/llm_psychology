@@ -103,7 +103,8 @@ def build_local_model_policies(
             fields["max_completion_tokens"] = completion_caps[task]
         overrides[task] = TaskOverride(**fields)
     return build_model_policies(
-        default_model=environment.model,
+        session_model=environment.model,
+        supervisor_model=environment.model,
         task_overrides=overrides,
     )
 
