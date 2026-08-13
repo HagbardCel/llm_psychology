@@ -388,4 +388,3 @@ def test_make_test_settings_ignores_ambient_supervisor_env(
     assert settings.supervisor_llm_base_url is None
     assert settings.supervisor_model_name is None
     assert settings.supervisor_llm_api_key is None
-
