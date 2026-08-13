@@ -120,6 +120,12 @@ the standalone server entry point.
 `_application/` implement chat generation, durable operation tasks, phase-input
 construction, and cancellation-safe store calls; they are not a public service layer.
 
+Post-session completion persists a typed `SessionReview` on the source therapy
+session, inserts unique grounded patient-message IDs, and optionally creates an
+immutable plan revision. Messages remain the sole durable exact wording;
+temporary LLM prompt keys such as `derived_profile` are packing-only until a
+later context-policy redesign.
+
 ## Application boundary
 
 All use cases enter through one explicitly constructed application service.
