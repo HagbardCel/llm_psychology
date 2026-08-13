@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from jung.domain.grounding import GroundedPatientTurn
+from jung.domain.session_artifacts import InterventionCitation, PatientTurnCitation
 from jung.domain.text import normalize_content
 from jung.phases.post_session.models import (
-    InterventionCitation,
     InterventionEvidence,
-    PatientTurnCitation,
     ResolvedSessionAnalysis,
+    SessionAnalysis,
     SessionAnalysisResult,
 )
 from jung.phases.transcript import TranscriptTurn
@@ -115,10 +114,10 @@ def validate_session_analysis(
 
 
 def resolve_session_analysis(
-    result: SessionAnalysisResult,
+    result: SessionAnalysis,
     transcript: tuple[TranscriptTurn, ...],
 ) -> ResolvedSessionAnalysis:
-    """Resolve validated citations to authoritative full-turn evidence."""
+    """Resolve validated citations to ephemeral full-turn evidence."""
     turns_by_sequence = {turn.sequence: turn for turn in transcript}
 
     interventions: list[InterventionEvidence] = []
@@ -138,16 +137,9 @@ def resolve_session_analysis(
             )
         )
 
-    grounded: list[GroundedPatientTurn] = []
+    selected: list[TranscriptTurn] = []
     for citation in result.patient_turn_citations:
-        turn = turns_by_sequence[citation.patient_sequence]
-        grounded.append(
-            GroundedPatientTurn(
-                source_message_id=turn.message_id,
-                source_sequence=turn.sequence,
-                content=normalize_content(turn.content),
-            )
-        )
+        selected.append(turns_by_sequence[citation.patient_sequence])
 
     interventions_sorted = tuple(
         sorted(
@@ -158,9 +150,9 @@ def resolve_session_analysis(
             ),
         )
     )
-    grounded_sorted = tuple(sorted(grounded, key=lambda item: item.source_sequence))
+    selected_sorted = tuple(sorted(selected, key=lambda item: item.sequence))
     return ResolvedSessionAnalysis(
         analysis=result,
         intervention_evidence=interventions_sorted,
-        grounded_patient_turns=grounded_sorted,
+        selected_patient_turns=selected_sorted,
     )

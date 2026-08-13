@@ -25,8 +25,9 @@ from jung.domain.models import (
     SessionKind,
     StoredProfile,
 )
+from jung.domain.session_artifacts import SessionReview
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -60,8 +61,8 @@ def seed_initial_state(conn: sqlite3.Connection) -> None:
         """
         INSERT INTO profile (
             singleton_id, name, primary_language, date_of_birth, notes,
-            derived_profile_json, current_plan_id, created_at, updated_at
-        ) VALUES (1, '', 'English', NULL, NULL, NULL, NULL, ?, ?)
+            current_plan_id, created_at, updated_at
+        ) VALUES (1, '', 'English', NULL, NULL, NULL, ?, ?)
         """,
         (now, now),
     )
@@ -207,11 +208,16 @@ def row_to_stored_profile(row: sqlite3.Row | tuple[Any, ...]) -> StoredProfile:
     )
     return StoredProfile(
         profile=profile,
-        derived_profile=json_loads(row[4]),
-        current_plan_id=UUID(row[5]) if row[5] else None,
-        created_at=parse_dt(row[6]),
-        updated_at=parse_dt(row[7]),
+        current_plan_id=UUID(row[4]) if row[4] else None,
+        created_at=parse_dt(row[5]),
+        updated_at=parse_dt(row[6]),
     )
+
+
+def _parse_review(raw: str | None) -> SessionReview | None:
+    if raw is None:
+        return None
+    return SessionReview.model_validate(json.loads(raw))
 
 
 def row_to_session(row: sqlite3.Row | tuple[Any, ...]) -> Session:
@@ -221,9 +227,8 @@ def row_to_session(row: sqlite3.Row | tuple[Any, ...]) -> Session:
         plan_id=UUID(row[2]) if row[2] else None,
         started_at=parse_dt(row[3]),
         ended_at=parse_dt(row[4]) if row[4] else None,
-        summary=row[5],
-        briefing=json_loads(row[6]),
-        intake_record=json_loads(row[7]) if len(row) > 7 else None,
+        intake_record=json_loads(row[5]),
+        review=_parse_review(row[6]),
     )
 
 
@@ -250,10 +255,9 @@ def row_to_plan(row: sqlite3.Row | tuple[Any, ...]) -> Plan:
         current_progress=row[6],
         planned_interventions=json_loads(row[7]),
         revision_recommendations=json_loads(row[8]),
-        session_briefing=json_loads(row[9]),
-        source_session_id=UUID(row[10]) if row[10] else None,
-        supersedes_plan_id=UUID(row[11]) if row[11] else None,
-        created_at=parse_dt(row[12]),
+        source_session_id=UUID(row[9]) if row[9] else None,
+        supersedes_plan_id=UUID(row[10]) if row[10] else None,
+        created_at=parse_dt(row[11]),
     )
 
 

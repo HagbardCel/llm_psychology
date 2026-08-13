@@ -152,14 +152,19 @@ def to_session_summary(session: Session) -> SessionSummaryResponse:
 
 
 def to_session_detail(session: Session) -> SessionDetailResponse:
+    summary = None
+    briefing = None
+    if session.review is not None:
+        summary = session.review.analysis.summary
+        briefing = session.review.briefing.model_dump(mode="json")
     return SessionDetailResponse(
         id=session.id,
         kind=session.kind.value,
         started_at=session.started_at,
         ended_at=session.ended_at,
         plan_id=session.plan_id,
-        summary=session.summary,
-        briefing=session.briefing,
+        summary=summary,
+        briefing=briefing,
     )
 
 
@@ -196,7 +201,6 @@ def to_plan_detail(plan: Plan) -> PlanDetailResponse:
         current_progress=plan.current_progress,
         planned_interventions=list(plan.planned_interventions),
         revision_recommendations=list(plan.revision_recommendations),
-        session_briefing=plan.session_briefing,
         source_session_id=plan.source_session_id,
         supersedes_plan_id=plan.supersedes_plan_id,
         created_at=plan.created_at,

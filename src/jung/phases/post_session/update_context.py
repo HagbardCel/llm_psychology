@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
-from jung.domain.grounding import GroundedPatientTurn, parse_grounded_patient_turns
-from jung.domain.session_artifacts import parse_session_briefing
+from jung.domain.session_artifacts import SessionBriefing
+from jung.domain.text import normalize_content
 from jung.llm.prompt_context import (
     render_context_user_message,
     rendered_context_user_message_length,
@@ -14,19 +15,18 @@ from jung.llm.prompt_context import (
 from jung.phases.context_bounds import bounded_text
 from jung.phases.context_projection import (
     ProjectionBudgetError,
-    build_evidence_atoms,
     compact_session_briefing,
     compact_summary,
     enrich_plan_projection,
     minimal_plan_projection,
-    pack_evidence_atoms,
-    pack_grounded_profile_turns,
+    pack_grounded_patient_messages,
 )
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
     ResolvedSessionAnalysis,
 )
+from jung.phases.transcript import TranscriptTurn
 
 _UPDATE_USER_MESSAGE_LIMIT = 8_000
 _UPDATE_TASK = "Produce the next-session briefing draft and plan patch."
@@ -54,6 +54,13 @@ _INTERPRETIVE_LIST_FIELDS = (
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisEvidenceAtom:
+    kind: Literal["intervention", "patient_turn"]
+    sequence: int
+    payload: InterventionEvidence | TranscriptTurn
+
+
+@dataclass(frozen=True, slots=True)
 class PostSessionUpdateContext:
     """Pure projection of resolved analysis for the update call."""
 
@@ -65,7 +72,7 @@ class PostSessionUpdateContext:
     progress_indicators: tuple[str, ...]
     unresolved_topics: tuple[str, ...]
     intervention_evidence: tuple[InterventionEvidence, ...]
-    patient_turns: tuple[GroundedPatientTurn, ...]
+    selected_patient_turns: tuple[TranscriptTurn, ...]
     safety_or_boundary_notes: tuple[str, ...]
 
     @classmethod
@@ -82,9 +89,112 @@ class PostSessionUpdateContext:
             progress_indicators=analysis.progress_indicators,
             unresolved_topics=analysis.unresolved_topics,
             intervention_evidence=resolved.intervention_evidence,
-            patient_turns=resolved.grounded_patient_turns,
+            selected_patient_turns=resolved.selected_patient_turns,
             safety_or_boundary_notes=analysis.safety_or_boundary_notes,
         )
+
+
+def intervention_payload(item: InterventionEvidence) -> dict[str, object]:
+    return {
+        "intervention_description": item.intervention_description,
+        "status": (
+            "response_cited" if item.patient_sequence is not None else "delivered"
+        ),
+        "therapist_sequence": item.therapist_sequence,
+        "therapist_content": item.therapist_content,
+        "patient_sequence": item.patient_sequence,
+        "patient_content": item.patient_content,
+    }
+
+
+def current_patient_turn_payload(item: TranscriptTurn) -> dict[str, object]:
+    """Current-session evidence retains sequence (same-prompt transcript)."""
+    return {
+        "source_sequence": item.sequence,
+        "content": normalize_content(item.content),
+    }
+
+
+def build_evidence_atoms(
+    interventions: Sequence[InterventionEvidence],
+    patient_turns: Sequence[TranscriptTurn],
+) -> tuple[AnalysisEvidenceAtom, ...]:
+    atoms = [
+        *(
+            AnalysisEvidenceAtom(
+                kind="intervention",
+                sequence=item.therapist_sequence,
+                payload=item,
+            )
+            for item in interventions
+        ),
+        *(
+            AnalysisEvidenceAtom(
+                kind="patient_turn",
+                sequence=item.sequence,
+                payload=item,
+            )
+            for item in patient_turns
+        ),
+    ]
+    return tuple(
+        sorted(
+            atoms,
+            key=lambda item: (
+                item.sequence,
+                0 if item.kind == "intervention" else 1,
+            ),
+        )
+    )
+
+
+def pack_evidence_atoms(
+    atoms: Sequence[AnalysisEvidenceAtom],
+    *,
+    total_interventions: int,
+    total_patient_turns: int,
+    interpretive: Mapping[str, object],
+    fits: Callable[[dict[str, object]], bool],
+) -> dict[str, object]:
+    """Pack evidence newest-first under a shared chronological budget."""
+
+    def build_document(
+        selected: Sequence[AnalysisEvidenceAtom],
+    ) -> dict[str, object]:
+        selected_interventions = [
+            item.payload for item in selected if item.kind == "intervention"
+        ]
+        selected_turns = [
+            item.payload for item in selected if item.kind == "patient_turn"
+        ]
+        return {
+            **dict(interpretive),
+            "intervention_evidence": [
+                intervention_payload(item)  # type: ignore[arg-type]
+                for item in selected_interventions
+            ],
+            "intervention_evidence_omitted": (
+                total_interventions - len(selected_interventions)
+            ),
+            "patient_turns": [
+                current_patient_turn_payload(item)  # type: ignore[arg-type]
+                for item in selected_turns
+            ],
+            "patient_turns_omitted": total_patient_turns - len(selected_turns),
+        }
+
+    baseline = build_document(())
+    if not fits(baseline):
+        raise ProjectionBudgetError("minimal analysis evidence projection does not fit")
+
+    selected_reverse: list[AnalysisEvidenceAtom] = []
+    for atom in reversed(atoms):
+        candidate = tuple(reversed([*selected_reverse, atom]))
+        if fits(build_document(candidate)):
+            selected_reverse.append(atom)
+
+    selected = tuple(reversed(selected_reverse))
+    return build_document(selected)
 
 
 def _fits_update(
@@ -121,7 +231,7 @@ def _baseline_analysis_document(
         "intervention_evidence": [],
         "intervention_evidence_omitted": len(analysis.intervention_evidence),
         "patient_turns": [],
-        "patient_turns_omitted": len(analysis.patient_turns),
+        "patient_turns_omitted": len(analysis.selected_patient_turns),
     }
 
 
@@ -180,7 +290,7 @@ def build_update_user_message(
     # 1. Pack current resolved evidence under one shared chronological budget.
     atoms = build_evidence_atoms(
         analysis.intervention_evidence,
-        analysis.patient_turns,
+        analysis.selected_patient_turns,
     )
 
     def analysis_fits(session_analysis: dict[str, object]) -> bool:
@@ -192,7 +302,7 @@ def build_update_user_message(
         best_analysis = pack_evidence_atoms(
             atoms,
             total_interventions=len(analysis.intervention_evidence),
-            total_patient_turns=len(analysis.patient_turns),
+            total_patient_turns=len(analysis.selected_patient_turns),
             interpretive={"summary": compact_summary(analysis.summary)},
             fits=analysis_fits,
         )
@@ -237,26 +347,24 @@ def build_update_user_message(
         fits=interpretive_fits,
     )
 
-    # 4. Grounded derived profile.
-    if input.derived_profile is not None:
-        turns = parse_grounded_patient_turns(input.derived_profile)
+    # 4. Grounded historical patient messages (prompt key: derived_profile).
+    if input.grounded_patient_messages:
 
         def profile_fits(profile_doc: dict[str, object]) -> bool:
             candidate = dict(document)
             candidate["derived_profile"] = profile_doc
             return _fits_update(candidate)
 
-        packed = pack_grounded_profile_turns(
-            turns,
+        packed = pack_grounded_patient_messages(
+            input.grounded_patient_messages,
             fits=profile_fits,
-            content_only=True,
         )
         if packed is not None:
             document["derived_profile"] = packed.document
 
-    # 5. Prior session briefing (typed, atomic evidence).
+    # 5. Prior session briefing.
     if input.prior_session_briefing is not None:
-        briefing = parse_session_briefing(input.prior_session_briefing)
+        briefing: SessionBriefing = input.prior_session_briefing
 
         def briefing_fits(briefing_doc: dict[str, object]) -> bool:
             candidate = dict(document)

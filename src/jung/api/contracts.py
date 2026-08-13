@@ -169,7 +169,6 @@ class PlanDetailResponse(BaseModel):
     current_progress: str
     planned_interventions: list[str]
     revision_recommendations: list[str]
-    session_briefing: dict[str, Any] | None = None
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
     created_at: UtcDateTime

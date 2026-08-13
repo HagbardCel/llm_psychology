@@ -1,21 +1,10 @@
-"""Cross-phase durable session briefing and intervention evidence."""
+"""Durable supervisor session review and related typed artifacts."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Literal, Self
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
-
-from jung.domain.text import normalize_content
-
-InterventionStatus = Literal["delivered", "response_cited"]
+_MAX_EVIDENCE_ITEMS = 20
 
 _NARRATIVE_HANDOFF = "narrative_handoff"
 _RECOMMENDED_OPENING = "recommended_opening_focus"
@@ -28,90 +17,59 @@ def _non_empty_required_text(value: str) -> str:
     return value
 
 
-def _normalize_non_empty_content(value: str) -> str:
-    value = normalize_content(value)
-    if not value:
-        raise ValueError("must be non-empty")
-    return value
-
-
-def _normalize_optional_content(value: str | None) -> str | None:
-    if value is None:
-        return None
-    value = normalize_content(value)
-    if not value:
-        raise ValueError("must be non-empty when provided")
-    return value
-
-
-def _evidence_sort_key(
-    item: InterventionEvidence,
-) -> tuple[int, int]:
-    return (item.therapist_sequence, item.patient_sequence or 0)
-
-
-class InterventionEvidence(BaseModel):
-    """Backend-resolved intervention evidence with full authoritative turns."""
+class InterventionCitation(BaseModel):
+    """Sequence-only intervention citation retained in the durable review."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     intervention_description: str = Field(max_length=500)
     therapist_sequence: int = Field(ge=1)
-    therapist_content: str
     patient_sequence: int | None = Field(default=None, ge=1)
-    patient_content: str | None = None
-    status: InterventionStatus
-
-    @model_validator(mode="before")
-    @classmethod
-    def derive_status(cls, value: object) -> object:
-        if not isinstance(value, Mapping):
-            return value
-        data = dict(value)
-        expected: InterventionStatus = (
-            "response_cited"
-            if data.get("patient_sequence") is not None
-            else "delivered"
-        )
-        if "status" in data and data["status"] != expected:
-            raise ValueError("status conflicts with patient citation")
-        data["status"] = expected
-        return data
 
     @field_validator("intervention_description")
     @classmethod
     def non_empty_description(cls, value: str) -> str:
         return _non_empty_required_text(value)
 
-    @field_validator("therapist_content")
-    @classmethod
-    def normalize_therapist_content(cls, value: str) -> str:
-        return _normalize_non_empty_content(value)
 
-    @field_validator("patient_content")
-    @classmethod
-    def normalize_patient_content(cls, value: str | None) -> str | None:
-        return _normalize_optional_content(value)
+class PatientTurnCitation(BaseModel):
+    """Sequence-only patient-turn citation retained in the durable review."""
 
-    @model_validator(mode="after")
-    def validate_response_reference(self) -> Self:
-        sequence_present = self.patient_sequence is not None
-        content_present = self.patient_content is not None
-        if sequence_present != content_present:
-            raise ValueError(
-                "patient_sequence and patient_content must both be "
-                "present or both absent"
-            )
-        if (
-            self.patient_sequence is not None
-            and self.patient_sequence <= self.therapist_sequence
-        ):
-            raise ValueError("patient_sequence must follow therapist_sequence")
-        return self
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    patient_sequence: int = Field(ge=1)
+
+
+class SessionAnalysis(BaseModel):
+    """Validated supervisor analysis retained on the closed therapy session."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    summary: str
+    key_themes: tuple[str, ...]
+    dominant_affects: tuple[str, ...] = ()
+    important_moments: tuple[str, ...] = ()
+    patient_insights: tuple[str, ...] = ()
+    progress_indicators: tuple[str, ...] = ()
+    unresolved_topics: tuple[str, ...] = ()
+    intervention_citations: tuple[InterventionCitation, ...] = Field(
+        default=(),
+        max_length=_MAX_EVIDENCE_ITEMS,
+    )
+    patient_turn_citations: tuple[PatientTurnCitation, ...] = Field(
+        default=(),
+        max_length=_MAX_EVIDENCE_ITEMS,
+    )
+    safety_or_boundary_notes: tuple[str, ...] = ()
+
+    @field_validator("summary")
+    @classmethod
+    def non_empty_summary(cls, value: str) -> str:
+        return _non_empty_required_text(value)
 
 
 class SessionBriefing(BaseModel):
-    """Durable next-session briefing with resolved intervention evidence."""
+    """Next-session handoff retained inside the durable session review."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -121,29 +79,53 @@ class SessionBriefing(BaseModel):
     recommended_opening_focus: str
     things_to_avoid: tuple[str, ...] = ()
     emotional_context: tuple[str, ...] = ()
-    intervention_evidence: tuple[InterventionEvidence, ...] = ()
 
     @field_validator(_NARRATIVE_HANDOFF, _RECOMMENDED_OPENING)
     @classmethod
     def non_empty_text(cls, value: str) -> str:
         return _non_empty_required_text(value)
 
-    @model_validator(mode="after")
-    def validate_evidence_integrity(self) -> Self:
-        sequences = [item.therapist_sequence for item in self.intervention_evidence]
-        if len(sequences) != len(set(sequences)):
-            raise ValueError(
-                "intervention_evidence therapist_sequence values must be unique"
-            )
-        canonical = tuple(sorted(self.intervention_evidence, key=_evidence_sort_key))
-        if self.intervention_evidence != canonical:
-            raise ValueError(
-                "intervention_evidence must be in canonical order "
-                "(therapist_sequence, patient_sequence or 0)"
-            )
-        return self
+
+class PlanPatch(BaseModel):
+    """Optional treatment-plan field overrides from the supervisor update pass."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    focus: str | None = None
+    themes: tuple[str, ...] | None = None
+    goals: tuple[str, ...] | None = None
+    current_progress: str | None = None
+    planned_interventions: tuple[str, ...] | None = None
+    revision_recommendations: tuple[str, ...] | None = None
 
 
-def parse_session_briefing(raw: Mapping[str, Any]) -> SessionBriefing:
-    """Strictly validate a persisted briefing mapping."""
-    return SessionBriefing.model_validate(raw)
+class SessionReviewGeneration(BaseModel):
+    """Backend-authored provenance for conversational supervisor reviews."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    analysis_model: str
+    analysis_prompt_version: str
+    update_model: str
+    update_prompt_version: str
+
+    @field_validator(
+        "analysis_model",
+        "analysis_prompt_version",
+        "update_model",
+        "update_prompt_version",
+    )
+    @classmethod
+    def non_empty_provenance(cls, value: str) -> str:
+        return _non_empty_required_text(value)
+
+
+class SessionReview(BaseModel):
+    """Complete durable supervisor record for a completed therapy session."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    analysis: SessionAnalysis
+    briefing: SessionBriefing
+    plan_recommendation: PlanPatch
+    generation: SessionReviewGeneration | None = None

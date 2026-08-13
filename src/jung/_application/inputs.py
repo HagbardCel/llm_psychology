@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any
 from uuid import UUID
 
 from jung._application.store_calls import run_store_call
@@ -17,6 +16,7 @@ from jung.domain.models import (
     Session,
     SessionKind,
 )
+from jung.domain.session_artifacts import SessionBriefing
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentInput
 from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
@@ -80,15 +80,19 @@ class PhaseInputs:
         if latest_user is None:
             raise InvariantViolation("therapy turn requires a user message")
         all_sessions = await self._run_store(self._store.list_sessions)
+        grounded = await self._run_store(self._store.list_grounded_patient_messages)
         summaries = _recent_session_summaries(
             all_sessions,
             exclude_session_id=session_id,
         )
         return TherapyTurnInput(
             profile=stored.profile,
-            derived_profile=stored.derived_profile,
+            grounded_patient_messages=tuple(grounded),
             current_plan=plan,
-            session_briefing=plan.session_briefing,
+            session_briefing=_latest_prior_briefing(
+                all_sessions,
+                exclude_session_id=session_id,
+            ),
             recent_session_summaries=summaries,
             transcript=transcript,
             latest_user_message=latest_user,
@@ -135,15 +139,15 @@ class PhaseInputs:
             operation.source_session_id,
         )
         sessions = await self._run_store(self._store.list_sessions)
+        grounded = await self._run_store(self._store.list_grounded_patient_messages)
         return PostSessionInput(
             transcript=messages_to_transcript(messages),
             current_plan=plan,
             profile=stored.profile,
-            derived_profile=stored.derived_profile,
-            prior_session_briefing=_prior_session_briefing(
+            grounded_patient_messages=tuple(grounded),
+            prior_session_briefing=_latest_prior_briefing(
                 sessions,
-                source_session_id=operation.source_session_id,
-                plan=plan,
+                exclude_session_id=operation.source_session_id,
             ),
             recent_session_summaries=_recent_session_summaries(
                 sessions,
@@ -201,27 +205,24 @@ def _recent_session_summaries(
             continue
         if session.kind is not SessionKind.THERAPY:
             continue
-        if session.ended_at is None or not session.summary:
+        if session.ended_at is None or session.review is None:
             continue
-        summaries.append(session.summary)
+        summaries.append(session.review.analysis.summary)
         if len(summaries) >= limit:
             break
     return tuple(summaries)
 
 
-def _prior_session_briefing(
+def _latest_prior_briefing(
     sessions: list[Session],
     *,
-    source_session_id: UUID,
-    plan: Plan,
-) -> dict[str, Any] | None:
-    if plan.session_briefing is not None:
-        return plan.session_briefing
+    exclude_session_id: UUID,
+) -> SessionBriefing | None:
     for session in sessions:
-        if session.id == source_session_id:
+        if session.id == exclude_session_id:
             continue
         if session.kind is not SessionKind.THERAPY:
             continue
-        if session.ended_at is not None and session.briefing is not None:
-            return session.briefing
+        if session.ended_at is not None and session.review is not None:
+            return session.review.briefing
     return None
