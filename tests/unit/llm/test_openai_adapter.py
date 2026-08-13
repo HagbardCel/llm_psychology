@@ -249,6 +249,102 @@ async def test_http_failure_translates_and_records_attempt_metadata(
     assert events[0].error_type == expected_error_type
 
 
+def _structured_completion(content: str) -> dict[str, object]:
+    return {
+        "id": "1",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "index": 0,
+            }
+        ],
+    }
+
+
+async def test_structured_http_error_makes_exactly_one_physical_request() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(503, json={"error": {"message": "boom"}})
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(LLMUnavailable):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+    assert calls["count"] == 1
+
+
+async def test_structured_connection_error_makes_exactly_one_physical_request() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(LLMUnavailable):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+    assert calls["count"] == 1
+
+
+async def test_structured_cancellation_makes_exactly_one_physical_request() -> None:
+    calls = {"count": 0}
+    started = asyncio.Event()
+
+    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    async def hang(**_kwargs: object) -> object:
+        calls["count"] += 1
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("hanging request should have been cancelled")
+
+    gateway._client.chat.completions.create = hang  # type: ignore[method-assign]
+
+    task = asyncio.create_task(
+        gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls["count"] == 1
+
+
+async def test_structured_provider_error_on_correction_makes_exactly_two_physical_requests() -> (
+    None
+):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(200, json=_structured_completion('{"value":1}'))
+        return httpx.Response(503, json={"error": {"message": "boom"}})
+
+    gateway = _client(httpx.MockTransport(handler))
+    with pytest.raises(LLMUnavailable):
+        await gateway.generate_structured(
+            [ChatMessage(role=ChatRole.USER, content="give json")],
+            _Answer,
+            _policy(),
+        )
+    assert calls["count"] == 2
+
+
 async def test_provider_attempt_event_records_empty_content_correction_metadata() -> (
     None
 ):
