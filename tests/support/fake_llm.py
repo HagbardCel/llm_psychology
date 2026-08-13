@@ -134,15 +134,19 @@ class FakeLLM:
 
 
 class RecordingFakeLLM:
-    """Test-only wrapper; records LLMTask at outermost client-facing entry only."""
+    """Test-only wrapper; records task/model at outermost LLM entry points."""
 
     def __init__(self, delegate: FakeLLM) -> None:
         self._delegate = delegate
-        self._recorded_tasks: list[LLMTask] = []
+        self._recorded_calls: list[tuple[LLMTask, str]] = []
+
+    @property
+    def recorded_calls(self) -> tuple[tuple[LLMTask, str], ...]:
+        return tuple(self._recorded_calls)
 
     @property
     def recorded_tasks(self) -> tuple[LLMTask, ...]:
-        return tuple(self._recorded_tasks)
+        return tuple(task for task, _model in self._recorded_calls)
 
     async def generate_structured(
         self,
@@ -151,7 +155,7 @@ class RecordingFakeLLM:
         policy: ModelPolicy,
         validate_result: Callable[[T], T] | None = None,
     ) -> T:
-        self._recorded_tasks.append(policy.task)
+        self._recorded_calls.append((policy.task, policy.model))
         return await self._delegate.generate_structured(
             messages=messages,
             output_type=output_type,
@@ -164,7 +168,7 @@ class RecordingFakeLLM:
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
     ) -> AsyncGenerator[str, None]:
-        self._recorded_tasks.append(policy.task)
+        self._recorded_calls.append((policy.task, policy.model))
         async for chunk in self._delegate.stream_text(messages, policy):
             yield chunk
 

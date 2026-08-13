@@ -71,7 +71,7 @@ async def test_default_config_builds_two_distinct_adapters(
     assert instances[0] is not instances[1]
 
 
-async def test_split_endpoint_and_model_reach_adapters(
+async def test_split_endpoint_reaches_adapters(
     tmp_path: Path,
 ) -> None:
     configs: list[AdapterConfig] = []
@@ -319,6 +319,12 @@ async def test_lifecycle_routes_tasks_to_role_gateways(
         LLMTask.ASSESSMENT,
         LLMTask.POST_SESSION_ANALYSIS,
         LLMTask.POST_SESSION_UPDATE,
+    }
+    assert {model for _task, model in session_recording.recorded_calls} == {
+        "session-model"
+    }
+    assert {model for _task, model in supervisor_recording.recorded_calls} == {
+        "supervisor-model"
     }
     assert LLMTask.THERAPY_RESPONSE not in supervisor_tasks
     assert LLMTask.POST_SESSION_ANALYSIS not in session_tasks
