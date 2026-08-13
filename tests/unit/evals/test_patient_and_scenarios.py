@@ -89,12 +89,24 @@ def test_resolve_patient_endpoint_inherits_session_when_same_origin() -> None:
         session_model="session-model",
         session_api_key="SESSION_SECRET",
         session_default_headers={"Authorization": "Bearer SESSION_SECRET"},
+        session_extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     assert config.base_url == "http://session.test/v1"
     assert config.model == "session-model"
     assert config.api_key == "SESSION_SECRET"
     assert config.default_headers == {"Authorization": "Bearer SESSION_SECRET"}
     assert config.max_completion_tokens == 400
+    assert config.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_resolve_patient_endpoint_uses_placeholder_for_empty_session_key() -> None:
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="",
+        session_default_headers=None,
+    )
+    assert config.api_key == "not-needed"
 
 
 def test_resolve_patient_endpoint_never_inherits_credentials_across_origins(

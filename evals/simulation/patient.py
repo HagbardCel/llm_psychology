@@ -81,6 +81,7 @@ class PatientEndpointConfig:
     default_headers: Mapping[str, str] | None
     timeout_seconds: float
     max_completion_tokens: int
+    extra_body: Mapping[str, Any] | None = None
 
 
 class PatientGenerationError(RuntimeError):
@@ -148,6 +149,7 @@ def resolve_patient_endpoint(
     patient_api_key_env: str | None = None,
     timeout_seconds: float = PATIENT_TIMEOUT_SECONDS,
     max_completion_tokens: int = PATIENT_MAX_COMPLETION_TOKENS,
+    session_extra_body: Mapping[str, Any] | None = None,
 ) -> PatientEndpointConfig:
     """Resolve patient transport without leaking credentials across origins."""
     model = patient_model or session_model
@@ -155,7 +157,7 @@ def resolve_patient_endpoint(
         return PatientEndpointConfig(
             base_url=session_base_url,
             model=model,
-            api_key=session_api_key,
+            api_key=session_api_key or _LOCAL_PLACEHOLDER_API_KEY,
             default_headers=(
                 dict(session_default_headers)
                 if session_default_headers is not None
@@ -163,6 +165,7 @@ def resolve_patient_endpoint(
             ),
             timeout_seconds=timeout_seconds,
             max_completion_tokens=max_completion_tokens,
+            extra_body=dict(session_extra_body) if session_extra_body else None,
         )
 
     if patient_api_key_env is None:
@@ -175,6 +178,7 @@ def resolve_patient_endpoint(
         default_headers=None,
         timeout_seconds=timeout_seconds,
         max_completion_tokens=max_completion_tokens,
+        extra_body=None,
     )
 
 
@@ -266,12 +270,15 @@ class PatientSimulator:
         prompt = build_patient_prompt(context)
         started = time.perf_counter()
         try:
-            response = await self._client.chat.completions.create(
-                model=self._config.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=self._config.max_completion_tokens,
-                temperature=0.7,
-            )
+            create_kwargs: dict[str, Any] = {
+                "model": self._config.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_completion_tokens": self._config.max_completion_tokens,
+                "temperature": 0.7,
+            }
+            if self._config.extra_body:
+                create_kwargs["extra_body"] = dict(self._config.extra_body)
+            response = await self._client.chat.completions.create(**create_kwargs)
         except Exception as exc:
             raise PatientGenerationError(
                 f"patient provider unavailable: {type(exc).__name__}: {exc}"

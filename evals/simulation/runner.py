@@ -261,6 +261,7 @@ async def run_simulation(
         patient_base_url=config.patient_base_url,
         patient_model=config.patient_model,
         timeout_seconds=config.patient_timeout,
+        session_extra_body=isolated.llm_extra_body,
     )
     owns_patient = patient_actor is None
     patient = patient_actor or PatientSimulator(endpoint)
