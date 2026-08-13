@@ -15,7 +15,8 @@ from typing import Any, Literal
 from uuid import UUID
 
 from jung.diagnostics import open_private_file, sanitize_url, snapshot_database
-from jung.domain.session_artifacts import SessionReview
+from jung.domain.session_artifacts import SessionAnalysis, SessionReview
+from jung.domain.text import normalize_content
 from jung.phases.context_projection import minimal_session_briefing_projection
 from jung.phases.post_session.models import PostSessionUpdateResult
 
@@ -61,6 +62,14 @@ class AuditResult:
         self.warnings.append(
             AuditFinding(code=code, message=message, evidence=evidence)
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SupervisorCallReconstruction:
+    llm_call_id: str
+    model: str | None
+    accepted_result: Mapping[str, Any]
+    accepted_sequence: int
 
 
 class JourneyLog:
@@ -191,7 +200,6 @@ def extract_context_data(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any
             raise ValueError("multiple <context_data> blocks in one user message")
         match = found[0]
         trailing = content[match.end() :].strip()
-        # Task text after the block is expected; additional tags are not.
         if "<context_data>" in trailing or "</context_data>" in trailing:
             raise ValueError("ambiguous trailing <context_data> content")
         matches.append(match)
@@ -207,6 +215,29 @@ def _connect_readonly(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _safe_section(audit: AuditResult, code: str, section: str) -> Any:
+    """Context-manager-like helper: run callable and convert escapes to findings."""
+
+    class _Guard:
+        def __enter__(self) -> AuditResult:
+            return audit
+
+        def __exit__(self, exc_type: Any, exc: Any, _tb: Any) -> bool:
+            if exc_type is None:
+                return False
+            if issubclass(exc_type, Exception):
+                audit.fail(
+                    "audit_section_error",
+                    f"{section}: {type(exc).__name__}: {exc}",
+                    section=section,
+                    code_hint=code,
+                )
+                return True
+            return False
+
+    return _Guard()
 
 
 def check_sqlite_integrity(db_path: Path, audit: AuditResult) -> None:
@@ -355,6 +386,238 @@ def audit_completed_therapy_session(
     return review
 
 
+def _event_task(event: Mapping[str, Any]) -> str | None:
+    data = event.get("data") or {}
+    context = event.get("context") or {}
+    task = data.get("task") or context.get("llm_task")
+    return str(task) if task is not None else None
+
+
+def _event_llm_call_id(event: Mapping[str, Any]) -> str | None:
+    data = event.get("data") or {}
+    context = event.get("context") or {}
+    value = data.get("llm_call_id") or context.get("llm_call_id")
+    return str(value) if value is not None else None
+
+
+def _event_provider_attempt_id(event: Mapping[str, Any]) -> str | None:
+    data = event.get("data") or {}
+    value = data.get("provider_attempt_id")
+    return str(value) if value is not None else None
+
+
+def _event_sequence(event: Mapping[str, Any]) -> int:
+    value = event.get("sequence")
+    if isinstance(value, int):
+        return value
+    raise ValueError(f"trace event missing integer sequence: {event.get('kind')!r}")
+
+
+def reconstruct_supervisor_call(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    task: str,
+    session_id: str | None = None,
+) -> tuple[SupervisorCallReconstruction | None, list[str]]:
+    """Reconstruct one structured supervisor call by llm_call_id correlation."""
+    errors: list[str] = []
+    scoped = [
+        event
+        for event in events
+        if _event_task(event) == task
+        and (
+            session_id is None
+            or (event.get("context") or {}).get("session_id") == session_id
+        )
+    ]
+    call_ids = {
+        call_id
+        for event in scoped
+        if (call_id := _event_llm_call_id(event)) is not None
+    }
+    if len(call_ids) != 1:
+        errors.append(
+            f"{task}: expected exactly one llm_call_id, got {sorted(call_ids)!r}"
+        )
+        return None, errors
+    llm_call_id = next(iter(call_ids))
+    call_events = [
+        event for event in scoped if _event_llm_call_id(event) == llm_call_id
+    ]
+
+    requests = [
+        event for event in call_events if event.get("kind") == "llm.provider.request"
+    ]
+    if not requests:
+        errors.append(f"{task}: missing provider request(s)")
+        return None, errors
+
+    terminals_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for event in call_events:
+        kind = event.get("kind")
+        if kind not in {"llm.provider.response", "llm.provider.error"}:
+            continue
+        attempt_id = _event_provider_attempt_id(event)
+        if attempt_id is None:
+            errors.append(
+                f"{task}: terminal provider event missing provider_attempt_id"
+            )
+            continue
+        terminals_by_attempt.setdefault(attempt_id, []).append(dict(event))
+
+    model: str | None = None
+    provider_sequences: list[int] = []
+    success_count = 0
+    for request in requests:
+        attempt_id = _event_provider_attempt_id(request)
+        if attempt_id is None:
+            errors.append(f"{task}: provider request missing provider_attempt_id")
+            continue
+        provider_sequences.append(_event_sequence(request))
+        request_model = (request.get("data") or {}).get("model")
+        if isinstance(request_model, str):
+            model = request_model
+        terminals = terminals_by_attempt.get(attempt_id, [])
+        if len(terminals) != 1:
+            errors.append(
+                f"{task}: provider_attempt_id={attempt_id!r} expected exactly one "
+                f"terminal response/error, got {len(terminals)}"
+            )
+            continue
+        terminal = terminals[0]
+        provider_sequences.append(_event_sequence(terminal))
+        if (
+            terminal.get("kind") == "llm.provider.response"
+            and (terminal.get("data") or {}).get("status") == "success"
+        ):
+            success_count += 1
+
+    unpaired_terminals = set(terminals_by_attempt) - {
+        attempt
+        for request in requests
+        if (attempt := _event_provider_attempt_id(request)) is not None
+    }
+    for attempt_id in sorted(unpaired_terminals):
+        errors.append(
+            f"{task}: terminal provider event without matching request "
+            f"provider_attempt_id={attempt_id!r}"
+        )
+
+    if success_count < 1:
+        errors.append(f"{task}: no successful provider.response")
+
+    accepted = [
+        event for event in call_events if event.get("kind") == "llm.output.accepted"
+    ]
+    if len(accepted) != 1:
+        errors.append(
+            f"{task}: expected exactly one llm.output.accepted, got {len(accepted)}"
+        )
+        return None, errors
+
+    accepted_event = accepted[0]
+    accepted_sequence = _event_sequence(accepted_event)
+    if provider_sequences and accepted_sequence <= max(provider_sequences):
+        errors.append(
+            f"{task}: accepted.sequence={accepted_sequence} must exceed every "
+            f"provider attempt sequence (max={max(provider_sequences)})"
+        )
+
+    result = (accepted_event.get("data") or {}).get("result")
+    if not isinstance(result, Mapping):
+        errors.append(f"{task}: accepted result is not a mapping")
+        return None, errors
+
+    if errors:
+        return None, errors
+
+    return (
+        SupervisorCallReconstruction(
+            llm_call_id=llm_call_id,
+            model=model,
+            accepted_result=result,
+            accepted_sequence=accepted_sequence,
+        ),
+        [],
+    )
+
+
+def audit_supervisor_session(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    session_id: str | None,
+    review: SessionReview | None,
+) -> list[str]:
+    """Validate analysis+update chains and durable SessionReview composition."""
+    errors: list[str] = []
+    analysis, analysis_errors = reconstruct_supervisor_call(
+        events, task="post_session_analysis", session_id=session_id
+    )
+    errors.extend(analysis_errors)
+    update, update_errors = reconstruct_supervisor_call(
+        events, task="post_session_update", session_id=session_id
+    )
+    errors.extend(update_errors)
+
+    accepted_analysis: SessionAnalysis | None = None
+    if analysis is not None:
+        try:
+            accepted_analysis = SessionAnalysis.model_validate(analysis.accepted_result)
+        except Exception as exc:
+            errors.append(f"post_session_analysis: accepted result invalid: {exc}")
+
+    accepted_update: PostSessionUpdateResult | None = None
+    if update is not None:
+        try:
+            accepted_update = PostSessionUpdateResult.model_validate(
+                update.accepted_result
+            )
+        except Exception as exc:
+            errors.append(f"post_session_update: accepted result invalid: {exc}")
+
+    if review is None:
+        return errors
+
+    if accepted_analysis is not None and accepted_analysis != review.analysis:
+        errors.append("accepted SessionAnalysis != durable review.analysis")
+    if accepted_update is not None:
+        if accepted_update.session_briefing != review.briefing:
+            errors.append(
+                "accepted PostSessionUpdateResult.session_briefing "
+                "!= durable review.briefing"
+            )
+        if accepted_update.plan_patch != review.plan_recommendation:
+            errors.append(
+                "accepted PostSessionUpdateResult.plan_patch "
+                "!= durable review.plan_recommendation"
+            )
+
+    if review.generation is None:
+        errors.append("durable review.generation is null")
+    else:
+        if analysis is not None and analysis.model is not None:
+            if review.generation.analysis_model != analysis.model:
+                errors.append(
+                    "review.generation.analysis_model != reconstructed analysis model"
+                )
+        if update is not None and update.model is not None:
+            if review.generation.update_model != update.model:
+                errors.append(
+                    "review.generation.update_model != reconstructed update model"
+                )
+    return errors
+
+
+def audit_supervisor_chain_from_fixture(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    review: SessionReview | None = None,
+    session_id: str | None = None,
+) -> list[str]:
+    """Validate the forensic supervisor sequence against a fixture trace."""
+    return audit_supervisor_session(events, session_id=session_id, review=review)
+
+
 def audit_grounding(conn: sqlite3.Connection, audit: AuditResult) -> None:
     rows = conn.execute(
         "SELECT g.message_id, m.role, m.session_id, m.sequence, m.content "
@@ -375,27 +638,55 @@ def audit_grounding(conn: sqlite3.Connection, audit: AuditResult) -> None:
                 f"grounded message role={row['role']!r}",
                 message_id=row["message_id"],
             )
-        review_row = conn.execute(
-            "SELECT review_json FROM sessions WHERE id = ?",
-            (row["session_id"],),
-        ).fetchone()
-        if review_row is None or review_row["review_json"] is None:
-            continue
+
+    sessions = conn.execute(
+        "SELECT id, review_json FROM sessions "
+        "WHERE kind = 'therapy' AND review_json IS NOT NULL"
+    ).fetchall()
+    for session in sessions:
+        session_id = session["id"]
         try:
-            review = SessionReview.model_validate_json(review_row["review_json"])
-        except Exception:
+            review = SessionReview.model_validate_json(session["review_json"])
+        except Exception as exc:
+            audit.fail(
+                "invalid_review",
+                f"review_json did not validate during grounding: {exc}",
+                session_id=session_id,
+            )
             continue
-        sequences = {
-            citation.patient_sequence
-            for citation in review.analysis.patient_turn_citations
+        expected_ids: set[str] = set()
+        for citation in review.analysis.patient_turn_citations:
+            matches = conn.execute(
+                "SELECT id FROM messages "
+                "WHERE session_id = ? AND sequence = ? AND role = 'user'",
+                (session_id, citation.patient_sequence),
+            ).fetchall()
+            if len(matches) != 1:
+                audit.fail(
+                    "grounding_citation_unresolved",
+                    "patient_turn_citation did not resolve to exactly one user message",
+                    session_id=session_id,
+                    patient_sequence=citation.patient_sequence,
+                    count=len(matches),
+                )
+                continue
+            expected_ids.add(matches[0]["id"])
+        actual_ids = {
+            row["message_id"]
+            for row in conn.execute(
+                "SELECT g.message_id FROM grounded_patient_turns g "
+                "JOIN messages m ON m.id = g.message_id "
+                "WHERE m.session_id = ?",
+                (session_id,),
+            ).fetchall()
         }
-        if row["sequence"] not in sequences:
-            audit.warn(
-                "grounding_citation_mismatch",
-                "grounded message sequence not listed in source review citations",
-                message_id=row["message_id"],
-                session_id=row["session_id"],
-                sequence=row["sequence"],
+        if expected_ids != actual_ids:
+            audit.fail(
+                "grounding_set_mismatch",
+                "citation-derived message IDs != grounded_patient_turns for session",
+                session_id=session_id,
+                expected=sorted(expected_ids),
+                actual=sorted(actual_ids),
             )
 
 
@@ -420,7 +711,6 @@ def audit_plan_lineage(conn: sqlite3.Connection, audit: AuditResult) -> None:
                 current_plan_id=profile["current_plan_id"],
             )
         elif profile["current_plan_id"] != plans[-1]["id"]:
-            # Active tip should be the highest version in this product model.
             audit.fail(
                 "current_plan_not_latest",
                 "profile.current_plan_id is not the latest plan version",
@@ -501,8 +791,7 @@ def find_provider_requests(
     for event in trace:
         if event.get("kind") != "llm.provider.request":
             continue
-        data = event.get("data") or {}
-        if data.get("task") != task:
+        if _event_task(event) != task:
             continue
         context = event.get("context") or {}
         if session_id is not None and context.get("session_id") != session_id:
@@ -526,10 +815,9 @@ def find_accepted_outputs(
     for event in trace:
         if event.get("kind") != "llm.output.accepted":
             continue
-        data = event.get("data") or {}
-        context = event.get("context") or {}
-        if data.get("task") != task and context.get("llm_task") != task:
+        if _event_task(event) != task:
             continue
+        context = event.get("context") or {}
         if session_id is not None and context.get("session_id") != session_id:
             continue
         matches.append(dict(event))
@@ -550,97 +838,6 @@ def compare_briefing_projection(
                 f"{key} mismatch: prompt={projected.get(key)!r} "
                 f"expected={expected[key]!r}"
             )
-    return errors
-
-
-def audit_supervisor_chain_from_fixture(
-    events: Sequence[Mapping[str, Any]],
-) -> list[str]:
-    """Validate the forensic supervisor sequence against a fixture trace."""
-    errors: list[str] = []
-    kinds = [str(event.get("kind")) for event in events]
-    required = [
-        "llm.provider.request",  # analysis
-        "llm.provider.response",
-        "llm.output.accepted",  # SessionAnalysis
-        "llm.provider.request",  # update
-        "llm.provider.response",
-        "llm.output.accepted",  # PostSessionUpdateResult
-    ]
-    # Soft structural check: both tasks appear with request/response/accepted.
-    analysis_requests = [
-        e
-        for e in events
-        if e.get("kind") == "llm.provider.request"
-        and (e.get("data") or {}).get("task") == "post_session_analysis"
-    ]
-    update_requests = [
-        e
-        for e in events
-        if e.get("kind") == "llm.provider.request"
-        and (e.get("data") or {}).get("task") == "post_session_update"
-    ]
-    accepted_analysis = [
-        e
-        for e in events
-        if e.get("kind") == "llm.output.accepted"
-        and (
-            (e.get("data") or {}).get("task") == "post_session_analysis"
-            or (e.get("context") or {}).get("llm_task") == "post_session_analysis"
-        )
-    ]
-    accepted_update = [
-        e
-        for e in events
-        if e.get("kind") == "llm.output.accepted"
-        and (
-            (e.get("data") or {}).get("task") == "post_session_update"
-            or (e.get("context") or {}).get("llm_task") == "post_session_update"
-        )
-    ]
-    if not analysis_requests:
-        errors.append("missing post_session_analysis provider request")
-    if not accepted_analysis:
-        errors.append("missing accepted SessionAnalysis")
-    else:
-        result = (accepted_analysis[0].get("data") or {}).get("result")
-        if result is not None:
-            try:
-                SessionReview.model_validate(
-                    {
-                        "analysis": result,
-                        "briefing": {
-                            "narrative_handoff": "x",
-                            "recommended_opening_focus": "y",
-                        },
-                        "plan_recommendation": {},
-                    }
-                )
-            except Exception:
-                # Accept either a SessionAnalysis-shaped dict or model dump.
-                try:
-                    from jung.domain.session_artifacts import SessionAnalysis
-
-                    if isinstance(result, Mapping):
-                        SessionAnalysis.model_validate(result)
-                    else:
-                        errors.append("accepted analysis is not SessionAnalysis-shaped")
-                except Exception as exc:
-                    errors.append(f"accepted analysis invalid: {exc}")
-    if not update_requests:
-        errors.append("missing post_session_update provider request")
-    if not accepted_update:
-        errors.append("missing accepted PostSessionUpdateResult")
-    else:
-        result = (accepted_update[0].get("data") or {}).get("result")
-        if isinstance(result, Mapping):
-            try:
-                PostSessionUpdateResult.model_validate(result)
-            except Exception as exc:
-                errors.append(f"accepted update is not PostSessionUpdateResult: {exc}")
-        else:
-            errors.append("accepted update missing mapping result")
-    del kinds, required
     return errors
 
 
@@ -698,6 +895,8 @@ def render_audit_markdown(
     warnings: Sequence[AuditFinding],
     run_config: Mapping[str, Any],
     artifact_index: Sequence[str],
+    journey_error_code: str | None = None,
+    journey_error_message: str | None = None,
 ) -> str:
     lines = [
         "# Journey Audit",
@@ -712,10 +911,24 @@ def render_audit_markdown(
         "",
         f"Simulation result: {status.upper()}",
         f"Runtime diagnostics: {(runtime_diagnostics_status or 'unknown').upper()}",
-        "",
-        "## Mechanical failures",
-        "",
     ]
+    if journey_error_code is not None or journey_error_message is not None:
+        lines.extend(
+            [
+                "",
+                "## Journey failure",
+                "",
+                f"error_code: `{journey_error_code or 'unknown'}`",
+                f"error_message: {journey_error_message or ''}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Mechanical failures",
+            "",
+        ]
+    )
     if findings:
         for finding in findings:
             lines.append(f"- `{finding.code}`: {finding.message}")
@@ -737,6 +950,99 @@ def render_audit_markdown(
     return "\n".join(lines)
 
 
+def _durable_db_for_session(
+    *,
+    snapshot: Path | None,
+    checkpoints_dir: Path,
+    session_number: int,
+) -> Path | None:
+    if snapshot is not None and snapshot.is_file():
+        return snapshot
+    checkpoint = checkpoints_dir / f"after-session-{session_number:03d}.sqlite"
+    if checkpoint.is_file():
+        return checkpoint
+    return None
+
+
+def _audit_checkpoints(audit: AuditResult, checkpoints_dir: Path) -> None:
+    with _safe_section(audit, "checkpoints", "checkpoints"):
+        initial = checkpoints_dir / "initial-ready.sqlite"
+        if initial.is_file():
+            check_sqlite_integrity(initial, audit)
+        else:
+            audit.fail("missing_initial_checkpoint", "initial-ready.sqlite missing")
+
+
+def _audit_final_database(
+    *,
+    audit: AuditResult,
+    snapshot: Path | None,
+    checkpoints_dir: Path,
+    therapy_sessions: Sequence[Mapping[str, Any]],
+) -> Path | None:
+    resolved: Path | None = None
+    if snapshot is not None and snapshot.is_file():
+        resolved = snapshot
+    if resolved is None:
+        audit.fail("missing_final_snapshot", "runtime/db_snapshot.sqlite missing")
+    else:
+        with _safe_section(audit, "final_snapshot", "final_snapshot"):
+            check_sqlite_integrity(resolved, audit)
+
+    for index, session_info in enumerate(therapy_sessions, start=1):
+        with _safe_section(audit, "session_durable", f"session_durable:{index}"):
+            checkpoint = checkpoints_dir / f"after-session-{index:03d}.sqlite"
+            if checkpoint.is_file():
+                check_sqlite_integrity(checkpoint, audit)
+            else:
+                audit.fail(
+                    "missing_session_checkpoint",
+                    f"missing {checkpoint.name}",
+                    session_number=index,
+                )
+            durable = _durable_db_for_session(
+                snapshot=resolved,
+                checkpoints_dir=checkpoints_dir,
+                session_number=index,
+            )
+            if durable is None:
+                audit.fail(
+                    "missing_session_durable_evidence",
+                    "no final snapshot or session checkpoint for durable checks",
+                    session_id=str(session_info["session_id"]),
+                    session_number=index,
+                )
+                continue
+            conn = _connect_readonly(durable)
+            try:
+                audit_completed_therapy_session(
+                    conn,
+                    session_id=str(session_info["session_id"]),
+                    submitted_turns=list(session_info.get("turns") or ()),
+                    audit=audit,
+                )
+            finally:
+                conn.close()
+
+    lineage_db = resolved
+    if lineage_db is None and therapy_sessions:
+        lineage_db = _durable_db_for_session(
+            snapshot=None,
+            checkpoints_dir=checkpoints_dir,
+            session_number=len(therapy_sessions),
+        )
+    if lineage_db is not None and lineage_db.is_file():
+        conn = _connect_readonly(lineage_db)
+        try:
+            with _safe_section(audit, "grounding", "grounding"):
+                audit_grounding(conn, audit)
+            with _safe_section(audit, "plan_lineage", "plan_lineage"):
+                audit_plan_lineage(conn, audit)
+        finally:
+            conn.close()
+    return resolved
+
+
 def run_mechanical_audit(
     *,
     run_dir: Path,
@@ -747,63 +1053,120 @@ def run_mechanical_audit(
     """Collect forensic findings from checkpoints, final snapshot, and trace."""
     audit = AuditResult()
     checkpoints_dir = run_dir / "checkpoints"
-    initial = checkpoints_dir / "initial-ready.sqlite"
-    if initial.is_file():
-        check_sqlite_integrity(initial, audit)
-    else:
-        audit.fail("missing_initial_checkpoint", "initial-ready.sqlite missing")
+    _audit_checkpoints(audit, checkpoints_dir)
 
-    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
-    if not snapshot.is_file():
-        audit.fail("missing_final_snapshot", "runtime/db_snapshot.sqlite missing")
-        return audit
+    snapshot_path = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot = _audit_final_database(
+        audit=audit,
+        snapshot=snapshot_path if snapshot_path.is_file() else None,
+        checkpoints_dir=checkpoints_dir,
+        therapy_sessions=therapy_sessions,
+    )
 
-    check_sqlite_integrity(snapshot, audit)
-    conn = _connect_readonly(snapshot)
-    try:
-        for index, session_info in enumerate(therapy_sessions, start=1):
-            checkpoint = checkpoints_dir / f"after-session-{index:03d}.sqlite"
-            if checkpoint.is_file():
-                check_sqlite_integrity(checkpoint, audit)
-            else:
+    with _safe_section(audit, "provider_trace", "provider_trace"):
+        trace_path = run_dir / "runtime" / "trace.jsonl"
+        trace = load_jsonl(trace_path)
+        if provider_trace_required:
+            if not any(event.get("kind") == "llm.provider.request" for event in trace):
                 audit.fail(
-                    "missing_session_checkpoint",
-                    f"missing {checkpoint.name}",
-                    session_number=index,
+                    "missing_provider_trace",
+                    "provider_trace_required but no llm.provider.request events found",
                 )
-            audit_completed_therapy_session(
-                conn,
-                session_id=str(session_info["session_id"]),
-                submitted_turns=list(session_info.get("turns") or ()),
-                audit=audit,
+            else:
+                _audit_provider_prompt_chains(
+                    audit=audit,
+                    trace=trace,
+                    configured_sessions=configured_sessions,
+                    therapy_sessions=therapy_sessions,
+                    snapshot=snapshot,
+                    checkpoints_dir=checkpoints_dir,
+                )
+        elif not any(event.get("kind") == "llm.provider.request" for event in trace):
+            audit.warn(
+                "provider_trace_unavailable",
+                "llm.provider.request events absent (expected under FakeLLM)",
             )
-        audit_grounding(conn, audit)
-        audit_plan_lineage(conn, audit)
-    finally:
-        conn.close()
-
-    trace_path = run_dir / "runtime" / "trace.jsonl"
-    trace = load_jsonl(trace_path)
-    if provider_trace_required:
-        if not any(event.get("kind") == "llm.provider.request" for event in trace):
-            audit.fail(
-                "missing_provider_trace",
-                "provider_trace_required but no llm.provider.request events found",
-            )
-        else:
-            _audit_provider_prompt_chains(
-                audit=audit,
-                trace=trace,
-                configured_sessions=configured_sessions,
-                therapy_sessions=therapy_sessions,
-                snapshot=snapshot,
-            )
-    elif not any(event.get("kind") == "llm.provider.request" for event in trace):
-        audit.warn(
-            "provider_trace_unavailable",
-            "llm.provider.request events absent (expected under FakeLLM)",
-        )
     return audit
+
+
+def _load_review(
+    conn: sqlite3.Connection,
+    session_id: str,
+) -> SessionReview | None:
+    row = conn.execute(
+        "SELECT review_json FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None or row["review_json"] is None:
+        return None
+    return SessionReview.model_validate_json(row["review_json"])
+
+
+def _audit_supervisor_session(
+    *,
+    audit: AuditResult,
+    trace: Sequence[Mapping[str, Any]],
+    session_id: str,
+    review: SessionReview | None,
+) -> None:
+    for error in audit_supervisor_session(trace, session_id=session_id, review=review):
+        audit.fail(
+            "supervisor_chain",
+            error,
+            session_id=session_id,
+        )
+
+
+def _audit_provider_call(
+    *,
+    audit: AuditResult,
+    trace: Sequence[Mapping[str, Any]],
+    session_id: str,
+    client_message_id: str,
+    patient_text: str,
+    conn: sqlite3.Connection | None,
+) -> None:
+    requests = find_provider_requests(
+        trace,
+        task="therapy_response",
+        session_id=session_id,
+        client_message_id=client_message_id,
+    )
+    if not requests:
+        audit.fail(
+            "missing_therapy_request",
+            "therapy_response provider request missing",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+        return
+    try:
+        document = extract_context_data(
+            (requests[0].get("data") or {}).get("messages") or ()
+        )
+    except ValueError as exc:
+        audit.fail(
+            "malformed_context_data",
+            str(exc),
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+        return
+    current = document.get("current_patient_message")
+    if current != patient_text:
+        audit.fail(
+            "patient_message_prompt_mismatch",
+            "current_patient_message != durable/submitted patient text",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+    if conn is None:
+        return
+    historical = document.get("historical_context")
+    if isinstance(historical, Mapping):
+        grounded = historical.get("grounded_patient_turns")
+        if isinstance(grounded, list):
+            _audit_grounded_prompt_contents(conn, grounded, audit=audit)
 
 
 def _audit_provider_prompt_chains(
@@ -812,98 +1175,55 @@ def _audit_provider_prompt_chains(
     trace: Sequence[Mapping[str, Any]],
     configured_sessions: int,
     therapy_sessions: Sequence[Mapping[str, Any]],
-    snapshot: Path,
+    snapshot: Path | None,
+    checkpoints_dir: Path,
 ) -> None:
-    conn = _connect_readonly(snapshot)
-    try:
-        for index, session_info in enumerate(therapy_sessions, start=1):
-            session_id = str(session_info["session_id"])
-            # Supervisor chain for this session.
-            analysis_reqs = find_provider_requests(
-                trace,
-                task="post_session_analysis",
-                session_id=session_id,
-            )
-            update_reqs = find_provider_requests(
-                trace,
-                task="post_session_update",
-                session_id=session_id,
-            )
-            if not analysis_reqs:
-                audit.fail(
-                    "missing_analysis_request",
-                    "post_session_analysis provider request missing",
+    for index, session_info in enumerate(therapy_sessions, start=1):
+        session_id = str(session_info["session_id"])
+        durable = _durable_db_for_session(
+            snapshot=snapshot,
+            checkpoints_dir=checkpoints_dir,
+            session_number=index,
+        )
+        review: SessionReview | None = None
+        conn: sqlite3.Connection | None = None
+        try:
+            if durable is not None:
+                conn = _connect_readonly(durable)
+                try:
+                    review = _load_review(conn, session_id)
+                except Exception as exc:
+                    audit.fail(
+                        "invalid_review",
+                        f"review_json did not validate: {exc}",
+                        session_id=session_id,
+                    )
+                    review = None
+
+            with _safe_section(audit, "supervisor", f"supervisor:{session_id}"):
+                _audit_supervisor_session(
+                    audit=audit,
+                    trace=trace,
                     session_id=session_id,
+                    review=review,
                 )
-            if not update_reqs:
-                audit.fail(
-                    "missing_update_request",
-                    "post_session_update provider request missing",
-                    session_id=session_id,
-                )
-            accepted_update = find_accepted_outputs(
-                trace,
-                task="post_session_update",
-                session_id=session_id,
-            )
-            if accepted_update:
-                result = (accepted_update[0].get("data") or {}).get("result")
-                if isinstance(result, Mapping):
-                    try:
-                        PostSessionUpdateResult.model_validate(result)
-                    except Exception as exc:
-                        audit.fail(
-                            "invalid_update_result",
-                            f"PostSessionUpdateResult invalid: {exc}",
-                            session_id=session_id,
-                        )
 
             for turn in session_info.get("turns") or ():
-                client_message_id = str(turn["client_message_id"])
-                requests = find_provider_requests(
-                    trace,
-                    task="therapy_response",
-                    session_id=session_id,
-                    client_message_id=client_message_id,
-                )
-                if not requests:
-                    audit.fail(
-                        "missing_therapy_request",
-                        "therapy_response provider request missing",
+                with _safe_section(
+                    audit,
+                    "therapy_prompt",
+                    f"therapy_prompt:{session_id}:{turn['client_message_id']}",
+                ):
+                    _audit_provider_call(
+                        audit=audit,
+                        trace=trace,
                         session_id=session_id,
-                        client_message_id=client_message_id,
+                        client_message_id=str(turn["client_message_id"]),
+                        patient_text=str(turn["patient_text"]),
+                        conn=conn,
                     )
-                    continue
-                try:
-                    document = extract_context_data(
-                        (requests[0].get("data") or {}).get("messages") or ()
-                    )
-                except ValueError as exc:
-                    audit.fail(
-                        "malformed_context_data",
-                        str(exc),
-                        session_id=session_id,
-                        client_message_id=client_message_id,
-                    )
-                    continue
-                current = document.get("current_patient_message")
-                if current != turn["patient_text"]:
-                    audit.fail(
-                        "patient_message_prompt_mismatch",
-                        "current_patient_message != durable/submitted patient text",
-                        session_id=session_id,
-                        client_message_id=client_message_id,
-                    )
-                historical = document.get("historical_context")
-                if isinstance(historical, Mapping):
-                    grounded = historical.get("grounded_patient_turns")
-                    if isinstance(grounded, list):
-                        _audit_grounded_prompt_contents(conn, grounded, audit=audit)
 
-            # Briefing handoff into next session.
-            if index >= configured_sessions:
-                continue
-            if index >= len(therapy_sessions):
+            if index >= configured_sessions or index >= len(therapy_sessions):
                 continue
             next_session = therapy_sessions[index]
             next_turns = list(next_session.get("turns") or ())
@@ -916,18 +1236,13 @@ def _audit_provider_prompt_chains(
                 session_id=str(next_session["session_id"]),
                 client_message_id=str(first["client_message_id"]),
             )
-            review_row = conn.execute(
-                "SELECT review_json FROM sessions WHERE id = ?",
-                (session_id,),
-            ).fetchone()
-            if review_row is None or review_row["review_json"] is None:
+            if review is None:
                 audit.fail(
                     "missing_review_for_handoff",
                     "cannot verify next-session briefing without review",
                     session_id=session_id,
                 )
                 continue
-            review = SessionReview.model_validate_json(review_row["review_json"])
             if not next_requests:
                 audit.fail(
                     "missing_next_session_prompt",
@@ -950,11 +1265,8 @@ def _audit_provider_prompt_chains(
             historical = document.get("historical_context")
             projected = None
             if isinstance(historical, Mapping):
-                projected = historical.get("latest_supervisor_briefing")
-                if isinstance(projected, Mapping):
-                    projected = dict(projected)
-                else:
-                    projected = None
+                raw = historical.get("latest_supervisor_briefing")
+                projected = dict(raw) if isinstance(raw, Mapping) else None
             for error in compare_briefing_projection(review, projected):
                 audit.fail(
                     "stale_or_missing_briefing",
@@ -962,8 +1274,9 @@ def _audit_provider_prompt_chains(
                     source_session_id=session_id,
                     next_session_id=str(next_session["session_id"]),
                 )
-    finally:
-        conn.close()
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 def _audit_grounded_prompt_contents(
@@ -978,7 +1291,8 @@ def _audit_grounded_prompt_contents(
     ).fetchall()
     by_content: dict[str, list[str]] = {}
     for row in rows:
-        by_content.setdefault(row["content"], []).append(row["id"])
+        key = normalize_content(row["content"])
+        by_content.setdefault(key, []).append(row["id"])
     for item in grounded_contents:
         content = item if isinstance(item, str) else None
         if isinstance(item, Mapping):
@@ -990,7 +1304,7 @@ def _audit_grounded_prompt_contents(
                 "grounded_patient_turns item missing content",
             )
             continue
-        candidates = by_content.get(content, [])
+        candidates = by_content.get(normalize_content(content), [])
         if not candidates:
             audit.fail(
                 "grounded_prompt_unmatched",

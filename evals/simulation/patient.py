@@ -126,17 +126,12 @@ def pack_visible_history(
 
     for exchange in reversed(tuple(current_session)):
         if not try_prepend(exchange):
-            # Stop extending current session once newest no longer fits.
-            # Older current-session exchanges would be even less preferred.
-            break
+            # Oversized newest exchange must not block a smaller older one.
+            continue
 
     for session in reversed(tuple(prior_sessions)):
         for exchange in reversed(tuple(session)):
             if not try_prepend(exchange):
-                # If this newest prior exchange does not fit, older ones in
-                # the same session also will not be preferred further back
-                # only if they are smaller; still try older exchanges that
-                # may be shorter. Continue scanning older exchanges.
                 continue
 
     return tuple(selected)

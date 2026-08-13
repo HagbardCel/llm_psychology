@@ -208,6 +208,21 @@ def test_pack_visible_history_omits_oversized_exchange() -> None:
     assert packed == ()
 
 
+def test_pack_visible_history_skips_oversized_current_keeps_smaller_older() -> None:
+    huge = "x" * 200
+    current = (
+        PatientExchange(patient="small", therapist="ok"),
+        PatientExchange(patient=huge, therapist=huge),
+    )
+    small = serialize_visible_history(_exchange_as_turns(current[0]))
+    packed = pack_visible_history(
+        current_session=current,
+        prior_sessions=(),
+        max_chars=len(small),
+    )
+    assert packed == _exchange_as_turns(current[0])
+
+
 def test_build_patient_prompt_contains_only_allowed_inputs() -> None:
     scenario = get_scenario("anxiety_sleep")
     context = PatientTurnContext(

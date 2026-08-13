@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from evals.simulation.audit import (
+    AuditResult,
     JourneyLog,
     SimulationStatus,
     allocate_run_directory,
@@ -54,6 +55,8 @@ from jung.api.server import running_local_api
 from jung.client.api_client import ClientSettings, JungApiClient
 from jung.composition import application_context
 from jung.config import JungSettings, load_settings
+from jung.llm.gateway import LLMTask
+from jung.llm.policies import build_model_policies
 
 POLL_INTERVAL_SECONDS = 0.15
 
@@ -204,6 +207,26 @@ def _select_style(recommendations: Sequence[Any]) -> Any:
     )[0]
 
 
+def _structured_output_modes(settings: JungSettings) -> dict[str, str]:
+    supervisor_model = settings.supervisor_model_name or settings.model_name
+    policies = build_model_policies(
+        session_model=settings.model_name,
+        supervisor_model=supervisor_model,
+        task_overrides=settings.llm_task_config,
+    )
+    return {task.value: policies[task].structured_output_mode.value for task in LLMTask}
+
+
+def _record_journey_exception(
+    exc: BaseException,
+) -> tuple[str, str]:
+    if isinstance(exc, SimulationError):
+        return exc.code, exc.message
+    if isinstance(exc, PatientGenerationError):
+        return "patient_generation_failed", str(exc)
+    return "journey_error", f"{type(exc).__name__}: {exc}"
+
+
 async def run_simulation(
     config: SimulationConfig,
     *,
@@ -253,11 +276,10 @@ async def run_simulation(
         },
     )
 
-    journey_error: BaseException | None = None
+    journey_error: Exception | None = None
     error_code: str | None = None
     error_message: str | None = None
     therapy_records: list[TherapySessionRecord] = []
-    style_selection: dict[str, Any] | None = None
     prior_patient_sessions: list[tuple[PatientExchange, ...]] = []
     run_config: dict[str, Any] = {
         "artifact_schema_version": 1,
@@ -278,76 +300,118 @@ async def run_simulation(
         ),
         "patient_model": endpoint.model,
         "patient_endpoint": sanitized_endpoint(endpoint.base_url),
+        "patient_max_completion_tokens": endpoint.max_completion_tokens,
+        "structured_output_modes": _structured_output_modes(isolated),
         "git_commit": git_commit,
         "git_worktree_dirty": git_dirty,
     }
 
     try:
-        async with running_local_api(
-            isolated,
-            application_factory=application_factory,
-        ) as base_url:
-            async with JungApiClient(ClientSettings(base_url=base_url)) as client:
-                try:
-                    await _run_live_journey(
-                        client=client,
-                        config=config,
-                        patient=patient,
-                        journey=journey,
-                        isolated=isolated,
-                        therapy_records=therapy_records,
-                        prior_patient_sessions=prior_patient_sessions,
-                        style_selection_out=run_config,
-                    )
-                    style_selection = run_config.get("style_selection")
-                    del style_selection
-                except BaseException as exc:
-                    journey_error = exc
-                    if isinstance(exc, SimulationError):
-                        error_code = exc.code
-                        error_message = exc.message
-                    elif isinstance(exc, PatientGenerationError):
-                        error_code = "patient_generation_failed"
-                        error_message = str(exc)
-                    elif isinstance(exc, TimeoutError):
-                        error_code = "overall_timeout"
-                        error_message = str(exc)
+        try:
+            async with running_local_api(
+                isolated,
+                application_factory=application_factory,
+            ) as base_url:
+                async with JungApiClient(ClientSettings(base_url=base_url)) as client:
+                    if config.overall_timeout is None:
+                        await _run_live_journey(
+                            client=client,
+                            config=config,
+                            patient=patient,
+                            journey=journey,
+                            isolated=isolated,
+                            therapy_records=therapy_records,
+                            prior_patient_sessions=prior_patient_sessions,
+                            style_selection_out=run_config,
+                        )
                     else:
-                        error_code = "journey_error"
-                        error_message = f"{type(exc).__name__}: {exc}"
-                    journey.append(
-                        "workflow.observed",
-                        data={
-                            "error_code": error_code,
-                            "error_message": error_message,
-                        },
-                    )
-    except BaseException as exc:
-        if journey_error is None:
+                        try:
+                            async with asyncio.timeout(config.overall_timeout):
+                                await _run_live_journey(
+                                    client=client,
+                                    config=config,
+                                    patient=patient,
+                                    journey=journey,
+                                    isolated=isolated,
+                                    therapy_records=therapy_records,
+                                    prior_patient_sessions=prior_patient_sessions,
+                                    style_selection_out=run_config,
+                                )
+                        except TimeoutError as exc:
+                            raise SimulationError(
+                                "overall_timeout",
+                                "live journey overall timeout",
+                            ) from exc
+        except Exception as exc:
             journey_error = exc
-            error_code = error_code or "shutdown_or_startup_failure"
-            error_message = error_message or f"{type(exc).__name__}: {exc}"
+            error_code, error_message = _record_journey_exception(exc)
+            journey.append(
+                "workflow.observed",
+                data={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                },
+            )
 
-    # --- post-shutdown finalization ---
-    audit = run_mechanical_audit(
-        run_dir=run_dir,
-        provider_trace_required=provider_trace_required,
-        configured_sessions=config.sessions,
-        therapy_sessions=[
-            {
-                "session_id": record.session_id,
-                "turns": [
-                    {
-                        "client_message_id": turn.client_message_id,
-                        "patient_text": turn.patient_text,
-                        "assistant_text": turn.assistant_text,
-                    }
-                    for turn in record.turns
-                ],
-            }
-            for record in therapy_records
-        ],
-    )
+        return _finalize_run(
+            config=config,
+            run_dir=run_dir,
+            journey=journey,
+            run_config=run_config,
+            therapy_records=therapy_records,
+            provider_trace_required=provider_trace_required,
+            started_at=started_at,
+            journey_error=journey_error,
+            error_code=error_code,
+            error_message=error_message,
+        )
+    finally:
+        if owns_patient:
+            try:
+                await patient.aclose()
+            except Exception:
+                pass
+
+
+def _finalize_run(
+    *,
+    config: SimulationConfig,
+    run_dir: Path,
+    journey: JourneyLog,
+    run_config: dict[str, Any],
+    therapy_records: list[TherapySessionRecord],
+    provider_trace_required: bool,
+    started_at: str,
+    journey_error: Exception | None,
+    error_code: str | None,
+    error_message: str | None,
+) -> SimulationResult:
+    try:
+        audit = run_mechanical_audit(
+            run_dir=run_dir,
+            provider_trace_required=provider_trace_required,
+            configured_sessions=config.sessions,
+            therapy_sessions=[
+                {
+                    "session_id": record.session_id,
+                    "turns": [
+                        {
+                            "client_message_id": turn.client_message_id,
+                            "patient_text": turn.patient_text,
+                            "assistant_text": turn.assistant_text,
+                        }
+                        for turn in record.turns
+                    ],
+                }
+                for record in therapy_records
+            ],
+        )
+    except Exception as exc:
+        audit = AuditResult()
+        audit.fail(
+            "audit_internal_error",
+            f"{type(exc).__name__}: {exc}",
+        )
 
     evidence_failed = journey_error is not None or not audit.ok
     provisional: SimulationStatus = "failed" if evidence_failed else "complete"
@@ -362,13 +426,7 @@ async def run_simulation(
             )
         except Exception as exc:
             transcript_error = f"{type(exc).__name__}: {exc}"
-            audit.fail(
-                "transcript_write_failed",
-                transcript_error,
-            )
-    else:
-        # Missing snapshot already recorded by mechanical audit when applicable.
-        pass
+            audit.fail("transcript_write_failed", transcript_error)
 
     final_status: SimulationStatus = (
         "failed" if (provisional == "failed" or transcript_error) else "complete"
@@ -380,7 +438,6 @@ async def run_simulation(
     trace = load_jsonl(run_dir / "runtime" / "trace.jsonl")
     runtime_status = diagnostics_end_status(trace)
 
-    # Best-effort terminal evidence writes.
     try:
         write_private_text(
             run_dir / "audit.md",
@@ -391,6 +448,8 @@ async def run_simulation(
                 warnings=audit.warnings,
                 run_config=run_config,
                 artifact_index=artifact_relative_paths(run_dir),
+                journey_error_code=error_code,
+                journey_error_message=error_message,
             ),
         )
     except Exception:
@@ -428,12 +487,6 @@ async def run_simulation(
     except Exception:
         final_status = "failed"
 
-    if owns_patient:
-        try:
-            await patient.aclose()
-        except Exception:
-            pass
-
     return SimulationResult(
         status=final_status,
         run_dir=run_dir,
@@ -453,16 +506,6 @@ async def _run_live_journey(
     prior_patient_sessions: list[tuple[PatientExchange, ...]],
     style_selection_out: dict[str, Any],
 ) -> None:
-    overall_deadline = (
-        time.monotonic() + config.overall_timeout
-        if config.overall_timeout is not None
-        else None
-    )
-
-    def check_overall() -> None:
-        if overall_deadline is not None and time.monotonic() >= overall_deadline:
-            raise SimulationError("overall_timeout", "live journey overall timeout")
-
     health = await client.get_health()
     if health.status != "healthy":
         raise SimulationError("health_failed", f"health status={health.status!r}")
@@ -488,19 +531,60 @@ async def _run_live_journey(
             f"expected intake after profile update, got {snapshot.stage!r}",
         )
 
-    # --- intake ---
-    intake_exchanges: list[PatientExchange] = []
-    intake_session_id: UUID | None = (
-        snapshot.active_session.id if snapshot.active_session is not None else None
+    intake_exchanges = await _run_intake(
+        client=client,
+        config=config,
+        patient=patient,
+        journey=journey,
+        intake_session_id=(
+            snapshot.active_session.id if snapshot.active_session is not None else None
+        ),
     )
+    prior_patient_sessions.append(tuple(intake_exchanges))
+
+    await _await_style_selection(
+        client=client,
+        workflow_timeout=config.workflow_timeout,
+        journey=journey,
+    )
+    await _select_initial_style(
+        client=client,
+        config=config,
+        journey=journey,
+        isolated=isolated,
+        style_selection_out=style_selection_out,
+    )
+
+    for session_number in range(1, config.sessions + 1):
+        await _run_therapy_session(
+            client=client,
+            config=config,
+            patient=patient,
+            journey=journey,
+            isolated=isolated,
+            therapy_records=therapy_records,
+            prior_patient_sessions=prior_patient_sessions,
+            session_number=session_number,
+        )
+
+
+async def _run_intake(
+    *,
+    client: JungApiClient,
+    config: SimulationConfig,
+    patient: PatientActor,
+    journey: JourneyLog,
+    intake_session_id: UUID | None,
+) -> list[PatientExchange]:
+    intake_exchanges: list[PatientExchange] = []
+    session_id = intake_session_id
     for turn_number in range(1, config.max_intake_turns + 1):
-        check_overall()
         state = await client.get_state()
         if state.stage != "intake":
             break
         if state.active_session is not None:
-            intake_session_id = state.active_session.id
-        if intake_session_id is None:
+            session_id = state.active_session.id
+        if session_id is None:
             raise SimulationError("impossible_stage", "intake has no active session")
         history = pack_visible_history(
             current_session=intake_exchanges,
@@ -545,7 +629,7 @@ async def _run_live_journey(
         journey.append(
             "chat.submitted",
             context={
-                "session_id": str(intake_session_id),
+                "session_id": str(session_id),
                 "client_message_id": str(client_message_id),
                 "request_id": str(request_id),
             },
@@ -553,7 +637,7 @@ async def _run_live_journey(
         )
         completed = await collect_chat_completion(
             client,
-            session_id=intake_session_id,
+            session_id=session_id,
             content=evidence.submitted_text,
             client_message_id=client_message_id,
             request_id=request_id,
@@ -561,7 +645,7 @@ async def _run_live_journey(
         journey.append(
             "chat.completed",
             context={
-                "session_id": str(intake_session_id),
+                "session_id": str(session_id),
                 "client_message_id": str(client_message_id),
                 "request_id": str(request_id),
             },
@@ -574,32 +658,48 @@ async def _run_live_journey(
             )
         )
     else:
-        # Loop exhausted without leaving intake.
         state = await client.get_state()
         if state.stage == "intake":
             raise SimulationError(
                 "intake_turn_limit_exceeded",
                 f"still in intake after {config.max_intake_turns} turns",
             )
+    return intake_exchanges
 
+
+async def _await_style_selection(
+    client: JungApiClient,
+    *,
+    workflow_timeout: float,
+    journey: JourneyLog,
+) -> Any:
+    """Accept either assessment or style_selection after intake completes."""
     state = await client.get_state()
     journey.append(
         "workflow.observed", data={"stage": state.stage, "phase": "post_intake"}
     )
     if state.stage == "assessment":
-        state = await wait_for_stage(
+        return await wait_for_stage(
             client,
             desired={"style_selection"},
-            workflow_timeout=config.workflow_timeout,
+            workflow_timeout=workflow_timeout,
         )
-    elif state.stage == "style_selection":
-        pass
-    else:
-        raise SimulationError(
-            "impossible_stage",
-            f"after intake expected assessment or style_selection, got {state.stage!r}",
-        )
+    if state.stage == "style_selection":
+        return state
+    raise SimulationError(
+        "impossible_stage",
+        f"after intake expected assessment or style_selection, got {state.stage!r}",
+    )
 
+
+async def _select_initial_style(
+    *,
+    client: JungApiClient,
+    config: SimulationConfig,
+    journey: JourneyLog,
+    isolated: JungSettings,
+    style_selection_out: dict[str, Any],
+) -> None:
     styles = await client.get_styles()
     selected = _select_style(styles.recommendations)
     style_selection_out["style_selection"] = {
@@ -626,8 +726,7 @@ async def _run_live_journey(
     )
     snapshot = await client.select_style(SelectStyleRequest(style_id=selected.style_id))
     if snapshot.stage != "ready":
-        # Style selection should yield READY with an initial plan.
-        snapshot = await wait_for_stage(
+        await wait_for_stage(
             client,
             desired={"ready"},
             workflow_timeout=config.workflow_timeout,
@@ -641,122 +740,130 @@ async def _run_live_journey(
         data={"name": "initial-ready.sqlite"},
     )
 
-    # --- therapy sessions ---
-    for session_number in range(1, config.sessions + 1):
-        check_overall()
-        started = await client.start_session()
-        if started.snapshot.stage != "therapy":
-            raise SimulationError(
-                "impossible_stage",
-                f"start_session returned stage={started.snapshot.stage!r}",
-            )
-        session_id = started.session.id
-        record = TherapySessionRecord(session_id=session_id)
-        journey.append(
-            "api.command",
-            context={"session_id": str(session_id)},
-            data={"command": "start_session", "session_number": session_number},
-        )
-        current_exchanges: list[PatientExchange] = []
-        for turn_number in range(1, config.turns_per_session + 1):
-            check_overall()
-            history = pack_visible_history(
-                current_session=current_exchanges,
-                prior_sessions=prior_patient_sessions,
-                max_chars=config.patient_history_chars,
-            )
-            context = PatientTurnContext(
-                scenario=config.scenario,
-                phase="therapy",
-                session_number=session_number,
-                turn_number=turn_number,
-                visible_history=history,
-            )
-            journey.append(
-                "patient.request",
-                context={"session_id": str(session_id)},
-                data={"phase": "therapy", "turn_number": turn_number},
-            )
-            evidence = await patient.generate(context)
-            journey.append(
-                "patient.response",
-                context={"session_id": str(session_id)},
-                data={
-                    "submitted_text": evidence.submitted_text,
-                    "finish_reason": evidence.finish_reason,
-                    "prompt_tokens": evidence.prompt_tokens,
-                    "completion_tokens": evidence.completion_tokens,
-                    "latency_seconds": evidence.latency_seconds,
-                    "model": evidence.model,
-                    "resolved_prompt": evidence.resolved_prompt,
-                    "raw_provider_text": evidence.raw_provider_text,
-                    "visible_history": [
-                        {"role": turn.role, "content": turn.content}
-                        for turn in evidence.visible_history
-                    ],
-                },
-            )
-            client_message_id = uuid4()
-            request_id = uuid4()
-            journey.append(
-                "chat.submitted",
-                context={
-                    "session_id": str(session_id),
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(request_id),
-                },
-                data={"content": evidence.submitted_text, "phase": "therapy"},
-            )
-            completed = await collect_chat_completion(
-                client,
-                session_id=session_id,
-                content=evidence.submitted_text,
-                client_message_id=client_message_id,
-                request_id=request_id,
-            )
-            journey.append(
-                "chat.completed",
-                context={
-                    "session_id": str(session_id),
-                    "client_message_id": str(client_message_id),
-                    "request_id": str(request_id),
-                },
-                data={"assistant_text": completed.assistant_text},
-            )
-            record.turns.append(completed)
-            current_exchanges.append(
-                PatientExchange(
-                    patient=completed.patient_text,
-                    therapist=completed.assistant_text,
-                )
-            )
 
-        ended = await client.end_session(session_id)
-        if ended.stage != "post_session":
-            raise SimulationError(
-                "impossible_stage",
-                f"end_session returned stage={ended.stage!r}",
-            )
-        journey.append(
-            "api.command",
-            context={"session_id": str(session_id)},
-            data={"command": "end_session", "stage": ended.stage},
+async def _run_therapy_session(
+    *,
+    client: JungApiClient,
+    config: SimulationConfig,
+    patient: PatientActor,
+    journey: JourneyLog,
+    isolated: JungSettings,
+    therapy_records: list[TherapySessionRecord],
+    prior_patient_sessions: list[tuple[PatientExchange, ...]],
+    session_number: int,
+) -> None:
+    started = await client.start_session()
+    if started.snapshot.stage != "therapy":
+        raise SimulationError(
+            "impossible_stage",
+            f"start_session returned stage={started.snapshot.stage!r}",
         )
-        await wait_for_stage(
+    session_id = started.session.id
+    record = TherapySessionRecord(session_id=session_id)
+    therapy_records.append(record)
+    journey.append(
+        "api.command",
+        context={"session_id": str(session_id)},
+        data={"command": "start_session", "session_number": session_number},
+    )
+    current_exchanges: list[PatientExchange] = []
+    for turn_number in range(1, config.turns_per_session + 1):
+        history = pack_visible_history(
+            current_session=current_exchanges,
+            prior_sessions=prior_patient_sessions,
+            max_chars=config.patient_history_chars,
+        )
+        context = PatientTurnContext(
+            scenario=config.scenario,
+            phase="therapy",
+            session_number=session_number,
+            turn_number=turn_number,
+            visible_history=history,
+        )
+        journey.append(
+            "patient.request",
+            context={"session_id": str(session_id)},
+            data={"phase": "therapy", "turn_number": turn_number},
+        )
+        evidence = await patient.generate(context)
+        journey.append(
+            "patient.response",
+            context={"session_id": str(session_id)},
+            data={
+                "submitted_text": evidence.submitted_text,
+                "finish_reason": evidence.finish_reason,
+                "prompt_tokens": evidence.prompt_tokens,
+                "completion_tokens": evidence.completion_tokens,
+                "latency_seconds": evidence.latency_seconds,
+                "model": evidence.model,
+                "resolved_prompt": evidence.resolved_prompt,
+                "raw_provider_text": evidence.raw_provider_text,
+                "visible_history": [
+                    {"role": turn.role, "content": turn.content}
+                    for turn in evidence.visible_history
+                ],
+            },
+        )
+        client_message_id = uuid4()
+        request_id = uuid4()
+        journey.append(
+            "chat.submitted",
+            context={
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+            },
+            data={"content": evidence.submitted_text, "phase": "therapy"},
+        )
+        completed = await collect_chat_completion(
             client,
-            desired={"ready"},
-            workflow_timeout=config.workflow_timeout,
-        )
-        create_checkpoint(
-            isolated.database_path,
-            Path(isolated.data_dir).parent
-            / "checkpoints"
-            / f"after-session-{session_number:03d}.sqlite",
+            session_id=session_id,
+            content=evidence.submitted_text,
+            client_message_id=client_message_id,
+            request_id=request_id,
         )
         journey.append(
-            "checkpoint.created",
-            context={"session_id": str(session_id)},
-            data={"name": f"after-session-{session_number:03d}.sqlite"},
+            "chat.completed",
+            context={
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+            },
+            data={"assistant_text": completed.assistant_text},
         )
-        therapy_records.append(record)
-        prior_patient_sessions.append(tuple(current_exchanges))
+        record.turns.append(completed)
+        current_exchanges.append(
+            PatientExchange(
+                patient=completed.patient_text,
+                therapist=completed.assistant_text,
+            )
+        )
+
+    ended = await client.end_session(session_id)
+    if ended.stage != "post_session":
+        raise SimulationError(
+            "impossible_stage",
+            f"end_session returned stage={ended.stage!r}",
+        )
+    journey.append(
+        "api.command",
+        context={"session_id": str(session_id)},
+        data={"command": "end_session", "stage": ended.stage},
+    )
+    await wait_for_stage(
+        client,
+        desired={"ready"},
+        workflow_timeout=config.workflow_timeout,
+    )
+    create_checkpoint(
+        isolated.database_path,
+        Path(isolated.data_dir).parent
+        / "checkpoints"
+        / f"after-session-{session_number:03d}.sqlite",
+    )
+    journey.append(
+        "checkpoint.created",
+        context={"session_id": str(session_id)},
+        data={"name": f"after-session-{session_number:03d}.sqlite"},
+    )
+    prior_patient_sessions.append(tuple(current_exchanges))

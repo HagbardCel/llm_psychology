@@ -63,5 +63,5 @@ max-complexity = 20
 "src/jung/api/routes.py" = ["B008"]
 "**/prompts.py" = ["E501"]
 "tests/**" = ["C901", "E501", "E402"]
-"evals/**" = ["C901", "E501"]
+"evals/simulation/scenarios.py" = ["E501"]
 "src/jung/persistence/sqlite_store.py" = ["E501"]
