@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from jung.llm.gateway import (
     ChatMessage,
@@ -85,12 +86,12 @@ def test_build_model_policies_applies_remaining_overrides() -> None:
 
 
 def test_task_override_rejects_model_field() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         TaskOverride.model_validate({"model": "other-model"})
 
 
 def test_task_override_rejects_role_field() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         TaskOverride.model_validate({"role": "session"})
 
 
