@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from jung.domain.models import Message, Plan
-from jung.domain.session_artifacts import SessionBriefing
+from jung.domain.session_artifacts import (
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
+)
 from jung.domain.text import normalize_content
 from jung.phases.context_bounds import bounded_text
 from jung.phases.transcript import TranscriptTurn
@@ -34,6 +38,25 @@ _PLAN_KEYS = frozenset(
         "revision_recommendations",
     }
 )
+_BRIEFING_LIST_FIELDS = (
+    "continuity_points",
+    "unresolved_issues",
+    "things_to_avoid",
+    "emotional_context",
+)
+_BRIEFING_KEYS = frozenset(
+    {
+        "narrative_handoff",
+        "continuity_points",
+        "unresolved_issues",
+        "recommended_opening_focus",
+        "things_to_avoid",
+        "emotional_context",
+    }
+)
+_MAX_BRIEFING_LIST_ITEMS = 20
+_MAX_LIST_ITEM_CHARS = 200
+_MAX_PRIOR_REVIEW_LIST_ITEMS = 6
 
 
 class ProjectionBudgetError(ValueError):
@@ -176,44 +199,143 @@ def compact_summary(text: str, *, limit: int = _SUMMARY_BASELINE_CHARS) -> str:
     return bounded_text(normalize_content(text), limit)
 
 
-def project_session_briefing(briefing: SessionBriefing) -> dict[str, object]:
-    """Project a validated briefing's handoff fields."""
+def minimal_session_briefing_projection(
+    briefing: SessionBriefing,
+) -> dict[str, object]:
+    """Return the canonical smallest semantic briefing projection."""
     return {
         "narrative_handoff": bounded_text(briefing.narrative_handoff, 400),
-        "continuity_points": [
-            bounded_text(item, 200)
-            for item in briefing.continuity_points
-            if item.strip()
-        ],
-        "unresolved_issues": [
-            bounded_text(item, 200)
-            for item in briefing.unresolved_issues
-            if item.strip()
-        ],
+        "continuity_points": [],
+        "unresolved_issues": [],
         "recommended_opening_focus": bounded_text(
             briefing.recommended_opening_focus, 400
         ),
-        "things_to_avoid": [
-            bounded_text(item, 200) for item in briefing.things_to_avoid if item.strip()
-        ],
-        "emotional_context": [
-            bounded_text(item, 200)
-            for item in briefing.emotional_context
-            if item.strip()
-        ],
+        "things_to_avoid": [],
+        "emotional_context": [],
     }
 
 
-def compact_session_briefing(
+def _iter_rich_briefing_candidates(
     briefing: SessionBriefing,
+) -> Iterator[dict[str, object]]:
+    """Yield progressively richer briefing projections, richest first."""
+    longest_list_len = max(
+        (len(getattr(briefing, field)) for field in _BRIEFING_LIST_FIELDS),
+        default=0,
+    )
+    max_items_start = min(_MAX_BRIEFING_LIST_ITEMS, max(1, longest_list_len))
+    previous: dict[str, object] | None = None
+    minimal = minimal_session_briefing_projection(briefing)
+    for max_items in range(max_items_start, 0, -1):
+        candidate = dict(minimal)
+        for field in _BRIEFING_LIST_FIELDS:
+            candidate[field] = _compact_string_list(
+                getattr(briefing, field),
+                max_items=max_items,
+                max_item_chars=_MAX_LIST_ITEM_CHARS,
+                keep_at_least_one=False,
+            )
+        if candidate == previous:
+            continue
+        previous = candidate
+        yield candidate
+
+
+def enrich_session_briefing_projection(
+    briefing: SessionBriefing,
+    *,
+    baseline: Mapping[str, object],
+    fits: Callable[[dict[str, object]], bool],
+) -> dict[str, object]:
+    """Return the richest briefing candidate fitting the caller's complete context.
+
+    Precondition: ``fits(dict(baseline))`` is true.
+    Returns ``baseline`` when no richer candidate fits.
+    """
+    baseline_doc = dict(baseline)
+    if set(baseline_doc) != _BRIEFING_KEYS:
+        raise ValueError(
+            "briefing enrichment baseline must expose canonical briefing keys: "
+            f"{sorted(_BRIEFING_KEYS)}"
+        )
+    if not fits(baseline_doc):
+        raise ValueError("briefing enrichment baseline must already fit")
+
+    best = baseline_doc
+    for candidate in _iter_rich_briefing_candidates(briefing):
+        if fits(candidate):
+            return candidate
+    return best
+
+
+def project_prior_session_review(analysis: SessionAnalysis) -> dict[str, object]:
+    """Return a compact LLM-facing projection of a prior session review."""
+    return {
+        "summary": compact_summary(analysis.summary),
+        "key_themes": _compact_string_list(
+            analysis.key_themes,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "progress_indicators": _compact_string_list(
+            analysis.progress_indicators,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "unresolved_topics": _compact_string_list(
+            analysis.unresolved_topics,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "safety_or_boundary_notes": _compact_string_list(
+            analysis.safety_or_boundary_notes,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+    }
+
+
+def pack_prior_session_reviews(
+    reviews: Sequence[SessionReview],
     *,
     fits: Callable[[dict[str, object]], bool],
 ) -> PackedProjection | None:
-    """Project briefing handoff fields under a caller-owned fitness predicate."""
-    document = project_session_briefing(briefing)
-    if not fits(document):
+    """Pack compact prior-review projections newest-first under a budget.
+
+    Returns ``None`` when even the empty structural projection cannot fit.
+    """
+    source = tuple(reviews)
+    total = len(source)
+
+    def build_document(
+        selected: Sequence[SessionReview],
+    ) -> dict[str, object]:
+        return {
+            "prior_supervisor_reviews": [
+                project_prior_session_review(item.analysis) for item in selected
+            ],
+            "prior_supervisor_reviews_omitted": total - len(selected),
+        }
+
+    empty = build_document(())
+    if not fits(empty):
         return None
-    return PackedProjection(document=document, omitted=0)
+
+    selected_reverse: list[SessionReview] = []
+    for item in reversed(source):
+        candidate = tuple(reversed([*selected_reverse, item]))
+        if fits(build_document(candidate)):
+            selected_reverse.append(item)
+
+    selected = tuple(reversed(selected_reverse))
+    return PackedProjection(
+        document=build_document(selected),
+        omitted=total - len(selected),
+    )
 
 
 def _validate_transcript_sequences(source: Sequence[TranscriptTurn]) -> None:
@@ -304,8 +426,8 @@ def pack_grounded_patient_messages(
 ) -> PackedProjection | None:
     """Pack grounded patient messages under a caller-owned fitness predicate.
 
-    Emits the temporary prompt-document key ``grounded_patient_turns`` until
-    Phase 7D redesigns the packing surface.
+    Returns content-only ``grounded_patient_turns`` and an omission count.
+    Callers merge those keys directly into the prompt document.
     """
     source = tuple(messages)
     total = len(source)

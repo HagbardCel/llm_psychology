@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from jung.domain import session_artifacts as _artifacts
-from jung.domain.models import Message, Plan, Profile
+from jung.domain.models import Message, Plan
 from jung.domain.text import normalize_content
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import StyleDefinition
@@ -115,10 +115,8 @@ class PostSessionInput(BaseModel):
 
     transcript: tuple[TranscriptTurn, ...]
     current_plan: Plan
-    profile: Profile
     grounded_patient_messages: tuple[Message, ...] = ()
-    prior_session_briefing: _artifacts.SessionBriefing | None = None
-    recent_session_summaries: tuple[str, ...] = ()
+    prior_reviews: tuple[_artifacts.SessionReview, ...] = ()
     selected_style: StyleDefinition
 
     @model_validator(mode="after")

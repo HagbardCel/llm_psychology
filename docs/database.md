@@ -81,7 +81,7 @@ application rather than claimed as pure SQL guarantees:
 - assistant persistence requires an unanswered latest user message in the same session with the matching `client_message_id`;
 - multi-table use cases such as assessment completion and post-session completion commit atomically in store methods;
 - post-session completion resolves `review.analysis.patient_turn_citations` against source-session messages (unique cited sequences; role `user`), inserts their message IDs into `grounded_patient_turns`, writes `review_json`, optionally creates a plan revision, and completes the operation in one transaction;
-- grounded message listing order is `sessions.started_at ASC`, `sessions.id ASC`, `messages.sequence ASC`;
+- grounded message listing order is `sessions.started_at ASC`, `sessions.id ASC`, `messages.sequence ASC`; the `grounded_patient_turns` table may grow without a retention cap — prompt projection, not deletion, bounds LLM context;
 - `SQLiteStore` owns SQL transaction boundaries (`BEGIN IMMEDIATE`) and commit/rollback; it does not own optimistic concurrency checks or snapshot-revision increments;
 - `TherapyApplication` serializes mutations and validates commands against authoritative state before calling the store;
 - missing singleton `profile` is corruption, not a legitimate `SETUP` state.

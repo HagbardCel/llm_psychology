@@ -122,9 +122,17 @@ construction, and cancellation-safe store calls; they are not a public service l
 
 Post-session completion persists a typed `SessionReview` on the source therapy
 session, inserts unique grounded patient-message IDs, and optionally creates an
-immutable plan revision. Messages remain the sole durable exact wording;
-temporary LLM prompt keys such as `derived_profile` are packing-only until a
-later context-policy redesign.
+immutable plan revision. Messages remain the sole durable exact wording.
+
+**SQLite durable history ≠ LLM active context.** Complete session history may
+grow in SQLite indefinitely; each phase receives a bounded, role-specific prompt
+projection instead:
+
+- **Session therapist:** current plan, latest supervisor briefing, active-session
+  transcript, grounded exact patient statements, and the current patient message.
+- **Supervisor:** completed-session transcript, current plan, and bounded
+  longitudinal context (latest prior briefing, grounded statements, compact prior
+  review projections).
 
 ## Application boundary
 

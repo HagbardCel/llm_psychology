@@ -8,12 +8,22 @@ from uuid import uuid4
 import pytest
 
 from jung.domain.models import Plan
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
+)
 from jung.phases.context_projection import (
     ProjectionBudgetError,
     _iter_rich_plan_candidates,
     enrich_plan_projection,
+    enrich_session_briefing_projection,
     minimal_plan_projection,
+    minimal_session_briefing_projection,
+    pack_prior_session_reviews,
     pack_transcript_turns,
+    project_prior_session_review,
 )
 from jung.phases.transcript import TranscriptTurn
 
@@ -183,3 +193,140 @@ def test_empty_projection_budget_error_is_typed() -> None:
             (_turn(1, "user", "a"),),
             fits=lambda _doc: False,
         )
+
+
+_BRIEFING_KEYS = {
+    "narrative_handoff",
+    "continuity_points",
+    "unresolved_issues",
+    "recommended_opening_focus",
+    "things_to_avoid",
+    "emotional_context",
+}
+
+
+def _briefing(**overrides: object) -> SessionBriefing:
+    values: dict[str, object] = {
+        "narrative_handoff": "Session focused on readiness.",
+        "recommended_opening_focus": "pace",
+        "continuity_points": ("continue sleep work",),
+        "unresolved_issues": ("family disclosure",),
+        "things_to_avoid": ("pushing too fast",),
+        "emotional_context": ("tired but engaged",),
+    }
+    values.update(overrides)
+    return SessionBriefing(**values)  # type: ignore[arg-type]
+
+
+def _review(summary: str) -> SessionReview:
+    return SessionReview(
+        analysis=SessionAnalysis(summary=summary, key_themes=(summary,)),
+        briefing=_briefing(),
+        plan_recommendation=PlanPatch(),
+    )
+
+
+def test_minimal_session_briefing_projection_returns_empty_lists() -> None:
+    minimal = minimal_session_briefing_projection(_briefing())
+    assert set(minimal) == _BRIEFING_KEYS
+    assert minimal["continuity_points"] == []
+    assert minimal["unresolved_issues"] == []
+    assert minimal["things_to_avoid"] == []
+    assert minimal["emotional_context"] == []
+
+
+def test_enrich_session_briefing_requires_fitting_baseline() -> None:
+    briefing = _briefing()
+    minimal = minimal_session_briefing_projection(briefing)
+    with pytest.raises(ValueError, match="baseline must already fit"):
+        enrich_session_briefing_projection(
+            briefing,
+            baseline=minimal,
+            fits=lambda _doc: False,
+        )
+
+
+def test_enrich_session_briefing_restores_lists() -> None:
+    briefing = _briefing()
+    minimal = minimal_session_briefing_projection(briefing)
+    enriched = enrich_session_briefing_projection(
+        briefing,
+        baseline=minimal,
+        fits=lambda _doc: True,
+    )
+    assert enriched["continuity_points"] == ["continue sleep work"]
+    assert enriched["unresolved_issues"] == ["family disclosure"]
+
+
+def test_project_prior_session_review_caps_list_items() -> None:
+    projection = project_prior_session_review(
+        SessionAnalysis(
+            summary="Prior summary.",
+            key_themes=tuple(f"theme-{index}" for index in range(100)),
+            progress_indicators=tuple(f"progress-{index}" for index in range(100)),
+            unresolved_topics=tuple(f"topic-{index}" for index in range(100)),
+            safety_or_boundary_notes=tuple(f"safety-{index}" for index in range(100)),
+            intervention_citations=(),
+            patient_turn_citations=(),
+        )
+    )
+    assert len(projection["key_themes"]) <= 6
+    assert len(projection["progress_indicators"]) <= 6
+    assert len(projection["unresolved_topics"]) <= 6
+    assert len(projection["safety_or_boundary_notes"]) <= 6
+
+
+def test_project_prior_session_review_exposes_only_approved_fields() -> None:
+    projection = project_prior_session_review(
+        SessionAnalysis(
+            summary="Prior summary.",
+            key_themes=("sleep",),
+            progress_indicators=("better nights",),
+            unresolved_topics=("family",),
+            safety_or_boundary_notes=("none",),
+            intervention_citations=(),
+            patient_turn_citations=(),
+        )
+    )
+    assert set(projection) == {
+        "summary",
+        "key_themes",
+        "progress_indicators",
+        "unresolved_topics",
+        "safety_or_boundary_notes",
+    }
+    assert "intervention_citations" not in projection
+    assert "patient_turn_citations" not in projection
+
+
+def test_pack_prior_session_reviews_returns_none_when_empty_projection_unfit() -> None:
+    reviews = (_review("one"), _review("two"))
+    assert pack_prior_session_reviews(reviews, fits=lambda _doc: False) is None
+
+
+def test_pack_prior_session_reviews_empty_list_when_channel_fits_but_no_review() -> (
+    None
+):
+    reviews = (_review("one"), _review("two"))
+    packed = pack_prior_session_reviews(
+        reviews,
+        fits=lambda document: len(document["prior_supervisor_reviews"]) <= 0,  # type: ignore[arg-type]
+    )
+    assert packed is not None
+    assert packed.document["prior_supervisor_reviews"] == []
+    assert packed.document["prior_supervisor_reviews_omitted"] == 2
+
+
+def test_pack_prior_session_reviews_prefers_newest_and_emits_chronological() -> None:
+    reviews = (_review("old"), _review("middle"), _review("newest"))
+    packed = pack_prior_session_reviews(
+        reviews,
+        fits=lambda document: len(document["prior_supervisor_reviews"]) <= 2,  # type: ignore[arg-type]
+    )
+    assert packed is not None
+    summaries = [
+        item["summary"]
+        for item in packed.document["prior_supervisor_reviews"]  # type: ignore[union-attr]
+    ]
+    assert summaries == ["middle", "newest"]
+    assert packed.document["prior_supervisor_reviews_omitted"] == 1

@@ -209,7 +209,19 @@ authoritative.
 | Resolver | Ephemeral full-turn evidence for the update prompt only |
 | Durable review | Sequence citations and interpretive fields inside `SessionReview` (no copied message text) |
 | Durable grounding | Message IDs in `grounded_patient_turns`, written only via persist-time resolution of `patient_turn_citations` |
-| LLM-facing historical context | Normalized turn content projected from authoritative messages; temporary prompt keys `derived_profile` / `grounded_patient_turns` remain until Phase 7D |
+| LLM-facing historical context | Content-only `grounded_patient_turns` projected from authoritative messages; compact prior `SessionReview` projections for supervisor longitudinal context; latest supervisor briefing as next-session handoff |
+
+**Context handoff after a completed session review:**
+
+```text
+latest completed review
+   ├─ briefing → next session therapist
+   └─ review projection → future supervisor
+```
+
+The current `SessionReview` interprets only the completed session it belongs to.
+Historical context may inform interpretation but must not be written into the
+current review as if it occurred in that session.
 
 **Normalized** means whitespace-collapsed (`" ".join(text.split())`), not byte-for-byte identical source text.
 

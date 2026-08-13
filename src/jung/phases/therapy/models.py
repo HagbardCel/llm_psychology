@@ -24,8 +24,7 @@ class TherapyTurnInput(BaseModel):
     profile: Profile
     grounded_patient_messages: tuple[Message, ...] = ()
     current_plan: Plan
-    session_briefing: SessionBriefing | None = None
-    recent_session_summaries: tuple[str, ...] = ()
+    latest_supervisor_briefing: SessionBriefing | None = None
     transcript: tuple[TranscriptTurn, ...] = ()
     latest_user_message: str | None = None
     is_opening_turn: bool = False

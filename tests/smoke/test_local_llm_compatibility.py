@@ -257,7 +257,6 @@ async def test_smoke_post_session_processor(gateway: SmokeGatewayContext) -> Non
             PostSessionInput(
                 transcript=transcript,
                 current_plan=_plan(),
-                profile=Profile(name="Alex", primary_language="English"),
                 selected_style=load_styles()["cbt"],
             )
         )

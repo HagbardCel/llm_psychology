@@ -183,7 +183,6 @@ class EvalRunner:
             PostSessionInput(
                 transcript=transcript,
                 current_plan=eval_plan(style.id),
-                profile=eval_profile(),
                 selected_style=style,
             )
         )

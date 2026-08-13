@@ -8,9 +8,15 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.models import Message, MessageRole, Plan, Profile
-from jung.domain.session_artifacts import SessionAnalysis, SessionBriefing
+from jung.domain.models import Message, MessageRole, Plan
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
+)
 from jung.llm.gateway import ChatRole
+from jung.phases.context_projection import minimal_plan_projection
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
@@ -26,6 +32,18 @@ from jung.phases.post_session.update_context import (
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
+
+
+def _collect_object_keys(value: object) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        keys.update(str(key) for key in value)
+        for item in value.values():
+            keys.update(_collect_object_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(_collect_object_keys(item))
+    return keys
 
 
 def _parse_update_context_document(message: str) -> dict[str, object]:
@@ -88,6 +106,22 @@ def _briefing(**overrides: object) -> SessionBriefing:
     return SessionBriefing(**values)  # type: ignore[arg-type]
 
 
+def _review(**briefing_overrides: object) -> SessionReview:
+    briefing_values: dict[str, object] = {
+        "narrative_handoff": "Continue with sleep.",
+        "recommended_opening_focus": "sleep readiness",
+    }
+    briefing_values.update(briefing_overrides)
+    return SessionReview(
+        analysis=SessionAnalysis(
+            summary="Prior session summary.",
+            key_themes=("sleep",),
+        ),
+        briefing=SessionBriefing(**briefing_values),  # type: ignore[arg-type]
+        plan_recommendation=PlanPatch(),
+    )
+
+
 def _input(**overrides: object) -> PostSessionInput:
     style = load_styles()["cbt"]
     values: dict[str, object] = {
@@ -106,7 +140,6 @@ def _input(**overrides: object) -> PostSessionInput:
             ),
         ),
         "current_plan": _plan(),
-        "profile": Profile(name="Alex", primary_language="English"),
         "selected_style": style,
     }
     values.update(overrides)
@@ -203,10 +236,7 @@ def test_intervention_payload_derives_status_for_prompt_projection() -> None:
 def test_builder_rendered_output_never_exceeds_update_limit() -> None:
     message = build_update_user_message(
         _input(
-            prior_session_briefing=_briefing(narrative_handoff="b" * 5000),
-            recent_session_summaries=tuple(
-                f"summary-{index}" * 200 for index in range(20)
-            ),
+            prior_reviews=(_review(narrative_handoff="b" * 5000),),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
@@ -220,10 +250,11 @@ def test_builder_rendered_output_never_exceeds_update_limit() -> None:
 def test_optional_sections_drop_before_plan_and_analysis() -> None:
     document = build_update_context_document(
         _input(
-            prior_session_briefing=_briefing(
-                narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
+            prior_reviews=(
+                _review(
+                    narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
+                ),
             ),
-            recent_session_summaries=("old " * 2000, "new " * 2000),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
@@ -251,8 +282,8 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
         "planned_interventions",
         "revision_recommendations",
     }
-    assert "session_analysis" in document
-    assert "summary" in document["session_analysis"]
+    assert "validated_session_analysis" in document
+    assert "summary" in document["validated_session_analysis"]
     assert "transcript" not in document
 
 
@@ -262,12 +293,9 @@ def test_profile_context_projects_content_without_message_ids() -> None:
         _input(grounded_patient_messages=(message,)),
         _resolved(),
     )
-    profile = document["derived_profile"]
-    assert profile == {
-        "grounded_patient_turns": [{"content": "I slept badly."}],
-        "grounded_patient_turns_omitted": 0,
-    }
-    rendered = json.dumps(profile)
+    longitudinal = document["longitudinal_context"]
+    assert longitudinal["grounded_patient_turns"] == [{"content": "I slept badly."}]
+    rendered = json.dumps(longitudinal)
     assert str(message.id) not in rendered
 
 
@@ -277,11 +305,10 @@ def test_update_document_has_no_uuids_in_profile_projection() -> None:
         _input(grounded_patient_messages=(message,)),
         _resolved(selected_patient_turns=(_patient_turn(2, message.content),)),
     )
-    profile = document["derived_profile"]
-    assert isinstance(profile, dict)
-    rendered = json.dumps(profile)
+    longitudinal = document["longitudinal_context"]
+    rendered = json.dumps(longitudinal)
     assert str(message.id) not in rendered
-    assert profile["grounded_patient_turns"][0]["content"] == (
+    assert longitudinal["grounded_patient_turns"][0]["content"] == (
         "I do not think I want to die."
     )
 
@@ -302,7 +329,7 @@ def test_analysis_document_emits_omission_markers_and_resolved_evidence() -> Non
             selected_patient_turns=(_patient_turn(2, "I slept badly."),),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert "intervention_evidence" in analysis
     assert "intervention_evidence_omitted" in analysis
     assert "patient_turns" in analysis
@@ -334,7 +361,7 @@ def test_all_omitted_evidence_reports_source_totals() -> None:
             ),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert (
         analysis["intervention_evidence_omitted"]
         + len(analysis["intervention_evidence"])
@@ -362,7 +389,7 @@ def test_intentional_duplication_of_patient_content_retained_in_both_collections
             selected_patient_turns=(_patient_turn(2, shared),),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert analysis["intervention_evidence"][0]["patient_content"] == shared
     assert analysis["patient_turns"][0]["content"] == shared
 
@@ -382,38 +409,25 @@ def test_plan_section_retains_all_semantic_field_names() -> None:
     assert plan["planned_interventions"]
 
 
-def test_newest_summaries_preferred() -> None:
-    document = build_update_context_document(
-        _input(
-            recent_session_summaries=(
-                "old summary",
-                "middle-too-large " * 400,
-                "newest summary",
-            )
-        ),
-        _resolved(),
-    )
-    summaries = document["recent_session_summaries"]
-    assert summaries[0] == "newest summary" or "newest summary" in summaries
-    assert "newest summary" in summaries
-
-
 def test_prior_briefing_handoff_complete_or_omit() -> None:
     negation = "I am not ready to do that."
     document = build_update_context_document(
         _input(
-            prior_session_briefing=_briefing(
-                narrative_handoff=negation,
-                continuity_points=(negation,),
+            prior_reviews=(
+                _review(
+                    narrative_handoff=negation,
+                    continuity_points=(negation,),
+                ),
             )
         ),
         _resolved(),
     )
-    if "prior_session_briefing" in document:
-        briefing = document["prior_session_briefing"]
-        assert "intervention_evidence" not in briefing
-        assert negation in briefing["narrative_handoff"]
-        assert "..." not in briefing["narrative_handoff"]
+    if "longitudinal_context" in document:
+        briefing = document["longitudinal_context"].get("latest_supervisor_briefing")
+        if briefing is not None:
+            assert "intervention_evidence" not in briefing
+            assert negation in briefing["narrative_handoff"]
+            assert "..." not in briefing["narrative_handoff"]
 
 
 def test_patient_name_absent_from_update_prompt() -> None:
@@ -525,15 +539,113 @@ def test_rich_plan_does_not_starve_evidence() -> None:
     }
 
 
-def test_update_builder_stays_within_limit_and_keeps_plan_keys() -> None:
-    document = build_update_context_document(_input(), _resolved())
-    message = build_update_user_message(_input(), _resolved())
-    assert len(message) <= _UPDATE_USER_MESSAGE_LIMIT
-    assert set(document["current_plan"]) == {
-        "focus",
-        "themes",
-        "goals",
-        "current_progress",
-        "planned_interventions",
-        "revision_recommendations",
+def test_update_system_instructions_name_validated_analysis_authority() -> None:
+    messages = build_update_messages(_input(), _resolved())
+    system = next(m.content for m in messages if m.role == ChatRole.SYSTEM)
+    assert "validated_session_analysis" in system
+    assert "authoritative account of the just-completed session" in system
+    assert "completed_session.transcript" not in system
+
+
+def test_interpretive_analysis_outranks_plan_richness_in_update_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interpretive analysis is frozen before optional plan richness in the builder."""
+    import jung.phases.post_session.update_context as update_context
+    from jung.llm.prompt_context import rendered_context_user_message_length
+
+    def dynamic_fits(
+        document: dict[str, object],
+        *,
+        task: str = update_context._UPDATE_TASK,
+        limit: int | None = None,
+    ) -> bool:
+        effective_limit = (
+            update_context._UPDATE_USER_MESSAGE_LIMIT if limit is None else limit
+        )
+        return (
+            rendered_context_user_message_length(document, task=task) <= effective_limit
+        )
+
+    monkeypatch.setattr(update_context, "_fits_update", dynamic_fits)
+
+    rich_plan = _plan(
+        focus="focus",
+        themes=tuple(f"theme-{index}-" * 30 for index in range(8)),
+        goals=tuple(f"goal-{index}-" * 30 for index in range(8)),
+        planned_interventions=tuple(f"iv-{index}-" * 30 for index in range(8)),
+        revision_recommendations=tuple(f"rev-{index}-" * 30 for index in range(8)),
+        current_progress="progress",
+    )
+    input = _input(current_plan=rich_plan)
+    resolved = _resolved(
+        summary="Sleep difficulties explored with detail.",
+        key_themes=tuple(f"CURRENT-THEME-{index}-" * 40 for index in range(18)),
+        dominant_affects=tuple(f"affect-{index}-" * 40 for index in range(15)),
+        important_moments=tuple(f"moment-{index}-" * 40 for index in range(15)),
+        patient_insights=tuple(f"insight-{index}-" * 40 for index in range(15)),
+        progress_indicators=tuple(f"progress-{index}-" * 40 for index in range(15)),
+        unresolved_topics=tuple(f"topic-{index}-" * 40 for index in range(15)),
+        safety_or_boundary_notes=tuple(f"note-{index}-" * 40 for index in range(10)),
+    )
+
+    monkeypatch.setattr(update_context, "_UPDATE_USER_MESSAGE_LIMIT", 100_000)
+    full_document = build_update_context_document(input, resolved)
+    full_analysis = full_document["validated_session_analysis"]
+    minimal_plan = minimal_plan_projection(rich_plan)
+    task = update_context._UPDATE_TASK
+
+    len_minimal = rendered_context_user_message_length(
+        {
+            "current_plan": minimal_plan,
+            "validated_session_analysis": full_analysis,
+        },
+        task=task,
+    )
+    len_rich = rendered_context_user_message_length(
+        {
+            "current_plan": full_document["current_plan"],
+            "validated_session_analysis": full_analysis,
+        },
+        task=task,
+    )
+    baseline_analysis = {
+        key: full_analysis[key]
+        for key in (
+            "summary",
+            "intervention_evidence",
+            "intervention_evidence_omitted",
+            "patient_turns",
+            "patient_turns_omitted",
+        )
     }
+    len_wrong_order_rich = rendered_context_user_message_length(
+        {
+            "current_plan": full_document["current_plan"],
+            "validated_session_analysis": baseline_analysis,
+        },
+        task=task,
+    )
+
+    assert len_minimal < len_rich
+    assert len_wrong_order_rich <= len_minimal
+    assert len_rich > len_minimal
+
+    monkeypatch.setattr(update_context, "_UPDATE_USER_MESSAGE_LIMIT", len_minimal)
+    tight_document = build_update_context_document(input, resolved)
+
+    assert tight_document["validated_session_analysis"] == full_analysis
+    assert tight_document["current_plan"] == minimal_plan
+
+
+def test_forbidden_prompt_keys_absent_from_update_document() -> None:
+    document = build_update_context_document(_input(), _resolved())
+    keys = _collect_object_keys(document)
+    forbidden = {
+        "derived_profile",
+        "recent_session_summaries",
+        "prior_session_briefing",
+        "session_briefing",
+        "session_analysis",
+    }
+    assert forbidden.isdisjoint(keys)

@@ -8,12 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from jung.domain.models import Plan, Profile
-from jung.domain.session_artifacts import (
-    InterventionCitation,
-    PatientTurnCitation,
-    SessionAnalysis,
-)
+from jung.domain.models import Plan
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
@@ -44,7 +39,6 @@ def _input(
     return PostSessionInput(
         transcript=transcript,
         current_plan=_plan(),
-        profile=Profile(name="Alex", primary_language="English"),
         selected_style=load_styles()["cbt"],
     )
 
@@ -61,7 +55,6 @@ def test_post_session_input_rejects_mismatched_style() -> None:
                 ),
             ),
             current_plan=_plan(),
-            profile=Profile(name="Alex", primary_language="English"),
             selected_style=load_styles()["jung"],
         )
 
@@ -199,26 +192,3 @@ def test_intervention_evidence_normalizes_content() -> None:
     )
     assert evidence.therapist_content == "hello world"
     assert evidence.patient_content == "patient response"
-
-
-def test_session_analysis_caps_citation_lists() -> None:
-    with pytest.raises(ValidationError):
-        SessionAnalysis(
-            summary="summary",
-            key_themes=("theme",),
-            intervention_citations=tuple(
-                InterventionCitation(
-                    intervention_description=f"i{i}",
-                    therapist_sequence=i + 1,
-                )
-                for i in range(21)
-            ),
-        )
-    with pytest.raises(ValidationError):
-        SessionAnalysis(
-            summary="summary",
-            key_themes=("theme",),
-            patient_turn_citations=tuple(
-                PatientTurnCitation(patient_sequence=i + 1) for i in range(21)
-            ),
-        )

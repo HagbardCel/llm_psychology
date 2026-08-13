@@ -60,9 +60,9 @@ def sample_review(**kwargs: object) -> SessionReview:
         ),
         "generation": SessionReviewGeneration(
             analysis_model="m1",
-            analysis_prompt_version="post-session-v6",
+            analysis_prompt_version="post-session-v7",
             update_model="m2",
-            update_prompt_version="post-session-v6",
+            update_prompt_version="post-session-v7",
         ),
     }
     defaults.update(kwargs)
@@ -83,9 +83,9 @@ def minimal_review(**kwargs: object) -> SessionReview:
         "plan_recommendation": PlanPatch(),
         "generation": SessionReviewGeneration(
             analysis_model="m1",
-            analysis_prompt_version="post-session-v6",
+            analysis_prompt_version="post-session-v7",
             update_model="m2",
-            update_prompt_version="post-session-v6",
+            update_prompt_version="post-session-v7",
         ),
     }
     defaults.update(kwargs)
