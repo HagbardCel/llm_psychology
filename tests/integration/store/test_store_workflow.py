@@ -21,7 +21,11 @@ from jung.domain.models import (
     SessionKind,
     Stage,
 )
-from jung.domain.session_artifacts import PatientTurnCitation
+from jung.domain.session_artifacts import (
+    PatientTurnCitation,
+    SessionAnalysis,
+    SessionReview,
+)
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.workflow import available_commands
 from tests.integration.application.scenarios import (
@@ -499,6 +503,16 @@ def test_complete_post_session_grounding_rejects_invalid_citations(
         )
 
 
+def _grounded_ordering_review() -> SessionReview:
+    return minimal_review(
+        analysis=SessionAnalysis(
+            summary="Minimal session summary.",
+            key_themes=("anxiety",),
+            patient_turn_citations=(PatientTurnCitation(patient_sequence=1),),
+        ),
+    )
+
+
 def test_list_grounded_patient_messages_orders_by_session_then_sequence(
     store: SQLiteStore,
 ) -> None:
@@ -523,7 +537,7 @@ def test_list_grounded_patient_messages_orders_by_session_then_sequence(
     store.mark_operation_running(first_post_op, now=first_started)
     store.complete_post_session(
         first_post_op,
-        review=sample_review(),
+        review=_grounded_ordering_review(),
         new_plan=None,
         now=first_started,
     )
@@ -548,7 +562,7 @@ def test_list_grounded_patient_messages_orders_by_session_then_sequence(
     store.mark_operation_running(second_post_op, now=second_started)
     store.complete_post_session(
         second_post_op,
-        review=sample_review(),
+        review=_grounded_ordering_review(),
         new_plan=None,
         now=second_started,
     )
