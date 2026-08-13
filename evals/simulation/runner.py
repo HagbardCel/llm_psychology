@@ -413,10 +413,6 @@ def _finalize_run(
             f"{type(exc).__name__}: {exc}",
         )
 
-    evidence_failed = journey_error is not None or not audit.ok
-    provisional: SimulationStatus = "failed" if evidence_failed else "complete"
-
-    transcript_error: str | None = None
     snapshot_path = run_dir / "runtime" / "db_snapshot.sqlite"
     if snapshot_path.is_file():
         try:
@@ -425,18 +421,32 @@ def _finalize_run(
                 render_transcript_from_snapshot(snapshot_path),
             )
         except Exception as exc:
-            transcript_error = f"{type(exc).__name__}: {exc}"
-            audit.fail("transcript_write_failed", transcript_error)
+            audit.fail(
+                "transcript_write_failed",
+                f"{type(exc).__name__}: {exc}",
+            )
 
-    final_status: SimulationStatus = (
-        "failed" if (provisional == "failed" or transcript_error) else "complete"
-    )
+    runtime_status: str | None = None
+    try:
+        trace = load_jsonl(run_dir / "runtime" / "trace.jsonl")
+        runtime_status = diagnostics_end_status(trace)
+    except Exception as exc:
+        audit.fail(
+            "runtime_trace_read_failed",
+            f"{type(exc).__name__}: {exc}",
+        )
+
     if journey_error is not None and error_code is None:
         error_code = "journey_error"
         error_message = str(journey_error)
+    if journey_error is None and not audit.ok:
+        codes = sorted({finding.code for finding in audit.findings})
+        error_code = "mechanical_audit_failed"
+        error_message = f"mechanical audit failed: {', '.join(codes)}"
 
-    trace = load_jsonl(run_dir / "runtime" / "trace.jsonl")
-    runtime_status = diagnostics_end_status(trace)
+    final_status: SimulationStatus = (
+        "failed" if journey_error is not None or not audit.ok else "complete"
+    )
 
     try:
         write_private_text(

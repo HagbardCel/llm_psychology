@@ -344,6 +344,14 @@ async def test_simulation_post_session_failure_preserves_evidence(
     assert "FAILED" in audit_text
     assert result.error_code in audit_text
     assert "Journey failure" in audit_text
+    assert any(
+        code in audit_text
+        for code in (
+            "missing_review",
+            "post_session_incomplete",
+            "missing_session_checkpoint",
+        )
+    )
     # Session was recorded at start_session even though post-session failed.
     assert "start_session" in journey_text
 

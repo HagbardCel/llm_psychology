@@ -445,67 +445,6 @@ def reconstruct_supervisor_call(
         event for event in scoped if _event_llm_call_id(event) == llm_call_id
     ]
 
-    requests = [
-        event for event in call_events if event.get("kind") == "llm.provider.request"
-    ]
-    if not requests:
-        errors.append(f"{task}: missing provider request(s)")
-        return None, errors
-
-    terminals_by_attempt: dict[str, list[dict[str, Any]]] = {}
-    for event in call_events:
-        kind = event.get("kind")
-        if kind not in {"llm.provider.response", "llm.provider.error"}:
-            continue
-        attempt_id = _event_provider_attempt_id(event)
-        if attempt_id is None:
-            errors.append(
-                f"{task}: terminal provider event missing provider_attempt_id"
-            )
-            continue
-        terminals_by_attempt.setdefault(attempt_id, []).append(dict(event))
-
-    model: str | None = None
-    provider_sequences: list[int] = []
-    success_count = 0
-    for request in requests:
-        attempt_id = _event_provider_attempt_id(request)
-        if attempt_id is None:
-            errors.append(f"{task}: provider request missing provider_attempt_id")
-            continue
-        provider_sequences.append(_event_sequence(request))
-        request_model = (request.get("data") or {}).get("model")
-        if isinstance(request_model, str):
-            model = request_model
-        terminals = terminals_by_attempt.get(attempt_id, [])
-        if len(terminals) != 1:
-            errors.append(
-                f"{task}: provider_attempt_id={attempt_id!r} expected exactly one "
-                f"terminal response/error, got {len(terminals)}"
-            )
-            continue
-        terminal = terminals[0]
-        provider_sequences.append(_event_sequence(terminal))
-        if (
-            terminal.get("kind") == "llm.provider.response"
-            and (terminal.get("data") or {}).get("status") == "success"
-        ):
-            success_count += 1
-
-    unpaired_terminals = set(terminals_by_attempt) - {
-        attempt
-        for request in requests
-        if (attempt := _event_provider_attempt_id(request)) is not None
-    }
-    for attempt_id in sorted(unpaired_terminals):
-        errors.append(
-            f"{task}: terminal provider event without matching request "
-            f"provider_attempt_id={attempt_id!r}"
-        )
-
-    if success_count < 1:
-        errors.append(f"{task}: no successful provider.response")
-
     accepted = [
         event for event in call_events if event.get("kind") == "llm.output.accepted"
     ]
@@ -514,19 +453,83 @@ def reconstruct_supervisor_call(
             f"{task}: expected exactly one llm.output.accepted, got {len(accepted)}"
         )
         return None, errors
-
     accepted_event = accepted[0]
     accepted_sequence = _event_sequence(accepted_event)
-    if provider_sequences and accepted_sequence <= max(provider_sequences):
-        errors.append(
-            f"{task}: accepted.sequence={accepted_sequence} must exceed every "
-            f"provider attempt sequence (max={max(provider_sequences)})"
-        )
-
     result = (accepted_event.get("data") or {}).get("result")
     if not isinstance(result, Mapping):
         errors.append(f"{task}: accepted result is not a mapping")
         return None, errors
+
+    requests_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    terminals_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for event in call_events:
+        kind = event.get("kind")
+        if kind == "llm.provider.request":
+            attempt_id = _event_provider_attempt_id(event)
+            if attempt_id is None:
+                errors.append(f"{task}: provider request missing provider_attempt_id")
+                continue
+            requests_by_attempt.setdefault(attempt_id, []).append(dict(event))
+        elif kind in {"llm.provider.response", "llm.provider.error"}:
+            attempt_id = _event_provider_attempt_id(event)
+            if attempt_id is None:
+                errors.append(
+                    f"{task}: terminal provider event missing provider_attempt_id"
+                )
+                continue
+            terminals_by_attempt.setdefault(attempt_id, []).append(dict(event))
+
+    attempt_ids = set(requests_by_attempt) | set(terminals_by_attempt)
+    if not attempt_ids:
+        errors.append(f"{task}: missing provider request(s)")
+        return None, errors
+
+    models: set[str] = set()
+    success_count = 0
+    for attempt_id in sorted(attempt_ids):
+        requests = requests_by_attempt.get(attempt_id, [])
+        terminals = terminals_by_attempt.get(attempt_id, [])
+        if len(requests) != 1 or len(terminals) != 1:
+            errors.append(
+                f"{task}: provider_attempt_id={attempt_id!r} expected exactly one "
+                f"request and one terminal, got requests={len(requests)} "
+                f"terminals={len(terminals)}"
+            )
+            continue
+        request = requests[0]
+        terminal = terminals[0]
+        request_sequence = _event_sequence(request)
+        terminal_sequence = _event_sequence(terminal)
+        if not (request_sequence < terminal_sequence < accepted_sequence):
+            errors.append(
+                f"{task}: provider_attempt_id={attempt_id!r} requires "
+                f"request.sequence < terminal.sequence < accepted.sequence "
+                f"(got {request_sequence} < {terminal_sequence} < {accepted_sequence})"
+            )
+        request_model = (request.get("data") or {}).get("model")
+        if not isinstance(request_model, str) or not request_model.strip():
+            errors.append(
+                f"{task}: provider request missing non-empty model "
+                f"(provider_attempt_id={attempt_id!r})"
+            )
+        else:
+            models.add(request_model)
+        if (
+            terminal.get("kind") == "llm.provider.response"
+            and (terminal.get("data") or {}).get("status") == "success"
+        ):
+            success_count += 1
+
+    if success_count < 1:
+        errors.append(f"{task}: no successful provider.response")
+    if len(models) != 1:
+        errors.append(
+            f"{task}: expected exactly one request model across attempts, "
+            f"got {sorted(models)!r}"
+        )
+        model: str | None = None
+    else:
+        model = next(iter(models))
 
     if errors:
         return None, errors
@@ -964,6 +967,17 @@ def _durable_db_for_session(
     return None
 
 
+def _newest_session_checkpoint(
+    checkpoints_dir: Path,
+    max_session_number: int,
+) -> Path | None:
+    for number in range(max_session_number, 0, -1):
+        candidate = checkpoints_dir / f"after-session-{number:03d}.sqlite"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _audit_checkpoints(audit: AuditResult, checkpoints_dir: Path) -> None:
     with _safe_section(audit, "checkpoints", "checkpoints"):
         initial = checkpoints_dir / "initial-ready.sqlite"
@@ -1026,10 +1040,9 @@ def _audit_final_database(
 
     lineage_db = resolved
     if lineage_db is None and therapy_sessions:
-        lineage_db = _durable_db_for_session(
-            snapshot=None,
-            checkpoints_dir=checkpoints_dir,
-            session_number=len(therapy_sessions),
+        lineage_db = _newest_session_checkpoint(
+            checkpoints_dir,
+            len(therapy_sessions),
         )
     if lineage_db is not None and lineage_db.is_file():
         conn = _connect_readonly(lineage_db)
