@@ -77,12 +77,12 @@ async def test_post_session_citations_resolve_to_authoritative_turns(
 
     result = await runner.post_session(style=eval_style("cbt"), transcript=transcript)
 
-    assert result.session_summary
+    assert result.review.analysis.summary
     assert citation_integrity_failures(result, transcript) == []
 
 
 @pytest.mark.asyncio
-async def test_post_session_retains_safety_relevant_negation_verbatim(
+async def test_post_session_selects_safety_relevant_negation_turn(
     runner: EvalRunner,
 ) -> None:
     transcript = negation_transcript()
@@ -90,18 +90,17 @@ async def test_post_session_retains_safety_relevant_negation_verbatim(
     result = await runner.post_session(style=eval_style("cbt"), transcript=transcript)
 
     assert citation_integrity_failures(result, transcript) == []
-    selected = next(
-        (
-            turn
-            for turn in result.derived_profile_patch.grounded_patient_turns
-            if turn.source_sequence == NEGATION_SEQUENCE
-        ),
-        None,
+    turns_by_sequence = {turn.sequence: turn for turn in transcript}
+    selected_sequences = {
+        citation.patient_sequence
+        for citation in result.review.analysis.patient_turn_citations
+    }
+    assert NEGATION_SEQUENCE in selected_sequences, (
+        "the safety-relevant negation turn was not selected"
     )
-    assert selected is not None, (
-        "the safety-relevant negation was not retained as durable context"
+    assert turns_by_sequence[NEGATION_SEQUENCE].content == normalize_content(
+        NEGATION_CONTENT
     )
-    assert selected.content == normalize_content(NEGATION_CONTENT)
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,8 @@ from pydantic import (
     field_validator,
 )
 
+from jung.domain.session_artifacts import SessionReview
+
 
 def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
@@ -83,7 +85,6 @@ class StoredProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     profile: Profile
-    derived_profile: dict[str, Any] | None = None
     current_plan_id: UUID | None = None
     created_at: UtcDateTime
     updated_at: UtcDateTime
@@ -97,8 +98,7 @@ class Session(BaseModel):
     plan_id: UUID | None = None
     started_at: UtcDateTime
     ended_at: UtcDateTime | None = None
-    summary: str | None = None
-    briefing: dict[str, Any] | None = None
+    review: SessionReview | None = None
     intake_record: dict[str, Any] | None = None
 
 
@@ -180,7 +180,6 @@ class Plan(PlanContent):
     id: UUID
     version: int = Field(ge=1)
     selected_style: str
-    session_briefing: dict[str, Any] | None = None
     source_session_id: UUID | None = None
     supersedes_plan_id: UUID | None = None
     created_at: UtcDateTime

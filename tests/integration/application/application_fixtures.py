@@ -17,6 +17,12 @@ from jung.domain.models import (
     Stage,
 )
 from jung.domain.results import ChatStreamResult
+from jung.domain.session_artifacts import (
+    PatientTurnCitation,
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+)
 from jung.llm.gateway import LLMTask, ModelPolicy, StructuredOutputMode
 from jung.llm.policies import TaskOverride, build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
@@ -33,11 +39,7 @@ from jung.phases.intake.models import (
 )
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
-    PatientTurnCitation,
-    PlanPatch,
     PostSessionUpdateResult,
-    SessionAnalysisResult,
-    SessionBriefingDraft,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
@@ -67,8 +69,8 @@ def post_session_expectations(
     return [
         StructuredExpectation(
             task=LLMTask.POST_SESSION_ANALYSIS,
-            output_type=SessionAnalysisResult,
-            response=SessionAnalysisResult(
+            output_type=SessionAnalysis,
+            response=SessionAnalysis(
                 summary="Patient explored sleep difficulties.",
                 key_themes=("sleep",),
                 patient_turn_citations=citations,
@@ -78,7 +80,7 @@ def post_session_expectations(
             task=LLMTask.POST_SESSION_UPDATE,
             output_type=PostSessionUpdateResult,
             response=PostSessionUpdateResult(
-                session_briefing=SessionBriefingDraft(
+                session_briefing=SessionBriefing(
                     narrative_handoff="Session focused on sleep.",
                     recommended_opening_focus="sleep routine",
                 ),

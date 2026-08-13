@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from jung.domain.models import Plan, Profile
+from jung.domain.models import Message, Plan, Profile
+from jung.domain.session_artifacts import SessionBriefing
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import StyleDefinition
 
@@ -23,9 +22,9 @@ class TherapyTurnInput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     profile: Profile
-    derived_profile: dict[str, Any] | None = None
+    grounded_patient_messages: tuple[Message, ...] = ()
     current_plan: Plan
-    session_briefing: dict[str, Any] | None = None
+    session_briefing: SessionBriefing | None = None
     recent_session_summaries: tuple[str, ...] = ()
     transcript: tuple[TranscriptTurn, ...] = ()
     latest_user_message: str | None = None

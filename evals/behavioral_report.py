@@ -112,18 +112,19 @@ async def _intervention_section(runner: EvalRunner) -> ReportSection:
     delivered = [turn.sequence for turn in transcript if turn.role == "assistant"]
     cited = [
         item.therapist_sequence
-        for item in result.session_briefing.intervention_evidence
+        for item in result.review.analysis.intervention_citations
     ]
-    grounded = [
-        turn.source_sequence
-        for turn in result.derived_profile_patch.grounded_patient_turns
+    selected_patient_sequences = [
+        citation.patient_sequence
+        for citation in result.review.analysis.patient_turn_citations
     ]
     integrity = citation_integrity_failures(result, transcript)
 
     observations = [
         f"Therapist turns delivered: {delivered}",
         f"Therapist turns cited as interventions: {cited or 'none'}",
-        f"Patient turns retained as durable context: {grounded or 'none'}",
+        f"Patient turns selected for durable context: "
+        f"{selected_patient_sequences or 'none'}",
         f"Citation integrity findings: {integrity or 'none'}",
     ]
     return ReportSection(
@@ -131,8 +132,8 @@ async def _intervention_section(runner: EvalRunner) -> ReportSection:
         review_focus=scenario.review_focus,
         observations=observations,
         excerpts=[
-            ("Session summary", result.session_summary),
-            ("Narrative handoff", result.session_briefing.narrative_handoff),
+            ("Session summary", result.review.analysis.summary),
+            ("Narrative handoff", result.review.briefing.narrative_handoff),
         ],
     )
 

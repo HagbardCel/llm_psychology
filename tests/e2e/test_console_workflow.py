@@ -269,12 +269,9 @@ def _assert_therapy_ready_store(store: SQLiteStore) -> None:
 
     profile = store.get_profile()
     assert profile is not None
-    # Deterministic composition only stores grounded patient-statement citations.
-    # The scripted analysis has none, so the durable profile is unchanged.
-    if profile.derived_profile is not None:
-        assert "observations" not in profile.derived_profile
-        assert "hypotheses" not in profile.derived_profile
-        assert "patient_stated_facts" not in profile.derived_profile
+
+    grounded = store.list_grounded_patient_messages()
+    assert grounded == [] or all(message.role.value == "user" for message in grounded)
 
 
 async def _run_console(

@@ -20,7 +20,8 @@ from jung.phases.post_session.models import (
 )
 from jung.phases.post_session.update_context import build_update_user_message
 
-PROMPT_VERSION = "post-session-v6"
+ANALYSIS_PROMPT_VERSION = "post-session-v6"
+UPDATE_PROMPT_VERSION = "post-session-v6"
 _ANALYSIS_USER_MESSAGE_LIMIT = 12_000
 _ANALYSIS_TASK = (
     "Analyze the completed session. For each intervention citation, "

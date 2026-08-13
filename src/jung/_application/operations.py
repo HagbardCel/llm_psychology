@@ -23,7 +23,7 @@ from jung.domain.models import (
 )
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.post_session.merge import merge_derived_profile, merge_plan_content
+from jung.phases.post_session.merge import merge_plan_content
 from jung.phases.post_session.processor import PostSessionProcessor
 
 logger = logging.getLogger(__name__)
@@ -239,7 +239,6 @@ class OperationRuntime:
                 elif operation.kind is OperationKind.POST_SESSION:
                     post_input = await self._inputs.build_post_session_input(operation)
                     result = await self._post_session.process(post_input)
-                    stored = await self._run_store(self._store.get_profile)
                     session = await self._run_store(
                         self._store.get_session,
                         operation.source_session_id,
@@ -249,12 +248,9 @@ class OperationRuntime:
                         operation.source_session_id,
                         session.plan_id,
                     )
-                    merged_profile = merge_derived_profile(
-                        stored.derived_profile if stored else None,
-                        result.derived_profile_patch,
-                    )
                     merged_plan = merge_plan_content(
-                        plan_for_session, result.plan_patch
+                        plan_for_session,
+                        result.review.plan_recommendation,
                     )
                     new_plan = (
                         NewPlanRevision(
@@ -269,9 +265,7 @@ class OperationRuntime:
                         to_stage = await self._run_store(
                             self._store.complete_post_session,
                             operation_id,
-                            summary=result.session_summary,
-                            briefing=result.session_briefing.model_dump(mode="json"),
-                            derived_profile=merged_profile,
+                            review=result.review,
                             new_plan=new_plan,
                             now=self._now(),
                         )

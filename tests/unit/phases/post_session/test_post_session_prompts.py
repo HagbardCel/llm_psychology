@@ -8,8 +8,12 @@ from uuid import uuid4
 import pytest
 
 import jung.phases.post_session.prompts as prompts
-from jung.domain.grounding import GroundedPatientTurn
 from jung.domain.models import Plan, Profile
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    SessionAnalysis,
+)
 from jung.llm.gateway import ChatRole
 from jung.llm.prompt_context import (
     UNTRUSTED_CONTEXT_RULE,
@@ -18,14 +22,13 @@ from jung.llm.prompt_context import (
 from jung.phases.context_projection import transcript_turn_payload
 from jung.phases.post_session.evidence_validation import validate_session_analysis
 from jung.phases.post_session.models import (
-    InterventionCitation,
     InterventionEvidence,
-    PatientTurnCitation,
     PostSessionInput,
     ResolvedSessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import (
+    ANALYSIS_PROMPT_VERSION,
+    UPDATE_PROMPT_VERSION,
     build_analysis_request,
     build_update_messages,
 )
@@ -73,16 +76,21 @@ def _input(*, patient_content: str = "I slept badly.") -> PostSessionInput:
 
 
 def _resolved(
-    analysis: SessionAnalysisResult,
+    analysis: SessionAnalysis,
     *,
     intervention_evidence: tuple[InterventionEvidence, ...] = (),
-    grounded_patient_turns: tuple[GroundedPatientTurn, ...] = (),
+    selected_patient_turns: tuple[TranscriptTurn, ...] = (),
 ) -> ResolvedSessionAnalysis:
     return ResolvedSessionAnalysis(
         analysis=analysis,
         intervention_evidence=intervention_evidence,
-        grounded_patient_turns=grounded_patient_turns,
+        selected_patient_turns=selected_patient_turns,
     )
+
+
+def test_prompt_versions_are_post_session_v6() -> None:
+    assert ANALYSIS_PROMPT_VERSION == "post-session-v6"
+    assert UPDATE_PROMPT_VERSION == "post-session-v6"
 
 
 def test_analysis_prompt_puts_style_and_untrusted_rule_in_system() -> None:
@@ -130,7 +138,7 @@ def test_analysis_system_defines_patient_turn_citation_selection() -> None:
 
 
 def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None:
-    analysis = SessionAnalysisResult(
+    analysis = SessionAnalysis(
         summary="Sleep difficulties explored.",
         key_themes=("sleep",),
         intervention_citations=(
@@ -141,6 +149,12 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
             ),
         ),
         patient_turn_citations=(PatientTurnCitation(patient_sequence=2),),
+    )
+    patient_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=2,
+        role="user",
+        content="I slept badly.",
     )
     resolved = _resolved(
         analysis,
@@ -153,13 +167,7 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
                 patient_content="I slept badly.",
             ),
         ),
-        grounded_patient_turns=(
-            GroundedPatientTurn(
-                source_message_id=uuid4(),
-                source_sequence=2,
-                content="I slept badly.",
-            ),
-        ),
+        selected_patient_turns=(patient_turn,),
     )
     messages = build_update_messages(_input(), resolved)
     combined = "\n".join(message.content for message in messages)
@@ -180,7 +188,7 @@ def test_update_prompt_omits_provider_citation_keys_and_raw_transcript() -> None
 def test_update_prompt_puts_style_in_system_and_plan_in_user() -> None:
     messages = build_update_messages(
         _input(),
-        _resolved(SessionAnalysisResult(summary="summary", key_themes=("sleep",))),
+        _resolved(SessionAnalysis(summary="summary", key_themes=("sleep",))),
     )
     system = next(
         message.content for message in messages if message.role is ChatRole.SYSTEM
@@ -334,7 +342,7 @@ def test_citation_of_non_visible_sequence_rejected() -> None:
         ),
         TranscriptTurn(message_id=uuid4(), sequence=4, role="user", content="later"),
     )
-    analysis = SessionAnalysisResult(
+    analysis = SessionAnalysis(
         summary="summary",
         key_themes=("sleep",),
         intervention_citations=(

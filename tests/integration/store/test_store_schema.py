@@ -14,7 +14,16 @@ from jung.domain.models import Profile, Stage
 from jung.persistence import _sqlite_support as sql
 from jung.persistence.sqlite_store import SCHEMA_VERSION, SQLiteStore
 
-EXPECTED_TABLES = frozenset({"profile", "sessions", "plans", "messages", "operations"})
+EXPECTED_TABLES = frozenset(
+    {
+        "profile",
+        "sessions",
+        "plans",
+        "messages",
+        "grounded_patient_turns",
+        "operations",
+    }
+)
 
 
 def test_initialize_creates_fresh_setup_state(store: SQLiteStore) -> None:
@@ -57,11 +66,33 @@ def test_fresh_schema_has_current_version_and_tables(
         message_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
+        session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        plan_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(plans)").fetchall()
+        }
+        profile_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(profile)").fetchall()
+        }
+        grounding_sql = conn.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'grounded_patient_turns'
+            """
+        ).fetchone()[0]
         message_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
         ).fetchone()[0]
     assert version == SCHEMA_VERSION
+    assert version == 7
     assert tables == EXPECTED_TABLES
+    assert "review_json" in session_columns
+    assert "summary" not in session_columns
+    assert "briefing_json" not in session_columns
+    assert "session_briefing_json" not in plan_columns
+    assert "derived_profile_json" not in profile_columns
+    assert "REFERENCES messages(id)" in grounding_sql
     assert "client_message_id" in message_columns
     assert "role IN ('user', 'assistant')" in message_sql
     assert "UNIQUE (session_id, client_message_id, role)" in message_sql
@@ -156,8 +187,8 @@ def _seed_open_session(
     now = datetime.now(UTC).isoformat()
     conn.execute(
         """
-        INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-        VALUES (?, 'intake', ?, ?, NULL, NULL, NULL)
+        INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, review_json)
+        VALUES (?, 'intake', ?, ?, NULL, NULL)
         """,
         (session_id, plan_id, now),
     )
@@ -175,8 +206,8 @@ def test_singleton_rejects_second_open_session(store_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
-                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-                VALUES (?, 'intake', NULL, ?, NULL, NULL, NULL)
+                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, review_json)
+                VALUES (?, 'intake', NULL, ?, NULL, NULL)
                 """,
                 (str(uuid4()), datetime.now(UTC).isoformat()),
             )
@@ -292,6 +323,22 @@ def test_messages_unique_client_message_id_per_role(store_path: Path) -> None:
             conn.commit()
 
 
+def test_grounded_patient_turns_reject_unknown_message_id(store_path: Path) -> None:
+    store = SQLiteStore(store_path)
+    store.initialize()
+    with sqlite3.connect(store_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO grounded_patient_turns (message_id)
+                VALUES (?)
+                """,
+                (str(uuid4()),),
+            )
+            conn.commit()
+
+
 def test_plan_empty_focus_rejected_by_schema(store_path: Path) -> None:
     store = SQLiteStore(store_path)
     store.initialize()
@@ -307,9 +354,9 @@ def test_plan_empty_focus_rejected_by_schema(store_path: Path) -> None:
                 INSERT INTO plans (
                     id, version, selected_style, focus, themes_json, goals_json,
                     current_progress, planned_interventions_json,
-                    revision_recommendations_json, session_briefing_json,
+                    revision_recommendations_json,
                     source_session_id, supersedes_plan_id, created_at
-                ) VALUES (?, 1, 'cbt', ' ', '[]', '[]', 'ok', '[]', '[]', NULL, ?, NULL, ?)
+                ) VALUES (?, 1, 'cbt', ' ', '[]', '[]', 'ok', '[]', '[]', ?, NULL, ?)
                 """,
                 (str(uuid4()), session_id, now),
             )
@@ -324,8 +371,8 @@ def test_therapy_session_rejects_invalid_plan_id(store_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 """
-                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, summary, briefing_json)
-                VALUES (?, 'therapy', ?, ?, NULL, NULL, NULL)
+                INSERT INTO sessions (id, kind, plan_id, started_at, ended_at, review_json)
+                VALUES (?, 'therapy', ?, ?, NULL, NULL)
                 """,
                 (str(uuid4()), str(uuid4()), datetime.now(UTC).isoformat()),
             )

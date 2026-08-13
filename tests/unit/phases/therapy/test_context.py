@@ -9,7 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.models import Plan, Profile
+from jung.domain.models import Message, MessageRole, Plan, Profile
+from jung.domain.session_artifacts import SessionBriefing
 from jung.llm.gateway import ChatRole
 from jung.llm.prompt_context import UNTRUSTED_CONTEXT_RULE, serialize_context_json
 from jung.phases.therapy.context import build_untrusted_therapy_document
@@ -46,6 +47,19 @@ def _turn(sequence: int, role: str, content: str) -> TranscriptTurn:
     )
 
 
+def _grounded_message(content: str, *, sequence: int = 1) -> Message:
+    now = datetime.now(UTC)
+    return Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        sequence=sequence,
+        role=MessageRole.USER,
+        content=content,
+        client_message_id=uuid4(),
+        created_at=now,
+    )
+
+
 def _input(**overrides: object) -> TherapyTurnInput:
     values: dict[str, object] = {
         "profile": Profile(name="Alex", primary_language="English"),
@@ -72,14 +86,13 @@ def _user_document(messages: list) -> dict[str, object]:
     return json.loads(match.group(1))
 
 
-def _briefing(**overrides: object) -> dict[str, object]:
+def _briefing(**overrides: object) -> SessionBriefing:
     values: dict[str, object] = {
         "narrative_handoff": "Session focused on readiness.",
         "recommended_opening_focus": "pace",
-        "intervention_evidence": [],
     }
     values.update(overrides)
-    return values
+    return SessionBriefing(**values)  # type: ignore[arg-type]
 
 
 def test_current_message_preserved_under_tight_budget() -> None:
@@ -113,15 +126,7 @@ def test_message_exceeding_historical_budget_still_present() -> None:
                 max_historical_context_chars=1000,
             ),
             session_briefing=_briefing(narrative_handoff="x" * 5000),
-            derived_profile={
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": str(uuid4()),
-                        "source_sequence": 1,
-                        "content": "z" * 5000,
-                    }
-                ]
-            },
+            grounded_patient_messages=(_grounded_message("z" * 5000),),
             recent_session_summaries=("w" * 5000,),
         ),
         include_current_message=True,
@@ -167,7 +172,7 @@ def test_opening_historical_context_respects_budget() -> None:
         _input(
             is_opening_turn=True,
             session_briefing=_briefing(narrative_handoff="b" * 5000),
-            derived_profile={},
+            grounded_patient_messages=(),
             recent_session_summaries=("s" * 5000,),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
@@ -203,22 +208,14 @@ def test_style_instructions_live_in_system_message() -> None:
     assert '"task"' not in user_text.split("</context_data>")[0]
 
 
-def test_briefing_evidence_not_truncated_in_final_context() -> None:
+def test_briefing_handoff_not_truncated_in_final_context() -> None:
     content = "I am not recommending that you confront them immediately."
     document = build_untrusted_therapy_document(
         _input(
             is_opening_turn=True,
             session_briefing=_briefing(
-                intervention_evidence=[
-                    {
-                        "intervention_description": "Pacing",
-                        "status": "response_cited",
-                        "therapist_sequence": 2,
-                        "therapist_content": content,
-                        "patient_sequence": 3,
-                        "patient_content": "I am not ready to do that.",
-                    }
-                ]
+                narrative_handoff=content,
+                continuity_points=("I am not ready to do that.",),
             ),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
@@ -232,25 +229,16 @@ def test_briefing_evidence_not_truncated_in_final_context() -> None:
     assert content in rendered
     assert "I am not ready to do that." in rendered
     assert "..." not in rendered
+    briefing = document["historical_context"]["session_briefing"]
+    assert "intervention_evidence" not in briefing
 
 
-def test_grounded_profile_allowlist_excludes_legacy_keys_and_sequences() -> None:
-    message_id = uuid4()
+def test_grounded_messages_project_content_only() -> None:
+    message = _grounded_message("I do not think I want to die.")
     document = build_untrusted_therapy_document(
         _input(
             is_opening_turn=True,
-            derived_profile={
-                "hypotheses": ["should never appear"],
-                "observations": ["legacy"],
-                "patient_stated_facts": ["legacy fact"],
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": str(message_id),
-                        "source_sequence": 1,
-                        "content": "I do not think I want to die.",
-                    }
-                ],
-            },
+            grounded_patient_messages=(message,),
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
                 max_plan_context_chars=5000,
@@ -261,36 +249,11 @@ def test_grounded_profile_allowlist_excludes_legacy_keys_and_sequences() -> None
     )
     rendered = json.dumps(document)
     assert "I do not think I want to die." in rendered
-    assert "should never appear" not in rendered
-    assert "legacy fact" not in rendered
-    assert str(message_id) not in rendered
+    assert str(message.id) not in rendered
     profile = document["historical_context"]["derived_profile"]
     assert profile["grounded_patient_turns"] == [
         {"content": "I do not think I want to die."}
     ]
-
-
-def test_malformed_grounded_profile_raises_even_at_zero_budget() -> None:
-    with pytest.raises(ValueError, match="grounded_patient_turns must be a list"):
-        build_untrusted_therapy_document(
-            _input(
-                is_opening_turn=True,
-                derived_profile={"grounded_patient_turns": None},
-                current_plan=_plan(
-                    focus="x" * 5000,
-                    current_progress="y" * 5000,
-                    themes=tuple(f"theme-{i}" * 50 for i in range(20)),
-                    goals=tuple(f"goal-{i}" * 50 for i in range(20)),
-                    planned_interventions=tuple(f"iv-{i}" * 50 for i in range(20)),
-                ),
-                context_limits=TherapyContextLimits(
-                    max_transcript_turns=6,
-                    max_plan_context_chars=200,
-                    max_historical_context_chars=1000,
-                ),
-            ),
-            include_current_message=False,
-        )
 
 
 def test_malformed_briefing_raises_even_at_zero_budget() -> None:

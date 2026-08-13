@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from jung.domain.grounding import GroundedPatientTurn, parse_grounded_patient_turns
-from jung.domain.session_artifacts import SessionBriefing, parse_session_briefing
+from jung.domain.models import Message
+from jung.domain.session_artifacts import SessionBriefing
 from jung.domain.text import normalize_content
 from jung.llm.prompt_context import serialize_context_json
 from jung.phases.context_bounds import bounded_text
@@ -15,7 +15,7 @@ from jung.phases.context_projection import (
     compact_session_briefing,
     enrich_plan_projection,
     minimal_plan_projection,
-    pack_grounded_profile_turns,
+    pack_grounded_patient_messages,
     pack_transcript_turns,
     project_primary_language,
 )
@@ -110,21 +110,21 @@ def _pack_historical_briefing(
         historical["session_briefing"] = packed.document
 
 
-def _pack_historical_profile(
+def _pack_historical_grounded_messages(
     historical: dict[str, object],
-    turns: Sequence[GroundedPatientTurn],
+    messages: Sequence[Message],
     *,
     historical_limit: int,
 ) -> None:
     def profile_fits(profile_doc: dict[str, object]) -> bool:
         candidate = dict(historical)
+        # Temporary prompt-document key until Phase 7D redesigns packing.
         candidate["derived_profile"] = profile_doc
         return len(serialize_context_json(candidate)) <= historical_limit
 
-    packed = pack_grounded_profile_turns(
-        turns,
+    packed = pack_grounded_patient_messages(
+        messages,
         fits=profile_fits,
-        content_only=True,
     )
     if packed is not None:
         historical["derived_profile"] = packed.document
@@ -170,13 +170,6 @@ def build_untrusted_therapy_document(
     limits = input.context_limits
     historical_limit = limits.max_historical_context_chars
 
-    grounded_turns = ()
-    if input.derived_profile is not None:
-        grounded_turns = parse_grounded_patient_turns(input.derived_profile)
-    briefing = None
-    if input.session_briefing is not None:
-        briefing = parse_session_briefing(input.session_briefing)
-
     transcript_source = prepare_historical_transcript(
         input,
         include_current_message=include_current_message,
@@ -218,16 +211,16 @@ def build_untrusted_therapy_document(
         transcript_source,
         historical_limit=historical_limit,
     )
-    if briefing is not None:
+    if input.session_briefing is not None:
         _pack_historical_briefing(
             historical,
-            briefing,
+            input.session_briefing,
             historical_limit=historical_limit,
         )
-    if input.derived_profile is not None:
-        _pack_historical_profile(
+    if input.grounded_patient_messages:
+        _pack_historical_grounded_messages(
             historical,
-            grounded_turns,
+            input.grounded_patient_messages,
             historical_limit=historical_limit,
         )
     if input.recent_session_summaries:

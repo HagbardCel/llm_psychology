@@ -4,15 +4,19 @@ CREATE TABLE IF NOT EXISTS sessions (
     plan_id TEXT NULL,
     started_at TEXT NOT NULL,
     ended_at TEXT NULL,
-    summary TEXT NULL,
-    briefing_json TEXT NULL,
     intake_record_json TEXT NULL,
+    review_json TEXT NULL,
     FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE RESTRICT,
     CHECK (kind = 'intake' OR intake_record_json IS NULL),
     CHECK (
         (kind = 'intake' AND plan_id IS NULL)
         OR
         (kind = 'therapy' AND plan_id IS NOT NULL)
+    ),
+    CHECK (
+        review_json IS NULL
+        OR
+        (kind = 'therapy' AND ended_at IS NOT NULL)
     )
 );
 
@@ -30,7 +34,6 @@ CREATE TABLE IF NOT EXISTS plans (
     current_progress TEXT NOT NULL,
     planned_interventions_json TEXT NOT NULL,
     revision_recommendations_json TEXT NOT NULL,
-    session_briefing_json TEXT NULL,
     source_session_id TEXT NULL UNIQUE,
     supersedes_plan_id TEXT NULL,
     created_at TEXT NOT NULL,
@@ -51,7 +54,6 @@ CREATE TABLE IF NOT EXISTS profile (
     primary_language TEXT NOT NULL,
     date_of_birth TEXT NULL,
     notes TEXT NULL,
-    derived_profile_json TEXT NULL,
     current_plan_id TEXT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -69,6 +71,11 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE RESTRICT,
     UNIQUE (session_id, sequence),
     UNIQUE (session_id, client_message_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS grounded_patient_turns (
+    message_id TEXT PRIMARY KEY
+        REFERENCES messages(id) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS operations (

@@ -1,110 +1,124 @@
-"""Tests for durable session briefing and intervention evidence artifacts."""
+"""Tests for durable session briefing and session review artifacts."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from jung.domain.session_artifacts import InterventionEvidence, SessionBriefing
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
+    SessionReviewGeneration,
+)
 
 
-def _evidence(
-    *,
-    therapist_sequence: int = 2,
-    patient_sequence: int | None = 3,
-    therapist_content: str = "What feels unclear?",
-    patient_content: str | None = "I am not ready to do that.",
-) -> InterventionEvidence:
-    kwargs: dict[str, object] = {
-        "intervention_description": "Exploratory questioning",
-        "therapist_sequence": therapist_sequence,
-        "therapist_content": therapist_content,
+def _briefing(**overrides: object) -> SessionBriefing:
+    values: dict[str, object] = {
+        "narrative_handoff": "Continue with sleep and readiness.",
+        "recommended_opening_focus": "Ask about readiness.",
     }
-    if patient_sequence is not None:
-        kwargs["patient_sequence"] = patient_sequence
-        kwargs["patient_content"] = patient_content
-    return InterventionEvidence(**kwargs)  # type: ignore[arg-type]
+    values.update(overrides)
+    return SessionBriefing(**values)  # type: ignore[arg-type]
 
 
-def _briefing(
-    evidence: tuple[InterventionEvidence, ...] = (),
-) -> SessionBriefing:
-    return SessionBriefing(
-        narrative_handoff="Continue with sleep and readiness.",
-        recommended_opening_focus="Ask about readiness.",
-        intervention_evidence=evidence,
-    )
+def _analysis(**overrides: object) -> SessionAnalysis:
+    values: dict[str, object] = {
+        "summary": "Patient explored sleep difficulties.",
+        "key_themes": ("sleep",),
+    }
+    values.update(overrides)
+    return SessionAnalysis(**values)  # type: ignore[arg-type]
+
+
+def _review(**overrides: object) -> SessionReview:
+    values: dict[str, object] = {
+        "analysis": _analysis(),
+        "briefing": _briefing(),
+        "plan_recommendation": PlanPatch(),
+        "generation": None,
+    }
+    values.update(overrides)
+    return SessionReview(**values)  # type: ignore[arg-type]
 
 
 def test_session_briefing_round_trips_through_json_dump() -> None:
     briefing = _briefing(
-        (_evidence(), _evidence(therapist_sequence=4, patient_sequence=5))
+        continuity_points=("sleep routine",),
+        unresolved_issues=("readiness",),
+        things_to_avoid=("pressure",),
+        emotional_context=("fatigue",),
     )
     restored = SessionBriefing.model_validate(briefing.model_dump(mode="json"))
     assert restored == briefing
-    assert restored.intervention_evidence[0].status == "response_cited"
+    assert "intervention_evidence" not in briefing.model_dump(mode="json")
 
 
-def test_status_derived_for_delivered_and_response_cited() -> None:
-    delivered = _evidence(patient_sequence=None, patient_content=None)
-    cited = _evidence()
-    assert delivered.status == "delivered"
-    assert cited.status == "response_cited"
-    assert delivered.model_dump(mode="json")["status"] == "delivered"
-    assert cited.model_dump(mode="json")["status"] == "response_cited"
+def test_session_briefing_rejects_empty_required_text() -> None:
+    with pytest.raises(ValidationError):
+        _briefing(narrative_handoff="   ")
+    with pytest.raises(ValidationError):
+        _briefing(recommended_opening_focus="")
 
 
-def test_conflicting_stored_status_rejected() -> None:
-    with pytest.raises(ValidationError, match="status conflicts"):
-        InterventionEvidence.model_validate(
+def test_session_briefing_has_no_intervention_evidence_field() -> None:
+    assert "intervention_evidence" not in SessionBriefing.model_fields
+    with pytest.raises(ValidationError):
+        SessionBriefing.model_validate(
             {
-                "intervention_description": "label",
-                "therapist_sequence": 1,
-                "therapist_content": "ok",
-                "patient_sequence": 2,
-                "patient_content": "response",
-                "status": "delivered",
+                "narrative_handoff": "handoff",
+                "recommended_opening_focus": "focus",
+                "intervention_evidence": [],
             }
         )
 
 
-def test_explicit_null_status_rejected_as_conflict() -> None:
-    with pytest.raises(ValidationError, match="status conflicts"):
-        InterventionEvidence.model_validate(
-            {
-                "intervention_description": "label",
-                "therapist_sequence": 1,
-                "therapist_content": "ok",
-                "patient_sequence": 3,
-                "patient_content": "response",
-                "status": None,
-            }
+def test_session_review_round_trips_through_json_dump() -> None:
+    review = _review(
+        analysis=_analysis(
+            intervention_citations=(
+                InterventionCitation(
+                    intervention_description="Exploratory questioning",
+                    therapist_sequence=2,
+                    patient_sequence=3,
+                ),
+            ),
+            patient_turn_citations=(PatientTurnCitation(patient_sequence=1),),
+        ),
+        plan_recommendation=PlanPatch(current_progress="improved"),
+        generation=SessionReviewGeneration(
+            analysis_model="analysis-model",
+            analysis_prompt_version="post-session-v6",
+            update_model="update-model",
+            update_prompt_version="post-session-v6",
+        ),
+    )
+    restored = SessionReview.model_validate(review.model_dump(mode="json"))
+    assert restored == review
+    assert restored.generation is not None
+    assert restored.generation.analysis_model == "analysis-model"
+
+
+def test_session_review_allows_null_generation() -> None:
+    review = _review(generation=None)
+    assert review.generation is None
+    dumped = review.model_dump(mode="json")
+    assert dumped["generation"] is None
+
+
+def test_session_review_generation_rejects_blank_provenance() -> None:
+    with pytest.raises(ValidationError):
+        SessionReviewGeneration(
+            analysis_model=" ",
+            analysis_prompt_version="post-session-v6",
+            update_model="update-model",
+            update_prompt_version="post-session-v6",
         )
 
 
-def test_status_present_in_validation_schema() -> None:
-    schema = InterventionEvidence.model_json_schema(mode="validation")
-    assert "status" in schema.get("properties", {})
-
-
-def test_duplicate_therapist_sequence_rejected() -> None:
-    with pytest.raises(
-        ValidationError, match="therapist_sequence values must be unique"
-    ):
-        _briefing(
-            (
-                _evidence(therapist_sequence=2, patient_sequence=3),
-                _evidence(therapist_sequence=2, patient_sequence=4),
-            )
-        )
-
-
-def test_noncanonical_evidence_ordering_rejected() -> None:
-    later = _evidence(therapist_sequence=4, patient_sequence=5)
-    earlier = _evidence(therapist_sequence=2, patient_sequence=3)
-    with pytest.raises(ValidationError, match="canonical order"):
-        SessionBriefing(
-            narrative_handoff="handoff",
-            recommended_opening_focus="focus",
-            intervention_evidence=(later, earlier),
-        )
+def test_session_analysis_rejects_empty_summary() -> None:
+    with pytest.raises(ValidationError):
+        _analysis(summary="\n\t")

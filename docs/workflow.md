@@ -161,19 +161,27 @@ On shutdown:
 - never mark an in-flight operation successful without validated completion;
 - in-flight chat is cancelled with its HTTP stream request.
 
-## Post-session grounding
+## Post-session review and grounding
 
-Persist durable factual evidence only when the backend can objectively ground it. Model-generated interpretations may remain in session-scoped summaries, briefings, intervention descriptions, and treatment-plan recommendations, but must never be promoted to durable profile facts or model-controlled evidence status.
+Messages own facts; session reviews own interpretation; plans own treatment
+state; grounded memory owns only message-ID references.
+
+Persist durable factual evidence only when the backend can objectively ground
+it. Model-generated interpretations may remain in the durable session review
+(analysis, briefing, intervention descriptions, and treatment-plan
+recommendations), but must never be promoted to durable profile facts or
+model-controlled evidence status.
 
 ### Ownership
 
 | Information | Owner |
 |---|---|
-| Session summary | Analysis call |
-| Intervention / patient-turn sequence citations | Analysis call |
-| Next-session narrative and continuity | Update call |
-| Plan patch | Update call |
-| Durable profile patch | Processor, composed from resolved citations + message IDs |
+| Complete supervisor analysis (including summary and sequence citations) | Durable `SessionReview.analysis` |
+| Next-session narrative and continuity | Durable `SessionReview.briefing` |
+| Plan recommendation | Durable `SessionReview.plan_recommendation` |
+| Generation provenance | Backend-authored `SessionReview.generation` (`analysis_model` / `update_model` and prompt versions) |
+| Selected patient wording | `grounded_patient_turns` → `messages` |
+| Applied treatment state | Immutable `plans` revision (when recommendation is not a no-op) |
 
 ### Input validation
 
@@ -187,7 +195,10 @@ Transcripts that lack either a user turn or an assistant turn take a determinist
 - user-only transcript
 - assistant-only transcript
 
-Each variant produces a speculation-free summary/briefing, empty intervention evidence, an empty profile patch, and an empty plan patch. User-only summaries do not embed patient message text; the source session history remains authoritative.
+Each variant produces a speculation-free review with empty citations, empty
+grounding, an empty plan recommendation, and `generation=None`. User-only
+summaries do not embed patient message text; the source session history remains
+authoritative.
 
 ### Evidence layers
 
@@ -195,25 +206,41 @@ Each variant produces a speculation-free summary/briefing, empty intervention ev
 |---|---|
 | Model output | Sequence-only citations (`intervention_citations`, `patient_turn_citations`) |
 | Validator | Verifies turn identity, role, and chronology; one intervention per therapist turn |
-| Resolver | Attaches full whitespace-normalized authoritative turn content + message IDs |
-| Durable profile | `grounded_patient_turns` with source message ID, sequence, and full normalized content |
-| LLM-facing profile context | Normalized turn content only (no internal message IDs); whole items or omit |
-| Interpretive reasoning | Session analysis and briefing only |
+| Resolver | Ephemeral full-turn evidence for the update prompt only |
+| Durable review | Sequence citations and interpretive fields inside `SessionReview` (no copied message text) |
+| Durable grounding | Message IDs in `grounded_patient_turns`, written only via persist-time resolution of `patient_turn_citations` |
+| LLM-facing historical context | Normalized turn content projected from authoritative messages; temporary prompt keys `derived_profile` / `grounded_patient_turns` remain until Phase 7D |
 
 **Normalized** means whitespace-collapsed (`" ".join(text.split())`), not byte-for-byte identical source text.
 
-Provider models cite sequences only. The backend resolves complete authoritative turns. Model-selected substrings are never persisted.
+Provider models cite sequences only. The backend resolves complete authoritative
+turns for the ephemeral update prompt. Model-selected substrings are never
+persisted. Exact wording has one durable owner: `messages`.
 
-Intervention status is derived as `delivered` or `response_cited` from whether a later user turn was cited. `response_cited` means a chronologically later user turn was selected — not that the turn semantically responded to the intervention. `intervention_description` remains a model-generated interpretation made auditable by its grounded citation.
+For the frozen update-prompt surface, intervention `"status"` is computed during
+projection as `delivered` or `response_cited` from whether a later user turn was
+cited. `response_cited` means a chronologically later user turn was selected —
+not that the turn semantically responded to the intervention.
+`intervention_description` remains a model-generated interpretation made
+auditable by its durable sequence citation.
 
-Patient-turn citations select patient-authored turns whose complete wording should be retained as durable cross-session context; cite sparingly, especially safety-relevant clarifications or negations where partial wording could reverse meaning, and omit when nothing qualifies. Patient-turn citations are unique by patient sequence. Durable turns are unique by authoritative source message ID. Merge keeps existing entries stable and appends new source messages. LLM profile projection is an allowlist of `grounded_patient_turns` only; unknown keys are dropped at merge and never re-enter prompts.
+Patient-turn citations select patient-authored turns whose complete wording
+should be retained as durable cross-session context; cite sparingly, especially
+safety-relevant clarifications or negations where partial wording could reverse
+meaning, and omit when nothing qualifies. Patient-turn citations are unique by
+patient sequence. The production application write path into
+`grounded_patient_turns` is exclusively persist-time resolution of those
+citations against source-session messages.
 
-The same patient turn may intentionally appear both as intervention `patient_content` and as a durable patient-turn selection. Context packing treats them as separate atoms under one shared budget.
+The latest next-session briefing for therapy/post-session input comes from the
+latest completed prior therapy session's `review.briefing`, whether or not that
+review produced a plan revision.
 
-Malformed stored `grounded_patient_turns` (including explicit `null`) fail fast as an internal application error during post-session merge or therapy context assembly. They are not LLM-correctable and are not silently omitted.
-
-Accumulation of grounded turns across sessions is currently unbounded; retention policy is a deliberate follow-up.
+Accumulation of grounded message IDs across sessions is currently unbounded;
+retention policy is a deliberate follow-up.
 
 ### Failure behavior
 
-After an unrecoverable validation, LLM, or derived-profile storage failure, the operation transitions to `FAILED`, but no session summary, briefing, derived-profile update, or plan revision is persisted.
+After an unrecoverable validation, LLM, or persistence failure, the operation
+transitions to `FAILED`, but no session review, grounding references, or plan
+revision is persisted.

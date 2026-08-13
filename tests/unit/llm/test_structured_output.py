@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from jung.domain.session_artifacts import SessionAnalysis
 from jung.llm.errors import InvalidLLMOutput
 from jung.llm.gateway import StructuredOutputMode
 from jung.llm.structured import (
@@ -19,7 +20,6 @@ from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.post_session.models import (
     PostSessionUpdateResult,
-    SessionAnalysisResult,
 )
 
 
@@ -65,7 +65,7 @@ def test_response_format_uses_strict_provider_schema() -> None:
     [
         IntakeRecordPatch,
         AssessmentResult,
-        SessionAnalysisResult,
+        SessionAnalysis,
         PostSessionUpdateResult,
     ],
 )

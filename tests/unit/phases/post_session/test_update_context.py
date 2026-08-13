@@ -8,14 +8,13 @@ from uuid import uuid4
 
 import pytest
 
-from jung.domain.grounding import GroundedPatientTurn
-from jung.domain.models import Plan, Profile
+from jung.domain.models import Message, MessageRole, Plan, Profile
+from jung.domain.session_artifacts import SessionAnalysis, SessionBriefing
 from jung.llm.gateway import ChatRole
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
     ResolvedSessionAnalysis,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.prompts import build_update_messages
 from jung.phases.post_session.update_context import (
@@ -23,6 +22,7 @@ from jung.phases.post_session.update_context import (
     PostSessionUpdateContext,
     build_update_user_message,
     enrich_analysis_without_evicting_evidence,
+    intervention_payload,
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
@@ -66,6 +66,28 @@ def _plan(**overrides: object) -> Plan:
     return Plan(**values)  # type: ignore[arg-type]
 
 
+def _grounded_message(content: str, *, sequence: int = 1) -> Message:
+    now = datetime.now(UTC)
+    return Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        sequence=sequence,
+        role=MessageRole.USER,
+        content=content,
+        client_message_id=uuid4(),
+        created_at=now,
+    )
+
+
+def _briefing(**overrides: object) -> SessionBriefing:
+    values: dict[str, object] = {
+        "narrative_handoff": "Continue with sleep.",
+        "recommended_opening_focus": "sleep readiness",
+    }
+    values.update(overrides)
+    return SessionBriefing(**values)  # type: ignore[arg-type]
+
+
 def _input(**overrides: object) -> PostSessionInput:
     style = load_styles()["cbt"]
     values: dict[str, object] = {
@@ -91,6 +113,20 @@ def _input(**overrides: object) -> PostSessionInput:
     return PostSessionInput(**values)
 
 
+def _patient_turn(
+    sequence: int,
+    content: str,
+    *,
+    message_id=None,
+) -> TranscriptTurn:
+    return TranscriptTurn(
+        message_id=message_id or uuid4(),
+        sequence=sequence,
+        role="user",
+        content=content,
+    )
+
+
 def _resolved(**overrides: object) -> ResolvedSessionAnalysis:
     analysis_overrides = {
         key: value
@@ -98,7 +134,7 @@ def _resolved(**overrides: object) -> ResolvedSessionAnalysis:
         if key
         not in {
             "intervention_evidence",
-            "grounded_patient_turns",
+            "selected_patient_turns",
         }
     }
     analysis_values: dict[str, object] = {
@@ -107,20 +143,10 @@ def _resolved(**overrides: object) -> ResolvedSessionAnalysis:
     }
     analysis_values.update(analysis_overrides)
     return ResolvedSessionAnalysis(
-        analysis=SessionAnalysisResult(**analysis_values),  # type: ignore[arg-type]
+        analysis=SessionAnalysis(**analysis_values),  # type: ignore[arg-type]
         intervention_evidence=overrides.get("intervention_evidence", ()),  # type: ignore[arg-type]
-        grounded_patient_turns=overrides.get("grounded_patient_turns", ()),  # type: ignore[arg-type]
+        selected_patient_turns=overrides.get("selected_patient_turns", ()),  # type: ignore[arg-type]
     )
-
-
-def _briefing(**overrides: object) -> dict[str, object]:
-    values: dict[str, object] = {
-        "narrative_handoff": "Continue with sleep.",
-        "recommended_opening_focus": "sleep readiness",
-        "intervention_evidence": [],
-    }
-    values.update(overrides)
-    return values
 
 
 def test_update_user_message_stays_within_total_budget() -> None:
@@ -142,41 +168,46 @@ def test_from_resolved_projects_evidence_not_provider_citations() -> None:
         patient_sequence=3,
         patient_content="I kept waking up.",
     )
-    grounded = GroundedPatientTurn(
-        source_message_id=uuid4(),
-        source_sequence=1,
-        content="I slept badly.",
-    )
+    selected = _patient_turn(1, "I slept badly.")
     context = PostSessionUpdateContext.from_resolved(
         _resolved(
             summary="summary",
             key_themes=("sleep",),
             intervention_evidence=(evidence,),
-            grounded_patient_turns=(grounded,),
+            selected_patient_turns=(selected,),
         )
     )
     assert context.intervention_evidence == (evidence,)
-    assert context.patient_turns == (grounded,)
+    assert context.selected_patient_turns == (selected,)
     assert context.summary == "summary"
 
 
+def test_intervention_payload_derives_status_for_prompt_projection() -> None:
+    cited = InterventionEvidence(
+        intervention_description="Exploratory questioning",
+        therapist_sequence=2,
+        therapist_content="What feels unclear?",
+        patient_sequence=3,
+        patient_content="I kept waking up.",
+    )
+    delivered = InterventionEvidence(
+        intervention_description="Exploratory questioning",
+        therapist_sequence=2,
+        therapist_content="What feels unclear?",
+    )
+    assert intervention_payload(cited)["status"] == "response_cited"
+    assert intervention_payload(delivered)["status"] == "delivered"
+    assert "status" not in cited.model_dump(mode="json")
+
+
 def test_builder_rendered_output_never_exceeds_update_limit() -> None:
-    message_id = uuid4()
     message = build_update_user_message(
         _input(
             prior_session_briefing=_briefing(narrative_handoff="b" * 5000),
             recent_session_summaries=tuple(
                 f"summary-{index}" * 200 for index in range(20)
             ),
-            derived_profile={
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": str(message_id),
-                        "source_sequence": 1,
-                        "content": "p" * 5000,
-                    }
-                ]
-            },
+            grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
             summary="x" * 5000,
@@ -191,26 +222,9 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
         _input(
             prior_session_briefing=_briefing(
                 narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
-                intervention_evidence=[
-                    {
-                        "intervention_description": "Pacing",
-                        "therapist_sequence": 2,
-                        "therapist_content": "I am not ready to do that. " * 40,
-                        "patient_sequence": 3,
-                        "patient_content": "I am not ready to do that.",
-                    }
-                ],
             ),
             recent_session_summaries=("old " * 2000, "new " * 2000),
-            derived_profile={
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": str(uuid4()),
-                        "source_sequence": 1,
-                        "content": "p" * 5000,
-                    }
-                ]
-            },
+            grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
             summary="x" * 10000,
@@ -223,13 +237,8 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
                 )
                 for index in range(20)
             ),
-            grounded_patient_turns=tuple(
-                GroundedPatientTurn(
-                    source_message_id=uuid4(),
-                    source_sequence=index + 1,
-                    content="p" * 400,
-                )
-                for index in range(20)
+            selected_patient_turns=tuple(
+                _patient_turn(index + 1, "p" * 400) for index in range(20)
             ),
         ),
     )
@@ -248,22 +257,9 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
 
 
 def test_profile_context_projects_content_without_message_ids() -> None:
-    message_id = str(uuid4())
+    message = _grounded_message("I slept badly.")
     document = build_update_context_document(
-        _input(
-            derived_profile={
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": message_id,
-                        "source_sequence": 1,
-                        "content": "I slept badly.",
-                    }
-                ],
-                "hypotheses": ["legacy hypothesis"],
-                "observations": ["legacy observation"],
-                "patient_stated_facts": ["legacy fact"],
-            }
-        ),
+        _input(grounded_patient_messages=(message,)),
         _resolved(),
     )
     profile = document["derived_profile"]
@@ -272,38 +268,19 @@ def test_profile_context_projects_content_without_message_ids() -> None:
         "grounded_patient_turns_omitted": 0,
     }
     rendered = json.dumps(profile)
-    assert message_id not in rendered
-    assert "legacy" not in rendered
+    assert str(message.id) not in rendered
 
 
 def test_update_document_has_no_uuids_in_profile_projection() -> None:
-    message_id = uuid4()
+    message = _grounded_message("I do not think I want to die.", sequence=2)
     document = build_update_context_document(
-        _input(
-            derived_profile={
-                "grounded_patient_turns": [
-                    {
-                        "source_message_id": str(message_id),
-                        "source_sequence": 2,
-                        "content": "I do not think I want to die.",
-                    }
-                ]
-            }
-        ),
-        _resolved(
-            grounded_patient_turns=(
-                GroundedPatientTurn(
-                    source_message_id=message_id,
-                    source_sequence=2,
-                    content="I do not think I want to die.",
-                ),
-            )
-        ),
+        _input(grounded_patient_messages=(message,)),
+        _resolved(selected_patient_turns=(_patient_turn(2, message.content),)),
     )
     profile = document["derived_profile"]
     assert isinstance(profile, dict)
     rendered = json.dumps(profile)
-    assert str(message_id) not in rendered
+    assert str(message.id) not in rendered
     assert profile["grounded_patient_turns"][0]["content"] == (
         "I do not think I want to die."
     )
@@ -322,13 +299,7 @@ def test_analysis_document_emits_omission_markers_and_resolved_evidence() -> Non
                     patient_content="I slept badly.",
                 ),
             ),
-            grounded_patient_turns=(
-                GroundedPatientTurn(
-                    source_message_id=uuid4(),
-                    source_sequence=2,
-                    content="I slept badly.",
-                ),
-            ),
+            selected_patient_turns=(_patient_turn(2, "I slept badly."),),
         ),
     )
     analysis = document["session_analysis"]
@@ -358,13 +329,8 @@ def test_all_omitted_evidence_reports_source_totals() -> None:
                 )
                 for index in range(5)
             ),
-            grounded_patient_turns=tuple(
-                GroundedPatientTurn(
-                    source_message_id=uuid4(),
-                    source_sequence=index + 1,
-                    content="p" * 2000,
-                )
-                for index in range(5)
+            selected_patient_turns=tuple(
+                _patient_turn(index + 1, "p" * 2000) for index in range(5)
             ),
         ),
     )
@@ -393,13 +359,7 @@ def test_intentional_duplication_of_patient_content_retained_in_both_collections
                     patient_content=shared,
                 ),
             ),
-            grounded_patient_turns=(
-                GroundedPatientTurn(
-                    source_message_id=uuid4(),
-                    source_sequence=2,
-                    content=shared,
-                ),
-            ),
+            selected_patient_turns=(_patient_turn(2, shared),),
         ),
     )
     analysis = document["session_analysis"]
@@ -438,31 +398,22 @@ def test_newest_summaries_preferred() -> None:
     assert "newest summary" in summaries
 
 
-def test_prior_briefing_evidence_complete_or_omit() -> None:
+def test_prior_briefing_handoff_complete_or_omit() -> None:
     negation = "I am not ready to do that."
     document = build_update_context_document(
         _input(
             prior_session_briefing=_briefing(
-                intervention_evidence=[
-                    {
-                        "intervention_description": "Pacing",
-                        "therapist_sequence": 2,
-                        "therapist_content": "Shall we try that?",
-                        "patient_sequence": 3,
-                        "patient_content": negation,
-                    }
-                ]
+                narrative_handoff=negation,
+                continuity_points=(negation,),
             )
         ),
         _resolved(),
     )
-    briefing = document["prior_session_briefing"]
-    evidence = briefing["intervention_evidence"]
-    if evidence:
-        assert evidence[0]["patient_content"] == negation
-        assert "..." not in evidence[0]["patient_content"]
-    else:
-        assert briefing["intervention_evidence_omitted"] == 1
+    if "prior_session_briefing" in document:
+        briefing = document["prior_session_briefing"]
+        assert "intervention_evidence" not in briefing
+        assert negation in briefing["narrative_handoff"]
+        assert "..." not in briefing["narrative_handoff"]
 
 
 def test_patient_name_absent_from_update_prompt() -> None:

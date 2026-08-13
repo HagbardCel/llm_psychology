@@ -1,15 +1,13 @@
-"""Shared LLM-facing projections for plans, briefings, and evidence."""
+"""Shared LLM-facing projections for plans, briefings, and transcripts."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Literal
 
-from jung.domain.grounding import GroundedPatientTurn
-from jung.domain.models import Plan
-from jung.domain.session_artifacts import InterventionEvidence, SessionBriefing
+from jung.domain.models import Message, Plan
+from jung.domain.session_artifacts import SessionBriefing
 from jung.domain.text import normalize_content
 from jung.phases.context_bounds import bounded_text
 from jung.phases.transcript import TranscriptTurn
@@ -46,13 +44,6 @@ class ProjectionBudgetError(ValueError):
 class PackedProjection:
     document: dict[str, object]
     omitted: int
-
-
-@dataclass(frozen=True, slots=True)
-class AnalysisEvidenceAtom:
-    kind: Literal["intervention", "patient_turn"]
-    sequence: int
-    payload: InterventionEvidence | GroundedPatientTurn
 
 
 def project_primary_language(value: str) -> str | None:
@@ -168,28 +159,9 @@ def enrich_plan_projection(
     return best
 
 
-def intervention_payload(item: InterventionEvidence) -> dict[str, object]:
-    return {
-        "intervention_description": item.intervention_description,
-        "status": item.status,
-        "therapist_sequence": item.therapist_sequence,
-        "therapist_content": item.therapist_content,
-        "patient_sequence": item.patient_sequence,
-        "patient_content": item.patient_content,
-    }
-
-
-def analysis_patient_turn_payload(item: GroundedPatientTurn) -> dict[str, object]:
-    """Current-session evidence retains sequence (same-prompt transcript)."""
-    return {
-        "source_sequence": item.source_sequence,
-        "content": item.content,
-    }
-
-
-def derived_profile_turn_payload(item: GroundedPatientTurn) -> dict[str, object]:
-    """Cross-session profile projection is content-only."""
-    return {"content": item.content}
+def grounded_message_payload(message: Message) -> dict[str, object]:
+    """Cross-session grounded-message projection is content-only."""
+    return {"content": normalize_content(message.content)}
 
 
 def transcript_turn_payload(turn: TranscriptTurn) -> dict[str, object]:
@@ -204,13 +176,8 @@ def compact_summary(text: str, *, limit: int = _SUMMARY_BASELINE_CHARS) -> str:
     return bounded_text(normalize_content(text), limit)
 
 
-def project_session_briefing(
-    briefing: SessionBriefing,
-    *,
-    selected_evidence: Sequence[InterventionEvidence],
-    omitted: int,
-) -> dict[str, object]:
-    """Project a validated briefing with the given evidence selection."""
+def project_session_briefing(briefing: SessionBriefing) -> dict[str, object]:
+    """Project a validated briefing's handoff fields."""
     return {
         "narrative_handoff": bounded_text(briefing.narrative_handoff, 400),
         "continuity_points": [
@@ -234,10 +201,6 @@ def project_session_briefing(
             for item in briefing.emotional_context
             if item.strip()
         ],
-        "intervention_evidence": [
-            intervention_payload(item) for item in selected_evidence
-        ],
-        "intervention_evidence_omitted": omitted,
     }
 
 
@@ -246,116 +209,11 @@ def compact_session_briefing(
     *,
     fits: Callable[[dict[str, object]], bool],
 ) -> PackedProjection | None:
-    """Pack briefing evidence under a caller-owned fitness predicate."""
-    evidence = briefing.intervention_evidence
-    total = len(evidence)
-
-    empty = project_session_briefing(briefing, selected_evidence=(), omitted=total)
-    if not fits(empty):
+    """Project briefing handoff fields under a caller-owned fitness predicate."""
+    document = project_session_briefing(briefing)
+    if not fits(document):
         return None
-
-    selected_reverse: list[InterventionEvidence] = []
-    for item in reversed(evidence):
-        candidate = tuple(reversed([*selected_reverse, item]))
-        omitted = total - len(candidate)
-        projected = project_session_briefing(
-            briefing,
-            selected_evidence=candidate,
-            omitted=omitted,
-        )
-        if fits(projected):
-            selected_reverse.append(item)
-
-    selected = tuple(reversed(selected_reverse))
-    omitted = total - len(selected)
-    document = project_session_briefing(
-        briefing,
-        selected_evidence=selected,
-        omitted=omitted,
-    )
-    return PackedProjection(document=document, omitted=omitted)
-
-
-def build_evidence_atoms(
-    interventions: Sequence[InterventionEvidence],
-    patient_turns: Sequence[GroundedPatientTurn],
-) -> tuple[AnalysisEvidenceAtom, ...]:
-    atoms = [
-        *(
-            AnalysisEvidenceAtom(
-                kind="intervention",
-                sequence=item.therapist_sequence,
-                payload=item,
-            )
-            for item in interventions
-        ),
-        *(
-            AnalysisEvidenceAtom(
-                kind="patient_turn",
-                sequence=item.source_sequence,
-                payload=item,
-            )
-            for item in patient_turns
-        ),
-    ]
-    return tuple(
-        sorted(
-            atoms,
-            key=lambda item: (
-                item.sequence,
-                0 if item.kind == "intervention" else 1,
-            ),
-        )
-    )
-
-
-def pack_evidence_atoms(
-    atoms: Sequence[AnalysisEvidenceAtom],
-    *,
-    total_interventions: int,
-    total_patient_turns: int,
-    interpretive: Mapping[str, object],
-    fits: Callable[[dict[str, object]], bool],
-) -> dict[str, object]:
-    """Pack evidence newest-first under a shared chronological budget."""
-
-    def build_document(
-        selected: Sequence[AnalysisEvidenceAtom],
-    ) -> dict[str, object]:
-        selected_interventions = [
-            item.payload for item in selected if item.kind == "intervention"
-        ]
-        selected_turns = [
-            item.payload for item in selected if item.kind == "patient_turn"
-        ]
-        return {
-            **dict(interpretive),
-            "intervention_evidence": [
-                intervention_payload(item)  # type: ignore[arg-type]
-                for item in selected_interventions
-            ],
-            "intervention_evidence_omitted": (
-                total_interventions - len(selected_interventions)
-            ),
-            "patient_turns": [
-                analysis_patient_turn_payload(item)  # type: ignore[arg-type]
-                for item in selected_turns
-            ],
-            "patient_turns_omitted": total_patient_turns - len(selected_turns),
-        }
-
-    baseline = build_document(())
-    if not fits(baseline):
-        raise ProjectionBudgetError("minimal analysis evidence projection does not fit")
-
-    selected_reverse: list[AnalysisEvidenceAtom] = []
-    for atom in reversed(atoms):
-        candidate = tuple(reversed([*selected_reverse, atom]))
-        if fits(build_document(candidate)):
-            selected_reverse.append(atom)
-
-    selected = tuple(reversed(selected_reverse))
-    return build_document(selected)
+    return PackedProjection(document=document, omitted=0)
 
 
 def _validate_transcript_sequences(source: Sequence[TranscriptTurn]) -> None:
@@ -439,26 +297,26 @@ def pack_transcript_turns(
     )
 
 
-def pack_grounded_profile_turns(
-    turns: Sequence[GroundedPatientTurn],
+def pack_grounded_patient_messages(
+    messages: Sequence[Message],
     *,
     fits: Callable[[dict[str, object]], bool],
-    content_only: bool = True,
 ) -> PackedProjection | None:
-    """Pack grounded profile turns under a caller-owned fitness predicate."""
-    source = tuple(turns)
+    """Pack grounded patient messages under a caller-owned fitness predicate.
+
+    Emits the temporary prompt-document key ``grounded_patient_turns`` until
+    Phase 7D redesigns the packing surface.
+    """
+    source = tuple(messages)
     total = len(source)
 
     def build_document(
-        selected: Sequence[GroundedPatientTurn],
+        selected: Sequence[Message],
     ) -> dict[str, object]:
-        payload_fn = (
-            derived_profile_turn_payload
-            if content_only
-            else analysis_patient_turn_payload
-        )
         return {
-            "grounded_patient_turns": [payload_fn(item) for item in selected],
+            "grounded_patient_turns": [
+                grounded_message_payload(item) for item in selected
+            ],
             "grounded_patient_turns_omitted": total - len(selected),
         }
 
@@ -466,7 +324,7 @@ def pack_grounded_profile_turns(
     if not fits(empty):
         return None
 
-    selected_reverse: list[GroundedPatientTurn] = []
+    selected_reverse: list[Message] = []
     for item in reversed(source):
         candidate = tuple(reversed([*selected_reverse, item]))
         if fits(build_document(candidate)):

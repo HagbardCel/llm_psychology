@@ -19,10 +19,12 @@ from jung.api.contracts import (
     MessageFailedEvent,
     MessageResponse,
     MessageRoleWire,
+    PlanDetailResponse,
     PlanSummaryResponse,
     ProfileUpdateRequest,
     ProfileWire,
     ServerEvent,
+    SessionDetailResponse,
     SessionSummaryResponse,
     TokenEvent,
 )
@@ -64,6 +66,12 @@ from jung.domain.results import (
     StyleOptions,
     StyleRecommendationView,
     StyleSummary,
+)
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
 )
 
 
@@ -123,6 +131,21 @@ def test_wire_utc_datetime_normalizes_aware_offsets() -> None:
     assert value.started_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
+def _make_review() -> SessionReview:
+    return SessionReview(
+        analysis=SessionAnalysis(
+            summary="summary",
+            key_themes=("anxiety",),
+        ),
+        briefing=SessionBriefing(
+            narrative_handoff="Continue with anxiety work.",
+            recommended_opening_focus="pace carefully",
+        ),
+        plan_recommendation=PlanPatch(),
+        generation=None,
+    )
+
+
 def _make_session(*, now: datetime | None = None) -> Session:
     timestamp = now or _now()
     return Session(
@@ -131,8 +154,7 @@ def _make_session(*, now: datetime | None = None) -> Session:
         started_at=timestamp,
         ended_at=None,
         plan_id=uuid4(),
-        summary="summary",
-        briefing={"focus": "anxiety"},
+        review=_make_review(),
     )
 
 
@@ -147,7 +169,6 @@ def _make_plan(*, session_id: UUID, now: datetime) -> Plan:
         current_progress="initial",
         planned_interventions=("breathing",),
         revision_recommendations=(),
-        session_briefing={"focus": "anxiety"},
         source_session_id=session_id,
         created_at=now,
     )
@@ -276,8 +297,7 @@ def test_start_session_response_maps_atomic_result() -> None:
         started_at=now,
         ended_at=None,
         plan_id=None,
-        summary=None,
-        briefing=None,
+        review=None,
     )
     context = MappingContext(request_id=uuid4())
     snapshot = AppSnapshot(
@@ -333,12 +353,32 @@ def test_session_and_plan_summary_detail_separation() -> None:
     detail = to_session_detail(session)
     assert "summary" not in type(summary).model_fields
     assert detail.summary == "summary"
-    assert detail.briefing == {"focus": "anxiety"}
+    assert detail.briefing == session.review.briefing.model_dump(mode="json")
+    assert frozenset(SessionDetailResponse.model_fields) >= {
+        "summary",
+        "briefing",
+    }
 
     plan_summary = to_plan_summary(plan)
     plan_detail = to_plan_detail(plan)
     assert "selected_style" not in type(plan_summary).model_fields
     assert plan_detail.selected_style == "cbt"
+    assert "session_briefing" not in PlanDetailResponse.model_fields
+
+
+def test_session_detail_without_review_has_null_summary_and_briefing() -> None:
+    now = _now()
+    session = Session(
+        id=uuid4(),
+        kind=SessionKind.THERAPY,
+        started_at=now,
+        ended_at=None,
+        plan_id=None,
+        review=None,
+    )
+    detail = to_session_detail(session)
+    assert detail.summary is None
+    assert detail.briefing is None
 
 
 def test_profile_history_and_style_mapping() -> None:

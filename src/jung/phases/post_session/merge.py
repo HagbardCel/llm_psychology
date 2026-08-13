@@ -1,33 +1,10 @@
-"""Pure merge and no-op detection for post-session patches."""
+"""Pure merge and no-op detection for post-session plan patches."""
 
 from __future__ import annotations
 
-from typing import Any
-
-from jung.domain.grounding import parse_grounded_patient_turns
 from jung.domain.models import Plan, PlanContent
-from jung.phases.post_session.models import (
-    DerivedProfilePatch,
-    PlanPatch,
-    PostSessionUpdateResult,
-)
-
-
-def merge_derived_profile(
-    current: dict[str, Any] | None,
-    patch: DerivedProfilePatch,
-) -> dict[str, Any] | None:
-    existing = parse_grounded_patient_turns(current) if current is not None else ()
-    by_message_id = {item.source_message_id: item for item in existing}
-    for item in patch.grounded_patient_turns:
-        by_message_id.setdefault(item.source_message_id, item)
-    if not by_message_id:
-        return None
-    return {
-        "grounded_patient_turns": [
-            item.model_dump(mode="json") for item in by_message_id.values()
-        ]
-    }
+from jung.domain.session_artifacts import PlanPatch
+from jung.phases.post_session.models import PostSessionUpdateResult
 
 
 def _current_plan_content(current: Plan) -> PlanContent:

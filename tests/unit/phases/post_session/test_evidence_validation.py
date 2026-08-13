@@ -6,14 +6,14 @@ from uuid import uuid4
 
 import pytest
 
+from jung.domain.session_artifacts import (
+    InterventionCitation,
+    PatientTurnCitation,
+    SessionAnalysis,
+)
 from jung.phases.post_session.evidence_validation import (
     resolve_session_analysis,
     validate_session_analysis,
-)
-from jung.phases.post_session.models import (
-    InterventionCitation,
-    PatientTurnCitation,
-    SessionAnalysisResult,
 )
 from jung.phases.transcript import TranscriptTurn
 
@@ -33,13 +33,13 @@ def _turn(
     )
 
 
-def _analysis(**overrides: object) -> SessionAnalysisResult:
+def _analysis(**overrides: object) -> SessionAnalysis:
     values: dict[str, object] = {
         "summary": "Session summary",
         "key_themes": ("sleep",),
     }
     values.update(overrides)
-    return SessionAnalysisResult(**values)  # type: ignore[arg-type]
+    return SessionAnalysis(**values)  # type: ignore[arg-type]
 
 
 def _conversational_transcript() -> tuple[TranscriptTurn, ...]:
@@ -64,12 +64,11 @@ def test_delivered_intervention_citation_accepted() -> None:
         transcript,
     )
     resolved = resolve_session_analysis(result, transcript)
-    assert resolved.intervention_evidence[0].status == "delivered"
-    assert resolved.intervention_evidence[0].patient_content is None
-    assert (
-        resolved.intervention_evidence[0].therapist_content
-        == "What feels unclear about your sleep?"
-    )
+    evidence = resolved.intervention_evidence[0]
+    assert evidence.patient_sequence is None
+    assert evidence.patient_content is None
+    assert "status" not in evidence.model_dump(mode="json")
+    assert evidence.therapist_content == "What feels unclear about your sleep?"
 
 
 def test_response_cited_intervention_with_later_patient_accepted() -> None:
@@ -87,8 +86,9 @@ def test_response_cited_intervention_with_later_patient_accepted() -> None:
         transcript,
     )
     resolved = resolve_session_analysis(result, transcript)
-    assert resolved.intervention_evidence[0].status == "response_cited"
-    assert resolved.intervention_evidence[0].patient_content == "I kept waking up."
+    evidence = resolved.intervention_evidence[0]
+    assert evidence.patient_sequence == 3
+    assert evidence.patient_content == "I kept waking up."
 
 
 def test_fabricated_evidence_without_assistant_turn_rejected() -> None:
@@ -223,9 +223,9 @@ def test_same_content_from_different_patient_sequences_accepted() -> None:
         transcript,
     )
     resolved = resolve_session_analysis(result, transcript)
-    assert len(resolved.grounded_patient_turns) == 2
+    assert len(resolved.selected_patient_turns) == 2
     assert all(
-        turn.content == "I don't know." for turn in resolved.grounded_patient_turns
+        turn.content == "I don't know." for turn in resolved.selected_patient_turns
     )
 
 
@@ -237,10 +237,10 @@ def test_resolve_attaches_message_id_and_normalizes_content() -> None:
         transcript,
     )
     resolved = resolve_session_analysis(result, transcript)
-    grounded = resolved.grounded_patient_turns[0]
-    assert grounded.source_message_id == message_id
-    assert grounded.source_sequence == 1
-    assert grounded.content == "I slept badly."
+    selected = resolved.selected_patient_turns[0]
+    assert selected.message_id == message_id
+    assert selected.sequence == 1
+    assert selected.content == "I   slept\nbadly."
 
 
 def test_resolve_sorts_evidence_by_sequence() -> None:
@@ -277,7 +277,7 @@ def test_resolve_sorts_evidence_by_sequence() -> None:
         2,
         4,
     ]
-    assert [item.source_sequence for item in resolved.grounded_patient_turns] == [1, 5]
+    assert [item.sequence for item in resolved.selected_patient_turns] == [1, 5]
 
 
 @pytest.mark.parametrize(
@@ -296,8 +296,8 @@ def test_sequence_resolution_preserves_negation_context(content: str) -> None:
         transcript,
     )
     resolved = resolve_session_analysis(result, transcript)
-    stored = resolved.grounded_patient_turns[0]
-    assert stored.content == content
-    assert stored.content != "I want to die."
-    assert stored.content != "want to die"
-    assert stored.source_message_id == message_id
+    selected = resolved.selected_patient_turns[0]
+    assert selected.content == content
+    assert selected.content != "I want to die."
+    assert selected.content != "want to die"
+    assert selected.message_id == message_id

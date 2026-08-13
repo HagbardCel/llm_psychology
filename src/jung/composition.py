@@ -19,6 +19,7 @@ from jung.diagnostics import (
     _safe_exception_message,
     snapshot_database,
 )
+from jung.domain.session_artifacts import SessionAnalysis
 from jung.llm.gateway import (
     AdapterConfig,
     LLMRole,
@@ -38,7 +39,6 @@ from jung.phases.intake.models import IntakeRecordPatch
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
     PostSessionUpdateResult,
-    SessionAnalysisResult,
 )
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.processor import TherapyProcessor
@@ -82,7 +82,7 @@ def _default_new_id() -> UUID:
 _SCHEMA_OUTPUT_TYPES = {
     LLMTask.INTAKE_PATCH: IntakeRecordPatch,
     LLMTask.ASSESSMENT: AssessmentResult,
-    LLMTask.POST_SESSION_ANALYSIS: SessionAnalysisResult,
+    LLMTask.POST_SESSION_ANALYSIS: SessionAnalysis,
     LLMTask.POST_SESSION_UPDATE: PostSessionUpdateResult,
 }
 

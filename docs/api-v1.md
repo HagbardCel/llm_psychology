@@ -23,22 +23,13 @@ Policy decisions:
 - `PUT /style` is allowed only in `STYLE_SELECTION` and is immutable thereafter;
 - most state-changing HTTP endpoints return `AppSnapshotResponse`; `POST /sessions` returns `StartSessionResponse`;
 - `ProfileResponse.current_plan` exposes the active plan revision; no separate current-plan endpoint is required for v1 clients;
-- `PlanSummaryResponse` is the session-history list view; `PlanDetailResponse` is the full immutable revision returned on profile read;
-- `GET /api/v1/sessions` returns `SessionListResponse`; `GET /api/v1/sessions/{session_id}` returns `SessionHistoryResponse` with messages, linked plans, and closed-session artifacts when available;
+- `PlanSummaryResponse` is the session-history list view; `PlanDetailResponse` is the full immutable treatment-plan revision returned on profile read and does not include a session briefing;
+- `GET /api/v1/sessions` returns `SessionListResponse`; `GET /api/v1/sessions/{session_id}` returns `SessionHistoryResponse` with messages, linked plans, and closed-session convenience fields when available;
 - `PlanDetailResponse.current_progress` is a required non-empty string on every revision; the initial immutable plan uses assessment-derived progress text;
-- `PlanDetailResponse.session_briefing` is an opaque server-validated JSON document; clients do not interpret its internal shape in v1. When present, the briefing may include `intervention_evidence` items with the observable shape below;
-- `SessionDetailResponse.briefing` is the canonical session-scoped artifact on the closed source session; `PlanDetailResponse.session_briefing` is an immutable snapshot copied from the source session at plan-revision creation when a briefing exists; clients needing the source artifact use `GET /sessions/{source_session_id}`;
+- `SessionDetailResponse.summary` and `SessionDetailResponse.briefing` are convenience projections of the durable session review when present (`review.analysis.summary` and `review.briefing`); they are not independently stored columns;
 - `client_message_id` on `MessageResponse` is stored on the message row (required for `user` and `assistant`); durable uniqueness is `(session_id, client_message_id, role)`;
-- Observable `intervention_evidence` item fields (when present inside a briefing document):
-  - `intervention_description` (string): model-generated interpretive label
-  - `therapist_sequence` (int): transcript sequence of the cited therapist turn
-  - `therapist_content` (string): server-resolved full whitespace-normalized content of that assistant turn
-  - `patient_sequence` (int \| null): later patient turn when a response is cited
-  - `patient_content` (string \| null): server-resolved full whitespace-normalized content of that user turn
-  - `status` (`"delivered"` \| `"response_cited"`): derived by the server from whether a later patient turn citation is present; never model-controlled. `response_cited` means a later user turn was cited, not that the turn was proven to be a semantic response;
-- Intervention evidence statuses are `"delivered"` and `"response_cited"` only;
-- Durable derived-profile records are not part of `ProfileResponse` and are not public API data in v1;
-- `ProfileWire` is the user-editable identity and preferences record; intake evidence, assessment formulation, and derived therapeutic profile data are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
+- Durable grounded patient-message references and the full internal `SessionReview` schema are not public API data in v1;
+- `ProfileWire` is the user-editable identity and preferences record; intake evidence and assessment formulation are separate backend-owned validated documents and cannot be overwritten through `PUT /profile`;
 - v1 does not implement a generic HTTP `Idempotency-Key` header or command-receipt store;
 - `GET /api/v1/state` is the canonical fresh-start read. An initialized database contains a seeded profile singleton; `GET /api/v1/profile` returns that seeded profile and any subsequently persisted partial or complete profile. Partial profiles persisted in `SETUP` remain readable. `404 not_found` is only a defensive response if the required profile singleton row is unexpectedly absent. The client fills or replaces the seeded profile through `PUT /api/v1/profile`;
 - `GET /api/v1/styles` always returns the style catalog. Recommendations are empty before assessment completion; afterward they contain the completed assessment recommendations and remain readable through `STYLE_SELECTION`, `READY`, `THERAPY`, and `POST_SESSION`;

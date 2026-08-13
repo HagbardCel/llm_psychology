@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from jung._application.inputs import PhaseInputs
 from jung._application.operations import OperationRuntime
 from jung.diagnostics import DiagnosticRecorder
 from jung.domain.commands import (
@@ -25,17 +26,27 @@ from jung.domain.models import (
     Stage,
 )
 from jung.domain.results import ChatCompleted, ChatFailed
+from jung.domain.session_artifacts import (
+    PlanPatch,
+    SessionAnalysis,
+    SessionBriefing,
+)
 from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.post_session.models import (
+    PostSessionUpdateResult,
+)
+from jung.styles import load_styles
 from tests.support.fake_llm import (
     FailureExpectation,
     FakeLLM,
     StreamExpectation,
     StructuredExpectation,
 )
+from tests.support.session_review import minimal_review
 
 from .application_fixtures import (
     assessment_result,
@@ -166,38 +177,47 @@ async def test_conversational_post_session_persists_authoritative_grounded_turn(
         )
         await wait_for_stage(runtime.application, Stage.READY)
 
-        profile = runtime.store.get_profile()
-        assert profile is not None
-        assert profile.derived_profile is not None
-        turns = profile.derived_profile["grounded_patient_turns"]
-        assert len(turns) == 1
-        assert turns[0]["source_message_id"] == str(user_message.id)
-        assert turns[0]["content"] == patient_text
-        assert turns[0]["content"] != "I want to die."
+        grounded = runtime.store.list_grounded_patient_messages()
+        assert len(grounded) == 1
+        assert grounded[0].id == user_message.id
+        assert grounded[0].content == patient_text
 
         history = runtime.store.get_session(session_id)
         assert history is not None
-        assert history.summary == "Patient explored sleep difficulties."
-        assert history.briefing is not None
-        assert history.briefing["narrative_handoff"] == "Session focused on sleep."
+        assert history.review is not None
+        assert history.review.analysis.summary == "Patient explored sleep difficulties."
+        assert history.review.briefing.narrative_handoff == "Session focused on sleep."
 
         plan = runtime.store.get_current_plan()
         assert plan is not None
         assert plan.source_session_id == session_id
         assert plan.current_progress == "some progress"
-        assert plan.session_briefing is not None
-        assert plan.session_briefing["narrative_handoff"] == "Session focused on sleep."
     fake.assert_exhausted()
 
 
-async def test_malformed_derived_profile_fails_therapy_as_internal_error(
+async def test_malformed_review_json_fails_therapy_as_internal_error(
     store: SQLiteStore,
 ) -> None:
-    advance_to_ready(store)
+    ready = advance_to_ready(store)
+    first_therapy_id = uuid4()
+    store.start_therapy_session(session_id=first_therapy_id, now=ready.now)
+    first_post_op = uuid4()
+    store.end_therapy_session(
+        session_id=first_therapy_id,
+        operation_id=first_post_op,
+        now=ready.now,
+    )
+    store.mark_operation_running(first_post_op, now=ready.now)
+    store.complete_post_session(
+        first_post_op,
+        review=minimal_review(),
+        new_plan=None,
+        now=ready.now,
+    )
     with store._connect() as conn:
         conn.execute(
-            "UPDATE profile SET derived_profile_json = ? WHERE singleton_id = 1",
-            ('{"grounded_patient_turns": null}',),
+            "UPDATE sessions SET review_json = ? WHERE id = ?",
+            ('{"analysis": "not-an-object"}', str(first_therapy_id)),
         )
         conn.commit()
 
@@ -218,31 +238,124 @@ async def test_malformed_derived_profile_fails_therapy_as_internal_error(
     fake.assert_exhausted()
 
 
-async def test_malformed_derived_profile_fails_post_session_as_internal_error(
+async def test_malformed_review_json_fails_post_session_as_internal_error(
     store: SQLiteStore,
 ) -> None:
-    ready = advance_to_post_session(store)
+    ready = advance_to_ready(store)
+    first_therapy_id = uuid4()
+    store.start_therapy_session(session_id=first_therapy_id, now=ready.now)
+    first_post_op = uuid4()
+    store.end_therapy_session(
+        session_id=first_therapy_id,
+        operation_id=first_post_op,
+        now=ready.now,
+    )
+    store.mark_operation_running(first_post_op, now=ready.now)
+    store.complete_post_session(
+        first_post_op,
+        review=minimal_review(),
+        new_plan=None,
+        now=ready.now,
+    )
     with store._connect() as conn:
         conn.execute(
-            "UPDATE profile SET derived_profile_json = ? WHERE singleton_id = 1",
-            ('{"grounded_patient_turns": null}',),
+            "UPDATE sessions SET review_json = ? WHERE id = ?",
+            ('{"analysis": "not-an-object"}', str(first_therapy_id)),
         )
         conn.commit()
+
+    second_therapy_id = uuid4()
+    store.start_therapy_session(session_id=second_therapy_id, now=ready.now)
+    second_post_op = uuid4()
+    store.end_therapy_session(
+        session_id=second_therapy_id,
+        operation_id=second_post_op,
+        now=ready.now,
+    )
 
     fake = FakeLLM([])
     async with build_test_application(store, fake) as runtime:
         await wait_for_operation_status(
             runtime.application,
-            ready.post_session_operation_id,
+            second_post_op,
             OperationStatus.FAILED,
         )
-        operation = runtime.store.get_operation(ready.post_session_operation_id)
+        operation = runtime.store.get_operation(second_post_op)
         assert operation is not None
         assert operation.error_code == "internal_error"
         assert operation.error_code != "invalid_llm_output"
-        session = runtime.store.get_session(ready.therapy_session_id)
+        session = runtime.store.get_session(second_therapy_id)
         assert session is not None
-        assert session.summary is None
+        assert session.review is None
+    fake.assert_exhausted()
+
+
+async def test_prior_session_briefing_reaches_next_session_without_plan_revision(
+    store: SQLiteStore,
+) -> None:
+    briefing_b = SessionBriefing(
+        narrative_handoff="Prior session handoff B.",
+        recommended_opening_focus="continue sleep work",
+    )
+    advance_to_ready(store)
+    patient_text = "I slept badly again."
+    fake = FakeLLM(
+        [
+            StreamExpectation(
+                task=LLMTask.THERAPY_RESPONSE,
+                chunks=("Let's explore that.",),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
+                    summary="Patient explored sleep difficulties.",
+                    key_themes=("sleep",),
+                ),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_UPDATE,
+                output_type=PostSessionUpdateResult,
+                response=PostSessionUpdateResult(
+                    session_briefing=briefing_b,
+                    plan_patch=PlanPatch(),
+                ),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        started = await runtime.application.start_session()
+        first_session_id = started.session.id
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=first_session_id,
+                client_message_id=uuid4(),
+                content=patient_text,
+            ),
+        )
+        assert isinstance(items[-1], ChatCompleted)
+        plan_before = runtime.store.get_current_plan()
+        assert plan_before is not None
+        await runtime.application.end_session(EndSession(session_id=first_session_id))
+        await wait_for_stage(runtime.application, Stage.READY)
+        plan_after = runtime.store.get_current_plan()
+        assert plan_after is not None
+        assert plan_after.id == plan_before.id
+        assert plan_after.version == plan_before.version
+
+        second = await runtime.application.start_session()
+        runtime.store.append_user_message(
+            session_id=second.session.id,
+            client_message_id=uuid4(),
+            user_message_id=uuid4(),
+            content="follow-up turn",
+            now=second.session.started_at,
+        )
+        inputs = PhaseInputs(store=runtime.store, styles=load_styles())
+        turn_input = await inputs.build_therapy_turn_input(second.session.id)
+        assert turn_input.session_briefing == briefing_b
+    fake.assert_exhausted()
 
 
 async def test_post_session_processing_failure_leaves_session_artifacts_unchanged(
@@ -293,16 +406,15 @@ async def test_post_session_processing_failure_leaves_session_artifacts_unchange
 
         session_after = runtime.store.get_session(session_id)
         assert session_after is not None
-        assert session_after.summary is None
-        assert session_after.briefing is None
+        assert session_after.review is None
         plan_after = runtime.store.get_current_plan()
         profile_after = runtime.store.get_profile()
         assert plan_after is not None
         assert profile_after is not None
         assert plan_after.id == plan_before.id
         assert plan_after.version == plan_before.version
-        assert profile_after.derived_profile == profile_before.derived_profile
         assert profile_after.current_plan_id == profile_before.current_plan_id
+        assert runtime.store.list_grounded_patient_messages() == []
     fake.assert_exhausted()
 
 
