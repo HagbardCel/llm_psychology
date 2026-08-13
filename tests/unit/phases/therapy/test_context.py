@@ -136,7 +136,6 @@ def test_message_exceeding_historical_budget_still_present() -> None:
     assert len(rendered) <= 1000
     assert "x" * 5000 not in rendered
     assert "z" * 5000 not in rendered
-    assert "w" * 5000 not in rendered
 
 
 def test_transcript_dedupe_keeps_earlier_identical_user_turn() -> None:
@@ -227,7 +226,7 @@ def test_briefing_handoff_not_truncated_in_final_context() -> None:
     assert content in rendered
     assert "I am not ready to do that." in rendered
     assert "..." not in rendered
-    briefing = document["historical_context"]["session_briefing"]
+    briefing = document["historical_context"]["latest_supervisor_briefing"]
     assert "intervention_evidence" not in briefing
 
 
@@ -248,8 +247,8 @@ def test_grounded_messages_project_content_only() -> None:
     rendered = json.dumps(document)
     assert "I do not think I want to die." in rendered
     assert str(message.id) not in rendered
-    profile = document["historical_context"]["derived_profile"]
-    assert profile["grounded_patient_turns"] == [
+    grounded = document["historical_context"]
+    assert grounded["grounded_patient_turns"] == [
         {"content": "I do not think I want to die."}
     ]
 
@@ -258,13 +257,25 @@ def test_malformed_briefing_raises_even_at_zero_budget() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        _input(
-            is_opening_turn=True,
-            latest_supervisor_briefing={"narrative_handoff": "only"},  # type: ignore[arg-type]
+        build_untrusted_therapy_document(
+            _input(
+                is_opening_turn=True,
+                latest_supervisor_briefing={"narrative_handoff": "only"},
+                current_plan=_plan(
+                    focus="x" * 5000,
+                    current_progress="y" * 5000,
+                ),
+                context_limits=TherapyContextLimits(
+                    max_transcript_turns=6,
+                    max_plan_context_chars=200,
+                    max_historical_context_chars=1000,
+                ),
+            ),
+            include_current_message=False,
         )
 
 
-def test_opening_context_includes_latest_supervisor_briefing() -> None:
+def test_opening_context_includes_session_briefing() -> None:
     document = build_untrusted_therapy_document(
         _input(
             is_opening_turn=True,
@@ -278,7 +289,9 @@ def test_opening_context_includes_latest_supervisor_briefing() -> None:
         include_current_message=False,
     )
     assert (
-        document["historical_context"]["session_briefing"]["narrative_handoff"]
+        document["historical_context"]["latest_supervisor_briefing"][
+            "narrative_handoff"
+        ]
         == "prior sleep focus"
     )
 
@@ -425,14 +438,14 @@ def test_no_transcript_marker_when_dedupe_leaves_empty_history() -> None:
     assert "active_session_transcript_turns_omitted" not in historical
 
 
-def test_plan_enrichment_may_omit_all_transcript_turns_while_keeping_marker() -> None:
-    """Plan detail outranks historical transcript content (documented policy)."""
+def test_transcript_content_outranks_optional_plan_richness() -> None:
+    """Live transcript content outranks optional plan/briefing richness."""
     document = build_untrusted_therapy_document(
         _input(
             latest_user_message="brand new answer",
             transcript=(
-                _turn(1, "user", "old " * 500),
-                _turn(2, "assistant", "middle " * 500),
+                _turn(1, "user", "old turn"),
+                _turn(2, "assistant", "middle turn"),
                 _turn(3, "user", "brand new answer"),
             ),
             current_plan=_plan(
@@ -446,24 +459,59 @@ def test_plan_enrichment_may_omit_all_transcript_turns_while_keeping_marker() ->
             context_limits=TherapyContextLimits(
                 max_transcript_turns=6,
                 max_plan_context_chars=2000,
-                max_historical_context_chars=1200,
+                max_historical_context_chars=1000,
             ),
         ),
         include_current_message=True,
     )
     historical = document["historical_context"]
     assert "current_plan" in historical
-    assert set(historical["current_plan"]) == {
-        "focus",
-        "themes",
-        "goals",
-        "current_progress",
-        "planned_interventions",
-        "revision_recommendations",
-    }
-    assert historical["active_session_transcript_turns_omitted"] >= 1
-    assert historical.get("active_session_transcript") == [] or isinstance(
-        historical.get("active_session_transcript"), list
-    )
+    transcript = historical.get("active_session_transcript", [])
+    assert isinstance(transcript, list)
+    assert len(transcript) >= 1
     assert document["current_patient_message"] == "brand new answer"
-    assert len(serialize_context_json(historical)) <= 1200
+    assert len(serialize_context_json(historical)) <= 1000
+
+
+def test_grounded_turns_lower_priority_than_live_transcript() -> None:
+    document = build_untrusted_therapy_document(
+        _input(
+            latest_user_message="current turn",
+            transcript=(
+                _turn(1, "assistant", "hello there"),
+                _turn(2, "user", "current turn"),
+            ),
+            grounded_patient_messages=(_grounded_message("grounded " * 500),),
+            context_limits=TherapyContextLimits(
+                max_transcript_turns=6,
+                max_plan_context_chars=200,
+                max_historical_context_chars=1000,
+            ),
+        ),
+        include_current_message=True,
+    )
+    historical = document["historical_context"]
+    assert historical.get("active_session_transcript")
+    assert "grounded_patient_turns" not in historical or not historical.get(
+        "grounded_patient_turns"
+    )
+
+
+def test_forbidden_prompt_keys_absent_from_therapy_document() -> None:
+    document = build_untrusted_therapy_document(
+        _input(
+            is_opening_turn=True,
+            latest_supervisor_briefing=_briefing(narrative_handoff="prior sleep focus"),
+            grounded_patient_messages=(_grounded_message("grounded fact"),),
+        ),
+        include_current_message=False,
+    )
+    rendered = json.dumps(document)
+    for forbidden in (
+        "derived_profile",
+        "recent_session_summaries",
+        "prior_session_briefing",
+        "session_briefing",
+    ):
+        assert forbidden not in rendered
+    assert '"session_analysis"' not in rendered
