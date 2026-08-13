@@ -358,6 +358,122 @@ async def test_prior_session_briefing_reaches_next_session_without_plan_revision
     fake.assert_exhausted()
 
 
+async def test_phase_inputs_prior_reviews_ordered_oldest_to_newest(
+    store: SQLiteStore,
+) -> None:
+    briefing_a = SessionBriefing(
+        narrative_handoff="Prior session handoff A.",
+        recommended_opening_focus="focus A",
+    )
+    briefing_b = SessionBriefing(
+        narrative_handoff="Prior session handoff B.",
+        recommended_opening_focus="focus B",
+    )
+    advance_to_ready(store)
+    fake = FakeLLM(
+        [
+            StreamExpectation(
+                task=LLMTask.THERAPY_RESPONSE,
+                chunks=("Let's explore session one.",),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
+                    summary="First session explored sleep.",
+                    key_themes=("sleep",),
+                ),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_UPDATE,
+                output_type=PostSessionUpdateResult,
+                response=PostSessionUpdateResult(
+                    session_briefing=briefing_a,
+                    plan_patch=PlanPatch(),
+                ),
+            ),
+            StreamExpectation(
+                task=LLMTask.THERAPY_RESPONSE,
+                chunks=("Let's explore session two.",),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_ANALYSIS,
+                output_type=SessionAnalysis,
+                response=SessionAnalysis(
+                    summary="Second session explored worry.",
+                    key_themes=("worry",),
+                ),
+            ),
+            StructuredExpectation(
+                task=LLMTask.POST_SESSION_UPDATE,
+                output_type=PostSessionUpdateResult,
+                response=PostSessionUpdateResult(
+                    session_briefing=briefing_b,
+                    plan_patch=PlanPatch(),
+                ),
+            ),
+        ]
+    )
+    async with build_test_application(store, fake) as runtime:
+        first = await runtime.application.start_session()
+        first_session_id = first.session.id
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=first_session_id,
+                client_message_id=uuid4(),
+                content="session one patient turn",
+            ),
+        )
+        assert isinstance(items[-1], ChatCompleted)
+        await runtime.application.end_session(EndSession(session_id=first_session_id))
+        await wait_for_stage(runtime.application, Stage.READY)
+        first_session = runtime.store.get_session(first_session_id)
+        assert first_session is not None
+        review_a = first_session.review
+        assert review_a is not None
+
+        second = await runtime.application.start_session()
+        second_session_id = second.session.id
+        items = await collect_stream(
+            runtime.application,
+            SendMessage(
+                session_id=second_session_id,
+                client_message_id=uuid4(),
+                content="session two patient turn",
+            ),
+        )
+        assert isinstance(items[-1], ChatCompleted)
+        await runtime.application.end_session(EndSession(session_id=second_session_id))
+        await wait_for_stage(runtime.application, Stage.READY)
+        second_session = runtime.store.get_session(second_session_id)
+        assert second_session is not None
+        review_b = second_session.review
+        assert review_b is not None
+
+        third = await runtime.application.start_session()
+        third_session_id = third.session.id
+        runtime.store.append_user_message(
+            session_id=third_session_id,
+            client_message_id=uuid4(),
+            user_message_id=uuid4(),
+            content="session three patient turn",
+            now=third.session.started_at,
+        )
+        inputs = PhaseInputs(store=runtime.store, styles=load_styles())
+        turn_input = await inputs.build_therapy_turn_input(third_session_id)
+        assert turn_input.latest_supervisor_briefing == briefing_b
+        assert turn_input.latest_supervisor_briefing == review_b.briefing
+
+        await runtime.application.end_session(EndSession(session_id=third_session_id))
+        await wait_for_stage(runtime.application, Stage.POST_SESSION)
+        operation = runtime.store.get_current_operation()
+        assert operation is not None
+        post_input = await inputs.build_post_session_input(operation)
+        assert post_input.prior_reviews == (review_a, review_b)
+    fake.assert_exhausted()
+
+
 async def test_post_session_processing_failure_leaves_session_artifacts_unchanged(
     store: SQLiteStore,
 ) -> None:

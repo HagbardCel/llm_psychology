@@ -261,7 +261,15 @@ def build_update_user_message(
     input: PostSessionInput,
     resolved: ResolvedSessionAnalysis,
 ) -> str:
-    """Build the final update user-role message within the configured limit."""
+    """Build the final update user-role message within the configured limit.
+
+    Priority packing:
+    1. minimal current plan + validated analysis baseline
+    2. pack current resolved evidence (summary + intervention/patient atoms)
+    3. enrich current-session interpretive analysis without evicting evidence
+    4. enrich current plan without evicting evidence or interpretive fields
+    5. optional longitudinal context: briefing, grounded turns, prior reviews
+    """
     analysis = PostSessionUpdateContext.from_resolved(resolved)
     baseline_analysis = _baseline_analysis_document(analysis)
     minimal_plan = minimal_plan_projection(input.current_plan)
@@ -301,20 +309,7 @@ def build_update_user_message(
         ) from exc
     document["validated_session_analysis"] = best_analysis
 
-    # 2. Enrich plan only after evidence is frozen (may not starve evidence).
-    def plan_fits(plan_doc: dict[str, object]) -> bool:
-        candidate = dict(document)
-        candidate["current_plan"] = plan_doc
-        candidate["validated_session_analysis"] = best_analysis
-        return _fits_update(candidate)
-
-    document["current_plan"] = enrich_plan_projection(
-        input.current_plan,
-        baseline=minimal_plan,
-        fits=plan_fits,
-    )
-
-    # 3. Optional interpretive lists without changing frozen summary/evidence.
+    # 2. Optional interpretive lists without changing frozen summary/evidence.
     interpretive_candidates = (
         _interpretive_list_fields(
             analysis,
@@ -333,6 +328,18 @@ def build_update_user_message(
         best_analysis,
         interpretive_candidates=interpretive_candidates,
         fits=interpretive_fits,
+    )
+
+    # 3. Enrich plan only after current-session interpretive analysis is frozen.
+    def plan_fits(plan_doc: dict[str, object]) -> bool:
+        candidate = dict(document)
+        candidate["current_plan"] = plan_doc
+        return _fits_update(candidate)
+
+    document["current_plan"] = enrich_plan_projection(
+        input.current_plan,
+        baseline=minimal_plan,
+        fits=plan_fits,
     )
 
     longitudinal: dict[str, object] = {}

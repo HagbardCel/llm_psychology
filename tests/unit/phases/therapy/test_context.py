@@ -20,6 +20,18 @@ from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
 
 
+def _collect_object_keys(value: object) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        keys.update(str(key) for key in value)
+        for item in value.values():
+            keys.update(_collect_object_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(_collect_object_keys(item))
+    return keys
+
+
 def _plan(**overrides: object) -> Plan:
     now = datetime.now(UTC)
     values: dict[str, object] = {
@@ -506,12 +518,12 @@ def test_forbidden_prompt_keys_absent_from_therapy_document() -> None:
         ),
         include_current_message=False,
     )
-    rendered = json.dumps(document)
-    for forbidden in (
+    keys = _collect_object_keys(document)
+    forbidden = {
         "derived_profile",
         "recent_session_summaries",
         "prior_session_briefing",
         "session_briefing",
-    ):
-        assert forbidden not in rendered
-    assert '"session_analysis"' not in rendered
+        "session_analysis",
+    }
+    assert forbidden.isdisjoint(keys)

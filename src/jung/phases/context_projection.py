@@ -56,6 +56,7 @@ _BRIEFING_KEYS = frozenset(
 )
 _MAX_BRIEFING_LIST_ITEMS = 20
 _MAX_LIST_ITEM_CHARS = 200
+_MAX_PRIOR_REVIEW_LIST_ITEMS = 6
 
 
 class ProjectionBudgetError(ValueError):
@@ -198,46 +199,6 @@ def compact_summary(text: str, *, limit: int = _SUMMARY_BASELINE_CHARS) -> str:
     return bounded_text(normalize_content(text), limit)
 
 
-def project_session_briefing(briefing: SessionBriefing) -> dict[str, object]:
-    """Project a validated briefing's handoff fields."""
-    return {
-        "narrative_handoff": bounded_text(briefing.narrative_handoff, 400),
-        "continuity_points": [
-            bounded_text(item, 200)
-            for item in briefing.continuity_points
-            if item.strip()
-        ],
-        "unresolved_issues": [
-            bounded_text(item, 200)
-            for item in briefing.unresolved_issues
-            if item.strip()
-        ],
-        "recommended_opening_focus": bounded_text(
-            briefing.recommended_opening_focus, 400
-        ),
-        "things_to_avoid": [
-            bounded_text(item, 200) for item in briefing.things_to_avoid if item.strip()
-        ],
-        "emotional_context": [
-            bounded_text(item, 200)
-            for item in briefing.emotional_context
-            if item.strip()
-        ],
-    }
-
-
-def compact_session_briefing(
-    briefing: SessionBriefing,
-    *,
-    fits: Callable[[dict[str, object]], bool],
-) -> PackedProjection | None:
-    """Project briefing handoff fields under a caller-owned fitness predicate."""
-    document = project_session_briefing(briefing)
-    if not fits(document):
-        return None
-    return PackedProjection(document=document, omitted=0)
-
-
 def minimal_session_briefing_projection(
     briefing: SessionBriefing,
 ) -> dict[str, object]:
@@ -311,26 +272,30 @@ def project_prior_session_review(analysis: SessionAnalysis) -> dict[str, object]
     """Return a compact LLM-facing projection of a prior session review."""
     return {
         "summary": compact_summary(analysis.summary),
-        "key_themes": [
-            bounded_text(item, _MAX_LIST_ITEM_CHARS)
-            for item in analysis.key_themes
-            if item.strip()
-        ],
-        "progress_indicators": [
-            bounded_text(item, _MAX_LIST_ITEM_CHARS)
-            for item in analysis.progress_indicators
-            if item.strip()
-        ],
-        "unresolved_topics": [
-            bounded_text(item, _MAX_LIST_ITEM_CHARS)
-            for item in analysis.unresolved_topics
-            if item.strip()
-        ],
-        "safety_or_boundary_notes": [
-            bounded_text(item, _MAX_LIST_ITEM_CHARS)
-            for item in analysis.safety_or_boundary_notes
-            if item.strip()
-        ],
+        "key_themes": _compact_string_list(
+            analysis.key_themes,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "progress_indicators": _compact_string_list(
+            analysis.progress_indicators,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "unresolved_topics": _compact_string_list(
+            analysis.unresolved_topics,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
+        "safety_or_boundary_notes": _compact_string_list(
+            analysis.safety_or_boundary_notes,
+            max_items=_MAX_PRIOR_REVIEW_LIST_ITEMS,
+            max_item_chars=_MAX_LIST_ITEM_CHARS,
+            keep_at_least_one=False,
+        ),
     }
 
 

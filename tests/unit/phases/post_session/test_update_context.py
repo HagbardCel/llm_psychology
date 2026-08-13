@@ -16,6 +16,7 @@ from jung.domain.session_artifacts import (
     SessionReview,
 )
 from jung.llm.gateway import ChatRole
+from jung.phases.context_projection import minimal_plan_projection
 from jung.phases.post_session.models import (
     InterventionEvidence,
     PostSessionInput,
@@ -31,6 +32,18 @@ from jung.phases.post_session.update_context import (
 )
 from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
+
+
+def _collect_object_keys(value: object) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        keys.update(str(key) for key in value)
+        for item in value.values():
+            keys.update(_collect_object_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(_collect_object_keys(item))
+    return keys
 
 
 def _parse_update_context_document(message: str) -> dict[str, object]:
@@ -534,14 +547,56 @@ def test_update_system_instructions_name_validated_analysis_authority() -> None:
     assert "completed_session.transcript" not in system
 
 
+def test_interpretive_analysis_outranks_optional_plan_richness() -> None:
+    """Plan enrichment must not displace already-enriched interpretive analysis."""
+    from jung.phases.context_projection import enrich_plan_projection
+
+    rich_plan = _plan(
+        themes=tuple(f"theme-{index}" for index in range(10)),
+        goals=tuple(f"goal-{index}" for index in range(10)),
+        planned_interventions=tuple(f"iv-{index}" for index in range(10)),
+        revision_recommendations=tuple(f"rev-{index}" for index in range(10)),
+    )
+    minimal = minimal_plan_projection(rich_plan)
+    interpretive_analysis: dict[str, object] = {
+        "summary": "Current session summary.",
+        "key_themes": ["CURRENT-THEME-0", "CURRENT-THEME-1"],
+        "dominant_affects": ["affect-0"],
+        "intervention_evidence": [],
+        "intervention_evidence_omitted": 0,
+        "patient_turns": [],
+        "patient_turns_omitted": 0,
+    }
+    document: dict[str, object] = {
+        "current_plan": minimal,
+        "validated_session_analysis": interpretive_analysis,
+    }
+
+    def plan_fits(plan_doc: dict[str, object]) -> bool:
+        candidate = dict(document)
+        candidate["current_plan"] = plan_doc
+        themes = plan_doc.get("themes", [])
+        assert isinstance(themes, list)
+        if themes and interpretive_analysis["key_themes"]:
+            return False
+        return True
+
+    enriched_plan = enrich_plan_projection(rich_plan, baseline=minimal, fits=plan_fits)
+    assert enriched_plan["themes"] == []
+    assert interpretive_analysis["key_themes"] == [
+        "CURRENT-THEME-0",
+        "CURRENT-THEME-1",
+    ]
+
+
 def test_forbidden_prompt_keys_absent_from_update_document() -> None:
     document = build_update_context_document(_input(), _resolved())
-    rendered = json.dumps(document)
-    for forbidden in (
+    keys = _collect_object_keys(document)
+    forbidden = {
         "derived_profile",
         "recent_session_summaries",
         "prior_session_briefing",
         "session_briefing",
-        '"session_analysis"',
-    ):
-        assert forbidden not in rendered
+        "session_analysis",
+    }
+    assert forbidden.isdisjoint(keys)

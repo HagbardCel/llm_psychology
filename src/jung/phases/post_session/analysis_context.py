@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from jung.domain.models import Message
-from jung.domain.session_artifacts import SessionBriefing, SessionReview
+from jung.domain.session_artifacts import SessionReview
 from jung.llm.prompt_context import rendered_context_user_message_length
 from jung.phases.context_projection import (
     ProjectionBudgetError,
@@ -18,18 +18,6 @@ from jung.phases.context_projection import (
     pack_transcript_turns,
 )
 from jung.phases.post_session.models import PostSessionInput
-
-_ANALYSIS_TASK = (
-    "Analyze the completed session. For each intervention citation, "
-    "include therapist_sequence. For a patient response, also include "
-    "patient_sequence from a later user turn. Cite patient turns with "
-    "patient_sequence only. Cite only sequences present in the transcript "
-    "projection."
-)
-
-
-def analysis_task() -> str:
-    return _ANALYSIS_TASK
 
 
 def _with_longitudinal_context(
@@ -57,47 +45,22 @@ def _pack_optional_longitudinal(
     return _with_longitudinal_context(document, packed)
 
 
-def _baseline_longitudinal_briefing(
-    briefing: SessionBriefing,
-    *,
-    minimal_plan: dict[str, object],
-    mandatory_completed_session: dict[str, object],
-    message_fits: Callable[[Mapping[str, object]], bool],
-    therapy_style: str,
-) -> dict[str, object]:
-    longitudinal: dict[str, object] = {}
-    minimal_briefing = minimal_session_briefing_projection(briefing)
-
-    def baseline_document(
-        longitudinal_context: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        document: dict[str, object] = {
-            "completed_session": mandatory_completed_session,
-            "current_plan": minimal_plan,
-            "therapy_style": therapy_style,
-        }
-        if longitudinal_context is not None:
-            document["longitudinal_context"] = longitudinal_context
-        return document
-
-    candidate = baseline_document(
-        longitudinal_context={
-            **longitudinal,
-            "latest_supervisor_briefing": minimal_briefing,
-        }
-    )
-    if message_fits(candidate):
-        longitudinal["latest_supervisor_briefing"] = minimal_briefing
-    return longitudinal
-
-
 def build_analysis_document(
     input: PostSessionInput,
     *,
     limit: int,
-    task: str = _ANALYSIS_TASK,
+    task: str,
 ) -> tuple[dict[str, object], frozenset[int]]:
-    """Build the analysis user document and visible transcript sequences."""
+    """Build the analysis user document and visible transcript sequences.
+
+    Priority packing (never evict a selected current-session transcript turn):
+    1. minimal current plan + empty completed-session transcript marker
+    2. pack completed-session transcript (two-role nucleus required)
+    3. enrich current plan without evicting transcript
+    4. optional latest supervisor briefing (minimal then enrich)
+    5. optional grounded patient turns
+    6. optional prior supervisor reviews
+    """
 
     def message_fits(document: Mapping[str, object]) -> bool:
         return rendered_context_user_message_length(document, task=task) <= limit
@@ -125,20 +88,9 @@ def build_analysis_document(
             document["longitudinal_context"] = longitudinal_context
         return document
 
-    longitudinal: dict[str, object] = {}
-    if briefing is not None:
-        longitudinal = _baseline_longitudinal_briefing(
-            briefing,
-            minimal_plan=minimal_plan,
-            mandatory_completed_session=mandatory_completed_session,
-            message_fits=message_fits,
-            therapy_style=therapy_style,
-        )
-
     baseline = baseline_document(
         current_plan=minimal_plan,
         completed_session=mandatory_completed_session,
-        longitudinal_context=longitudinal or None,
     )
     if not message_fits(baseline):
         raise ValueError(
@@ -153,7 +105,6 @@ def build_analysis_document(
                 "transcript": transcript_doc["transcript"],
                 "transcript_turns_omitted": transcript_doc["transcript_turns_omitted"],
             },
-            longitudinal_context=longitudinal or None,
         )
         return message_fits(candidate)
 
@@ -177,7 +128,6 @@ def build_analysis_document(
                 "transcript_turns_omitted"
             ],
         },
-        longitudinal_context=longitudinal or None,
     )
 
     def plan_fits(plan_doc: dict[str, object]) -> bool:
@@ -191,12 +141,27 @@ def build_analysis_document(
         fits=plan_fits,
     )
 
-    if briefing is not None and "latest_supervisor_briefing" in longitudinal:
-        document = _pack_optional_longitudinal(
-            document,
-            fits=message_fits,
-            packer=lambda fits: _enrich_briefing_packed(briefing, longitudinal, fits),
-        )
+    longitudinal: dict[str, object] = {}
+    if briefing is not None:
+        minimal_briefing = minimal_session_briefing_projection(briefing)
+
+        def briefing_fits(briefing_doc: dict[str, object]) -> bool:
+            candidate = dict(document)
+            candidate["longitudinal_context"] = {
+                **longitudinal,
+                "latest_supervisor_briefing": briefing_doc,
+            }
+            return message_fits(candidate)
+
+        if briefing_fits(minimal_briefing):
+            longitudinal["latest_supervisor_briefing"] = (
+                enrich_session_briefing_projection(
+                    briefing,
+                    baseline=minimal_briefing,
+                    fits=briefing_fits,
+                )
+            )
+            document["longitudinal_context"] = dict(longitudinal)
 
     if input.grounded_patient_messages:
         document = _pack_optional_longitudinal(
@@ -223,19 +188,6 @@ def build_analysis_document(
         for item in document["completed_session"]["transcript"]  # type: ignore[index, union-attr]
     )
     return document, visible
-
-
-def _enrich_briefing_packed(
-    briefing: SessionBriefing,
-    longitudinal: dict[str, object],
-    fits: Callable[[dict[str, object]], bool],
-) -> dict[str, object] | None:
-    enriched = enrich_session_briefing_projection(
-        briefing,
-        baseline=longitudinal["latest_supervisor_briefing"],  # type: ignore[arg-type]
-        fits=fits,
-    )
-    return {"latest_supervisor_briefing": enriched}
 
 
 def _pack_grounded(

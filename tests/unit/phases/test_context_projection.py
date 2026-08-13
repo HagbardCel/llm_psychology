@@ -258,6 +258,24 @@ def test_enrich_session_briefing_restores_lists() -> None:
     assert enriched["unresolved_issues"] == ["family disclosure"]
 
 
+def test_project_prior_session_review_caps_list_items() -> None:
+    projection = project_prior_session_review(
+        SessionAnalysis(
+            summary="Prior summary.",
+            key_themes=tuple(f"theme-{index}" for index in range(100)),
+            progress_indicators=tuple(f"progress-{index}" for index in range(100)),
+            unresolved_topics=tuple(f"topic-{index}" for index in range(100)),
+            safety_or_boundary_notes=tuple(f"safety-{index}" for index in range(100)),
+            intervention_citations=(),
+            patient_turn_citations=(),
+        )
+    )
+    assert len(projection["key_themes"]) <= 6
+    assert len(projection["progress_indicators"]) <= 6
+    assert len(projection["unresolved_topics"]) <= 6
+    assert len(projection["safety_or_boundary_notes"]) <= 6
+
+
 def test_project_prior_session_review_exposes_only_approved_fields() -> None:
     projection = project_prior_session_review(
         SessionAnalysis(
