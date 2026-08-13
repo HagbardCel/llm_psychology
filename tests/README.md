@@ -33,8 +33,11 @@ tests/
 └── smoke/                   # Opt-in local-model compatibility (make smoke-local-llm)
 ```
 
-`evals/` sits beside `tests/` and holds the opt-in real-model suites. See
-[`evals/README.md`](../evals/README.md).
+Deterministic simulation-harness coverage lives under `tests/unit/evals/` and
+`tests/integration/evals/`.
+
+`evals/` sits beside `tests/` and holds the opt-in real-model suites plus the
+longitudinal simulation package. See [`evals/README.md`](../evals/README.md).
 
 `tests/support/fake_llm.py` owns the scripted `FakeLLM` gateway used by
 deterministic unit, integration, and E2E tests. `tests/support/local_llm.py`
@@ -95,20 +98,26 @@ own unit test. Do not re-assert them in application, API, client, or E2E tests.
 At a boundary, assert what that boundary adds: the field crossed the wire,
 survived a round-trip through SQLite, or reached the terminal renderer.
 
-## Real-model suites: smoke, evals, eval-report
+## Real-model suites: smoke, evals, eval-report, simulate
 
-Three different questions, three different owners. None of them run in
-`make test` or `make check`.
+Four different questions, four different owners. None of the live real-model
+commands run in `make test` or `make check`.
 
 | Surface | Question | Failure means |
 | --- | --- | --- |
 | `make smoke-local-llm` (`tests/smoke/`) | Can this server and model run our paths at all — streaming works, structured output parses, latency is within budget? | The model or server is incompatible with the runtime |
 | `make evals` (`evals/test_hard_invariants.py`) | Does the model honor the contractual behavior the product depends on — no system-prompt disclosure, no objective hijack, citations resolve to authoritative turns? | The model is unsuitable, or a prompt/validation regression let something through |
 | `make eval-report` (`evals/behavioral_report.py`) | What does the model actually say in crisis, medical-advice, delusion, and dependency scenarios? | Nothing — the report exits non-zero only if it could not be produced |
+| `make simulate-local-llm` (`evals/simulation/`) | Does the whole HTTP product preserve longitudinal state across multi-session journeys with a synthetic patient? | Mechanical audit failed, or the run could not complete |
 
 Smoke deliberately does **not** assert grounding or negation behavior; those
 are hard-eval invariants. Report scenarios deliberately assert nothing about
 semantic quality; they exist for human review under `logs/evals/`.
+
+The simulation harness has deterministic unit/integration coverage under
+`tests/unit/evals` and `tests/integration/evals` (FakeLLM + scripted patient).
+Those tests run in `make check`. The live multi-session real-model journey is
+manual and is **not** part of `make check`.
 
 ## Running tests
 

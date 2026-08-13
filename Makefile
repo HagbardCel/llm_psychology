@@ -1,7 +1,7 @@
 .PHONY: help sync format format-check lint docs-links test probe-console \
 	smoke-local-llm run run-api run-console check \
 	clean test-unit test-integration \
-	evals eval-report
+	evals eval-report simulate-local-llm
 
 export PYTHONPATH := src
 
@@ -10,6 +10,7 @@ LOCAL_LLM_SMOKE_PYTEST_ARGS ?= -q
 CONSOLE_E2E_TEST := tests/e2e/test_console_workflow.py
 PROBE_OUTPUT_DIR ?= logs/workflow-probes/console-v1
 PROBE_ABS_OUTPUT_DIR := $(abspath $(PROBE_OUTPUT_DIR))
+SIM_ARGS ?=
 
 help:
 	@echo "Native uv workflow:"
@@ -24,6 +25,7 @@ help:
 	@echo "  smoke-local-llm      - manual local-model smoke"
 	@echo "  evals                - hard real-model invariants (pass/fail)"
 	@echo "  eval-report          - diagnostic behavioral report under logs/evals"
+	@echo "  simulate-local-llm   - whole-product longitudinal journey audit"
 
 sync:
 	uv sync --locked
@@ -74,6 +76,12 @@ evals:
 eval-report:
 	@mkdir -p logs/evals
 	uv run --locked python -m evals.behavioral_report
+
+# Whole-product longitudinal journey over real HTTP. Opt-in; not part of check.
+# Uses production Jung LLM settings (LLM_BASE_URL / MODEL_NAME / …), not
+# LOCAL_LLM_SMOKE_*.
+simulate-local-llm:
+	uv run --locked python -m evals.simulation $(SIM_ARGS)
 
 # Deterministic native release gate. No live LLM; no Docker.
 check: sync

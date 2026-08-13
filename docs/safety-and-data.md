@@ -21,10 +21,20 @@ scenarios in `make eval-report` — crisis, self-harm, violence, medical advice,
 dependency, and diagnosis requests — are **diagnostic only**: they record what
 the configured model said for human review and assert nothing.
 
-Passing evals is not a safety claim. Turning any behavioral scenario into a
-product commitment would be an intentional extension of this safety
-specification, with the guarantee stated here first and only then enforced as a
-hard eval. See [Real-model evaluations](../evals/README.md).
+`make simulate-local-llm` adds a whole-product longitudinal journey. A single
+simulation directory may contain complete synthetic dialogue, patient prompts,
+therapist prompts, supervisor prompts, raw provider outputs, `SessionReview`
+data, plans, and SQLite snapshots/checkpoints. Treat the entire run directory
+as highly sensitive diagnostic material, equivalent to a debug-run capture.
+
+Passing evals or a simulation mechanical audit is not a safety claim. Turning
+any behavioral scenario into a product commitment would be an intentional
+extension of this safety specification, with the guarantee stated here first and
+only then enforced as a hard eval. See [Real-model evaluations](../evals/README.md).
+
+When an alternate patient endpoint is configured for simulation, credentials
+come only from the eval-only environment variable `JUNG_SIM_PATIENT_API_KEY`
+(never from production `JungSettings` fields added for simulation).
 
 ## Sensitive local data
 
@@ -153,9 +163,9 @@ sidecars.
 
 ### Logs, backups, and copies
 
-Remove relevant files under `./logs` (including `./logs/debug-runs/`), manual
-archives, backups, workflow-probe artifacts that may contain user text, and
-any copied database exports separately.
+Remove relevant files under `./logs` (including `./logs/debug-runs/` and
+`./logs/simulations/`), manual archives, backups, workflow-probe artifacts that
+may contain user text, and any copied database exports separately.
 
 ## Related canonical documentation
 

@@ -1,7 +1,7 @@
 # Real-model evaluations
 
 Opt-in suites that run against a configured local (or otherwise
-OpenAI-compatible) model. Neither surface runs in `make test` or
+OpenAI-compatible) model. None of these surfaces run in `make test` or
 `make check`. General developer workflow and release commands are
 documented in [`docs/development.md`](../docs/development.md).
 
@@ -11,8 +11,22 @@ evals/
 ├── harness.py               # Phase execution + citation-integrity verification
 ├── scenarios.py             # Scenario data and transcripts
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
-└── behavioral_report.py     # make eval-report — diagnostic report
+├── behavioral_report.py     # make eval-report — diagnostic report
+└── simulation/              # make simulate-local-llm — whole-product journey
+    ├── scenarios.py
+    ├── patient.py
+    ├── runner.py
+    └── audit.py
 ```
+
+## Four verification surfaces
+
+| Surface | Purpose | Gate |
+| --- | --- | --- |
+| `make smoke-local-llm` | provider compatibility at processor level | manual |
+| `make evals` | contractual model invariants | pass/fail |
+| `make eval-report` | fixed difficult scenarios | human review |
+| `make simulate-local-llm` | whole-product longitudinal behavior over real HTTP | mechanical gate + human review |
 
 ## Hard evals versus the diagnostic report
 
@@ -37,6 +51,48 @@ The report exits non-zero only when it could not be produced: missing
 environment, unreachable server, failed or timed-out request, a scenario that
 cannot be constructed, or a report that cannot be written. It never uses pytest
 assertions for semantic quality.
+
+## Longitudinal simulation (`make simulate-local-llm`)
+
+The simulation drives the **unmodified production HTTP product** through a
+synthetic patient LLM:
+
+```text
+Synthetic patient → JungApiClient → real loopback HTTP → TherapyApplication
+→ session/supervisor LLMs → isolated SQLite → forensic audit bundle
+```
+
+It does **not** call processors directly, mutate the store to advance workflow,
+or use an ASGI shortcut. Artifacts land under `logs/simulations/run-<UTC>/`.
+
+```bash
+make simulate-local-llm \
+  SIM_ARGS="--scenario anxiety_sleep --sessions 5 --turns-per-session 10"
+```
+
+Important configuration notes:
+
+- Live simulation uses **normal Jung production LLM settings**
+  (`LLM_BASE_URL`, `MODEL_NAME`, `LLM_API_KEY`, `JUNG_SUPERVISOR_*`, …) via
+  `load_settings()`. It does **not** read `LOCAL_LLM_SMOKE_*`; those remain
+  exclusive to the processor-level smoke/eval tooling.
+- Patient timeout defaults to 120s; workflow waits default to 600s; optional
+  `--overall-timeout` bounds only the live journey (not shutdown/audit).
+- Patient history is hard-bounded (`--patient-history-chars`, default 40000)
+  against the exact serialized history inserted into the patient prompt.
+- Optional patient endpoint override (`--patient-base-url`) never inherits the
+  session API key or default headers. Alternate-origin credentials come only
+  from `JUNG_SIM_PATIENT_API_KEY` (or the local `"not-needed"` placeholder).
+- `provider_trace_required` is explicit run metadata. Deterministic FakeLLM
+  tests set it false; live runs require full provider-request evidence.
+
+Mechanical audit gates software/data-flow correctness (persistence, plan
+lineage, grounding, briefing→next-prompt under real adapters). Therapeutic
+quality remains human review of the evidence bundle. There is no judge LLM.
+
+Deterministic unit/integration coverage for the harness lives under
+`tests/unit/evals` and `tests/integration/evals` and runs in `make check`.
+The live multi-session real-model journey is **not** part of `make check`.
 
 ## What is hard-asserted today
 
@@ -112,17 +168,20 @@ than as scored suites:
 
 ## Configuration
 
-Evals reuse the manual smoke's environment. There are no `LOCAL_LLM_EVAL_*`
-variables.
+Hard evals and the behavioral report reuse the manual smoke's environment.
+There are no `LOCAL_LLM_EVAL_*` variables.
 
 | Variable | Purpose |
 | --- | --- |
-| `LOCAL_LLM_SMOKE_BASE_URL` | Required. OpenAI-compatible base URL |
-| `LOCAL_LLM_SMOKE_MODEL` | Required. Model name |
+| `LOCAL_LLM_SMOKE_BASE_URL` | Required for smoke/evals/report. OpenAI-compatible base URL |
+| `LOCAL_LLM_SMOKE_MODEL` | Required for smoke/evals/report. Model name |
 | `LOCAL_LLM_SMOKE_STRUCTURED_MODE` | Optional. Defaults to `json_schema` |
 | `LOCAL_LLM_SMOKE_REQUEST_TIMEOUT` / `LOCAL_LLM_SMOKE_TIMEOUT` | Optional per-request timeout in seconds |
 | `LOCAL_LLM_SMOKE_EXTRA_BODY` | Optional JSON object of provider-specific request extras |
 | `OPENAI_API_KEY` | Optional; defaults to a placeholder for local servers |
+
+Live simulation uses production settings instead (see above), plus optional
+`JUNG_SIM_PATIENT_API_KEY` when `--patient-base-url` points at a different origin.
 
 Hard evals carry both `eval` and `real_llm`, so they skip unless `--no-mocks`
 is passed:
@@ -138,6 +197,10 @@ uv run --locked pytest evals/test_hard_invariants.py -q      # all skipped
 - `logs/evals/latest.md` — most recent run
 - `logs/evals/report-<UTC timestamp>.md` — retained copy
 
-`logs/` is gitignored. Reports contain full model output; treat them as
-sensitive and erase them with the rest of `./logs` (see
+`make simulate-local-llm` writes to `logs/simulations/run-<UTC>/` including
+`run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite,
+runtime diagnostics, and session checkpoints.
+
+`logs/` is gitignored. Reports and simulation bundles contain full model
+output; treat them as sensitive and erase them with the rest of `./logs` (see
 [safety and data handling](../docs/safety-and-data.md)).
