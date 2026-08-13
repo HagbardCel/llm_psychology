@@ -547,46 +547,95 @@ def test_update_system_instructions_name_validated_analysis_authority() -> None:
     assert "completed_session.transcript" not in system
 
 
-def test_interpretive_analysis_outranks_optional_plan_richness() -> None:
-    """Plan enrichment must not displace already-enriched interpretive analysis."""
-    from jung.phases.context_projection import enrich_plan_projection
+def test_interpretive_analysis_outranks_plan_richness_in_update_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interpretive analysis is frozen before optional plan richness in the builder."""
+    import jung.phases.post_session.update_context as update_context
+    from jung.llm.prompt_context import rendered_context_user_message_length
+
+    def dynamic_fits(
+        document: dict[str, object],
+        *,
+        task: str = update_context._UPDATE_TASK,
+        limit: int | None = None,
+    ) -> bool:
+        effective_limit = (
+            update_context._UPDATE_USER_MESSAGE_LIMIT if limit is None else limit
+        )
+        return (
+            rendered_context_user_message_length(document, task=task) <= effective_limit
+        )
+
+    monkeypatch.setattr(update_context, "_fits_update", dynamic_fits)
 
     rich_plan = _plan(
-        themes=tuple(f"theme-{index}" for index in range(10)),
-        goals=tuple(f"goal-{index}" for index in range(10)),
-        planned_interventions=tuple(f"iv-{index}" for index in range(10)),
-        revision_recommendations=tuple(f"rev-{index}" for index in range(10)),
+        focus="focus",
+        themes=tuple(f"theme-{index}-" * 30 for index in range(8)),
+        goals=tuple(f"goal-{index}-" * 30 for index in range(8)),
+        planned_interventions=tuple(f"iv-{index}-" * 30 for index in range(8)),
+        revision_recommendations=tuple(f"rev-{index}-" * 30 for index in range(8)),
+        current_progress="progress",
     )
-    minimal = minimal_plan_projection(rich_plan)
-    interpretive_analysis: dict[str, object] = {
-        "summary": "Current session summary.",
-        "key_themes": ["CURRENT-THEME-0", "CURRENT-THEME-1"],
-        "dominant_affects": ["affect-0"],
-        "intervention_evidence": [],
-        "intervention_evidence_omitted": 0,
-        "patient_turns": [],
-        "patient_turns_omitted": 0,
-    }
-    document: dict[str, object] = {
-        "current_plan": minimal,
-        "validated_session_analysis": interpretive_analysis,
-    }
+    input = _input(current_plan=rich_plan)
+    resolved = _resolved(
+        summary="Sleep difficulties explored with detail.",
+        key_themes=tuple(f"CURRENT-THEME-{index}-" * 40 for index in range(18)),
+        dominant_affects=tuple(f"affect-{index}-" * 40 for index in range(15)),
+        important_moments=tuple(f"moment-{index}-" * 40 for index in range(15)),
+        patient_insights=tuple(f"insight-{index}-" * 40 for index in range(15)),
+        progress_indicators=tuple(f"progress-{index}-" * 40 for index in range(15)),
+        unresolved_topics=tuple(f"topic-{index}-" * 40 for index in range(15)),
+        safety_or_boundary_notes=tuple(f"note-{index}-" * 40 for index in range(10)),
+    )
 
-    def plan_fits(plan_doc: dict[str, object]) -> bool:
-        candidate = dict(document)
-        candidate["current_plan"] = plan_doc
-        themes = plan_doc.get("themes", [])
-        assert isinstance(themes, list)
-        if themes and interpretive_analysis["key_themes"]:
-            return False
-        return True
+    monkeypatch.setattr(update_context, "_UPDATE_USER_MESSAGE_LIMIT", 100_000)
+    full_document = build_update_context_document(input, resolved)
+    full_analysis = full_document["validated_session_analysis"]
+    minimal_plan = minimal_plan_projection(rich_plan)
+    task = update_context._UPDATE_TASK
 
-    enriched_plan = enrich_plan_projection(rich_plan, baseline=minimal, fits=plan_fits)
-    assert enriched_plan["themes"] == []
-    assert interpretive_analysis["key_themes"] == [
-        "CURRENT-THEME-0",
-        "CURRENT-THEME-1",
-    ]
+    len_minimal = rendered_context_user_message_length(
+        {
+            "current_plan": minimal_plan,
+            "validated_session_analysis": full_analysis,
+        },
+        task=task,
+    )
+    len_rich = rendered_context_user_message_length(
+        {
+            "current_plan": full_document["current_plan"],
+            "validated_session_analysis": full_analysis,
+        },
+        task=task,
+    )
+    baseline_analysis = {
+        key: full_analysis[key]
+        for key in (
+            "summary",
+            "intervention_evidence",
+            "intervention_evidence_omitted",
+            "patient_turns",
+            "patient_turns_omitted",
+        )
+    }
+    len_wrong_order_rich = rendered_context_user_message_length(
+        {
+            "current_plan": full_document["current_plan"],
+            "validated_session_analysis": baseline_analysis,
+        },
+        task=task,
+    )
+
+    assert len_minimal < len_rich
+    assert len_wrong_order_rich <= len_minimal
+    assert len_rich > len_minimal
+
+    monkeypatch.setattr(update_context, "_UPDATE_USER_MESSAGE_LIMIT", len_minimal)
+    tight_document = build_update_context_document(input, resolved)
+
+    assert tight_document["validated_session_analysis"] == full_analysis
+    assert tight_document["current_plan"] == minimal_plan
 
 
 def test_forbidden_prompt_keys_absent_from_update_document() -> None:
