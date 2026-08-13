@@ -268,8 +268,16 @@ model. Model selection belongs to the role.
 
 Structured-output capability is configuration-driven (`json_schema`,
 `json_object`, or `prompt`), not inferred from provider identity. The adapter
-uses Chat Completions-compatible behavior only and makes one correction attempt
-before returning `invalid_llm_output`.
+uses Chat Completions-compatible behavior only.
+
+Structured generation remains project-owned. Phase processors may supply a
+request-specific `validate_result` callback. `OpenAICompatibleLLM` parses the
+returned content into the requested Pydantic model, applies that semantic
+validator, and, when structural or semantic validation fails, makes at most one
+explicit correction request before returning `invalid_llm_output`. The
+production OpenAI SDK client uses `max_retries=0`, preventing SDK-level
+automatic retries from multiplying Jung-owned provider attempts. Jung does not
+delegate this validation/correction boundary to a structured-output wrapper.
 
 The concrete provider is OpenAI-compatible and must work with llama.cpp,
 LM Studio, OpenRouter, and equivalent endpoints by changing configuration
