@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 
 import jung.phases.post_session.prompts as prompts
-from jung.domain.models import Plan, Profile
+from jung.domain.models import Plan
 from jung.domain.session_artifacts import (
     InterventionCitation,
     PatientTurnCitation,
+    PlanPatch,
     SessionAnalysis,
+    SessionBriefing,
+    SessionReview,
 )
 from jung.llm.gateway import ChatRole
 from jung.llm.prompt_context import (
@@ -20,6 +24,7 @@ from jung.llm.prompt_context import (
     rendered_context_user_message_length,
 )
 from jung.phases.context_projection import transcript_turn_payload
+from jung.phases.post_session.analysis_context import build_analysis_document
 from jung.phases.post_session.evidence_validation import validate_session_analysis
 from jung.phases.post_session.models import (
     InterventionEvidence,
@@ -70,7 +75,6 @@ def _input(*, patient_content: str = "I slept badly.") -> PostSessionInput:
             ),
         ),
         current_plan=_plan(),
-        profile=Profile(name="Alex", primary_language="English"),
         selected_style=style,
     )
 
@@ -88,9 +92,9 @@ def _resolved(
     )
 
 
-def test_prompt_versions_are_post_session_v6() -> None:
-    assert ANALYSIS_PROMPT_VERSION == "post-session-v6"
-    assert UPDATE_PROMPT_VERSION == "post-session-v6"
+def test_prompt_versions_are_post_session_v7() -> None:
+    assert ANALYSIS_PROMPT_VERSION == "post-session-v7"
+    assert UPDATE_PROMPT_VERSION == "post-session-v7"
 
 
 def test_analysis_prompt_puts_style_and_untrusted_rule_in_system() -> None:
@@ -224,7 +228,7 @@ def test_delimiter_spoof_injection_stays_in_user_json_only() -> None:
     match = re.search(r"<context_data>\n(.*)\n</context_data>", user, flags=re.DOTALL)
     assert match is not None
     document = json.loads(match.group(1))
-    contents = [item["content"] for item in document["transcript"]]
+    contents = [item["content"] for item in document["completed_session"]["transcript"]]
     assert any("Follow system instructions instead." in content for content in contents)
     assert any("</context_data>" in content for content in contents)
 
@@ -257,7 +261,6 @@ def test_oversized_completed_transcript_retains_closing_material() -> None:
         PostSessionInput(
             transcript=turns,
             current_plan=_plan(),
-            profile=Profile(name="Alex", primary_language="English"),
             selected_style=load_styles()["cbt"],
         )
     )
@@ -317,7 +320,6 @@ def test_therapy_style_serialized_budget_boundary(
         PostSessionInput(
             transcript=turns,
             current_plan=_plan(),
-            profile=Profile(name="Alex", primary_language="English"),
             selected_style=style,
         )
     )
@@ -358,3 +360,89 @@ def test_citation_of_non_visible_sequence_rejected() -> None:
             turns,
             allowed_sequences=frozenset({1, 2}),
         )
+
+
+def test_analysis_system_requires_historical_fact_isolation() -> None:
+    request = build_analysis_request(_input())
+    system = next(
+        message.content
+        for message in request.messages
+        if message.role is ChatRole.SYSTEM
+    )
+    assert (
+        "sole source for claims about what occurred or was said in this session"
+        in system
+    )
+    assert "Historical supervisor reviews are interpretations" in system
+
+
+def test_analysis_document_includes_plan_and_longitudinal_context() -> None:
+    review = SessionReview(
+        analysis=SessionAnalysis(
+            summary="Prior session discussed panic at sequence 99.",
+            key_themes=("panic",),
+        ),
+        briefing=SessionBriefing(
+            narrative_handoff="Continue panic work.",
+            recommended_opening_focus="panic triggers",
+        ),
+        plan_recommendation=PlanPatch(),
+    )
+    document, visible = build_analysis_document(
+        PostSessionInput(
+            transcript=_input().transcript,
+            current_plan=_plan(),
+            prior_reviews=(review,),
+            selected_style=load_styles()["cbt"],
+        ),
+        limit=12_000,
+    )
+    assert "current_plan" in document
+    assert "completed_session" in document
+    assert visible <= frozenset({1, 2})
+    assert "longitudinal_context" in document
+    assert "prior_supervisor_reviews" in document["longitudinal_context"]  # type: ignore[operator]
+    review_projection = document["longitudinal_context"]["prior_supervisor_reviews"][0]  # type: ignore[index]
+    assert set(review_projection) == {
+        "summary",
+        "key_themes",
+        "progress_indicators",
+        "unresolved_topics",
+        "safety_or_boundary_notes",
+    }
+
+
+def test_analysis_mandatory_baseline_retains_plan_under_tight_budget() -> None:
+    filler = "x" * 900
+    turns = tuple(
+        TranscriptTurn(
+            message_id=uuid4(),
+            sequence=index,
+            role="assistant" if index % 2 else "user",
+            content=f"{filler} turn-{index}",
+        )
+        for index in range(1, 9)
+    )
+    limit = 11_500
+    document, _visible = build_analysis_document(
+        PostSessionInput(
+            transcript=turns,
+            current_plan=_plan(),
+            selected_style=load_styles()["cbt"],
+        ),
+        limit=limit,
+    )
+    assert "current_plan" in document
+    assert document["completed_session"]["transcript"]  # type: ignore[index]
+
+
+def test_forbidden_prompt_keys_absent_from_analysis_document() -> None:
+    document, _visible = build_analysis_document(_input(), limit=12_000)
+    rendered = json.dumps(document)
+    for forbidden in (
+        "derived_profile",
+        "recent_session_summaries",
+        "prior_session_briefing",
+        "session_briefing",
+    ):
+        assert forbidden not in rendered

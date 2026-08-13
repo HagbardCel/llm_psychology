@@ -46,10 +46,12 @@ model responses remain sensitive as before.
 When configured to use a remote OpenAI-compatible endpoint, the application
 sends constructed prompt context to that provider. Depending on the task, this
 may include profile fields, intake or therapy transcripts, current plans,
-session reviews (analysis and briefing), grounded patient-message content
-projected into prompts, and therapeutic style instructions. Deleting local
-files does **not** erase data that a remote provider may retain under its own
-policies.
+session reviews (analysis and briefing), exact grounded historical patient
+statements projected into prompts, compact prior-review projections for
+supervisor longitudinal context, and therapeutic style instructions. The
+supervisor endpoint may receive more longitudinal material than before. Deleting
+local files does **not** erase data that a remote provider may retain under its
+own policies.
 
 ## Network exposure
 

@@ -91,9 +91,9 @@ def test_session_review_round_trips_through_json_dump() -> None:
         plan_recommendation=PlanPatch(current_progress="improved"),
         generation=SessionReviewGeneration(
             analysis_model="analysis-model",
-            analysis_prompt_version="post-session-v6",
+            analysis_prompt_version="post-session-v7",
             update_model="update-model",
-            update_prompt_version="post-session-v6",
+            update_prompt_version="post-session-v7",
         ),
     )
     restored = SessionReview.model_validate(review.model_dump(mode="json"))
@@ -113,9 +113,9 @@ def test_session_review_generation_rejects_blank_provenance() -> None:
     with pytest.raises(ValidationError):
         SessionReviewGeneration(
             analysis_model=" ",
-            analysis_prompt_version="post-session-v6",
+            analysis_prompt_version="post-session-v7",
             update_model="update-model",
-            update_prompt_version="post-session-v6",
+            update_prompt_version="post-session-v7",
         )
 
 

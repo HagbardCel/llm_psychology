@@ -6,7 +6,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from jung.domain.session_artifacts import SessionBriefing
 from jung.domain.text import normalize_content
 from jung.llm.prompt_context import (
     render_context_user_message,
@@ -15,11 +14,13 @@ from jung.llm.prompt_context import (
 from jung.phases.context_bounds import bounded_text
 from jung.phases.context_projection import (
     ProjectionBudgetError,
-    compact_session_briefing,
     compact_summary,
     enrich_plan_projection,
+    enrich_session_briefing_projection,
     minimal_plan_projection,
+    minimal_session_briefing_projection,
     pack_grounded_patient_messages,
+    pack_prior_session_reviews,
 )
 from jung.phases.post_session.models import (
     InterventionEvidence,
@@ -256,19 +257,6 @@ def enrich_analysis_without_evicting_evidence(
     return best
 
 
-def _try_set(
-    document: dict[str, object],
-    key: str,
-    value: object,
-) -> bool:
-    candidate = dict(document)
-    candidate[key] = value
-    if _fits_update(candidate):
-        document[key] = value
-        return True
-    return False
-
-
 def build_update_user_message(
     input: PostSessionInput,
     resolved: ResolvedSessionAnalysis,
@@ -279,7 +267,7 @@ def build_update_user_message(
     minimal_plan = minimal_plan_projection(input.current_plan)
     document: dict[str, object] = {
         "current_plan": minimal_plan,
-        "session_analysis": baseline_analysis,
+        "validated_session_analysis": baseline_analysis,
     }
     if not _fits_update(document):
         raise ValueError(
@@ -293,9 +281,9 @@ def build_update_user_message(
         analysis.selected_patient_turns,
     )
 
-    def analysis_fits(session_analysis: dict[str, object]) -> bool:
+    def analysis_fits(validated_session_analysis: dict[str, object]) -> bool:
         candidate = dict(document)
-        candidate["session_analysis"] = session_analysis
+        candidate["validated_session_analysis"] = validated_session_analysis
         return _fits_update(candidate)
 
     try:
@@ -311,13 +299,13 @@ def build_update_user_message(
             "post-session update cannot fit analysis evidence "
             f"within the {_UPDATE_USER_MESSAGE_LIMIT}-character user-message limit"
         ) from exc
-    document["session_analysis"] = best_analysis
+    document["validated_session_analysis"] = best_analysis
 
     # 2. Enrich plan only after evidence is frozen (may not starve evidence).
     def plan_fits(plan_doc: dict[str, object]) -> bool:
         candidate = dict(document)
         candidate["current_plan"] = plan_doc
-        candidate["session_analysis"] = best_analysis
+        candidate["validated_session_analysis"] = best_analysis
         return _fits_update(candidate)
 
     document["current_plan"] = enrich_plan_projection(
@@ -336,44 +324,74 @@ def build_update_user_message(
         for max_items in range(20, 0, -1)
     )
 
-    def interpretive_fits(session_analysis: dict[str, object]) -> bool:
+    def interpretive_fits(validated_session_analysis: dict[str, object]) -> bool:
         candidate = dict(document)
-        candidate["session_analysis"] = session_analysis
+        candidate["validated_session_analysis"] = validated_session_analysis
         return _fits_update(candidate)
 
-    document["session_analysis"] = enrich_analysis_without_evicting_evidence(
+    document["validated_session_analysis"] = enrich_analysis_without_evicting_evidence(
         best_analysis,
         interpretive_candidates=interpretive_candidates,
         fits=interpretive_fits,
     )
 
-    # 4. Grounded historical patient messages (prompt key: derived_profile).
+    longitudinal: dict[str, object] = {}
+    briefing = input.prior_reviews[-1].briefing if input.prior_reviews else None
+    if briefing is not None:
+        minimal_briefing = minimal_session_briefing_projection(briefing)
+
+        def briefing_fits(briefing_doc: dict[str, object]) -> bool:
+            candidate = dict(document)
+            candidate["longitudinal_context"] = {
+                **longitudinal,
+                "latest_supervisor_briefing": briefing_doc,
+            }
+            return _fits_update(candidate)
+
+        if briefing_fits(minimal_briefing):
+            enriched_briefing = enrich_session_briefing_projection(
+                briefing,
+                baseline=minimal_briefing,
+                fits=briefing_fits,
+            )
+            longitudinal["latest_supervisor_briefing"] = enriched_briefing
+
     if input.grounded_patient_messages:
 
-        def profile_fits(profile_doc: dict[str, object]) -> bool:
+        def grounded_fits(grounded_doc: dict[str, object]) -> bool:
             candidate = dict(document)
-            candidate["derived_profile"] = profile_doc
+            candidate["longitudinal_context"] = {
+                **longitudinal,
+                **grounded_doc,
+            }
             return _fits_update(candidate)
 
         packed = pack_grounded_patient_messages(
             input.grounded_patient_messages,
-            fits=profile_fits,
+            fits=grounded_fits,
         )
         if packed is not None:
-            document["derived_profile"] = packed.document
+            longitudinal.update(packed.document)
 
-    # 5. Latest prior supervisor briefing from completed reviews.
     if input.prior_reviews:
-        briefing = input.prior_reviews[-1].briefing
 
-        def briefing_fits(briefing_doc: dict[str, object]) -> bool:
+        def reviews_fits(reviews_doc: dict[str, object]) -> bool:
             candidate = dict(document)
-            candidate["prior_session_briefing"] = briefing_doc
+            candidate["longitudinal_context"] = {
+                **longitudinal,
+                **reviews_doc,
+            }
             return _fits_update(candidate)
 
-        packed_briefing = compact_session_briefing(briefing, fits=briefing_fits)
-        if packed_briefing is not None:
-            document["prior_session_briefing"] = packed_briefing.document
+        packed_reviews = pack_prior_session_reviews(
+            input.prior_reviews,
+            fits=reviews_fits,
+        )
+        if packed_reviews is not None:
+            longitudinal.update(packed_reviews.document)
+
+    if longitudinal:
+        document["longitudinal_context"] = longitudinal
 
     final = render_context_user_message(document, task=_UPDATE_TASK)
     if len(final) > _UPDATE_USER_MESSAGE_LIMIT:

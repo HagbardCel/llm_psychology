@@ -223,9 +223,7 @@ def test_intervention_payload_derives_status_for_prompt_projection() -> None:
 def test_builder_rendered_output_never_exceeds_update_limit() -> None:
     message = build_update_user_message(
         _input(
-            prior_reviews=(
-                _review(narrative_handoff="b" * 5000),
-            ),
+            prior_reviews=(_review(narrative_handoff="b" * 5000),),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
         _resolved(
@@ -240,7 +238,9 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
     document = build_update_context_document(
         _input(
             prior_reviews=(
-                _review(narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200),
+                _review(
+                    narrative_handoff="OPTIONAL_BRIEFING_MARKER" * 200,
+                ),
             ),
             grounded_patient_messages=(_grounded_message("p" * 5000),),
         ),
@@ -269,8 +269,8 @@ def test_optional_sections_drop_before_plan_and_analysis() -> None:
         "planned_interventions",
         "revision_recommendations",
     }
-    assert "session_analysis" in document
-    assert "summary" in document["session_analysis"]
+    assert "validated_session_analysis" in document
+    assert "summary" in document["validated_session_analysis"]
     assert "transcript" not in document
 
 
@@ -280,12 +280,9 @@ def test_profile_context_projects_content_without_message_ids() -> None:
         _input(grounded_patient_messages=(message,)),
         _resolved(),
     )
-    profile = document["derived_profile"]
-    assert profile == {
-        "grounded_patient_turns": [{"content": "I slept badly."}],
-        "grounded_patient_turns_omitted": 0,
-    }
-    rendered = json.dumps(profile)
+    longitudinal = document["longitudinal_context"]
+    assert longitudinal["grounded_patient_turns"] == [{"content": "I slept badly."}]
+    rendered = json.dumps(longitudinal)
     assert str(message.id) not in rendered
 
 
@@ -295,11 +292,10 @@ def test_update_document_has_no_uuids_in_profile_projection() -> None:
         _input(grounded_patient_messages=(message,)),
         _resolved(selected_patient_turns=(_patient_turn(2, message.content),)),
     )
-    profile = document["derived_profile"]
-    assert isinstance(profile, dict)
-    rendered = json.dumps(profile)
+    longitudinal = document["longitudinal_context"]
+    rendered = json.dumps(longitudinal)
     assert str(message.id) not in rendered
-    assert profile["grounded_patient_turns"][0]["content"] == (
+    assert longitudinal["grounded_patient_turns"][0]["content"] == (
         "I do not think I want to die."
     )
 
@@ -320,7 +316,7 @@ def test_analysis_document_emits_omission_markers_and_resolved_evidence() -> Non
             selected_patient_turns=(_patient_turn(2, "I slept badly."),),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert "intervention_evidence" in analysis
     assert "intervention_evidence_omitted" in analysis
     assert "patient_turns" in analysis
@@ -352,7 +348,7 @@ def test_all_omitted_evidence_reports_source_totals() -> None:
             ),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert (
         analysis["intervention_evidence_omitted"]
         + len(analysis["intervention_evidence"])
@@ -380,7 +376,7 @@ def test_intentional_duplication_of_patient_content_retained_in_both_collections
             selected_patient_turns=(_patient_turn(2, shared),),
         ),
     )
-    analysis = document["session_analysis"]
+    analysis = document["validated_session_analysis"]
     assert analysis["intervention_evidence"][0]["patient_content"] == shared
     assert analysis["patient_turns"][0]["content"] == shared
 
@@ -413,11 +409,12 @@ def test_prior_briefing_handoff_complete_or_omit() -> None:
         ),
         _resolved(),
     )
-    if "prior_session_briefing" in document:
-        briefing = document["prior_session_briefing"]
-        assert "intervention_evidence" not in briefing
-        assert negation in briefing["narrative_handoff"]
-        assert "..." not in briefing["narrative_handoff"]
+    if "longitudinal_context" in document:
+        briefing = document["longitudinal_context"].get("latest_supervisor_briefing")
+        if briefing is not None:
+            assert "intervention_evidence" not in briefing
+            assert negation in briefing["narrative_handoff"]
+            assert "..." not in briefing["narrative_handoff"]
 
 
 def test_patient_name_absent_from_update_prompt() -> None:
@@ -529,15 +526,22 @@ def test_rich_plan_does_not_starve_evidence() -> None:
     }
 
 
-def test_update_builder_stays_within_limit_and_keeps_plan_keys() -> None:
+def test_update_system_instructions_name_validated_analysis_authority() -> None:
+    messages = build_update_messages(_input(), _resolved())
+    system = next(m.content for m in messages if m.role == ChatRole.SYSTEM)
+    assert "validated_session_analysis" in system
+    assert "authoritative account of the just-completed session" in system
+    assert "completed_session.transcript" not in system
+
+
+def test_forbidden_prompt_keys_absent_from_update_document() -> None:
     document = build_update_context_document(_input(), _resolved())
-    message = build_update_user_message(_input(), _resolved())
-    assert len(message) <= _UPDATE_USER_MESSAGE_LIMIT
-    assert set(document["current_plan"]) == {
-        "focus",
-        "themes",
-        "goals",
-        "current_progress",
-        "planned_interventions",
-        "revision_recommendations",
-    }
+    rendered = json.dumps(document)
+    for forbidden in (
+        "derived_profile",
+        "recent_session_summaries",
+        "prior_session_briefing",
+        "session_briefing",
+        '"session_analysis"',
+    ):
+        assert forbidden not in rendered
