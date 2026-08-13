@@ -48,7 +48,7 @@ def _policy(
 
 
 def _client(
-    handler: httpx.MockTransport,
+    transport: httpx.AsyncBaseTransport,
     *,
     config: AdapterConfig | None = None,
     on_provider_attempt: object | None = None,
@@ -68,7 +68,7 @@ def _client(
         client=AsyncOpenAI(
             base_url=adapter_config.base_url,
             api_key=adapter_config.api_key,
-            http_client=httpx.AsyncClient(transport=handler),
+            http_client=httpx.AsyncClient(transport=transport),
             max_retries=0,
         ),
         **kwargs,
@@ -298,18 +298,16 @@ async def test_structured_connection_error_makes_exactly_one_physical_request() 
 
 async def test_structured_cancellation_makes_exactly_one_physical_request() -> None:
     calls = {"count": 0}
-    started = asyncio.Event()
+    entered = asyncio.Event()
 
-    gateway = _client(httpx.MockTransport(lambda request: httpx.Response(500)))
+    class _HangingTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, _request: httpx.Request) -> httpx.Response:
+            calls["count"] += 1
+            entered.set()
+            await asyncio.Event().wait()
+            raise AssertionError("hanging request should have been cancelled")
 
-    async def hang(**_kwargs: object) -> object:
-        calls["count"] += 1
-        started.set()
-        await asyncio.Event().wait()
-        raise AssertionError("hanging request should have been cancelled")
-
-    gateway._client.chat.completions.create = hang  # type: ignore[method-assign]
-
+    gateway = _client(_HangingTransport())
     task = asyncio.create_task(
         gateway.generate_structured(
             [ChatMessage(role=ChatRole.USER, content="give json")],
@@ -317,7 +315,7 @@ async def test_structured_cancellation_makes_exactly_one_physical_request() -> N
             _policy(),
         )
     )
-    await started.wait()
+    await asyncio.wait_for(entered.wait(), timeout=5.0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -697,6 +695,30 @@ async def test_extra_body_rejects_forbidden_core_fields(config: AdapterConfig) -
         ValueError, match="extra_body cannot override adapter-owned fields"
     ):
         OpenAICompatibleLLM(config)
+
+
+async def test_default_client_disables_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class StubClient:
+        async def close(self) -> None:
+            pass
+
+    def capture_openai(*_args: object, **kwargs: object) -> StubClient:
+        captured.update(kwargs)
+        return StubClient()
+
+    monkeypatch.setattr("jung.llm.openai_compatible.AsyncOpenAI", capture_openai)
+    gateway = OpenAICompatibleLLM(
+        AdapterConfig(
+            base_url="http://testserver/v1",
+            api_key="test",
+        )
+    )
+    assert captured["max_retries"] == 0
+    await gateway.aclose()
 
 
 async def test_extra_body_rejects_forbidden_global_field_before_sdk_construction(
