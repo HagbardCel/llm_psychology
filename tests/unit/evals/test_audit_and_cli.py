@@ -6,10 +6,11 @@ import copy
 import json
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -19,6 +20,7 @@ from evals.simulation.audit import (
     AuditResult,
     JourneyLog,
     allocate_run_directory,
+    artifact_relative_paths,
     audit_grounding,
     audit_supervisor_chain_from_fixture,
     compare_briefing_projection,
@@ -31,15 +33,22 @@ from evals.simulation.audit import (
 )
 from evals.simulation.runner import (
     SimulationConfig,
+    SimulationError,
     SimulationProgress,
     SimulationResult,
-    SimulationError,
     _await_style_selection,
     _finalize_run,
     collect_chat_completion,
 )
 from evals.simulation.scenarios import get_scenario
-from jung.api.contracts import ErrorEnvelope, ErrorEvent, MessageCompletedEvent, MessageFailedEvent, TokenEvent
+from jung.api.contracts import (
+    ErrorEnvelope,
+    ErrorEvent,
+    MessageCompletedEvent,
+    MessageFailedEvent,
+    MessageResponse,
+    TokenEvent,
+)
 from jung.domain.session_artifacts import (
     PatientTurnCitation,
     PlanPatch,
@@ -637,16 +646,23 @@ def test_newest_checkpoint_fallback_with_partial_later_session(
     runtime.mkdir()
     write_private_text(
         runtime / "trace.jsonl",
-        json.dumps(
-            {
-                "sequence": 1,
-                "kind": "llm.provider.request",
-                "context": {"session_id": session_1},
-                "data": {"task": "therapy_response", "messages": []},
-            },
-            separators=(",", ":"),
-        )
-        + "\n",
+        "".join(
+            json.dumps(event, separators=(",", ":")) + "\n"
+            for event in (
+                {
+                    "sequence": 1,
+                    "kind": "llm.call.started",
+                    "context": {"session_id": session_1},
+                    "data": {},
+                },
+                {
+                    "sequence": 2,
+                    "kind": "llm.provider.request",
+                    "context": {"session_id": session_1},
+                    "data": {"task": "therapy_response", "messages": []},
+                },
+            )
+        ),
     )
     audit = run_mechanical_audit(
         run_dir=run_dir,
@@ -848,3 +864,691 @@ async def test_await_style_selection_accepts_immediate_style_selection() -> None
     result = await _await_style_selection(client, workflow_timeout=1.0, journey=journey)
     assert result is snapshot
     journey.append.assert_called_once()
+
+
+def _message_response(
+    *,
+    session_id: UUID,
+    client_message_id: UUID,
+    role: str,
+    content: str,
+    sequence: int,
+) -> MessageResponse:
+    return MessageResponse(
+        id=uuid4(),
+        session_id=session_id,
+        sequence=sequence,
+        role=role,  # type: ignore[arg-type]
+        content=content,
+        created_at=datetime.now(UTC),
+        client_message_id=client_message_id,
+    )
+
+
+def _stream_client(events: list[Any]) -> MagicMock:
+    @asynccontextmanager
+    async def stream_message(*_args: Any, **_kwargs: Any) -> Any:
+        async def iterator() -> Any:
+            for event in events:
+                yield event
+
+        yield iterator()
+
+    client = MagicMock()
+    client.stream_message = stream_message
+    return client
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_unknown_event_has_no_api_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    client = _stream_client(
+        [
+            TokenEvent(
+                type="token",
+                text="x",
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+            object(),
+        ]
+    )
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "chat_terminal_failure"
+    assert exc_info.value.details == {}
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_eof_has_no_api_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    client = _stream_client([])
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "chat_terminal_failure"
+    assert exc_info.value.details == {}
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_stream_text_mismatch() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    completed = MessageCompletedEvent(
+        type="message_completed",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        user_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="user",
+            content="hello",
+            sequence=1,
+        ),
+        assistant_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="assistant",
+            content="reply",
+            sequence=2,
+        ),
+    )
+    client = _stream_client(
+        [
+            TokenEvent(
+                type="token",
+                text="other",
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+            completed,
+        ]
+    )
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "stream_persistence_mismatch"
+    assert exc_info.value.details == {}
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_submitted_text_mismatch() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    completed = MessageCompletedEvent(
+        type="message_completed",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        user_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="user",
+            content="stored",
+            sequence=1,
+        ),
+        assistant_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="assistant",
+            content="reply",
+            sequence=2,
+        ),
+    )
+    client = _stream_client(
+        [
+            TokenEvent(
+                type="token",
+                text="reply",
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+            completed,
+        ]
+    )
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "stream_persistence_mismatch"
+    assert exc_info.value.details == {}
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_success() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    completed = MessageCompletedEvent(
+        type="message_completed",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        user_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="user",
+            content="hello",
+            sequence=1,
+        ),
+        assistant_message=_message_response(
+            session_id=session_id,
+            client_message_id=client_message_id,
+            role="assistant",
+            content="reply",
+            sequence=2,
+        ),
+    )
+    client = _stream_client(
+        [
+            TokenEvent(
+                type="token",
+                text="re",
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+            TokenEvent(
+                type="token",
+                text="ply",
+                request_id=request_id,
+                session_id=session_id,
+                client_message_id=client_message_id,
+            ),
+            completed,
+        ]
+    )
+    turn = await collect_chat_completion(
+        client,
+        session_id=session_id,
+        content="hello",
+        client_message_id=client_message_id,
+        request_id=request_id,
+    )
+    assert turn.patient_text == "hello"
+    assert turn.assistant_text == "reply"
+    assert turn.client_message_id == client_message_id
+
+
+def _write_trace(run_dir: Path, events: list[dict[str, Any]]) -> None:
+    runtime = run_dir / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    write_private_text(
+        runtime / "trace.jsonl",
+        "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+    )
+
+
+def test_provider_trace_required_no_started_is_not_applicable(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-na")
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    na_codes = {item.code for item in audit.not_applicable}
+    assert "missing_provider_trace" not in codes
+    assert "missing_llm_call_started" not in codes
+    assert "provider_trace" in na_codes
+
+
+def test_provider_trace_required_started_without_request_fails(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-missing")
+    _write_trace(
+        run_dir,
+        [{"sequence": 1, "kind": "llm.call.started", "context": {}, "data": {}}],
+    )
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_provider_trace" in codes
+
+
+def test_provider_trace_required_request_without_started_fails(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-orphan")
+    _write_trace(
+        run_dir,
+        [
+            {
+                "sequence": 1,
+                "kind": "llm.provider.request",
+                "context": {},
+                "data": {"task": "therapy_response", "messages": []},
+            }
+        ],
+    )
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_llm_call_started" in codes
+    assert "missing_provider_trace" not in codes
+
+
+def test_provider_trace_required_both_present_runs_chains(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-both")
+    session_id = str(uuid4())
+    _write_trace(
+        run_dir,
+        [
+            {"sequence": 1, "kind": "llm.call.started", "context": {}, "data": {}},
+            {
+                "sequence": 2,
+                "kind": "llm.provider.request",
+                "context": {"session_id": session_id},
+                "data": {"task": "therapy_response", "messages": []},
+            },
+        ],
+    )
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=1,
+        initial_ready_reached=False,
+        therapy_sessions=[
+            {"session_id": session_id, "post_session_entered": False, "turns": []}
+        ],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_provider_trace" not in codes
+    assert "missing_llm_call_started" not in codes
+    na_codes = {item.code for item in audit.not_applicable}
+    assert "supervisor_chain" in na_codes
+
+
+def _insert_message(
+    path: Path,
+    *,
+    session_id: str,
+    client_message_id: str,
+    role: str,
+    content: str,
+    sequence: int,
+) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '2020-01-01T00:00:01Z')
+            """,
+            (str(uuid4()), session_id, sequence, role, content, client_message_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _write_journey(run_dir: Path, events: list[dict[str, Any]]) -> None:
+    write_private_text(
+        run_dir / "journey.jsonl",
+        "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+    )
+
+
+def test_journey_chat_persistence_completed_and_message_failed(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-journey-persist")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    session_id = str(uuid4())
+    client_ok = str(uuid4())
+    client_fail = str(uuid4())
+    request_ok = str(uuid4())
+    request_fail = str(uuid4())
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _insert_message(
+        snapshot,
+        session_id=session_id,
+        client_message_id=client_ok,
+        role="user",
+        content="patient says hi",
+        sequence=1,
+    )
+    _insert_message(
+        snapshot,
+        session_id=session_id,
+        client_message_id=client_ok,
+        role="assistant",
+        content="therapist replies",
+        sequence=2,
+    )
+    _insert_message(
+        snapshot,
+        session_id=session_id,
+        client_message_id=client_fail,
+        role="user",
+        content="failed turn",
+        sequence=3,
+    )
+    _write_journey(
+        run_dir,
+        [
+            {
+                "sequence": 1,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_ok,
+                    "request_id": request_ok,
+                },
+                "data": {"content": "patient says hi", "phase": "intake"},
+            },
+            {
+                "sequence": 2,
+                "kind": "chat.completed",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_ok,
+                    "request_id": request_ok,
+                },
+                "data": {"assistant_text": "therapist replies"},
+            },
+            {
+                "sequence": 3,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_fail,
+                    "request_id": request_fail,
+                },
+                "data": {"content": "failed turn", "phase": "intake"},
+            },
+            {
+                "sequence": 4,
+                "kind": "chat.failed",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_fail,
+                    "request_id": request_fail,
+                },
+                "data": {
+                    "error_code": "chat_invalid_llm_output",
+                    "error_message": "bad",
+                    "api_error": {"event_type": "message_failed"},
+                },
+            },
+        ],
+    )
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_user_message" not in codes
+    assert "missing_assistant_message" not in codes
+    assert "unexpected_assistant_message" not in codes
+    assert "user_content_mismatch" not in codes
+    assert "assistant_content_mismatch" not in codes
+    assert "chat_journey_cardinality" not in codes
+
+
+def test_journey_chat_persistence_cardinality_and_na(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-journey-card")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    session_id = str(uuid4())
+    client_dup = str(uuid4())
+    client_multi = str(uuid4())
+    client_open = str(uuid4())
+    request_dup = str(uuid4())
+    request_multi = str(uuid4())
+    request_open = str(uuid4())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Corrupt rows that must NOT produce persistence findings when cardinality fails.
+    _insert_message(
+        snapshot,
+        session_id=session_id,
+        client_message_id=client_dup,
+        role="user",
+        content="wrong",
+        sequence=1,
+    )
+    _write_journey(
+        run_dir,
+        [
+            {
+                "sequence": 1,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_dup,
+                    "request_id": request_dup,
+                },
+                "data": {"content": "one"},
+            },
+            {
+                "sequence": 2,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_dup,
+                    "request_id": request_dup,
+                },
+                "data": {"content": "two"},
+            },
+            {
+                "sequence": 3,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_multi,
+                    "request_id": request_multi,
+                },
+                "data": {"content": "once"},
+            },
+            {
+                "sequence": 4,
+                "kind": "chat.completed",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_multi,
+                    "request_id": request_multi,
+                },
+                "data": {"assistant_text": "a"},
+            },
+            {
+                "sequence": 5,
+                "kind": "chat.failed",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_multi,
+                    "request_id": request_multi,
+                },
+                "data": {"error_code": "x", "error_message": "y"},
+            },
+            {
+                "sequence": 6,
+                "kind": "chat.submitted",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_open,
+                    "request_id": request_open,
+                },
+                "data": {"content": "open"},
+            },
+        ],
+    )
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    na_codes = {item.code for item in audit.not_applicable}
+    assert "chat_journey_cardinality" in codes
+    assert "missing_user_message" not in codes
+    assert "user_content_mismatch" not in codes
+    assert "chat_persistence" in na_codes
+
+
+def test_partial_session_missing_message_does_not_require_review(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-partial-session")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    session_id = str(uuid4())
+    client_message_id = str(uuid4())
+    plan_id = str(uuid4())
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO plans (
+                id, version, selected_style, focus, themes_json, goals_json,
+                current_progress, planned_interventions_json,
+                revision_recommendations_json, source_session_id,
+                supersedes_plan_id, created_at
+            ) VALUES (?, 1, 'style', 'focus', '[]', '[]', 'progress', '[]', '[]',
+                      NULL, NULL, '2020-01-01T00:00:00Z')
+            """,
+            (plan_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'therapy', ?, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id, plan_id),
+        )
+        conn.execute(
+            """
+            UPDATE profile
+            SET current_plan_id = ?, updated_at = '2020-01-01T00:00:00Z'
+            WHERE singleton_id = 1
+            """,
+            (plan_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Only user row; assistant deliberately missing.
+    _insert_message(
+        snapshot,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        role="user",
+        content="hello",
+        sequence=1,
+    )
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=1,
+        initial_ready_reached=True,
+        therapy_sessions=[
+            {
+                "session_id": session_id,
+                "post_session_entered": False,
+                "turns": [
+                    {
+                        "client_message_id": client_message_id,
+                        "patient_text": "hello",
+                        "assistant_text": "reply",
+                    }
+                ],
+            }
+        ],
+    )
+    codes = {finding.code for finding in audit.findings}
+    na_codes = {item.code for item in audit.not_applicable}
+    assert "missing_assistant_message" in codes
+    assert "missing_review" not in codes
+    assert "missing_session_checkpoint" not in codes
+    assert "session_checkpoint" in na_codes
+    assert "session_completion" in na_codes
+
+
+def test_artifact_relative_paths_includes_pending_audit_and_run(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-artifacts")
+    write_private_text(run_dir / "journey.jsonl", "{}\n")
+    paths = artifact_relative_paths(run_dir)
+    assert "audit.md" in paths
+    assert "run.json" in paths
+    assert "journey.jsonl" in paths
+    assert "transcript.md" not in paths

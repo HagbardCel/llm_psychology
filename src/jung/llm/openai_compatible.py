@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
@@ -85,37 +84,10 @@ class ProviderAttemptEvent:
     error_type: str | None = None
 
 
-def _lmstudio_thinking_prefill_enabled() -> bool:
-    return os.environ.get("JUNG_LLM_THINKING_PREFILL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
-def _choice_message_text(message: object | None) -> str | None:
-    if message is None:
-        return None
-    content = getattr(message, "content", None)
-    if content is not None and str(content).strip():
-        return str(content)
-    reasoning = getattr(message, "reasoning_content", None)
-    if isinstance(reasoning, str) and reasoning.strip():
-        return reasoning
-    return None
-
-
-def _to_openai_messages(
-    messages: Sequence[ChatMessage],
-    *,
-    apply_thinking_prefill: bool = True,
-) -> list[dict[str, str]]:
-    result = [
+def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
+    return [
         {"role": message.role.value, "content": message.content} for message in messages
     ]
-    if apply_thinking_prefill and _lmstudio_thinking_prefill_enabled():
-        result.append({"role": "assistant", "content": " \n"})
-    return result
 
 
 def _merge_extra_body(
@@ -378,11 +350,7 @@ class OpenAICompatibleLLM:
                     reason = getattr(choice, "finish_reason", None)
                     if reason:
                         finish_reason = reason
-                    text = (
-                        _choice_message_text(choice.delta)
-                        if choice.delta is not None
-                        else None
-                    )
+                    text = choice.delta.content if choice.delta is not None else None
                     if text:
                         if recording:
                             assembled.append(text)
@@ -699,15 +667,10 @@ class OpenAICompatibleLLM:
         self,
         messages: Sequence[ChatMessage],
         policy: ModelPolicy,
-        *,
-        apply_thinking_prefill: bool = True,
     ) -> dict[str, object]:
         request: dict[str, object] = {
             "model": policy.model,
-            "messages": _to_openai_messages(
-                messages,
-                apply_thinking_prefill=apply_thinking_prefill,
-            ),
+            "messages": _to_openai_messages(messages),
             "temperature": policy.temperature,
             "timeout": policy.timeout_seconds,
         }
@@ -727,14 +690,7 @@ class OpenAICompatibleLLM:
         attempt: Literal["initial", "correction"],
         correction_trigger: str | None = None,
     ) -> str:
-        apply_thinking_prefill = (
-            policy.structured_output_mode is StructuredOutputMode.PROMPT
-        )
-        request = self._base_request(
-            messages,
-            policy,
-            apply_thinking_prefill=apply_thinking_prefill,
-        )
+        request = self._base_request(messages, policy)
         request["stream"] = False
         response_format = response_format_for_mode(
             policy.structured_output_mode,
@@ -783,10 +739,10 @@ class OpenAICompatibleLLM:
             if not response.choices:
                 raise InvalidLLMOutput("empty provider response")
             choice = response.choices[0]
-            content = _choice_message_text(choice.message)
-            if content is None or not content.strip():
+            content = choice.message.content
+            if not content or not str(content).strip():
                 raise InvalidLLMOutput("missing text content")
-            raw_text = content
+            raw_text = str(content)
             response_chars = len(raw_text)
             text = strip_markdown_json_fence(raw_text)
             status = "success"

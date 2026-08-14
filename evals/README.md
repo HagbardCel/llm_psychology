@@ -187,29 +187,36 @@ There are no `LOCAL_LLM_EVAL_*` variables.
 Live simulation uses production settings instead (see above), plus optional
 `JUNG_SIM_PATIENT_API_KEY` when `--patient-base-url` points at a different origin.
 
-### LM Studio and other thinking local models
+### Thinking local models
 
-Some local servers (notably LM Studio builds of Qwen 3.6 and Gemma 4) route
-thinking output to `reasoning_content` and leave `content` empty unless thinking
-is disabled. For live simulation against those models:
+Some local servers route thinking output to `reasoning_content` and leave
+`content` empty unless thinking is disabled. For Jung production calls, disable
+thinking via `JUNG_LLM_EXTRA_BODY_JSON` (for example
+`{"chat_template_kwargs":{"enable_thinking":false}}`). The production
+OpenAI-compatible gateway uses ordinary `content` only; it does not apply
+assistant prefill or treat `reasoning_content` as therapist text.
 
-- Set `JUNG_LLM_THINKING_PREFILL=1` so prompt-mode/streaming calls and the
-  synthetic patient actor append a minimal assistant prefill (`" \n"`), which
-  disables thinking for those requests. The gateway skips this prefill for
-  `json_schema` / `json_object` structured calls because LM Studio rejects the
-  combination.
-- The OpenAI-compatible gateway reads `reasoning_content` when `content` is
-  empty, so structured JSON that lands in the thinking channel still parses.
-- Slow local models may exceed the default 120s per-task timeout during
-  structured phases. Raise limits via `JUNG_LLM_TASK_CONFIG_JSON` and pass a
-  larger `--workflow-timeout` / `--patient-timeout` on the simulation CLI.
-  Evidence bundles remain under `logs/simulations/` (gitignored); cite run IDs
-  in PRs or notes rather than committing artifact trees.
+The synthetic patient actor is eval-only and has its own knobs under the
+`JUNG_SIM_PATIENT_*` namespace:
 
-Example for a slow LM Studio model:
+- Optional `JUNG_SIM_PATIENT_THINKING_PREFILL=1` appends a minimal assistant
+  prefill (`" \n"`) on patient requests so thinking-capable servers return
+  patient text in `content`.
+- If patient `content` is still empty, the actor may fall back to
+  `reasoning_content` for that eval-only boundary only.
+
+Slow local models may exceed the default 120s per-task timeout during
+structured phases. Raise limits via `JUNG_LLM_TASK_CONFIG_JSON` and pass a
+larger `--workflow-timeout` / `--patient-timeout` on the simulation CLI.
+Evidence bundles remain under `logs/simulations/` (gitignored); cite run IDs
+in PRs or notes rather than committing artifact trees.
+
+Example for a slow local model with thinking disabled for Jung and optional
+patient prefill:
 
 ```bash
-JUNG_LLM_THINKING_PREFILL=1 \
+export JUNG_LLM_EXTRA_BODY_JSON='{"chat_template_kwargs":{"enable_thinking":false}}'
+export JUNG_SIM_PATIENT_THINKING_PREFILL=1
 JUNG_LLM_TASK_CONFIG_JSON='{"intake_patch":{"timeout_seconds":300}}' \
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4 --workflow-timeout 7200"

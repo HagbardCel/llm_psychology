@@ -598,52 +598,6 @@ async def test_response_format_for_structured_mode(
         assert response_format.get("type") == expected_type
 
 
-async def test_thinking_prefill_applies_only_to_prompt_structured_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("JUNG_LLM_THINKING_PREFILL", "1")
-    captured: dict[str, object] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content.decode())
-        return httpx.Response(
-            200,
-            json={
-                "id": "1",
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "message": {"role": "assistant", "content": '{"value":"ok"}'},
-                        "index": 0,
-                    }
-                ],
-            },
-        )
-
-    gateway = _client(httpx.MockTransport(handler))
-    await gateway.generate_structured(
-        [ChatMessage(role=ChatRole.USER, content="give json")],
-        _Answer,
-        _policy(mode=StructuredOutputMode.JSON_SCHEMA),
-    )
-    schema_body = captured["body"]
-    assert isinstance(schema_body, dict)
-    schema_messages = schema_body["messages"]
-    assert isinstance(schema_messages, list)
-    assert schema_messages[-1] != {"role": "assistant", "content": " \n"}
-
-    await gateway.generate_structured(
-        [ChatMessage(role=ChatRole.USER, content="give json")],
-        _Answer,
-        _policy(mode=StructuredOutputMode.PROMPT),
-    )
-    prompt_body = captured["body"]
-    assert isinstance(prompt_body, dict)
-    prompt_messages = prompt_body["messages"]
-    assert isinstance(prompt_messages, list)
-    assert prompt_messages[-1] == {"role": "assistant", "content": " \n"}
-
-
 async def test_default_client_accepts_empty_api_key() -> None:
     gateway = OpenAICompatibleLLM(
         AdapterConfig(

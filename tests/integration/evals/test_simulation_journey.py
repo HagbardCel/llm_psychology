@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -468,3 +469,35 @@ async def test_simulation_intake_chat_failure_preserves_api_error(
     assert "chat_invalid_llm_output" in audit_text
     assert "missing_initial_checkpoint" not in audit_text
     assert "initial_ready_checkpoint" in audit_text
+
+    session_id = chat_failed["context"]["session_id"]
+    client_message_id = chat_failed["context"]["client_message_id"]
+    submitted = next(
+        event
+        for event in journey_events
+        if event.get("kind") == "chat.submitted"
+        and (event.get("context") or {}).get("client_message_id") == client_message_id
+    )
+    assert submitted["data"]["content"] == "more detail"
+
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    assert snapshot.is_file()
+    conn = sqlite3.connect(snapshot)
+    try:
+        user_rows = conn.execute(
+            "SELECT content FROM messages "
+            "WHERE session_id = ? AND client_message_id = ? AND role = 'user'",
+            (session_id, client_message_id),
+        ).fetchall()
+        assistant_rows = conn.execute(
+            "SELECT id FROM messages "
+            "WHERE session_id = ? AND client_message_id = ? AND role = 'assistant'",
+            (session_id, client_message_id),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(user_rows) == 1
+    assert user_rows[0][0] == "more detail"
+    assert assistant_rows == []
+    assert "missing_user_message" not in audit_text
+    assert "unexpected_assistant_message" not in audit_text

@@ -24,6 +24,7 @@ PATIENT_HISTORY_MAX_CHARS = 40_000
 WORKFLOW_TIMEOUT_SECONDS = 600.0
 
 PATIENT_API_KEY_ENV = "JUNG_SIM_PATIENT_API_KEY"
+PATIENT_THINKING_PREFILL_ENV = "JUNG_SIM_PATIENT_THINKING_PREFILL"
 _LOCAL_PLACEHOLDER_API_KEY = "not-needed"
 
 PatientPhase = Literal["intake", "therapy"]
@@ -227,8 +228,8 @@ def _usage_int(usage: Any, name: str) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
-def _lmstudio_thinking_prefill_enabled() -> bool:
-    return os.environ.get("JUNG_LLM_THINKING_PREFILL", "").strip().lower() in {
+def _patient_thinking_prefill_enabled() -> bool:
+    return os.environ.get(PATIENT_THINKING_PREFILL_ENV, "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -279,7 +280,7 @@ class PatientSimulator:
         started = time.perf_counter()
         try:
             messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
-            if _lmstudio_thinking_prefill_enabled():
+            if _patient_thinking_prefill_enabled():
                 messages.append({"role": "assistant", "content": " \n"})
             create_kwargs: dict[str, Any] = {
                 "model": self._config.model,

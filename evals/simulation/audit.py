@@ -12,7 +12,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
 
 from jung.diagnostics import open_private_file, sanitize_url, snapshot_database
 from jung.domain.session_artifacts import SessionAnalysis, SessionReview
@@ -283,6 +282,214 @@ def _session_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     )
 
 
+def _message_rows_for_client_id(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    client_message_id: str,
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    user_rows = list(
+        conn.execute(
+            "SELECT id, content, sequence FROM messages "
+            "WHERE session_id = ? AND client_message_id = ? AND role = 'user'",
+            (session_id, client_message_id),
+        )
+    )
+    assistant_rows = list(
+        conn.execute(
+            "SELECT id, content, sequence FROM messages "
+            "WHERE session_id = ? AND client_message_id = ? AND role = 'assistant'",
+            (session_id, client_message_id),
+        )
+    )
+    return user_rows, assistant_rows
+
+
+def _audit_completed_chat_message_rows(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    client_message_id: str,
+    submitted_content: str,
+    assistant_text: str,
+    audit: AuditResult,
+) -> None:
+    user_rows, assistant_rows = _message_rows_for_client_id(
+        conn,
+        session_id=session_id,
+        client_message_id=client_message_id,
+    )
+    if len(user_rows) != 1:
+        audit.fail(
+            "missing_user_message",
+            f"expected one user message for client_message_id={client_message_id}",
+            session_id=session_id,
+            client_message_id=client_message_id,
+            count=len(user_rows),
+        )
+        return
+    if user_rows[0]["content"] != submitted_content:
+        audit.fail(
+            "user_content_mismatch",
+            "durable user content != submitted patient text",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+    if len(assistant_rows) != 1:
+        audit.fail(
+            "missing_assistant_message",
+            "expected one assistant message",
+            session_id=session_id,
+            client_message_id=client_message_id,
+            count=len(assistant_rows),
+        )
+        return
+    if assistant_rows[0]["content"] != assistant_text:
+        audit.fail(
+            "assistant_content_mismatch",
+            "durable assistant content != streamed text",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+    if assistant_rows[0]["sequence"] != user_rows[0]["sequence"] + 1:
+        audit.fail(
+            "message_sequence",
+            "assistant sequence must follow user sequence",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+
+
+def _audit_message_failed_user_row(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    client_message_id: str,
+    submitted_content: str,
+    audit: AuditResult,
+) -> None:
+    user_rows, assistant_rows = _message_rows_for_client_id(
+        conn,
+        session_id=session_id,
+        client_message_id=client_message_id,
+    )
+    if len(user_rows) != 1:
+        audit.fail(
+            "missing_user_message",
+            "expected one accepted user message for "
+            f"client_message_id={client_message_id}",
+            session_id=session_id,
+            client_message_id=client_message_id,
+            count=len(user_rows),
+        )
+        return
+    if user_rows[0]["content"] != submitted_content:
+        audit.fail(
+            "user_content_mismatch",
+            "durable user content != submitted patient text",
+            session_id=session_id,
+            client_message_id=client_message_id,
+        )
+    if assistant_rows:
+        audit.fail(
+            "unexpected_assistant_message",
+            "message_failed chat must not have an assistant row",
+            session_id=session_id,
+            client_message_id=client_message_id,
+            count=len(assistant_rows),
+        )
+
+
+def _chat_identity(
+    event: Mapping[str, Any],
+) -> tuple[str, str, str] | None:
+    context = event.get("context") or {}
+    session_id = context.get("session_id")
+    client_message_id = context.get("client_message_id")
+    request_id = context.get("request_id")
+    if (
+        not isinstance(session_id, str)
+        or not isinstance(client_message_id, str)
+        or not isinstance(request_id, str)
+    ):
+        return None
+    return session_id, client_message_id, request_id
+
+
+def audit_journey_chat_persistence(
+    conn: sqlite3.Connection,
+    journey: Sequence[Mapping[str, Any]],
+    audit: AuditResult,
+) -> None:
+    """Correlate journey chat events with durable message rows in the snapshot."""
+    submitted_by: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    terminals_by: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    for event in journey:
+        kind = event.get("kind")
+        identity = _chat_identity(event)
+        if identity is None:
+            continue
+        if kind == "chat.submitted":
+            submitted_by.setdefault(identity, []).append(event)
+        elif kind in {"chat.completed", "chat.failed"}:
+            terminals_by.setdefault(identity, []).append(event)
+
+    for identity in sorted(set(submitted_by) | set(terminals_by)):
+        session_id, client_message_id, request_id = identity
+        submitted_events = submitted_by.get(identity, [])
+        terminal_events = terminals_by.get(identity, [])
+        if len(submitted_events) != 1 or len(terminal_events) > 1:
+            audit.fail(
+                "chat_journey_cardinality",
+                "expected exactly one chat.submitted and at most one terminal",
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+                submitted_count=len(submitted_events),
+                terminal_count=len(terminal_events),
+            )
+            continue
+        if not terminal_events:
+            audit.na(
+                "chat_persistence",
+                "chat.submitted has no terminal; persistence not applicable",
+                session_id=session_id,
+                client_message_id=client_message_id,
+                request_id=request_id,
+            )
+            continue
+
+        submitted = submitted_events[0]
+        terminal = terminal_events[0]
+        submitted_content = str((submitted.get("data") or {}).get("content") or "")
+        if terminal.get("kind") == "chat.completed":
+            assistant_text = str(
+                (terminal.get("data") or {}).get("assistant_text") or ""
+            )
+            _audit_completed_chat_message_rows(
+                conn,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                submitted_content=submitted_content,
+                assistant_text=assistant_text,
+                audit=audit,
+            )
+            continue
+
+        api_error = (terminal.get("data") or {}).get("api_error")
+        event_type = None
+        if isinstance(api_error, Mapping):
+            event_type = api_error.get("event_type")
+        if event_type == "message_failed":
+            _audit_message_failed_user_row(
+                conn,
+                session_id=session_id,
+                client_message_id=client_message_id,
+                submitted_content=submitted_content,
+                audit=audit,
+            )
+
+
 def audit_therapy_session_messages(
     conn: sqlite3.Connection,
     *,
@@ -305,66 +512,22 @@ def audit_therapy_session_messages(
         )
 
     for turn in submitted_turns:
-        client_message_id = str(turn["client_message_id"])
-        user_rows = conn.execute(
-            "SELECT id, content, sequence FROM messages "
-            "WHERE session_id = ? AND client_message_id = ? AND role = 'user'",
-            (session_id, client_message_id),
-        ).fetchall()
-        if len(user_rows) != 1:
-            audit.fail(
-                "missing_user_message",
-                f"expected one user message for client_message_id={client_message_id}",
-                session_id=session_id,
-                client_message_id=client_message_id,
-                count=len(user_rows),
-            )
-            continue
-        if user_rows[0]["content"] != turn["patient_text"]:
-            audit.fail(
-                "user_content_mismatch",
-                "durable user content != submitted patient text",
-                session_id=session_id,
-                client_message_id=client_message_id,
-            )
-        assistant_rows = conn.execute(
-            "SELECT id, content, sequence FROM messages "
-            "WHERE session_id = ? AND client_message_id = ? AND role = 'assistant'",
-            (session_id, client_message_id),
-        ).fetchall()
-        if len(assistant_rows) != 1:
-            audit.fail(
-                "missing_assistant_message",
-                "expected one assistant message",
-                session_id=session_id,
-                client_message_id=client_message_id,
-                count=len(assistant_rows),
-            )
-            continue
-        if assistant_rows[0]["content"] != turn["assistant_text"]:
-            audit.fail(
-                "assistant_content_mismatch",
-                "durable assistant content != streamed text",
-                session_id=session_id,
-                client_message_id=client_message_id,
-            )
-        if assistant_rows[0]["sequence"] != user_rows[0]["sequence"] + 1:
-            audit.fail(
-                "message_sequence",
-                "assistant sequence must follow user sequence",
-                session_id=session_id,
-                client_message_id=client_message_id,
-            )
+        _audit_completed_chat_message_rows(
+            conn,
+            session_id=session_id,
+            client_message_id=str(turn["client_message_id"]),
+            submitted_content=str(turn["patient_text"]),
+            assistant_text=str(turn["assistant_text"]),
+            audit=audit,
+        )
 
 
 def audit_completed_therapy_session(
     conn: sqlite3.Connection,
     *,
     session_id: str,
-    submitted_turns: Sequence[Mapping[str, Any]],
     audit: AuditResult,
 ) -> SessionReview | None:
-    del submitted_turns
     row = conn.execute(
         "SELECT id, kind, ended_at, review_json FROM sessions WHERE id = ?",
         (session_id,),
@@ -837,25 +1000,6 @@ def find_provider_requests(
     return matches
 
 
-def find_accepted_outputs(
-    trace: Sequence[Mapping[str, Any]],
-    *,
-    task: str,
-    session_id: str | None = None,
-) -> list[dict[str, Any]]:
-    matches: list[dict[str, Any]] = []
-    for event in trace:
-        if event.get("kind") != "llm.output.accepted":
-            continue
-        if _event_task(event) != task:
-            continue
-        context = event.get("context") or {}
-        if session_id is not None and context.get("session_id") != session_id:
-            continue
-        matches.append(dict(event))
-    return matches
-
-
 def compare_briefing_projection(
     review: SessionReview,
     projected: Mapping[str, Any] | None,
@@ -954,7 +1098,8 @@ def render_audit_markdown(
         "## Simulation result",
         "",
         f"Simulation result: {status.upper()}",
-        f"Diagnostic capture: {format_diagnostic_capture_status(runtime_diagnostics_status)}",
+        "Diagnostic capture: "
+        f"{format_diagnostic_capture_status(runtime_diagnostics_status)}",
     ]
     if run_config.get("git_worktree_dirty") is True:
         lines.append(
@@ -1123,7 +1268,6 @@ def _audit_final_database(
                     audit_completed_therapy_session(
                         conn,
                         session_id=str(session_info["session_id"]),
-                        submitted_turns=submitted_turns,
                         audit=audit,
                     )
                 else:
@@ -1178,14 +1322,41 @@ def run_mechanical_audit(
         therapy_sessions=therapy_sessions,
     )
 
+    if snapshot is not None and snapshot.is_file():
+        journey = load_jsonl(run_dir / "journey.jsonl")
+        conn = _connect_readonly(snapshot)
+        try:
+            with _safe_section(
+                audit, "journey_chat_persistence", "journey_chat_persistence"
+            ):
+                audit_journey_chat_persistence(conn, journey, audit)
+        finally:
+            conn.close()
+
     with _safe_section(audit, "provider_trace", "provider_trace"):
         trace_path = run_dir / "runtime" / "trace.jsonl"
         trace = load_jsonl(trace_path)
         if provider_trace_required:
-            if not any(event.get("kind") == "llm.provider.request" for event in trace):
+            has_call_started = any(
+                event.get("kind") == "llm.call.started" for event in trace
+            )
+            has_provider_request = any(
+                event.get("kind") == "llm.provider.request" for event in trace
+            )
+            if not has_call_started and not has_provider_request:
+                audit.na(
+                    "provider_trace",
+                    "no Jung llm.call.started; provider-request audit not applicable",
+                )
+            elif has_call_started and not has_provider_request:
                 audit.fail(
                     "missing_provider_trace",
-                    "provider_trace_required but no llm.provider.request events found",
+                    "llm.call.started without llm.provider.request",
+                )
+            elif not has_call_started and has_provider_request:
+                audit.fail(
+                    "missing_llm_call_started",
+                    "llm.provider.request without llm.call.started",
                 )
             else:
                 _audit_provider_prompt_chains(
@@ -1465,12 +1636,8 @@ def sanitized_endpoint(url: str) -> str:
 
 
 def artifact_relative_paths(run_dir: Path) -> list[str]:
-    paths: list[str] = []
-    for path in sorted(run_dir.rglob("*")):
-        if path.is_file():
-            paths.append(str(path.relative_to(run_dir)))
-    return paths
-
-
-def uuid_str(value: UUID | str) -> str:
-    return str(value)
+    paths = {
+        str(path.relative_to(run_dir)) for path in run_dir.rglob("*") if path.is_file()
+    }
+    # Finalization enumerates while writing audit.md and before run.json exists.
+    return sorted(paths | {"audit.md", "run.json"})
