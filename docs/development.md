@@ -147,7 +147,17 @@ Opt-in real-model surfaces (not part of `make test` or `make check`):
 make smoke-local-llm
 make evals
 make eval-report
+make simulate-local-llm \
+  SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
 ```
+
+`simulate-local-llm` uses normal Jung production LLM settings (`LLM_BASE_URL`,
+`MODEL_NAME`, `LLM_API_KEY`, `JUNG_SUPERVISOR_*`, …), not `LOCAL_LLM_SMOKE_*`.
+The latter remain exclusive to the processor-level smoke/eval tooling. Each run
+writes an isolated evidence bundle under `logs/simulations/run-<UTC>/` (SQLite,
+checkpoints, `journey.jsonl`, `transcript.md`, `audit.md`, runtime diagnostics).
+Optional flags include `--patient-timeout`, `--workflow-timeout`,
+`--overall-timeout`, `--patient-history-chars`, and `--patient-base-url`.
 
 See [`tests/README.md`](../tests/README.md) and [`evals/README.md`](../evals/README.md)
 for suite ownership and hard-versus-diagnostic semantics.
