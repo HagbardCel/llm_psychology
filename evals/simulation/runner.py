@@ -45,7 +45,9 @@ from evals.simulation.patient import (
 )
 from evals.simulation.scenarios import SimulationScenario
 from jung.api.contracts import (
+    ErrorEvent,
     MessageCompletedEvent,
+    MessageFailedEvent,
     ProfileUpdateRequest,
     ProfileWire,
     SelectStyleRequest,
@@ -70,10 +72,25 @@ class PatientActor(Protocol):
 class SimulationError(RuntimeError):
     """Fail-fast live-journey error."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = {
+            key: str(value) if isinstance(value, UUID) else value
+            for key, value in dict(details or {}).items()
+        }
+
+
+@dataclass
+class SimulationProgress:
+    initial_ready_reached: bool = False
 
 
 @dataclass
@@ -88,6 +105,7 @@ class SubmittedTurn:
 class TherapySessionRecord:
     session_id: UUID
     turns: list[SubmittedTurn] = field(default_factory=list)
+    post_session_entered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +166,32 @@ async def wait_for_stage(
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
+def _terminal_api_error_details(
+    event: MessageFailedEvent | ErrorEvent,
+    *,
+    event_type: str,
+) -> dict[str, Any]:
+    return {
+        "code": event.error.code,
+        "message": event.error.message,
+        "retryable": event.error.retryable,
+        "request_id": str(event.error.request_id),
+        "session_id": str(event.session_id),
+        "client_message_id": str(event.client_message_id),
+        "event_type": event_type,
+    }
+
+
+def _chat_failure_from_error(exc: SimulationError) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "error_code": exc.code,
+        "error_message": exc.message,
+    }
+    if exc.details:
+        data["api_error"] = dict(exc.details)
+    return data
+
+
 async def collect_chat_completion(
     client: JungApiClient,
     *,
@@ -171,6 +215,24 @@ async def collect_chat_completion(
             if isinstance(event, MessageCompletedEvent):
                 terminal = event
                 break
+            if isinstance(event, MessageFailedEvent):
+                raise SimulationError(
+                    f"chat_{event.error.code}",
+                    event.error.message,
+                    details=_terminal_api_error_details(
+                        event,
+                        event_type="message_failed",
+                    ),
+                )
+            if isinstance(event, ErrorEvent):
+                raise SimulationError(
+                    f"chat_{event.error.code}",
+                    event.error.message,
+                    details=_terminal_api_error_details(
+                        event,
+                        event_type="error",
+                    ),
+                )
             raise SimulationError(
                 "chat_terminal_failure",
                 f"unexpected terminal event type={type(event).__name__}",
@@ -219,12 +281,63 @@ def _structured_output_modes(settings: JungSettings) -> dict[str, str]:
 
 def _record_journey_exception(
     exc: BaseException,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any] | None]:
     if isinstance(exc, SimulationError):
-        return exc.code, exc.message
+        api_error = dict(exc.details) if exc.details else None
+        return exc.code, exc.message, api_error
     if isinstance(exc, PatientGenerationError):
-        return "patient_generation_failed", str(exc)
-    return "journey_error", f"{type(exc).__name__}: {exc}"
+        return "patient_generation_failed", str(exc), None
+    return "journey_error", f"{type(exc).__name__}: {exc}", None
+
+
+async def _submit_chat_turn(
+    client: JungApiClient,
+    journey: JourneyLog,
+    *,
+    session_id: UUID,
+    content: str,
+    client_message_id: UUID,
+    request_id: UUID,
+    phase: str,
+) -> SubmittedTurn:
+    journey.append(
+        "chat.submitted",
+        context={
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "request_id": str(request_id),
+        },
+        data={"content": content, "phase": phase},
+    )
+    try:
+        completed = await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content=content,
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    except SimulationError as exc:
+        journey.append(
+            "chat.failed",
+            context={
+                "session_id": str(session_id),
+                "client_message_id": str(client_message_id),
+                "request_id": str(request_id),
+            },
+            data=_chat_failure_from_error(exc),
+        )
+        raise
+    journey.append(
+        "chat.completed",
+        context={
+            "session_id": str(session_id),
+            "client_message_id": str(client_message_id),
+            "request_id": str(request_id),
+        },
+        data={"assistant_text": completed.assistant_text},
+    )
+    return completed
 
 
 async def run_simulation(
@@ -280,7 +393,9 @@ async def run_simulation(
     journey_error: Exception | None = None
     error_code: str | None = None
     error_message: str | None = None
+    api_error: dict[str, Any] | None = None
     therapy_records: list[TherapySessionRecord] = []
+    progress = SimulationProgress()
     prior_patient_sessions: list[tuple[PatientExchange, ...]] = []
     run_config: dict[str, Any] = {
         "artifact_schema_version": 1,
@@ -322,6 +437,7 @@ async def run_simulation(
                             journey=journey,
                             isolated=isolated,
                             therapy_records=therapy_records,
+                            progress=progress,
                             prior_patient_sessions=prior_patient_sessions,
                             style_selection_out=run_config,
                         )
@@ -335,6 +451,7 @@ async def run_simulation(
                                     journey=journey,
                                     isolated=isolated,
                                     therapy_records=therapy_records,
+                                    progress=progress,
                                     prior_patient_sessions=prior_patient_sessions,
                                     style_selection_out=run_config,
                                 )
@@ -345,13 +462,16 @@ async def run_simulation(
                             ) from exc
         except Exception as exc:
             journey_error = exc
-            error_code, error_message = _record_journey_exception(exc)
+            error_code, error_message, api_error = _record_journey_exception(exc)
+            observed_data: dict[str, Any] = {
+                "error_code": error_code,
+                "error_message": error_message,
+            }
+            if api_error is not None:
+                observed_data["api_error"] = api_error
             journey.append(
                 "workflow.observed",
-                data={
-                    "error_code": error_code,
-                    "error_message": error_message,
-                },
+                data=observed_data,
             )
 
         return _finalize_run(
@@ -360,11 +480,13 @@ async def run_simulation(
             journey=journey,
             run_config=run_config,
             therapy_records=therapy_records,
+            progress=progress,
             provider_trace_required=provider_trace_required,
             started_at=started_at,
             journey_error=journey_error,
             error_code=error_code,
             error_message=error_message,
+            api_error=api_error,
         )
     finally:
         if owns_patient:
@@ -381,20 +503,24 @@ def _finalize_run(
     journey: JourneyLog,
     run_config: dict[str, Any],
     therapy_records: list[TherapySessionRecord],
+    progress: SimulationProgress,
     provider_trace_required: bool,
     started_at: str,
     journey_error: Exception | None,
     error_code: str | None,
     error_message: str | None,
+    api_error: dict[str, Any] | None,
 ) -> SimulationResult:
     try:
         audit = run_mechanical_audit(
             run_dir=run_dir,
             provider_trace_required=provider_trace_required,
             configured_sessions=config.sessions,
+            initial_ready_reached=progress.initial_ready_reached,
             therapy_sessions=[
                 {
                     "session_id": record.session_id,
+                    "post_session_entered": record.post_session_entered,
                     "turns": [
                         {
                             "client_message_id": turn.client_message_id,
@@ -412,6 +538,13 @@ def _finalize_run(
         audit.fail(
             "audit_internal_error",
             f"{type(exc).__name__}: {exc}",
+        )
+
+    if run_config.get("git_worktree_dirty") is True:
+        audit.warn(
+            "dirty_worktree",
+            "source worktree was dirty; exact executed source is not "
+            "reproducible from git_commit alone.",
         )
 
     snapshot_path = run_dir / "runtime" / "db_snapshot.sqlite"
@@ -457,10 +590,12 @@ def _finalize_run(
                 runtime_diagnostics_status=runtime_status,
                 findings=audit.findings,
                 warnings=audit.warnings,
+                not_applicable=audit.not_applicable,
                 run_config=run_config,
                 artifact_index=artifact_relative_paths(run_dir),
                 journey_error_code=error_code,
                 journey_error_message=error_message,
+                journey_api_error=api_error,
             ),
         )
     except Exception:
@@ -469,21 +604,24 @@ def _finalize_run(
     terminal_kind = (
         "simulation.completed" if final_status == "complete" else "simulation.failed"
     )
+    terminal_data: dict[str, Any] = {
+        "status": final_status,
+        "error_code": error_code,
+        "error_message": error_message,
+        "finding_codes": [item.code for item in audit.findings],
+    }
+    if api_error is not None:
+        terminal_data["api_error"] = api_error
     try:
         journey.append(
             terminal_kind,
-            data={
-                "status": final_status,
-                "error_code": error_code,
-                "error_message": error_message,
-                "finding_codes": [item.code for item in audit.findings],
-            },
+            data=terminal_data,
         )
     except Exception:
         final_status = "failed"
 
     completed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    run_payload = {
+    run_payload: dict[str, Any] = {
         **run_config,
         "run_id": run_dir.name,
         "started_at": started_at,
@@ -493,6 +631,8 @@ def _finalize_run(
         "error_message": error_message,
         "provider_trace_required": provider_trace_required,
     }
+    if api_error is not None:
+        run_payload["api_error"] = api_error
     try:
         write_run_json(run_dir / "run.json", run_payload)
     except Exception:
@@ -514,6 +654,7 @@ async def _run_live_journey(
     journey: JourneyLog,
     isolated: JungSettings,
     therapy_records: list[TherapySessionRecord],
+    progress: SimulationProgress,
     prior_patient_sessions: list[tuple[PatientExchange, ...]],
     style_selection_out: dict[str, Any],
 ) -> None:
@@ -563,6 +704,7 @@ async def _run_live_journey(
         config=config,
         journey=journey,
         isolated=isolated,
+        progress=progress,
         style_selection_out=style_selection_out,
     )
 
@@ -637,30 +779,14 @@ async def _run_intake(
         )
         client_message_id = uuid4()
         request_id = uuid4()
-        journey.append(
-            "chat.submitted",
-            context={
-                "session_id": str(session_id),
-                "client_message_id": str(client_message_id),
-                "request_id": str(request_id),
-            },
-            data={"content": evidence.submitted_text, "phase": "intake"},
-        )
-        completed = await collect_chat_completion(
+        completed = await _submit_chat_turn(
             client,
+            journey,
             session_id=session_id,
             content=evidence.submitted_text,
             client_message_id=client_message_id,
             request_id=request_id,
-        )
-        journey.append(
-            "chat.completed",
-            context={
-                "session_id": str(session_id),
-                "client_message_id": str(client_message_id),
-                "request_id": str(request_id),
-            },
-            data={"assistant_text": completed.assistant_text},
+            phase="intake",
         )
         intake_exchanges.append(
             PatientExchange(
@@ -709,6 +835,7 @@ async def _select_initial_style(
     config: SimulationConfig,
     journey: JourneyLog,
     isolated: JungSettings,
+    progress: SimulationProgress,
     style_selection_out: dict[str, Any],
 ) -> None:
     styles = await client.get_styles()
@@ -742,6 +869,7 @@ async def _select_initial_style(
             desired={"ready"},
             workflow_timeout=config.workflow_timeout,
         )
+    progress.initial_ready_reached = True
     create_checkpoint(
         isolated.database_path,
         Path(isolated.data_dir).parent / "checkpoints" / "initial-ready.sqlite",
@@ -817,30 +945,14 @@ async def _run_therapy_session(
         )
         client_message_id = uuid4()
         request_id = uuid4()
-        journey.append(
-            "chat.submitted",
-            context={
-                "session_id": str(session_id),
-                "client_message_id": str(client_message_id),
-                "request_id": str(request_id),
-            },
-            data={"content": evidence.submitted_text, "phase": "therapy"},
-        )
-        completed = await collect_chat_completion(
+        completed = await _submit_chat_turn(
             client,
+            journey,
             session_id=session_id,
             content=evidence.submitted_text,
             client_message_id=client_message_id,
             request_id=request_id,
-        )
-        journey.append(
-            "chat.completed",
-            context={
-                "session_id": str(session_id),
-                "client_message_id": str(client_message_id),
-                "request_id": str(request_id),
-            },
-            data={"assistant_text": completed.assistant_text},
+            phase="therapy",
         )
         record.turns.append(completed)
         current_exchanges.append(
@@ -856,6 +968,7 @@ async def _run_therapy_session(
             "impossible_stage",
             f"end_session returned stage={ended.stage!r}",
         )
+    record.post_session_entered = True
     journey.append(
         "api.command",
         context={"session_id": str(session_id)},

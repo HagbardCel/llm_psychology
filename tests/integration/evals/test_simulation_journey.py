@@ -386,3 +386,85 @@ async def test_simulation_overall_timeout_interrupts_in_flight_wait(
     assert "simulation.failed" in (run_dir / "journey.jsonl").read_text(
         encoding="utf-8"
     )
+
+
+def _intake_chat_failure_expectations() -> list[Any]:
+    return [
+        StructuredExpectation(
+            task=LLMTask.INTAKE_PATCH,
+            output_type=IntakeRecordPatch,
+            response=IntakeRecordPatch(),
+        ),
+        StreamExpectation(
+            task=LLMTask.INTAKE_RESPONSE,
+            chunks=("Intake response 1.",),
+        ),
+        StructuredExpectation(
+            task=LLMTask.INTAKE_PATCH,
+            output_type=IntakeRecordPatch,
+            response=IntakeRecordPatch(),
+        ),
+        FailureExpectation(
+            task=LLMTask.INTAKE_RESPONSE,
+            error=InvalidLLMOutput("forced intake failure"),
+        ),
+    ]
+
+
+async def test_simulation_intake_chat_failure_preserves_api_error(
+    tmp_path: Path,
+    sim_settings: JungSettings,
+) -> None:
+    run_dir = tmp_path / "sim-intake-chat-fail"
+    patient = ScriptedPatient(["first concern", "more detail"])
+    result = await run_simulation(
+        SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+            max_intake_turns=5,
+            output_dir=run_dir,
+            require_provider_trace=False,
+            workflow_timeout=30.0,
+        ),
+        settings=sim_settings,
+        application_factory=_simulation_application_factory(
+            _intake_chat_failure_expectations()
+        ),
+        patient_actor=patient,
+        require_provider_trace=False,
+    )
+    assert result.status == "failed"
+    assert result.error_code == "chat_invalid_llm_output"
+
+    journey_events = [
+        json.loads(line)
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    chat_failed = next(
+        event for event in journey_events if event.get("kind") == "chat.failed"
+    )
+    workflow_observed = next(
+        event
+        for event in reversed(journey_events)
+        if event.get("kind") == "workflow.observed"
+    )
+    simulation_failed = next(
+        event for event in journey_events if event.get("kind") == "simulation.failed"
+    )
+    run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+
+    api_error = chat_failed["data"]["api_error"]
+    assert api_error["code"] == "invalid_llm_output"
+    assert api_error["message"] == "The language model returned an invalid response."
+    assert api_error["retryable"] is None
+    assert api_error["event_type"] == "message_failed"
+    assert workflow_observed["data"]["api_error"] == api_error
+    assert simulation_failed["data"]["api_error"] == api_error
+    assert run_payload["api_error"] == api_error
+
+    audit_text = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "chat_invalid_llm_output" in audit_text
+    assert "missing_initial_checkpoint" not in audit_text
+    assert "initial_ready_checkpoint" in audit_text

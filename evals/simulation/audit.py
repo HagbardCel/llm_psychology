@@ -48,6 +48,7 @@ class AuditFinding:
 class AuditResult:
     findings: list[AuditFinding] = field(default_factory=list)
     warnings: list[AuditFinding] = field(default_factory=list)
+    not_applicable: list[AuditFinding] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -60,6 +61,11 @@ class AuditResult:
 
     def warn(self, code: str, message: str, **evidence: Any) -> None:
         self.warnings.append(
+            AuditFinding(code=code, message=message, evidence=evidence)
+        )
+
+    def na(self, code: str, message: str, **evidence: Any) -> None:
+        self.not_applicable.append(
             AuditFinding(code=code, message=message, evidence=evidence)
         )
 
@@ -277,59 +283,25 @@ def _session_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     )
 
 
-def audit_completed_therapy_session(
+def audit_therapy_session_messages(
     conn: sqlite3.Connection,
     *,
     session_id: str,
     submitted_turns: Sequence[Mapping[str, Any]],
     audit: AuditResult,
-) -> SessionReview | None:
+) -> None:
     row = conn.execute(
-        "SELECT id, kind, ended_at, review_json FROM sessions WHERE id = ?",
+        "SELECT id, kind FROM sessions WHERE id = ?",
         (session_id,),
     ).fetchone()
     if row is None:
         audit.fail("missing_session", "therapy session missing", session_id=session_id)
-        return None
+        return
     if row["kind"] != "therapy":
         audit.fail(
             "session_kind",
             f"expected therapy, got {row['kind']!r}",
             session_id=session_id,
-        )
-    if row["ended_at"] is None:
-        audit.fail("session_not_ended", "ended_at is NULL", session_id=session_id)
-    if row["review_json"] is None:
-        audit.fail("missing_review", "review_json is NULL", session_id=session_id)
-        review = None
-    else:
-        try:
-            review = SessionReview.model_validate_json(row["review_json"])
-        except Exception as exc:
-            audit.fail(
-                "invalid_review",
-                f"review_json did not validate: {exc}",
-                session_id=session_id,
-            )
-            review = None
-
-    ops = conn.execute(
-        "SELECT id, status FROM operations "
-        "WHERE kind = 'post_session' AND source_session_id = ?",
-        (session_id,),
-    ).fetchall()
-    if len(ops) != 1:
-        audit.fail(
-            "post_session_operation_count",
-            f"expected exactly one post_session operation, got {len(ops)}",
-            session_id=session_id,
-        )
-    elif ops[0]["status"] != "complete":
-        audit.fail(
-            "post_session_incomplete",
-            f"operation status={ops[0]['status']!r}",
-            session_id=session_id,
-            operation_id=ops[0]["id"],
         )
 
     for turn in submitted_turns:
@@ -383,6 +355,56 @@ def audit_completed_therapy_session(
                 session_id=session_id,
                 client_message_id=client_message_id,
             )
+
+
+def audit_completed_therapy_session(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    submitted_turns: Sequence[Mapping[str, Any]],
+    audit: AuditResult,
+) -> SessionReview | None:
+    del submitted_turns
+    row = conn.execute(
+        "SELECT id, kind, ended_at, review_json FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["ended_at"] is None:
+        audit.fail("session_not_ended", "ended_at is NULL", session_id=session_id)
+    if row["review_json"] is None:
+        audit.fail("missing_review", "review_json is NULL", session_id=session_id)
+        review = None
+    else:
+        try:
+            review = SessionReview.model_validate_json(row["review_json"])
+        except Exception as exc:
+            audit.fail(
+                "invalid_review",
+                f"review_json did not validate: {exc}",
+                session_id=session_id,
+            )
+            review = None
+
+    ops = conn.execute(
+        "SELECT id, status FROM operations "
+        "WHERE kind = 'post_session' AND source_session_id = ?",
+        (session_id,),
+    ).fetchall()
+    if len(ops) != 1:
+        audit.fail(
+            "post_session_operation_count",
+            f"expected exactly one post_session operation, got {len(ops)}",
+            session_id=session_id,
+        )
+    elif ops[0]["status"] != "complete":
+        audit.fail(
+            "post_session_incomplete",
+            f"operation status={ops[0]['status']!r}",
+            session_id=session_id,
+            operation_id=ops[0]["id"],
+        )
     return review
 
 
@@ -897,16 +919,28 @@ def scenario_snapshot(scenario: Any) -> dict[str, Any]:
     return asdict(scenario)
 
 
+def format_diagnostic_capture_status(status: str | None) -> str:
+    if status == "success":
+        return "COMPLETE"
+    if status == "failed":
+        return "FAILED"
+    if status is None:
+        return "UNKNOWN"
+    return status.upper()
+
+
 def render_audit_markdown(
     *,
     status: SimulationStatus,
     runtime_diagnostics_status: str | None,
     findings: Sequence[AuditFinding],
     warnings: Sequence[AuditFinding],
+    not_applicable: Sequence[AuditFinding],
     run_config: Mapping[str, Any],
     artifact_index: Sequence[str],
     journey_error_code: str | None = None,
     journey_error_message: str | None = None,
+    journey_api_error: Mapping[str, Any] | None = None,
 ) -> str:
     lines = [
         "# Journey Audit",
@@ -920,8 +954,13 @@ def render_audit_markdown(
         "## Simulation result",
         "",
         f"Simulation result: {status.upper()}",
-        f"Runtime diagnostics: {(runtime_diagnostics_status or 'unknown').upper()}",
+        f"Diagnostic capture: {format_diagnostic_capture_status(runtime_diagnostics_status)}",
     ]
+    if run_config.get("git_worktree_dirty") is True:
+        lines.append(
+            "WARNING: source worktree was dirty; exact executed source is not "
+            "reproducible from git_commit alone."
+        )
     if journey_error_code is not None or journey_error_message is not None:
         lines.extend(
             [
@@ -932,6 +971,17 @@ def render_audit_markdown(
                 f"error_message: {journey_error_message or ''}",
             ]
         )
+        if journey_api_error is not None:
+            lines.extend(
+                [
+                    "",
+                    "api_error:",
+                    "",
+                    "```json",
+                    json.dumps(dict(journey_api_error), indent=2, default=str),
+                    "```",
+                ]
+            )
     lines.extend(
         [
             "",
@@ -951,6 +1001,15 @@ def render_audit_markdown(
     if warnings:
         for warning in warnings:
             lines.append(f"- `{warning.code}`: {warning.message}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Not applicable", ""])
+    if not_applicable:
+        for item in not_applicable:
+            lines.append(f"- `{item.code}`: {item.message}")
+            if item.evidence:
+                evidence_json = json.dumps(item.evidence, default=str)
+                lines.append(f"  evidence: `{evidence_json}`")
     else:
         lines.append("- none")
     lines.extend(["", "## Artifact index", ""])
@@ -985,9 +1044,17 @@ def _newest_session_checkpoint(
     return None
 
 
-def _audit_checkpoints(audit: AuditResult, checkpoints_dir: Path) -> None:
+def _audit_checkpoints(
+    audit: AuditResult,
+    checkpoints_dir: Path,
+    *,
+    initial_ready_reached: bool,
+) -> None:
     with _safe_section(audit, "checkpoints", "checkpoints"):
         initial = checkpoints_dir / "initial-ready.sqlite"
+        if not initial_ready_reached:
+            audit.na("initial_ready_checkpoint", "run never reached READY")
+            return
         if initial.is_file():
             check_sqlite_integrity(initial, audit)
         else:
@@ -1011,14 +1078,22 @@ def _audit_final_database(
             check_sqlite_integrity(resolved, audit)
 
     for index, session_info in enumerate(therapy_sessions, start=1):
+        post_session_entered = bool(session_info.get("post_session_entered"))
         with _safe_section(audit, "session_durable", f"session_durable:{index}"):
             checkpoint = checkpoints_dir / f"after-session-{index:03d}.sqlite"
-            if checkpoint.is_file():
-                check_sqlite_integrity(checkpoint, audit)
+            if post_session_entered:
+                if checkpoint.is_file():
+                    check_sqlite_integrity(checkpoint, audit)
+                else:
+                    audit.fail(
+                        "missing_session_checkpoint",
+                        f"missing {checkpoint.name}",
+                        session_number=index,
+                    )
             else:
-                audit.fail(
-                    "missing_session_checkpoint",
-                    f"missing {checkpoint.name}",
+                audit.na(
+                    "session_checkpoint",
+                    "post-session was not entered",
                     session_number=index,
                 )
             durable = _durable_db_for_session(
@@ -1027,21 +1102,36 @@ def _audit_final_database(
                 session_number=index,
             )
             if durable is None:
-                audit.fail(
-                    "missing_session_durable_evidence",
-                    "no final snapshot or session checkpoint for durable checks",
-                    session_id=str(session_info["session_id"]),
-                    session_number=index,
-                )
+                if list(session_info.get("turns") or ()):
+                    audit.fail(
+                        "missing_session_durable_evidence",
+                        "no final snapshot or session checkpoint for durable checks",
+                        session_id=str(session_info["session_id"]),
+                        session_number=index,
+                    )
                 continue
             conn = _connect_readonly(durable)
             try:
-                audit_completed_therapy_session(
+                submitted_turns = list(session_info.get("turns") or ())
+                audit_therapy_session_messages(
                     conn,
                     session_id=str(session_info["session_id"]),
-                    submitted_turns=list(session_info.get("turns") or ()),
+                    submitted_turns=submitted_turns,
                     audit=audit,
                 )
+                if post_session_entered:
+                    audit_completed_therapy_session(
+                        conn,
+                        session_id=str(session_info["session_id"]),
+                        submitted_turns=submitted_turns,
+                        audit=audit,
+                    )
+                else:
+                    audit.na(
+                        "session_completion",
+                        "post-session was not entered",
+                        session_number=index,
+                    )
             finally:
                 conn.close()
 
@@ -1069,11 +1159,16 @@ def run_mechanical_audit(
     provider_trace_required: bool,
     configured_sessions: int,
     therapy_sessions: Sequence[Mapping[str, Any]],
+    initial_ready_reached: bool,
 ) -> AuditResult:
     """Collect forensic findings from checkpoints, final snapshot, and trace."""
     audit = AuditResult()
     checkpoints_dir = run_dir / "checkpoints"
-    _audit_checkpoints(audit, checkpoints_dir)
+    _audit_checkpoints(
+        audit,
+        checkpoints_dir,
+        initial_ready_reached=initial_ready_reached,
+    )
 
     snapshot_path = run_dir / "runtime" / "db_snapshot.sqlite"
     snapshot = _audit_final_database(
@@ -1199,6 +1294,7 @@ def _audit_provider_prompt_chains(
     checkpoints_dir: Path,
 ) -> None:
     for index, session_info in enumerate(therapy_sessions, start=1):
+        post_session_entered = bool(session_info.get("post_session_entered"))
         session_id = str(session_info["session_id"])
         durable = _durable_db_for_session(
             snapshot=snapshot,
@@ -1210,23 +1306,16 @@ def _audit_provider_prompt_chains(
         try:
             if durable is not None:
                 conn = _connect_readonly(durable)
-                try:
-                    review = _load_review(conn, session_id)
-                except Exception as exc:
-                    audit.fail(
-                        "invalid_review",
-                        f"review_json did not validate: {exc}",
-                        session_id=session_id,
-                    )
-                    review = None
-
-            with _safe_section(audit, "supervisor", f"supervisor:{session_id}"):
-                _audit_supervisor_session(
-                    audit=audit,
-                    trace=trace,
-                    session_id=session_id,
-                    review=review,
-                )
+                if post_session_entered:
+                    try:
+                        review = _load_review(conn, session_id)
+                    except Exception as exc:
+                        audit.fail(
+                            "invalid_review",
+                            f"review_json did not validate: {exc}",
+                            session_id=session_id,
+                        )
+                        review = None
 
             for turn in session_info.get("turns") or ():
                 with _safe_section(
@@ -1243,11 +1332,35 @@ def _audit_provider_prompt_chains(
                         conn=conn,
                     )
 
+            if post_session_entered:
+                with _safe_section(audit, "supervisor", f"supervisor:{session_id}"):
+                    _audit_supervisor_session(
+                        audit=audit,
+                        trace=trace,
+                        session_id=session_id,
+                        review=review,
+                    )
+            else:
+                audit.na(
+                    "supervisor_chain",
+                    "post-session was not entered",
+                    session_id=session_id,
+                    session_number=index,
+                )
+
             if index >= configured_sessions or index >= len(therapy_sessions):
                 continue
             next_session = therapy_sessions[index]
             next_turns = list(next_session.get("turns") or ())
             if not next_turns:
+                continue
+            if not post_session_entered:
+                audit.na(
+                    "next_session_handoff",
+                    "post-session was not entered",
+                    source_session_id=session_id,
+                    session_number=index,
+                )
                 continue
             first = next_turns[0]
             next_requests = find_provider_requests(

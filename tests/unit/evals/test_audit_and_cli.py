@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -14,6 +15,7 @@ import pytest
 
 from evals.simulation import __main__ as sim_main
 from evals.simulation.audit import (
+    AuditFinding,
     AuditResult,
     JourneyLog,
     allocate_run_directory,
@@ -21,17 +23,23 @@ from evals.simulation.audit import (
     audit_supervisor_chain_from_fixture,
     compare_briefing_projection,
     extract_context_data,
+    format_diagnostic_capture_status,
     reconstruct_supervisor_call,
+    render_audit_markdown,
     run_mechanical_audit,
     write_private_text,
 )
 from evals.simulation.runner import (
     SimulationConfig,
+    SimulationProgress,
     SimulationResult,
+    SimulationError,
     _await_style_selection,
     _finalize_run,
+    collect_chat_completion,
 )
 from evals.simulation.scenarios import get_scenario
+from jung.api.contracts import ErrorEnvelope, ErrorEvent, MessageCompletedEvent, MessageFailedEvent, TokenEvent
 from jung.domain.session_artifacts import (
     PatientTurnCitation,
     PlanPatch,
@@ -455,11 +463,13 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
         journey=journey,
         run_config={"scenario_id": "anxiety_sleep"},
         therapy_records=[],
+        progress=SimulationProgress(),
         provider_trace_required=False,
         started_at="2020-01-01T00:00:00Z",
         journey_error=None,
         error_code=None,
         error_message=None,
+        api_error=None,
     )
     assert result.status == "failed"
     assert result.error_code == "mechanical_audit_failed"
@@ -642,16 +652,168 @@ def test_newest_checkpoint_fallback_with_partial_later_session(
         run_dir=run_dir,
         provider_trace_required=True,
         configured_sessions=2,
+        initial_ready_reached=True,
         therapy_sessions=[
-            {"session_id": session_1, "turns": []},
-            {"session_id": session_2, "turns": []},
+            {"session_id": session_1, "post_session_entered": True, "turns": []},
+            {"session_id": session_2, "post_session_entered": False, "turns": []},
         ],
     )
     codes = {finding.code for finding in audit.findings}
+    assert "missing_initial_checkpoint" in codes
     assert "missing_final_snapshot" in codes
-    assert "missing_session_checkpoint" in codes
     assert "grounding_set_mismatch" in codes
     assert "missing_analysis_request" in codes or "supervisor_chain" in codes
+    assert "missing_session_checkpoint" not in codes
+
+
+def test_mechanical_audit_initial_ready_not_reached_is_not_applicable(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-no-ready")
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    na_codes = {item.code for item in audit.not_applicable}
+    assert "missing_initial_checkpoint" not in codes
+    assert "initial_ready_checkpoint" in na_codes
+
+
+def test_mechanical_audit_initial_ready_without_checkpoint_fails(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-ready-no-checkpoint")
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_initial_checkpoint" in codes
+
+
+def test_format_diagnostic_capture_status() -> None:
+    assert format_diagnostic_capture_status("success") == "COMPLETE"
+    assert format_diagnostic_capture_status("failed") == "FAILED"
+    assert format_diagnostic_capture_status(None) == "UNKNOWN"
+
+
+def test_render_audit_markdown_includes_not_applicable_and_dirty_warning() -> None:
+    text = render_audit_markdown(
+        status="failed",
+        runtime_diagnostics_status="success",
+        findings=[],
+        warnings=[],
+        not_applicable=[
+            AuditFinding(
+                code="initial_ready_checkpoint",
+                message="run never reached READY",
+            )
+        ],
+        run_config={"git_worktree_dirty": True, "scenario_id": "anxiety_sleep"},
+        artifact_index=["run.json"],
+        journey_error_code="chat_invalid_llm_output",
+        journey_error_message="The language model returned an invalid response.",
+        journey_api_error={
+            "code": "invalid_llm_output",
+            "message": "The language model returned an invalid response.",
+            "retryable": None,
+            "event_type": "message_failed",
+        },
+    )
+    assert "Diagnostic capture: COMPLETE" in text
+    assert "WARNING: source worktree was dirty" in text
+    assert "## Not applicable" in text
+    assert "initial_ready_checkpoint" in text
+    assert "invalid_llm_output" in text
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_message_failed_preserves_api_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    failed = MessageFailedEvent(
+        type="message_failed",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        error=ErrorEnvelope(
+            code="invalid_llm_output",
+            message="The language model returned an invalid response.",
+            request_id=request_id,
+            retryable=None,
+        ),
+    )
+
+    @asynccontextmanager
+    async def stream_message(*_args: Any, **_kwargs: Any) -> Any:
+        async def events() -> Any:
+            yield failed
+
+        yield events()
+
+    client = MagicMock()
+    client.stream_message = stream_message
+
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "chat_invalid_llm_output"
+    assert exc_info.value.details["retryable"] is None
+    assert exc_info.value.details["event_type"] == "message_failed"
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_completion_error_event_preserves_api_error() -> None:
+    session_id = uuid4()
+    client_message_id = uuid4()
+    request_id = uuid4()
+    error_event = ErrorEvent(
+        type="error",
+        request_id=request_id,
+        session_id=session_id,
+        client_message_id=client_message_id,
+        error=ErrorEnvelope(
+            code="validation_error",
+            message="bad request",
+            request_id=request_id,
+            retryable=False,
+        ),
+    )
+
+    @asynccontextmanager
+    async def stream_message(*_args: Any, **_kwargs: Any) -> Any:
+        async def events() -> Any:
+            yield error_event
+
+        yield events()
+
+    client = MagicMock()
+    client.stream_message = stream_message
+
+    with pytest.raises(SimulationError) as exc_info:
+        await collect_chat_completion(
+            client,
+            session_id=session_id,
+            content="hello",
+            client_message_id=client_message_id,
+            request_id=request_id,
+        )
+    assert exc_info.value.code == "chat_validation_error"
+    assert exc_info.value.details["retryable"] is False
+    assert exc_info.value.details["event_type"] == "error"
 
 
 def test_main_exit_code_mapping() -> None:

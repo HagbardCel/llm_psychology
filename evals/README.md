@@ -87,8 +87,12 @@ Important configuration notes:
   tests set it false; live runs require full provider-request evidence.
 
 Mechanical audit gates software/data-flow correctness (persistence, plan
-lineage, grounding, briefing→next-prompt under real adapters). Therapeutic
-quality remains human review of the evidence bundle. There is no judge LLM.
+lineage, grounding, briefing→next-prompt under real adapters). Checks are
+**reachability-aware**: missing checkpoints, reviews, or supervisor evidence
+only fail when the corresponding workflow milestone was actually reached.
+Terminal chat failures persist the public API `api_error` envelope in
+`journey.jsonl`, `run.json`, and `audit.md`. Therapeutic quality remains
+human review of the evidence bundle. There is no judge LLM.
 
 Deterministic unit/integration coverage for the harness lives under
 `tests/unit/evals` and `tests/integration/evals` and runs in `make check`.
@@ -182,6 +186,34 @@ There are no `LOCAL_LLM_EVAL_*` variables.
 
 Live simulation uses production settings instead (see above), plus optional
 `JUNG_SIM_PATIENT_API_KEY` when `--patient-base-url` points at a different origin.
+
+### LM Studio and other thinking local models
+
+Some local servers (notably LM Studio builds of Qwen 3.6 and Gemma 4) route
+thinking output to `reasoning_content` and leave `content` empty unless thinking
+is disabled. For live simulation against those models:
+
+- Set `JUNG_LLM_THINKING_PREFILL=1` so prompt-mode/streaming calls and the
+  synthetic patient actor append a minimal assistant prefill (`" \n"`), which
+  disables thinking for those requests. The gateway skips this prefill for
+  `json_schema` / `json_object` structured calls because LM Studio rejects the
+  combination.
+- The OpenAI-compatible gateway reads `reasoning_content` when `content` is
+  empty, so structured JSON that lands in the thinking channel still parses.
+- Slow local models may exceed the default 120s per-task timeout during
+  structured phases. Raise limits via `JUNG_LLM_TASK_CONFIG_JSON` and pass a
+  larger `--workflow-timeout` / `--patient-timeout` on the simulation CLI.
+  Evidence bundles remain under `logs/simulations/` (gitignored); cite run IDs
+  in PRs or notes rather than committing artifact trees.
+
+Example for a slow LM Studio model:
+
+```bash
+JUNG_LLM_THINKING_PREFILL=1 \
+JUNG_LLM_TASK_CONFIG_JSON='{"intake_patch":{"timeout_seconds":300}}' \
+make simulate-local-llm \
+  SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4 --workflow-timeout 7200"
+```
 
 Hard evals carry both `eval` and `real_llm`, so they skip unless `--no-mocks`
 is passed:

@@ -227,6 +227,14 @@ def _usage_int(usage: Any, name: str) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
+def _lmstudio_thinking_prefill_enabled() -> bool:
+    return os.environ.get("JUNG_LLM_THINKING_PREFILL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 class PatientSimulator:
     """Direct AsyncOpenAI patient actor with zero SDK retries."""
 
@@ -270,9 +278,12 @@ class PatientSimulator:
         prompt = build_patient_prompt(context)
         started = time.perf_counter()
         try:
+            messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+            if _lmstudio_thinking_prefill_enabled():
+                messages.append({"role": "assistant", "content": " \n"})
             create_kwargs: dict[str, Any] = {
                 "model": self._config.model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "max_completion_tokens": self._config.max_completion_tokens,
                 "temperature": 0.7,
             }
@@ -289,6 +300,10 @@ class PatientSimulator:
         if choice is None:
             raise PatientGenerationError("patient provider returned no choices")
         raw = (choice.message.content or "") if choice.message is not None else ""
+        if not raw.strip() and choice.message is not None:
+            reasoning = getattr(choice.message, "reasoning_content", None)
+            if isinstance(reasoning, str) and reasoning.strip():
+                raw = reasoning
         finish_reason = choice.finish_reason
         if finish_reason in {"length", "max_tokens"}:
             raise PatientGenerationError(
