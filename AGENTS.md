@@ -91,15 +91,15 @@ Durable selection ≠ guaranteed prompt inclusion.
 - **Session therapist:** current plan, latest supervisor briefing,
   current-session transcript, selected grounded patient statements,
   current patient message.
-- **Supervisor:** completed-session transcript, current plan, previous
+- **Supervisor:** completed-session transcript, current plan, latest prior
   briefing, selected grounded patient statements, bounded prior review
   projections.
 
 ## Fixed LLM roles
 
 Routing is source-defined, not configuration-defined. Task overrides tune
-inference policy (temperature, timeouts, token caps, structured mode), not
-model ownership. There is no generic role registry and no hidden failover
+inference policy (temperature, timeouts, token caps, structured mode, extra body),
+not model ownership. There is no generic role registry and no hidden failover
 to the other role.
 
 | Role       | Tasks                                                        |
@@ -141,11 +141,11 @@ machinery. Wrapping Jung-owned semantic validation/correction does not.)
 
 ## Database changes
 
-When intentionally changing persistence:
+When intentionally changing the database schema:
 
 1. Edit `schema.sql`.
 2. Bump `SCHEMA_VERSION`.
-3. Update typed persistence/domain models.
+3. Update affected typed persistence/domain models.
 4. Update `docs/database.md`.
 5. Update owning integration tests.
 6. Reset/recreate the local database.
