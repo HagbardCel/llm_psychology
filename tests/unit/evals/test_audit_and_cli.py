@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import sqlite3
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ from evals.simulation.audit import (
     compare_briefing_projection,
     extract_context_data,
     format_diagnostic_capture_status,
-    reconstruct_supervisor_call,
+    reconstruct_structured_call,
     render_audit_markdown,
     run_mechanical_audit,
     write_private_text,
@@ -412,10 +413,10 @@ def _mutate_accepted_plan_patch(events: list[dict[str, Any]]) -> list[dict[str, 
     return events
 
 
-def test_reconstruct_supervisor_call_requires_paired_attempts() -> None:
+def test_reconstruct_structured_call_requires_paired_attempts() -> None:
     events = _valid_supervisor_events()[:2]
     events[1]["data"]["provider_attempt_id"] = "missing-request"
-    reconstruction, errors = reconstruct_supervisor_call(
+    reconstruction, errors = reconstruct_structured_call(
         events, task="post_session_analysis", session_id="sess-1"
     )
     assert reconstruction is None
@@ -449,7 +450,7 @@ def test_reconstruct_rejects_extra_attempt_missing_llm_call_id() -> None:
             },
         ]
     )
-    reconstruction, errors = reconstruct_supervisor_call(
+    reconstruction, errors = reconstruct_structured_call(
         events, task="post_session_analysis", session_id="sess-1"
     )
     assert reconstruction is None
@@ -488,6 +489,107 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
     assert "simulation.failed" in (run_dir / "journey.jsonl").read_text(
         encoding="utf-8"
     )
+
+
+def test_audit_md_write_failure_sets_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-audit-write-clean")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    monkeypatch.setattr(
+        "evals.simulation.runner.run_mechanical_audit",
+        lambda **_kwargs: AuditResult(),
+    )
+    real_write = write_private_text
+
+    def boom(path: Path, text: str) -> None:
+        if path.name == "audit.md":
+            raise OSError("simulated audit write failure")
+        real_write(path, text)
+
+    monkeypatch.setattr("evals.simulation.runner.write_private_text", boom)
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={"scenario_id": "anxiety_sleep"},
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code=None,
+        error_message=None,
+        api_error=None,
+    )
+    assert result.status == "failed"
+    assert result.error_code == "audit_write_failed"
+    assert result.error_message
+    run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_payload["status"] == "failed"
+    assert run_payload["error_code"] == "audit_write_failed"
+    assert run_payload["error_message"]
+    terminal = [
+        json.loads(line)
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ][-1]
+    assert terminal["kind"] == "simulation.failed"
+    assert "audit_write_failed" in terminal["data"]["finding_codes"]
+
+
+def test_audit_md_write_failure_preserves_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-audit-write-preserve")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    monkeypatch.setattr(
+        "evals.simulation.runner.run_mechanical_audit",
+        lambda **_kwargs: AuditResult(),
+    )
+    real_write = write_private_text
+
+    def boom(path: Path, text: str) -> None:
+        if path.name == "audit.md":
+            raise OSError("simulated audit write failure")
+        real_write(path, text)
+
+    monkeypatch.setattr("evals.simulation.runner.write_private_text", boom)
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={"scenario_id": "anxiety_sleep"},
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code="chat_invalid_llm_output",
+        error_message="bad model output",
+        api_error=None,
+    )
+    assert result.status == "failed"
+    assert result.error_code == "chat_invalid_llm_output"
+    assert result.error_message == "bad model output"
+    terminal = [
+        json.loads(line)
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ][-1]
+    assert terminal["kind"] == "simulation.failed"
+    assert terminal["data"]["error_code"] == "chat_invalid_llm_output"
+    assert "audit_write_failed" in terminal["data"]["finding_codes"]
 
 
 def _minimal_grounding_conn(
@@ -1224,8 +1326,272 @@ def test_provider_trace_required_both_present_runs_chains(tmp_path: Path) -> Non
     codes = {finding.code for finding in audit.findings}
     assert "missing_provider_trace" not in codes
     assert "missing_llm_call_started" not in codes
+    assert "assessment_chain" in codes
     na_codes = {item.code for item in audit.not_applicable}
     assert "supervisor_chain" in na_codes
+
+
+_PRETHERAPY_CODES = {
+    "missing_intake_response",
+    "intake_patch_chain",
+    "assessment_chain",
+}
+
+
+def _structured_call_events(
+    *,
+    task: str,
+    session_id: str,
+    client_message_id: str | None,
+    llm_call_id: str,
+    attempt_id: str,
+    sequence_start: int,
+    result: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    context: dict[str, Any] = {
+        "session_id": session_id,
+        "llm_call_id": llm_call_id,
+    }
+    if client_message_id is not None:
+        context["client_message_id"] = client_message_id
+    return [
+        {
+            "sequence": sequence_start,
+            "kind": "llm.provider.request",
+            "context": dict(context),
+            "data": {
+                "task": task,
+                "llm_call_id": llm_call_id,
+                "provider_attempt_id": attempt_id,
+                "model": "test-model",
+                "messages": [],
+            },
+        },
+        {
+            "sequence": sequence_start + 1,
+            "kind": "llm.provider.response",
+            "context": dict(context),
+            "data": {
+                "task": task,
+                "llm_call_id": llm_call_id,
+                "provider_attempt_id": attempt_id,
+                "status": "success",
+            },
+        },
+        {
+            "sequence": sequence_start + 2,
+            "kind": "llm.output.accepted",
+            "context": {**context, "llm_task": task},
+            "data": {
+                "task": task,
+                "result": {} if result is None else dict(result),
+            },
+        },
+    ]
+
+
+def _pretherapy_fixture(
+    *,
+    include_intake_patch: bool = True,
+    include_intake_response: bool = True,
+    include_assessment: bool = True,
+    intake_session_id: str | None = None,
+    client_message_id: str | None = None,
+    extra_intake_sessions: Sequence[str] = (),
+) -> tuple[str, str, list[dict[str, Any]], list[dict[str, Any]]]:
+    session_id = intake_session_id or str(uuid4())
+    client_id = client_message_id or str(uuid4())
+    request_id = str(uuid4())
+    journey: list[dict[str, Any]] = [
+        {
+            "sequence": 1,
+            "kind": "chat.submitted",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_id,
+                "request_id": request_id,
+            },
+            "data": {"content": "I have trouble sleeping", "phase": "intake"},
+        },
+        {
+            "sequence": 2,
+            "kind": "chat.completed",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_id,
+                "request_id": request_id,
+            },
+            "data": {"assistant_text": "Tell me more."},
+        },
+    ]
+    for index, other_session in enumerate(extra_intake_sessions, start=1):
+        other_client = str(uuid4())
+        other_request = str(uuid4())
+        journey.extend(
+            [
+                {
+                    "sequence": 2 + index * 2 - 1,
+                    "kind": "chat.submitted",
+                    "context": {
+                        "session_id": other_session,
+                        "client_message_id": other_client,
+                        "request_id": other_request,
+                    },
+                    "data": {"content": f"extra {index}", "phase": "intake"},
+                },
+                {
+                    "sequence": 2 + index * 2,
+                    "kind": "chat.completed",
+                    "context": {
+                        "session_id": other_session,
+                        "client_message_id": other_client,
+                        "request_id": other_request,
+                    },
+                    "data": {"assistant_text": "ok"},
+                },
+            ]
+        )
+
+    trace: list[dict[str, Any]] = [
+        {"sequence": 1, "kind": "llm.call.started", "context": {}, "data": {}},
+    ]
+    seq = 2
+    if include_intake_patch:
+        events = _structured_call_events(
+            task="intake_patch",
+            session_id=session_id,
+            client_message_id=client_id,
+            llm_call_id="llm-patch",
+            attempt_id="attempt-patch",
+            sequence_start=seq,
+            result={"notes": "extracted"},
+        )
+        trace.extend(events)
+        seq += 3
+    if include_intake_response:
+        trace.append(
+            {
+                "sequence": seq,
+                "kind": "llm.provider.request",
+                "context": {
+                    "session_id": session_id,
+                    "client_message_id": client_id,
+                },
+                "data": {
+                    "task": "intake_response",
+                    "messages": [],
+                    "model": "test-model",
+                },
+            }
+        )
+        seq += 1
+    if include_assessment:
+        events = _structured_call_events(
+            task="assessment",
+            session_id=session_id,
+            client_message_id=None,
+            llm_call_id="llm-assess",
+            attempt_id="attempt-assess",
+            sequence_start=seq,
+            result={"styles": []},
+        )
+        trace.extend(events)
+    return session_id, client_id, journey, trace
+
+
+def test_pretherapy_provider_evidence_complete_passes(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-pretherapy-ok")
+    _session_id, _client_id, journey, trace = _pretherapy_fixture()
+    _write_journey(run_dir, journey)
+    _write_trace(run_dir, trace)
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert codes.isdisjoint(_PRETHERAPY_CODES)
+
+
+@pytest.mark.parametrize(
+    ("omit", "expected"),
+    [
+        ("intake_patch", "intake_patch_chain"),
+        ("intake_response", "missing_intake_response"),
+        ("assessment", "assessment_chain"),
+    ],
+)
+def test_pretherapy_provider_evidence_missing_matrix(
+    tmp_path: Path,
+    omit: str,
+    expected: str,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / f"run-pretherapy-omit-{omit}")
+    _session_id, _client_id, journey, trace = _pretherapy_fixture(
+        include_intake_patch=omit != "intake_patch",
+        include_intake_response=omit != "intake_response",
+        include_assessment=omit != "assessment",
+    )
+    _write_journey(run_dir, journey)
+    _write_trace(run_dir, trace)
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert expected in codes
+
+
+def test_pretherapy_assessment_requires_exactly_one_intake_session(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-pretherapy-multi-intake")
+    _session_id, _client_id, journey, trace = _pretherapy_fixture(
+        extra_intake_sessions=[str(uuid4())],
+    )
+    _write_journey(run_dir, journey)
+    _write_trace(run_dir, trace)
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    findings = [f for f in audit.findings if f.code == "assessment_chain"]
+    assert findings
+    assert any("exactly one intake session" in finding.message for finding in findings)
+
+
+def test_pretherapy_assessment_zero_intake_sessions_fails(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-pretherapy-zero-intake")
+    _write_trace(
+        run_dir,
+        [
+            {"sequence": 1, "kind": "llm.call.started", "context": {}, "data": {}},
+            {
+                "sequence": 2,
+                "kind": "llm.provider.request",
+                "context": {},
+                "data": {"task": "therapy_response", "messages": []},
+            },
+        ],
+    )
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    findings = [f for f in audit.findings if f.code == "assessment_chain"]
+    assert findings
+    assert any("exactly one intake session" in finding.message for finding in findings)
 
 
 def _insert_message(
