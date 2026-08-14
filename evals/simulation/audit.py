@@ -70,7 +70,7 @@ class AuditResult:
 
 
 @dataclass(frozen=True, slots=True)
-class SupervisorCallReconstruction:
+class StructuredCallReconstruction:
     llm_call_id: str
     model: str | None
     accepted_result: Mapping[str, Any]
@@ -606,13 +606,14 @@ def _event_sequence(event: Mapping[str, Any]) -> int:
     raise ValueError(f"trace event missing integer sequence: {event.get('kind')!r}")
 
 
-def reconstruct_supervisor_call(
+def reconstruct_structured_call(
     events: Sequence[Mapping[str, Any]],
     *,
     task: str,
     session_id: str | None = None,
-) -> tuple[SupervisorCallReconstruction | None, list[str]]:
-    """Reconstruct one structured supervisor call by llm_call_id correlation."""
+    client_message_id: str | None = None,
+) -> tuple[StructuredCallReconstruction | None, list[str]]:
+    """Reconstruct one structured LLM call by llm_call_id correlation."""
     errors: list[str] = []
     scoped = [
         event
@@ -621,6 +622,11 @@ def reconstruct_supervisor_call(
         and (
             session_id is None
             or (event.get("context") or {}).get("session_id") == session_id
+        )
+        and (
+            client_message_id is None
+            or (event.get("context") or {}).get("client_message_id")
+            == client_message_id
         )
     ]
     logical_kinds = {
@@ -735,7 +741,7 @@ def reconstruct_supervisor_call(
         return None, errors
 
     return (
-        SupervisorCallReconstruction(
+        StructuredCallReconstruction(
             llm_call_id=llm_call_id,
             model=model,
             accepted_result=result,
@@ -753,11 +759,11 @@ def audit_supervisor_session(
 ) -> list[str]:
     """Validate analysis+update chains and durable SessionReview composition."""
     errors: list[str] = []
-    analysis, analysis_errors = reconstruct_supervisor_call(
+    analysis, analysis_errors = reconstruct_structured_call(
         events, task="post_session_analysis", session_id=session_id
     )
     errors.extend(analysis_errors)
-    update, update_errors = reconstruct_supervisor_call(
+    update, update_errors = reconstruct_structured_call(
         events, task="post_session_update", session_id=session_id
     )
     errors.extend(update_errors)
@@ -1330,8 +1336,8 @@ def run_mechanical_audit(
         therapy_sessions=therapy_sessions,
     )
 
+    journey = load_jsonl(run_dir / "journey.jsonl")
     if snapshot is not None and snapshot.is_file():
-        journey = load_jsonl(run_dir / "journey.jsonl")
         conn = _connect_readonly(snapshot)
         try:
             with _safe_section(
@@ -1385,8 +1391,10 @@ def run_mechanical_audit(
                     _audit_provider_prompt_chains(
                         audit=audit,
                         trace=trace,
+                        journey=journey,
                         configured_sessions=configured_sessions,
                         therapy_sessions=therapy_sessions,
+                        initial_ready_reached=initial_ready_reached,
                         snapshot=snapshot,
                         checkpoints_dir=checkpoints_dir,
                     )
@@ -1480,15 +1488,129 @@ def _audit_provider_call(
             _audit_grounded_prompt_contents(conn, grounded, audit=audit)
 
 
+def _completed_intake_chats(
+    journey: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, str]]:
+    """Return (session_id, client_message_id) for valid completed intake chats."""
+    submitted_by: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    completed_by: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    for event in journey:
+        kind = event.get("kind")
+        if kind not in {"chat.submitted", "chat.completed"}:
+            continue
+        identity = _chat_identity(event)
+        if identity is None:
+            continue
+        if kind == "chat.submitted":
+            if (event.get("data") or {}).get("phase") != "intake":
+                continue
+            submitted_by.setdefault(identity, []).append(event)
+        else:
+            completed_by.setdefault(identity, []).append(event)
+
+    completed: list[tuple[str, str]] = []
+    for identity, submitted_events in submitted_by.items():
+        terminals = completed_by.get(identity, [])
+        if len(submitted_events) != 1 or len(terminals) != 1:
+            continue
+        session_id, client_message_id, _request_id = identity
+        completed.append((session_id, client_message_id))
+    return completed
+
+
+def _audit_pretherapy_provider_evidence(
+    *,
+    audit: AuditResult,
+    trace: Sequence[Mapping[str, Any]],
+    journey: Sequence[Mapping[str, Any]],
+    initial_ready_reached: bool,
+    therapy_sessions: Sequence[Mapping[str, Any]],
+) -> None:
+    intake_chats = _completed_intake_chats(journey)
+    for session_id, client_message_id in intake_chats:
+        with _safe_section(
+            audit,
+            "intake_patch",
+            f"intake_patch:{session_id}:{client_message_id}",
+        ):
+            _reconstruction, errors = reconstruct_structured_call(
+                trace,
+                task="intake_patch",
+                session_id=session_id,
+                client_message_id=client_message_id,
+            )
+            for error in errors:
+                audit.fail(
+                    "intake_patch_chain",
+                    error,
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                )
+        with _safe_section(
+            audit,
+            "intake_response",
+            f"intake_response:{session_id}:{client_message_id}",
+        ):
+            requests = find_provider_requests(
+                trace,
+                task="intake_response",
+                session_id=session_id,
+                client_message_id=client_message_id,
+            )
+            if not requests:
+                audit.fail(
+                    "missing_intake_response",
+                    "intake_response provider request missing",
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                )
+
+    pretherapy_reached = initial_ready_reached or bool(therapy_sessions)
+    if not pretherapy_reached:
+        return
+
+    with _safe_section(audit, "assessment", "assessment"):
+        intake_sessions = sorted({session_id for session_id, _ in intake_chats})
+        if len(intake_sessions) != 1:
+            audit.fail(
+                "assessment_chain",
+                "cannot derive exactly one intake session from completed "
+                "intake journey evidence",
+                intake_session_count=len(intake_sessions),
+            )
+            return
+        intake_session_id = intake_sessions[0]
+        _reconstruction, errors = reconstruct_structured_call(
+            trace,
+            task="assessment",
+            session_id=intake_session_id,
+        )
+        for error in errors:
+            audit.fail(
+                "assessment_chain",
+                error,
+                session_id=intake_session_id,
+            )
+
+
 def _audit_provider_prompt_chains(
     *,
     audit: AuditResult,
     trace: Sequence[Mapping[str, Any]],
+    journey: Sequence[Mapping[str, Any]],
     configured_sessions: int,
     therapy_sessions: Sequence[Mapping[str, Any]],
+    initial_ready_reached: bool,
     snapshot: Path | None,
     checkpoints_dir: Path,
 ) -> None:
+    _audit_pretherapy_provider_evidence(
+        audit=audit,
+        trace=trace,
+        journey=journey,
+        initial_ready_reached=initial_ready_reached,
+        therapy_sessions=therapy_sessions,
+    )
     for index, session_info in enumerate(therapy_sessions, start=1):
         post_session_entered = bool(session_info.get("post_session_entered"))
         session_id = str(session_info["session_id"])

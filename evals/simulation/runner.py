@@ -598,8 +598,13 @@ def _finalize_run(
                 journey_api_error=api_error,
             ),
         )
-    except Exception:
+    except Exception as exc:
         final_status = "failed"
+        detail = f"{type(exc).__name__}: {exc}"
+        audit.fail("audit_write_failed", detail)
+        if error_code is None:
+            error_code = "audit_write_failed"
+            error_message = detail
 
     terminal_kind = (
         "simulation.completed" if final_status == "complete" else "simulation.failed"
