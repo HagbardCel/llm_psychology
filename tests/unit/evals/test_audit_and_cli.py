@@ -1126,6 +1126,35 @@ def test_provider_trace_required_no_started_is_not_applicable(tmp_path: Path) ->
     assert "provider_trace" in na_codes
 
 
+def test_provider_trace_required_missing_trace_file_fails(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-missing-file")
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_provider_trace" in codes
+
+
+def test_provider_trace_required_empty_trace_with_progress_fails(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-provider-empty-progress")
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=True,
+        configured_sessions=0,
+        initial_ready_reached=True,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "missing_provider_trace" in codes
+
+
 def test_provider_trace_required_started_without_request_fails(tmp_path: Path) -> None:
     run_dir = allocate_run_directory(tmp_path / "run-provider-missing")
     _write_trace(
@@ -1458,6 +1487,39 @@ def test_journey_chat_persistence_cardinality_and_na(tmp_path: Path) -> None:
     assert "missing_user_message" not in codes
     assert "user_content_mismatch" not in codes
     assert "chat_persistence" in na_codes
+
+
+def test_journey_chat_persistence_malformed_identity(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-journey-identity")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    _write_journey(
+        run_dir,
+        [
+            {
+                "sequence": 1,
+                "kind": "chat.submitted",
+                "context": {"session_id": str(uuid4())},
+                "data": {"content": "missing ids"},
+            },
+        ],
+    )
+    _write_trace(run_dir, [])
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "chat_journey_identity" in codes
+    assert "missing_user_message" not in codes
+    assert "user_content_mismatch" not in codes
+    assert "assistant_content_mismatch" not in codes
+    assert "chat_journey_cardinality" not in codes
 
 
 def test_partial_session_missing_message_does_not_require_review(

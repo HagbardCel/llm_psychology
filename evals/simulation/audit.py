@@ -426,8 +426,16 @@ def audit_journey_chat_persistence(
     terminals_by: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
     for event in journey:
         kind = event.get("kind")
+        if kind not in {"chat.submitted", "chat.completed", "chat.failed"}:
+            continue
         identity = _chat_identity(event)
         if identity is None:
+            audit.fail(
+                "chat_journey_identity",
+                "chat event missing or invalid session_id/client_message_id/request_id",
+                kind=kind,
+                sequence=event.get("sequence"),
+            )
             continue
         if kind == "chat.submitted":
             submitted_by.setdefault(identity, []).append(event)
@@ -1335,43 +1343,60 @@ def run_mechanical_audit(
 
     with _safe_section(audit, "provider_trace", "provider_trace"):
         trace_path = run_dir / "runtime" / "trace.jsonl"
-        trace = load_jsonl(trace_path)
-        if provider_trace_required:
-            has_call_started = any(
-                event.get("kind") == "llm.call.started" for event in trace
+        if provider_trace_required and not trace_path.is_file():
+            audit.fail(
+                "missing_provider_trace",
+                "runtime/trace.jsonl missing",
             )
-            has_provider_request = any(
+        else:
+            trace = load_jsonl(trace_path)
+            if provider_trace_required:
+                has_call_started = any(
+                    event.get("kind") == "llm.call.started" for event in trace
+                )
+                has_provider_request = any(
+                    event.get("kind") == "llm.provider.request" for event in trace
+                )
+                reached = initial_ready_reached or bool(therapy_sessions)
+                if not has_call_started and not has_provider_request:
+                    if reached:
+                        audit.fail(
+                            "missing_provider_trace",
+                            "runtime trace contains no LLM provider evidence "
+                            "despite workflow progress",
+                        )
+                    else:
+                        audit.na(
+                            "provider_trace",
+                            "no Jung llm.call.started; provider-request audit "
+                            "not applicable",
+                        )
+                elif has_call_started and not has_provider_request:
+                    audit.fail(
+                        "missing_provider_trace",
+                        "llm.call.started without llm.provider.request",
+                    )
+                elif not has_call_started and has_provider_request:
+                    audit.fail(
+                        "missing_llm_call_started",
+                        "llm.provider.request without llm.call.started",
+                    )
+                else:
+                    _audit_provider_prompt_chains(
+                        audit=audit,
+                        trace=trace,
+                        configured_sessions=configured_sessions,
+                        therapy_sessions=therapy_sessions,
+                        snapshot=snapshot,
+                        checkpoints_dir=checkpoints_dir,
+                    )
+            elif not any(
                 event.get("kind") == "llm.provider.request" for event in trace
-            )
-            if not has_call_started and not has_provider_request:
-                audit.na(
-                    "provider_trace",
-                    "no Jung llm.call.started; provider-request audit not applicable",
+            ):
+                audit.warn(
+                    "provider_trace_unavailable",
+                    "llm.provider.request events absent (expected under FakeLLM)",
                 )
-            elif has_call_started and not has_provider_request:
-                audit.fail(
-                    "missing_provider_trace",
-                    "llm.call.started without llm.provider.request",
-                )
-            elif not has_call_started and has_provider_request:
-                audit.fail(
-                    "missing_llm_call_started",
-                    "llm.provider.request without llm.call.started",
-                )
-            else:
-                _audit_provider_prompt_chains(
-                    audit=audit,
-                    trace=trace,
-                    configured_sessions=configured_sessions,
-                    therapy_sessions=therapy_sessions,
-                    snapshot=snapshot,
-                    checkpoints_dir=checkpoints_dir,
-                )
-        elif not any(event.get("kind") == "llm.provider.request" for event in trace):
-            audit.warn(
-                "provider_trace_unavailable",
-                "llm.provider.request events absent (expected under FakeLLM)",
-            )
     return audit
 
 
