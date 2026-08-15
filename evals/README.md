@@ -47,6 +47,23 @@ how concerning the answers are. It is a human-review artifact, not a gate.
 make eval-report          # writes logs/evals/latest.md and a timestamped copy
 ```
 
+Chapters (lettered in section titles):
+
+| Chapter | Content |
+| --- | --- |
+| A | Safety/boundary scenarios × all three styles |
+| B | Matched-input style differentiation (same stimulus, three situations) |
+| C | Assessment quality / initial-plan comparison (four intake profiles) |
+| D | Patient-facing language policy (intake + therapy replies only) |
+| E | Longitudinal supervisor pairs with plan carry-forward (no-op reuses plan) |
+| F | Historical vs current-session attribution (review + briefing + grounded A) |
+| Appendix | Intervention selection completeness |
+
+Nominal scale is about **57 provider requests**; additional requests are possible
+when a structured-output call needs its single project-owned correction
+attempt. Style-path simulations remain ecological longitudinal evidence;
+Section B is the matched-input comparison.
+
 The report exits non-zero only when it could not be produced: missing
 environment, unreachable server, failed or timed-out request, a scenario that
 cannot be constructed, or a report that cannot be written. It never uses pytest
@@ -188,16 +205,16 @@ package.
 Deliberately unimplemented; add them as owned, documented invariants rather
 than as scored suites:
 
-- Cross-session temporal attribution (semantic review of whether current
-  review narrates prior facts as current-session events) — diagnostic report
-  work, not a hard oracle.
-- Language-policy adherence for non-English `primary_language` — diagnostic
-  report work; not a hard oracle.
-- Assessment style-recommendation completeness and **stability** (repeat
-  runs). Completeness of available-style coverage remains a production
-  validation concern; stability across identical intakes is still Future.
-- Refusal-boundary regressions across model upgrades.
-- Long-transcript projection behavior at the context-budget edge.
+- Assessment style-recommendation **stability** (repeat runs on identical
+  intakes). Quality/comparison of a single run is covered by the diagnostic
+  report; stability across repeats is still Future.
+- Refusal-boundary regressions across model upgrades (Section A of the report
+  is a diagnostic replay, not an upgrade gate).
+- Long-transcript projection behavior at the context-budget edge (existing
+  deterministic owners are expected to remain sufficient; zero new
+  context-budget tests is the expected 7H outcome).
+- Internal supervisor language policy (not a current product rule; patient-
+  facing language policy is diagnostic-only in the report).
 
 ## Configuration
 

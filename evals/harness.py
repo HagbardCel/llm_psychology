@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from jung.domain.models import Message, Plan, Profile
+from jung.domain.models import Message, Plan, PlanContent, Profile
 from jung.domain.session_artifacts import (
     PatientTurnCitation,
     SessionAnalysis,
@@ -28,8 +28,14 @@ from jung.domain.text import normalize_content
 from jung.llm.gateway import LLMGateway, LLMTask, ModelPolicy
 from jung.phases.assessment.models import AssessmentInput, AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.intake.completion import IntakeCompleteness
 from jung.phases.intake.models import IntakeRecord
-from jung.phases.post_session.merge import validate_update_result
+from jung.phases.intake.prompts import build_response_messages
+from jung.phases.post_session.merge import (
+    apply_plan_patch,
+    plan_patch_is_noop,
+    validate_update_result,
+)
 from jung.phases.post_session.models import (
     PostSessionInput,
     PostSessionResult,
@@ -145,6 +151,40 @@ def eval_plan(style_id: str, *, version: int = 1) -> Plan:
         planned_interventions=["grounding"],
         revision_recommendations=[],
         created_at=datetime.now(UTC),
+    )
+
+
+def plan_from_content(
+    content: PlanContent,
+    *,
+    selected_style: str,
+    version: int,
+    plan_id: object | None = None,
+) -> Plan:
+    return Plan(
+        id=plan_id or uuid4(),
+        version=version,
+        selected_style=selected_style,
+        focus=content.focus,
+        themes=list(content.themes),
+        goals=list(content.goals),
+        current_progress=content.current_progress,
+        planned_interventions=list(content.planned_interventions),
+        revision_recommendations=list(content.revision_recommendations),
+        created_at=datetime.now(UTC),
+    )
+
+
+def next_plan_after_review(plan: Plan, review: SessionReview) -> Plan:
+    """Mirror production: no-op patches reuse the same plan/version."""
+    patch = review.plan_recommendation
+    if plan_patch_is_noop(plan, patch):
+        return plan
+    content = apply_plan_patch(plan, patch)
+    return plan_from_content(
+        content,
+        selected_style=plan.selected_style,
+        version=plan.version + 1,
     )
 
 
@@ -265,6 +305,42 @@ class EvalRunner:
                     latest_user_message=patient_message,
                     selected_style=style,
                 )
+            )
+        ]
+        return "".join(chunks)
+
+    async def intake_reply(
+        self,
+        *,
+        profile: Profile,
+        patient_message: str,
+    ) -> str:
+        """Stream an intake patient-facing reply without running patch extraction."""
+        transcript = build_transcript(
+            (
+                ("assistant", "What brings you in today?"),
+                ("user", patient_message),
+            )
+        )
+        completeness = IntakeCompleteness(
+            complete=False,
+            missing_required_items=("risk_screen", "presenting_problem"),
+            missing_hard_items=("risk_screen", "presenting_problem"),
+            next_required_item="risk_screen",
+        )
+        messages = build_response_messages(
+            profile=profile,
+            record=IntakeRecord(),
+            completeness=completeness,
+            latest_user_message=patient_message,
+            transcript=transcript,
+            is_opening=False,
+        )
+        chunks = [
+            chunk
+            async for chunk in self.gateway.stream_text(
+                messages,
+                self.policies[LLMTask.INTAKE_RESPONSE],
             )
         ]
         return "".join(chunks)
