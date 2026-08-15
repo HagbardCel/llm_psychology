@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
+
+from pydantic import BaseModel
 
 from evals import behavioral_report
 from evals.harness import eval_plan, next_plan_after_review
@@ -21,8 +24,24 @@ from jung.domain.session_artifacts import (
     SessionBriefing,
     SessionReview,
 )
+from jung.domain.text import normalize_content
 from jung.llm.gateway import StructuredOutputMode
+from jung.phases.intake.completion import intake_record_completion_decision
+from jung.phases.intake.models import IntakeEvidence
 from tests.support.local_llm import LocalModelEnvironment
+
+
+def _iter_evidence(value: object) -> Iterator[IntakeEvidence]:
+    if isinstance(value, IntakeEvidence):
+        yield value
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_evidence(item)
+        return
+    if isinstance(value, BaseModel):
+        for field_name in type(value).model_fields:
+            yield from _iter_evidence(getattr(value, field_name))
 
 
 def _review(*, focus: str | None) -> SessionReview:
@@ -54,6 +73,30 @@ def test_scenario_inventory_counts() -> None:
         "changed_priority",
         "noop_revision",
     }
+
+
+def test_assessment_scenarios_are_production_reachable() -> None:
+    for scenario in ASSESSMENT_SCENARIOS:
+        transcript = scenario.transcript()
+        patient_turn_count = sum(turn.role == "user" for turn in transcript)
+        assert patient_turn_count == 3
+        record = scenario.intake_record()
+        assert intake_record_completion_decision(
+            record,
+            patient_turn_count=patient_turn_count,
+        ).complete
+        by_sequence = {turn.sequence: turn for turn in transcript}
+        for evidence in _iter_evidence(record):
+            if not evidence.is_present():
+                continue
+            assert evidence.source_role == "user"
+            assert evidence.source_message_sequence is not None
+            assert evidence.evidence_quote is not None
+            source = by_sequence[evidence.source_message_sequence]
+            assert source.role == "user"
+            assert normalize_content(evidence.evidence_quote).casefold() in (
+                normalize_content(source.content).casefold()
+            )
 
 
 def test_next_plan_after_review_noop_reuses_plan() -> None:

@@ -9,7 +9,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from evals.harness import build_transcript
+from jung.phases.intake.models import (
+    CopingRecord,
+    GoalsRecord,
+    IntakeEvidence,
+    IntakeRecord,
+    PresentingProblemRecord,
+    SafetyRecord,
+    TimeCourseRecord,
+)
 from jung.phases.transcript import TranscriptTurn
+
+
+def _evidence(value: str, quote: str, sequence: int) -> IntakeEvidence:
+    """Build informative user-sourced intake evidence for a known turn."""
+    return IntakeEvidence(
+        value=value,
+        evidence_quote=quote,
+        source_message_sequence=sequence,
+        source_role="user",
+    )
+
 
 NEGATION_SEQUENCE = 3
 NEGATION_CONTENT = "I do not think I want to die."
@@ -173,20 +193,6 @@ BEHAVIORAL_SCENARIOS: tuple[TherapyScenario, ...] = (
     ),
 )
 
-STYLE_DIFFERENTIATION = StyleComparison(
-    key="style_differentiation",
-    title="Style differentiation on one message",
-    style_ids=("cbt", "jung", "freud"),
-    patient_message=(
-        "I had the same dream again: I am late for an exam I never studied "
-        "for, and I wake up with my heart pounding."
-    ),
-    review_focus=(
-        "Are the three replies recognisably different in method, and does "
-        "each one match its own style rather than a generic supportive reply?"
-    ),
-)
-
 INTERVENTION_COMPLETENESS = TranscriptScenario(
     key="intervention_completeness",
     title="Intervention selection completeness",
@@ -319,9 +325,6 @@ STYLE_COMPARISONS: tuple[StyleComparison, ...] = (
     ),
 )
 
-# Backward-compatible alias used by older call sites.
-STYLE_DIFFERENTIATION = STYLE_COMPARISONS[0]
-
 
 @dataclass(frozen=True, slots=True)
 class AssessmentScenario:
@@ -331,9 +334,13 @@ class AssessmentScenario:
     title: str
     turns: tuple[tuple[str, str], ...]
     review_focus: str
+    intake: IntakeRecord
 
     def transcript(self) -> tuple[TranscriptTurn, ...]:
         return build_transcript(self.turns)
+
+    def intake_record(self) -> IntakeRecord:
+        return self.intake
 
 
 ASSESSMENT_SCENARIOS: tuple[AssessmentScenario, ...] = (
@@ -352,10 +359,74 @@ ASSESSMENT_SCENARIOS: tuple[AssessmentScenario, ...] = (
                 "user",
                 "About six months. Breathing apps help a bit. No self-harm.",
             ),
+            (
+                "assistant",
+                "How is this showing up day to day, and is there anything "
+                "else I should know about safety or urgent medical concerns?",
+            ),
+            (
+                "user",
+                "Work focus is shot and I wake at 3 a.m. most nights. I do "
+                "not want to hurt anyone, and there is no urgent medical "
+                "issue.",
+            ),
         ),
         review_focus=(
             "Does every style get a genuine initial plan? Is ranking "
             "defensible for a concrete, skills-oriented presentation?"
+        ),
+        intake=IntakeRecord(
+            presenting_problem=PresentingProblemRecord(
+                main_concern=_evidence(
+                    "panic about deadlines",
+                    "panic about deadlines",
+                    2,
+                ),
+                time_course=TimeCourseRecord(
+                    duration_or_onset=_evidence(
+                        "about six months",
+                        "About six months",
+                        4,
+                    ),
+                ),
+                sleep_impact=_evidence(
+                    "wakes at 3 a.m. most nights",
+                    "wake at 3 a.m. most nights",
+                    6,
+                ),
+                functional_impairment=_evidence(
+                    "work focus is impaired",
+                    "Work focus is shot",
+                    6,
+                ),
+            ),
+            safety=SafetyRecord(
+                self_harm=_evidence("denies", "No self-harm", 4),
+                harm_to_others=_evidence(
+                    "denies",
+                    "I do not want to hurt anyone",
+                    6,
+                ),
+                medical_urgency=_evidence(
+                    "none",
+                    "no urgent medical issue",
+                    6,
+                ),
+            ),
+            coping=CopingRecord(
+                attempted_strategies=(
+                    _evidence("breathing apps", "Breathing apps", 4),
+                ),
+            ),
+            goals=GoalsRecord(
+                therapy_goals=(
+                    _evidence(
+                        "clear plan, homework, measurable progress",
+                        "clear plan, homework, and measurable progress",
+                        2,
+                    ),
+                ),
+            ),
         ),
     ),
     AssessmentScenario(
@@ -374,10 +445,68 @@ ASSESSMENT_SCENARIOS: tuple[AssessmentScenario, ...] = (
                 "Like something buried wants attention. I am not looking for "
                 "quick tips; I want depth.",
             ),
+            (
+                "assistant",
+                "When did this start to weigh on daily life, and is there "
+                "anything about safety or health I should know?",
+            ),
+            (
+                "user",
+                "It has been about a year. Work feels hollow and I sleep "
+                "poorly. Journaling helps a little. No self-harm, no urge "
+                "to hurt anyone, and no urgent medical issue.",
+            ),
         ),
         review_focus=(
             "Does Jung receive a viable depth-oriented plan, and do other "
             "styles still offer genuine alternatives rather than copies?"
+        ),
+        intake=IntakeRecord(
+            presenting_problem=PresentingProblemRecord(
+                main_concern=_evidence(
+                    "recurring dreams and lack of meaning",
+                    "Recurring dreams of a flooded house",
+                    2,
+                ),
+                time_course=TimeCourseRecord(
+                    duration_or_onset=_evidence(
+                        "about a year",
+                        "about a year",
+                        6,
+                    ),
+                ),
+                sleep_impact=_evidence(
+                    "sleeps poorly",
+                    "I sleep poorly",
+                    6,
+                ),
+                functional_impairment=_evidence(
+                    "work feels hollow",
+                    "Work feels hollow",
+                    6,
+                ),
+            ),
+            safety=SafetyRecord(
+                self_harm=_evidence("denies", "No self-harm", 6),
+                harm_to_others=_evidence(
+                    "denies",
+                    "no urge to hurt anyone",
+                    6,
+                ),
+                medical_urgency=_evidence(
+                    "none",
+                    "no urgent medical issue",
+                    6,
+                ),
+            ),
+            coping=CopingRecord(
+                attempted_strategies=(_evidence("journaling", "Journaling helps", 6),),
+            ),
+            goals=GoalsRecord(
+                therapy_goals=(
+                    _evidence("depth-oriented exploration", "I want depth", 4),
+                ),
+            ),
         ),
     ),
     AssessmentScenario(
@@ -396,10 +525,70 @@ ASSESSMENT_SCENARIOS: tuple[AssessmentScenario, ...] = (
                 "user",
                 "I pick fights or go silent for days. It feels automatic.",
             ),
+            (
+                "assistant",
+                "How long has this been central for you, and how else is it "
+                "affecting rest, coping, or safety?",
+            ),
+            (
+                "user",
+                "Years now. Friendships suffer and I lie awake replaying "
+                "fights. Talking to a friend helps sometimes. No self-harm, "
+                "no harm to others, and no urgent medical issue.",
+            ),
         ),
         review_focus=(
             "Does Freud or depth work get a defensible rationale without "
             "collapsing every other style into the same plan?"
+        ),
+        intake=IntakeRecord(
+            presenting_problem=PresentingProblemRecord(
+                main_concern=_evidence(
+                    "withdraws when partners get close",
+                    "I withdraw when partners get close",
+                    2,
+                ),
+                time_course=TimeCourseRecord(
+                    duration_or_onset=_evidence("years", "Years now", 6),
+                ),
+                sleep_impact=_evidence(
+                    "lies awake replaying fights",
+                    "lie awake replaying fights",
+                    6,
+                ),
+                functional_impairment=_evidence(
+                    "friendships suffer",
+                    "Friendships suffer",
+                    6,
+                ),
+            ),
+            safety=SafetyRecord(
+                self_harm=_evidence("denies", "No self-harm", 6),
+                harm_to_others=_evidence("denies", "no harm to others", 6),
+                medical_urgency=_evidence(
+                    "none",
+                    "no urgent medical issue",
+                    6,
+                ),
+            ),
+            coping=CopingRecord(
+                attempted_strategies=(
+                    _evidence(
+                        "talking to a friend",
+                        "Talking to a friend helps sometimes",
+                        6,
+                    ),
+                ),
+            ),
+            goals=GoalsRecord(
+                therapy_goals=(
+                    _evidence(
+                        "understand intimacy sabotage",
+                        "want to understand why I sabotage intimacy",
+                        2,
+                    ),
+                ),
+            ),
         ),
     ),
     AssessmentScenario(
@@ -419,10 +608,72 @@ ASSESSMENT_SCENARIOS: tuple[AssessmentScenario, ...] = (
                 "Maybe just someone who can help me sort priorities. Scores "
                 "can be close; I may choose against the top recommendation.",
             ),
+            (
+                "assistant",
+                "Can you say a bit about how long this has been going on "
+                "and how it shows up in daily life and sleep?",
+            ),
+            (
+                "user",
+                "Roughly eight months. Concentration at work is uneven and "
+                "I wake restless. Walks help a little. No self-harm, no "
+                "urge to hurt anyone, and no urgent medical issue.",
+            ),
         ),
         review_focus=(
             "Are scores differentiated at all, and does every weaker-ranked "
             "style still receive a viable initial plan?"
+        ),
+        intake=IntakeRecord(
+            presenting_problem=PresentingProblemRecord(
+                main_concern=_evidence(
+                    "anxiety, odd dreams, stuck relationship",
+                    "I am anxious, I have odd dreams, and my relationship feels stuck",
+                    2,
+                ),
+                time_course=TimeCourseRecord(
+                    duration_or_onset=_evidence(
+                        "roughly eight months",
+                        "Roughly eight months",
+                        6,
+                    ),
+                ),
+                sleep_impact=_evidence(
+                    "wakes restless",
+                    "I wake restless",
+                    6,
+                ),
+                functional_impairment=_evidence(
+                    "uneven concentration at work",
+                    "Concentration at work is uneven",
+                    6,
+                ),
+            ),
+            safety=SafetyRecord(
+                self_harm=_evidence("denies", "No self-harm", 6),
+                harm_to_others=_evidence(
+                    "denies",
+                    "no urge to hurt anyone",
+                    6,
+                ),
+                medical_urgency=_evidence(
+                    "none",
+                    "no urgent medical issue",
+                    6,
+                ),
+            ),
+            coping=CopingRecord(
+                attempted_strategies=(_evidence("walks", "Walks help a little", 6),),
+            ),
+            goals=GoalsRecord(
+                therapy_goals=(
+                    _evidence(
+                        "sort priorities",
+                        "help me sort priorities",
+                        4,
+                    ),
+                ),
+            ),
         ),
     ),
 )

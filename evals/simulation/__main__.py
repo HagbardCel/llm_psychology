@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     style_choices = ("auto", *load_styles())
     parser = argparse.ArgumentParser(
         prog="python -m evals.simulation",
-        description="Longitudinal whole-product real-model journey audit (Phase 7F).",
+        description="Longitudinal whole-product real-model journey audit.",
     )
     parser.add_argument(
         "--scenario",

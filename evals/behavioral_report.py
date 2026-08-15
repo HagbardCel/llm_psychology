@@ -153,7 +153,10 @@ async def _style_sections(runner: EvalRunner) -> list[ReportSection]:
 async def _assessment_sections(runner: EvalRunner) -> list[ReportSection]:
     sections: list[ReportSection] = []
     for scenario in ASSESSMENT_SCENARIOS:
-        result = await runner.assess(transcript=scenario.transcript())
+        result = await runner.assess(
+            transcript=scenario.transcript(),
+            intake_record=scenario.intake_record(),
+        )
         lines = [
             "| Style | Score | Rationale | Initial focus | Goals | Interventions |",
             "| --- | ---: | --- | --- | --- | --- |",
