@@ -248,8 +248,12 @@ The latest next-session briefing for therapy/post-session input comes from the
 latest completed prior therapy session's `review.briefing`, whether or not that
 review produced a plan revision.
 
-Accumulation of grounded message IDs across sessions is currently unbounded;
-retention policy is a deliberate follow-up.
+Grounded message references have no automatic retention cap.
+
+This is intentional. SQLite is the durable historical archive; prompt
+construction separately bounds the longitudinal material presented to an LLM.
+A storage-retention feature should only be introduced for an explicit
+data-management requirement, not as a context-window mechanism.
 
 ### Failure behavior
 
