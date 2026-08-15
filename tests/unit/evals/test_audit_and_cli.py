@@ -39,7 +39,11 @@ from evals.simulation.runner import (
     SimulationResult,
     _await_style_selection,
     _finalize_run,
+    _select_initial_style,
     collect_chat_completion,
+    initial_style_selection_metadata,
+    resolve_style_selection,
+    style_selection_mode,
 )
 from evals.simulation.scenarios import get_scenario
 from jung.api.contracts import (
@@ -834,7 +838,16 @@ def test_render_audit_markdown_includes_not_applicable_and_dirty_warning() -> No
                 message="run never reached READY",
             )
         ],
-        run_config={"git_worktree_dirty": True, "scenario_id": "anxiety_sleep"},
+        run_config={
+            "git_worktree_dirty": True,
+            "scenario_id": "anxiety_sleep",
+            "style_selection": {
+                "mode": "explicit",
+                "requested_style": "jung",
+                "recommendations": [],
+                "selected_style_id": None,
+            },
+        },
         artifact_index=["run.json"],
         journey_error_code="chat_invalid_llm_output",
         journey_error_message="The language model returned an invalid response.",
@@ -847,6 +860,7 @@ def test_render_audit_markdown_includes_not_applicable_and_dirty_warning() -> No
     )
     assert "Diagnostic capture: COMPLETE" in text
     assert "WARNING: source worktree was dirty" in text
+    assert "Style selection: mode=explicit, requested='jung', selected=None" in text
     assert "## Not applicable" in text
     assert "initial_ready_checkpoint" in text
     assert "invalid_llm_output" in text
@@ -954,6 +968,219 @@ def test_positive_float_rejects_non_finite() -> None:
         sim_main._positive_float("nan")
     with pytest.raises(Exception, match="finite"):
         sim_main._positive_float("inf")
+
+
+def test_parser_style_defaults_to_auto_and_accepts_catalog() -> None:
+    parser = sim_main.build_parser()
+    args = parser.parse_args(
+        ["--scenario", "anxiety_sleep", "--sessions", "1", "--turns-per-session", "1"]
+    )
+    assert args.style == "auto"
+    from jung.styles import load_styles
+
+    style_ids = set(load_styles())
+    for style_id in style_ids:
+        parsed = parser.parse_args(
+            [
+                "--scenario",
+                "anxiety_sleep",
+                "--sessions",
+                "1",
+                "--turns-per-session",
+                "1",
+                "--style",
+                style_id,
+            ]
+        )
+        assert parsed.style == style_id
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--scenario",
+                "anxiety_sleep",
+                "--sessions",
+                "1",
+                "--turns-per-session",
+                "1",
+                "--style",
+                "not-a-style",
+            ]
+        )
+
+
+def test_style_selection_mode_and_initial_metadata() -> None:
+    assert style_selection_mode(None) == "assessment_top"
+    assert style_selection_mode("jung") == "explicit"
+    auto = initial_style_selection_metadata(None)
+    assert auto == {
+        "mode": "assessment_top",
+        "requested_style": None,
+        "recommendations": [],
+        "selected_style_id": None,
+    }
+    explicit = initial_style_selection_metadata("cbt")
+    assert explicit["mode"] == "explicit"
+    assert explicit["requested_style"] == "cbt"
+    assert explicit["selected_style_id"] is None
+
+
+def test_resolve_style_selection_auto_and_explicit() -> None:
+    recommendations = [
+        MagicMock(style_id="jung", score=0.5),
+        MagicMock(style_id="cbt", score=0.9),
+        MagicMock(style_id="freud", score=0.5),
+    ]
+    assert resolve_style_selection(recommendations, requested_style=None).style_id == (
+        "cbt"
+    )
+    assert (
+        resolve_style_selection(recommendations, requested_style="jung").style_id
+        == "jung"
+    )
+    with pytest.raises(SimulationError) as exc_info:
+        resolve_style_selection(recommendations, requested_style="missing")
+    assert exc_info.value.code == "style_selection"
+    assert "missing" in exc_info.value.message
+    with pytest.raises(SimulationError) as exc_info:
+        resolve_style_selection([], requested_style=None)
+    assert exc_info.value.code == "style_selection"
+
+
+@pytest.mark.asyncio
+async def test_select_initial_style_records_recommendations_before_put_failure(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "style-put-fail")
+    (run_dir / "data").mkdir(exist_ok=True)
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    recommendation = MagicMock(
+        style_id="jung",
+        score=0.4,
+        rationale="depth",
+        key_topics=["dreams"],
+    )
+    styles = MagicMock()
+    styles.recommendations = [
+        MagicMock(
+            style_id="cbt",
+            score=0.9,
+            rationale="skills",
+            key_topics=["anxiety"],
+        ),
+        recommendation,
+    ]
+    client = MagicMock()
+    client.get_styles = AsyncMock(return_value=styles)
+    client.select_style = AsyncMock(
+        side_effect=SimulationError("style_selection", "put failed")
+    )
+    config = SimulationConfig(
+        scenario=get_scenario("anxiety_sleep"),
+        sessions=1,
+        turns_per_session=1,
+        requested_style="jung",
+        workflow_timeout=1.0,
+    )
+    isolated = MagicMock()
+    isolated.database_path = run_dir / "data" / "jung.sqlite"
+    isolated.data_dir = run_dir / "data"
+    style_selection_out = {
+        "style_selection": initial_style_selection_metadata("jung"),
+    }
+    with pytest.raises(SimulationError, match="put failed"):
+        await _select_initial_style(
+            client=client,
+            config=config,
+            journey=journey,
+            isolated=isolated,
+            progress=SimulationProgress(),
+            style_selection_out=style_selection_out,
+        )
+    selection = style_selection_out["style_selection"]
+    assert selection["mode"] == "explicit"
+    assert selection["requested_style"] == "jung"
+    assert selection["selected_style_id"] is None
+    assert [item["style_id"] for item in selection["recommendations"]] == [
+        "cbt",
+        "jung",
+    ]
+    journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
+    assert "style.selected" not in journey_text
+
+
+@pytest.mark.asyncio
+async def test_select_initial_style_emits_selected_after_ready_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "style-ok")
+    (run_dir / "data").mkdir(exist_ok=True)
+    (run_dir / "checkpoints").mkdir(exist_ok=True)
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    selected = MagicMock(
+        style_id="jung",
+        score=0.4,
+        rationale="depth",
+        key_topics=["dreams"],
+    )
+    styles = MagicMock()
+    styles.recommendations = [
+        MagicMock(
+            style_id="cbt",
+            score=0.9,
+            rationale="skills",
+            key_topics=["anxiety"],
+        ),
+        selected,
+    ]
+    immediate = MagicMock()
+    immediate.stage = "style_selection"
+    immediate.selected_style = None
+    ready = MagicMock()
+    ready.stage = "ready"
+    ready.selected_style = "jung"
+    client = MagicMock()
+    client.get_styles = AsyncMock(return_value=styles)
+    client.select_style = AsyncMock(return_value=immediate)
+    client.get_state = AsyncMock(return_value=ready)
+    monkeypatch.setattr(
+        "evals.simulation.runner.create_checkpoint",
+        lambda *_args, **_kwargs: None,
+    )
+    config = SimulationConfig(
+        scenario=get_scenario("anxiety_sleep"),
+        sessions=1,
+        turns_per_session=1,
+        requested_style="jung",
+        workflow_timeout=1.0,
+    )
+    isolated = MagicMock()
+    isolated.database_path = run_dir / "data" / "jung.sqlite"
+    isolated.data_dir = run_dir / "data"
+    style_selection_out = {
+        "style_selection": initial_style_selection_metadata("jung"),
+    }
+    progress = SimulationProgress()
+    await _select_initial_style(
+        client=client,
+        config=config,
+        journey=journey,
+        isolated=isolated,
+        progress=progress,
+        style_selection_out=style_selection_out,
+    )
+    assert style_selection_out["style_selection"]["selected_style_id"] == "jung"
+    assert progress.initial_ready_reached is True
+    events = [
+        json.loads(line)
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    selected_events = [event for event in events if event["kind"] == "style.selected"]
+    assert len(selected_events) == 1
+    assert selected_events[0]["data"]["mode"] == "explicit"
+    assert selected_events[0]["data"]["requested_style"] == "jung"
+    assert selected_events[0]["data"]["selected_style_id"] == "jung"
 
 
 @pytest.mark.asyncio

@@ -70,6 +70,18 @@ make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 5 --turns-per-session 10"
 ```
 
+Style selection after assessment:
+
+- `--style auto` (default) picks the highest-scored assessment recommendation
+  (same behavior as before).
+- `--style <style_id>` selects that packaged style via the real
+  `PUT /api/v1/style` route after assessment completes. Assessment is never
+  bypassed; an unavailable style fails the run clearly.
+- `run.json` records `style_selection.mode` (`assessment_top` or `explicit`),
+  `requested_style`, `recommendations` (filled immediately after
+  `GET /styles`), and `selected_style_id` (only after authoritative READY
+  confirmation). `style.selected` is emitted only after that confirmation.
+
 Important configuration notes:
 
 - Live simulation uses **normal Jung production LLM settings**

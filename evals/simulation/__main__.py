@@ -15,6 +15,7 @@ from evals.simulation.patient import (
 )
 from evals.simulation.runner import SimulationConfig, SimulationResult, run_simulation
 from evals.simulation.scenarios import get_scenario, list_scenario_ids
+from jung.styles import load_styles
 
 
 def _positive_int(value: str) -> int:
@@ -32,6 +33,7 @@ def _positive_float(value: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    style_choices = ("auto", *load_styles())
     parser = argparse.ArgumentParser(
         prog="python -m evals.simulation",
         description="Longitudinal whole-product real-model journey audit (Phase 7F).",
@@ -45,6 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sessions", type=_positive_int, required=True)
     parser.add_argument("--turns-per-session", type=_positive_int, required=True)
     parser.add_argument("--max-intake-turns", type=_positive_int, default=12)
+    parser.add_argument(
+        "--style",
+        choices=style_choices,
+        default="auto",
+        help=(
+            "Therapy style after assessment: auto picks the highest-scored "
+            "recommendation; an explicit id selects that style via the real "
+            "style-selection API (assessment is never bypassed)"
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -79,6 +91,7 @@ def exit_code_for_result(result: SimulationResult) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    requested_style = None if args.style == "auto" else args.style
     config = SimulationConfig(
         scenario=get_scenario(args.scenario),
         sessions=args.sessions,
@@ -92,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         overall_timeout=args.overall_timeout,
         patient_history_chars=args.patient_history_chars,
         require_provider_trace=True,
+        requested_style=requested_style,
     )
     result = asyncio.run(run_simulation(config))
     if result.status == "complete":

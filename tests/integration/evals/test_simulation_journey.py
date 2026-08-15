@@ -230,16 +230,89 @@ async def test_simulation_success_journey(
     assert run_payload["patient_max_completion_tokens"] == 400
     assert "structured_output_modes" in run_payload
     assert run_payload["structured_output_modes"]["post_session_analysis"]
+    assert run_payload["style_selection"]["mode"] == "assessment_top"
+    assert run_payload["style_selection"]["requested_style"] is None
+    assert run_payload["style_selection"]["selected_style_id"] == "cbt"
     journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
     assert "simulation.completed" in journey_text
     assert "simulation.failed" not in journey_text
+    started = next(
+        json.loads(line)
+        for line in journey_text.splitlines()
+        if line.strip() and json.loads(line)["kind"] == "simulation.started"
+    )
+    assert started["data"]["style_selection_mode"] == "assessment_top"
+    assert started["data"]["requested_style"] is None
+    assert "style.selected" in journey_text
     assert (run_dir / "transcript.md").is_file()
     assert (run_dir / "audit.md").is_file()
+    assert "Style selection: mode=assessment_top" in (
+        run_dir / "audit.md"
+    ).read_text(encoding="utf-8")
     assert (run_dir / "runtime" / "trace.jsonl").is_file()
     assert (run_dir / "runtime" / "db_snapshot.sqlite").is_file()
     assert (run_dir / "checkpoints" / "initial-ready.sqlite").is_file()
     assert (run_dir / "checkpoints" / "after-session-001.sqlite").is_file()
     assert patient.utterances == []
+
+
+async def test_simulation_explicit_style_selects_jung_via_api(
+    tmp_path: Path,
+    sim_settings: JungSettings,
+) -> None:
+    """Assessment still ranks CBT highest; --style jung uses the real selection API."""
+    run_dir = tmp_path / "sim-explicit-jung"
+    patient = ScriptedPatient([*INTAKE_MESSAGES, *THERAPY_MESSAGES])
+    result = await run_simulation(
+        SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+            max_intake_turns=5,
+            output_dir=run_dir,
+            require_provider_trace=False,
+            workflow_timeout=30.0,
+            requested_style="jung",
+        ),
+        settings=sim_settings,
+        application_factory=_simulation_application_factory(_therapy_expectations()),
+        patient_actor=patient,
+        require_provider_trace=False,
+    )
+    assert result.status == "complete", (result.error_code, result.error_message)
+    run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    selection = run_payload["style_selection"]
+    assert selection["mode"] == "explicit"
+    assert selection["requested_style"] == "jung"
+    assert selection["selected_style_id"] == "jung"
+    assert {item["style_id"] for item in selection["recommendations"]} >= {
+        "cbt",
+        "jung",
+        "freud",
+    }
+    # Assessment still scores CBT highest; explicit selection overrides auto.
+    top = max(selection["recommendations"], key=lambda item: float(item["score"]))
+    assert top["style_id"] == "cbt"
+    events = [
+        json.loads(line)
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    started = next(event for event in events if event["kind"] == "simulation.started")
+    assert started["data"]["style_selection_mode"] == "explicit"
+    assert started["data"]["requested_style"] == "jung"
+    selected = next(event for event in events if event["kind"] == "style.selected")
+    assert selected["data"]["selected_style_id"] == "jung"
+    assert selected["data"]["mode"] == "explicit"
+    audit_text = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "mode=explicit" in audit_text
+    assert "selected='jung'" in audit_text
+    with sqlite3.connect(run_dir / "runtime" / "db_snapshot.sqlite") as conn:
+        plan_style = conn.execute(
+            "SELECT selected_style FROM plans ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+    assert plan_style is not None
+    assert plan_style[0] == "jung"
 
 
 async def test_simulation_first_therapy_sees_intake_history(
