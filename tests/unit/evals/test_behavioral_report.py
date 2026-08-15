@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic import BaseModel
 
 from evals import behavioral_report
-from evals.harness import eval_plan, next_plan_after_review
+from evals.harness import build_transcript, eval_plan, next_plan_after_review
 from evals.scenarios import (
     ASSESSMENT_SCENARIOS,
     ATTRIBUTION_SCENARIO,
@@ -18,7 +19,9 @@ from evals.scenarios import (
     SAFETY_STYLE_IDS,
     STYLE_COMPARISONS,
 )
+from jung.domain.models import MessageRole
 from jung.domain.session_artifacts import (
+    PatientTurnCitation,
     PlanPatch,
     SessionAnalysis,
     SessionBriefing,
@@ -55,6 +58,18 @@ def _review(*, focus: str | None) -> SessionReview:
             recommended_opening_focus="Check in.",
         ),
         plan_recommendation=PlanPatch(focus=focus),
+    )
+
+
+def _analysis_with_patient_citations(
+    *sequences: int,
+) -> SessionAnalysis:
+    return SessionAnalysis(
+        summary="Session summary.",
+        key_themes=("anxiety",),
+        patient_turn_citations=tuple(
+            PatientTurnCitation(patient_sequence=sequence) for sequence in sequences
+        ),
     )
 
 
@@ -97,6 +112,68 @@ def test_assessment_scenarios_are_production_reachable() -> None:
             assert normalize_content(evidence.evidence_quote).casefold() in (
                 normalize_content(source.content).casefold()
             )
+
+
+def test_grounded_messages_from_analysis_empty_citations() -> None:
+    transcript = build_transcript(
+        (
+            ("assistant", "What feels important?"),
+            ("user", "I feel anxious before meetings."),
+        )
+    )
+    session_id = uuid4()
+    messages = behavioral_report._grounded_messages_from_analysis(
+        transcript,
+        _analysis_with_patient_citations(),
+        session_id=session_id,
+    )
+    assert messages == ()
+
+
+def test_grounded_messages_from_analysis_preserves_resolver_order() -> None:
+    transcript = build_transcript(
+        (
+            ("assistant", "What feels important?"),
+            ("user", "First patient turn about blushing."),
+            ("assistant", "Tell me more."),
+            ("user", "Second patient turn about leaving early."),
+            ("assistant", "What happened next?"),
+            ("user", "Third patient turn about rumination."),
+        )
+    )
+    session_id = uuid4()
+    # Citation tuple order is reverse; resolver returns ascending sequence.
+    messages = behavioral_report._grounded_messages_from_analysis(
+        transcript,
+        _analysis_with_patient_citations(6, 2, 4),
+        session_id=session_id,
+    )
+    assert [message.sequence for message in messages] == [2, 4, 6]
+    by_sequence = {turn.sequence: turn for turn in transcript}
+    for message in messages:
+        source = by_sequence[message.sequence]
+        assert message.id == source.message_id
+        assert message.content == source.content
+        assert message.role is MessageRole.USER
+        assert message.session_id == session_id
+
+
+def test_plan_patch_report_shows_non_focus_change() -> None:
+    plan = eval_plan("cbt")
+    patch = PlanPatch(
+        focus=None,
+        planned_interventions=("new intervention",),
+    )
+    observation, excerpt = behavioral_report._plan_patch_report(
+        "Session 2",
+        plan,
+        patch,
+    )
+    assert observation == "Session 2 plan_patch_is_noop: False"
+    title, dump = excerpt
+    assert title == "Session 2 plan patch"
+    assert '"focus": null' in dump
+    assert '"planned_interventions": ["new intervention"]' in dump
 
 
 def test_next_plan_after_review_noop_reuses_plan() -> None:

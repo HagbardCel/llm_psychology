@@ -16,11 +16,12 @@ structured-output call needs its single project-owned correction attempt).
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from evals.harness import (
     EvalRunner,
@@ -51,7 +52,9 @@ from jung.domain.session_artifacts import (
     SessionReview,
 )
 from jung.llm.errors import LLMError
+from jung.phases.post_session.evidence_validation import resolve_session_analysis
 from jung.phases.post_session.merge import plan_patch_is_noop
+from jung.phases.transcript import TranscriptTurn
 from jung.styles import load_styles
 from tests.support.local_llm import (
     LocalModelEnvironment,
@@ -97,6 +100,47 @@ def _plan_with_focus(
         planned_interventions=list(interventions),
         revision_recommendations=list(plan.revision_recommendations),
         created_at=plan.created_at,
+    )
+
+
+def _grounded_messages_from_analysis(
+    transcript: tuple[TranscriptTurn, ...],
+    analysis: SessionAnalysis,
+    *,
+    session_id: UUID,
+) -> tuple[Message, ...]:
+    """Project validated patient-turn citations into Message wrappers."""
+    resolved = resolve_session_analysis(analysis, transcript)
+    now = datetime.now(UTC)
+    return tuple(
+        Message(
+            id=turn.message_id,
+            session_id=session_id,
+            sequence=turn.sequence,
+            role=MessageRole.USER,
+            content=turn.content,
+            client_message_id=uuid4(),
+            created_at=now,
+        )
+        for turn in resolved.selected_patient_turns
+    )
+
+
+def _plan_patch_report(
+    label: str,
+    plan: Plan,
+    patch: PlanPatch,
+) -> tuple[str, tuple[str, str]]:
+    """Return a no-op observation and a full PlanPatch JSON excerpt."""
+    noop = plan_patch_is_noop(plan, patch)
+    dump = json.dumps(
+        patch.model_dump(mode="json"),
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return (
+        f"{label} plan_patch_is_noop: {noop}",
+        (f"{label} plan patch", dump),
     )
 
 
@@ -228,18 +272,34 @@ async def _longitudinal_sections(runner: EvalRunner) -> list[ReportSection]:
             focus=scenario.initial_focus,
             interventions=scenario.initial_interventions,
         )
+        session_1_transcript = scenario.session_1_transcript()
         result_1 = await runner.post_session(
             style=style,
-            transcript=scenario.session_1_transcript(),
+            transcript=session_1_transcript,
             current_plan=plan_1,
         )
-        noop = plan_patch_is_noop(plan_1, result_1.review.plan_recommendation)
+        grounded = _grounded_messages_from_analysis(
+            session_1_transcript,
+            result_1.review.analysis,
+            session_id=uuid4(),
+        )
+        noop_1, patch_1_excerpt = _plan_patch_report(
+            "Session 1",
+            plan_1,
+            result_1.review.plan_recommendation,
+        )
         plan_2 = next_plan_after_review(plan_1, result_1.review)
         result_2 = await runner.post_session(
             style=style,
             transcript=scenario.session_2_transcript(),
             current_plan=plan_2,
             prior_reviews=(result_1.review,),
+            grounded_patient_messages=grounded,
+        )
+        noop_2, patch_2_excerpt = _plan_patch_report(
+            "Session 2",
+            plan_2,
+            result_2.review.plan_recommendation,
         )
         sections.append(
             ReportSection(
@@ -248,11 +308,12 @@ async def _longitudinal_sections(runner: EvalRunner) -> list[ReportSection]:
                 observations=[
                     f"Style: `{scenario.style_id}`",
                     f"Session 1 plan version: {plan_1.version}",
-                    f"Session 1 plan_patch_is_noop: {noop}",
+                    noop_1,
                     f"Session 2 plan version: {plan_2.version}",
                     f"Session 2 plan focus: {plan_2.focus}",
                     "Session 2 plan identity reused: "
                     f"{plan_2.id == plan_1.id and plan_2.version == plan_1.version}",
+                    noop_2,
                 ],
                 excerpts=[
                     ("Session 1 summary", result_1.review.analysis.summary),
@@ -261,9 +322,14 @@ async def _longitudinal_sections(runner: EvalRunner) -> list[ReportSection]:
                         "\n".join(result_1.review.analysis.progress_indicators)
                         or "(none)",
                     ),
+                    patch_1_excerpt,
                     (
-                        "Session 1 plan patch focus",
-                        result_1.review.plan_recommendation.focus or "(unchanged)",
+                        "Grounded patient messages supplied to session 2",
+                        "\n".join(
+                            f"[{message.sequence}] {message.content}"
+                            for message in grounded
+                        )
+                        or "(none)",
                     ),
                     ("Session 2 summary", result_2.review.analysis.summary),
                     (
@@ -271,10 +337,7 @@ async def _longitudinal_sections(runner: EvalRunner) -> list[ReportSection]:
                         "\n".join(result_2.review.analysis.progress_indicators)
                         or "(none)",
                     ),
-                    (
-                        "Session 2 plan patch focus",
-                        result_2.review.plan_recommendation.focus or "(unchanged)",
-                    ),
+                    patch_2_excerpt,
                     (
                         "Session 2 narrative handoff",
                         result_2.review.briefing.narrative_handoff,
