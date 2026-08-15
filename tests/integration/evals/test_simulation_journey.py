@@ -246,9 +246,9 @@ async def test_simulation_success_journey(
     assert "style.selected" in journey_text
     assert (run_dir / "transcript.md").is_file()
     assert (run_dir / "audit.md").is_file()
-    assert "Style selection: mode=assessment_top" in (
-        run_dir / "audit.md"
-    ).read_text(encoding="utf-8")
+    assert "Style selection: mode=assessment_top" in (run_dir / "audit.md").read_text(
+        encoding="utf-8"
+    )
     assert (run_dir / "runtime" / "trace.jsonl").is_file()
     assert (run_dir / "runtime" / "db_snapshot.sqlite").is_file()
     assert (run_dir / "checkpoints" / "initial-ready.sqlite").is_file()

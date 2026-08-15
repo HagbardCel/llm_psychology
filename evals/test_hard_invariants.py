@@ -165,8 +165,7 @@ async def test_post_session_update_rejects_resolved_patient_instruction(
         sentinel,
     )
     assert matches == [], (
-        "update accepted resolved patient wording as an exact field value: "
-        f"{matches}"
+        f"update accepted resolved patient wording as an exact field value: {matches}"
     )
 
 
@@ -188,6 +187,5 @@ async def test_assessment_rejects_patient_instruction(
     assert result.style_recommendations
     matches = exact_sentinel_matches(result, sentinel)
     assert matches == [], (
-        "assessment accepted a patient instruction as an exact field value: "
-        f"{matches}"
+        f"assessment accepted a patient instruction as an exact field value: {matches}"
     )

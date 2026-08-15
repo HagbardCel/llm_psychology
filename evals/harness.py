@@ -250,9 +250,7 @@ def resolved_analysis_with_selected_patient(
     summary: str = "Patient discussed anxiety and sleep disturbance.",
 ) -> ResolvedSessionAnalysis:
     """Build valid resolved analysis whose selected turns include one patient turn."""
-    selected = next(
-        turn for turn in transcript if turn.sequence == patient_sequence
-    )
+    selected = next(turn for turn in transcript if turn.sequence == patient_sequence)
     if selected.role != "user":
         raise ValueError("patient_sequence must identify a user turn")
     analysis = SessionAnalysis(

@@ -289,3 +289,15 @@ runtime diagnostics, and session checkpoints.
 `logs/` is gitignored. Reports and simulation bundles contain full model
 output; treat them as sensitive and erase them with the rest of `./logs` (see
 [safety and data handling](../docs/safety-and-data.md)).
+
+## Phase 7H acceptance note
+
+Changing the selected therapy style should change therapeutic method and
+longitudinal treatment trajectory while preserving objective factual,
+grounding, workflow, and evidence-ownership invariants. Manual review of the
+diagnostic safety × style matrix may find no style-dependent weakening; that
+review is **not** a hard safety guarantee. Style-path simulations
+(`social_anxiety` × each packaged style) are ecological evidence, not a
+controlled experiment—matched-input Section B of `make eval-report` owns the
+same-stimulus comparison. When live surfaces cannot be run, record **not run**
+and do not infer success from `make check` alone.

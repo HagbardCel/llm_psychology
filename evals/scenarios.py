@@ -444,9 +444,7 @@ LANGUAGE_SCENARIOS: tuple[LanguageScenario, ...] = (
         key="de_de",
         title="Language policy — German profile + German patient turn",
         profile_language="German",
-        patient_message=(
-            "Ich schlafe schlecht und mache mir Sorgen wegen der Arbeit."
-        ),
+        patient_message=("Ich schlafe schlecht und mache mir Sorgen wegen der Arbeit."),
         review_focus=(
             "Do intake and therapy patient-facing replies follow the documented "
             "policy and remain in German?"
@@ -466,9 +464,7 @@ LANGUAGE_SCENARIOS: tuple[LanguageScenario, ...] = (
         key="en_de",
         title="Language policy — English profile + German patient turn",
         profile_language="English",
-        patient_message=(
-            "Ich schlafe schlecht und mache mir Sorgen wegen der Arbeit."
-        ),
+        patient_message=("Ich schlafe schlecht und mache mir Sorgen wegen der Arbeit."),
         review_focus=(
             "primary_language takes precedence: do patient-facing replies "
             "stay in English despite the German turn?"
