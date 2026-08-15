@@ -11,7 +11,7 @@ from jung.phases.intake.completion import (
 from jung.phases.intake.models import IntakeRecord
 from jung.phases.transcript import TranscriptTurn
 
-PROMPT_VERSION = "intake-v1"
+PROMPT_VERSION = "intake-v2"
 
 
 def _record_summary(record: IntakeRecord, completeness: IntakeCompleteness) -> str:
@@ -49,6 +49,13 @@ def build_patch_extraction_messages(
         "Do not infer unsupported facts.",
         "Evidence must reference patient-authored text with source_role=user.",
         f"Use source_message_sequence={latest_user_message.sequence}.",
+        "Omit whole sections (presenting_problem, safety, coping, goals) that the "
+        "latest turn does not support. Prefer no_new_information=true when the "
+        "turn adds no grounded evidence.",
+        "Never invent unknown/unable evidence for unasked topics. If "
+        "response_status is unknown or unable_to_answer, direct_ask must be true "
+        "(the patient was asked and could not answer). Otherwise leave "
+        "unaddressed evidence at defaults or omit the section.",
         f"Current record summary:\n{_record_summary(record, missing_items_from_record(record))}",
         f"Latest patient message:\n{latest_user_message.content}",
     ]
@@ -61,7 +68,9 @@ def build_patch_extraction_messages(
             role=ChatRole.SYSTEM,
             content=(
                 "You extract patient-grounded intake evidence as JSON. "
-                "Return only fields supported by the latest patient turn."
+                "Return only fields supported by the latest patient turn. "
+                "unknown/unable response_status requires direct_ask=true; "
+                "do not mark unasked fields as unknown."
             ),
         ),
         ChatMessage(role=ChatRole.USER, content="\n\n".join(context_parts)),
