@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -748,22 +749,47 @@ def _write_report(
     metrics: dict[str, object],
     generated_at: datetime,
 ) -> list[Path]:
+    """Stage Markdown+metrics to unique temps, then atomically publish finals."""
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     metrics_text = json.dumps(metrics, indent=2, sort_keys=True) + "\n"
-    paths = [
-        REPORT_DIR / LATEST_REPORT,
-        REPORT_DIR / f"report-{stamp}.md",
-        REPORT_DIR / LATEST_METRICS,
-        REPORT_DIR / f"report-{stamp}.metrics.json",
+    finals = [
+        (REPORT_DIR / LATEST_REPORT, text),
+        (REPORT_DIR / f"report-{stamp}.md", text),
+        (REPORT_DIR / LATEST_METRICS, metrics_text),
+        (REPORT_DIR / f"report-{stamp}.metrics.json", metrics_text),
     ]
-    (REPORT_DIR / LATEST_REPORT).write_text(text, encoding="utf-8")
-    (REPORT_DIR / f"report-{stamp}.md").write_text(text, encoding="utf-8")
-    (REPORT_DIR / LATEST_METRICS).write_text(metrics_text, encoding="utf-8")
-    (REPORT_DIR / f"report-{stamp}.metrics.json").write_text(
-        metrics_text, encoding="utf-8"
-    )
-    return paths
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for final_path, content in finals:
+            handle = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=f".{final_path.name}.",
+                suffix=".tmp",
+                dir=REPORT_DIR,
+                delete=False,
+            )
+            temp_path = Path(handle.name)
+            try:
+                with handle:
+                    handle.write(content)
+            except Exception:
+                temp_path.unlink(missing_ok=True)
+                raise
+            staged.append((temp_path, final_path))
+        published: list[Path] = []
+        for temp_path, final_path in staged:
+            temp_path.replace(final_path)
+            published.append(final_path)
+        return published
+    except Exception:
+        for temp_path, _final_path in staged:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
 
 
 async def _collect(

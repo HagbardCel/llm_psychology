@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -284,39 +286,126 @@ def test_parser_rejects_non_positive_concurrency() -> None:
         assert exc_info.value.code == 2
 
 
-def test_build_report_jobs_inventory_and_chapter_order() -> None:
+@pytest.mark.asyncio
+async def test_build_report_jobs_execute_in_chapter_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove A→Appendix order by running the actual lazy jobs (helpers stubbed)."""
+    from evals.execution import bounded_ordered_map
     from evals.harness import EvalRunner
     from evals.scenarios import INTERVENTION_COMPLETENESS
     from tests.support.fake_llm import FakeLLM
 
-    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
-    jobs = behavioral_report.build_report_jobs(runner)
-    assert len(jobs) == 34
+    async def stub_safety(runner, scenario, style_id, style):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"A. Safety × style — {scenario.title} (`{style_id}`)",
+            review_focus="stub",
+            observations=[f"key={scenario.key}", f"style={style_id}"],
+            excerpts=[("stub", "ok")],
+        )
 
-    expected_prefixes: list[str] = []
-    for scenario in BEHAVIORAL_SCENARIOS:
-        for style_id in SAFETY_STYLE_IDS:
-            expected_prefixes.append(
-                f"A. Safety × style — {scenario.title} (`{style_id}`)"
-            )
-    for comparison in STYLE_COMPARISONS:
-        expected_prefixes.append(f"B. {comparison.title}")
-    for scenario in ASSESSMENT_SCENARIOS:
-        expected_prefixes.append(f"C. {scenario.title}")
-    for scenario in LANGUAGE_SCENARIOS:
-        expected_prefixes.append(f"D. {scenario.title}")
-    for scenario in LONGITUDINAL_SUPERVISOR_SCENARIOS:
-        expected_prefixes.append(f"E. {scenario.title}")
-    expected_prefixes.append(f"F. {ATTRIBUTION_SCENARIO.title}")
-    expected_prefixes.append(f"Appendix. {INTERVENTION_COMPLETENESS.title}")
-    assert len(expected_prefixes) == 34
-    assert expected_prefixes[0].startswith("A.")
-    assert expected_prefixes[18].startswith("B.")
-    assert expected_prefixes[21].startswith("C.")
-    assert expected_prefixes[25].startswith("D.")
-    assert expected_prefixes[28].startswith("E.")
-    assert expected_prefixes[32].startswith("F.")
-    assert expected_prefixes[33].startswith("Appendix.")
+    async def stub_style(runner, comparison, styles):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"B. {comparison.title}",
+            review_focus="stub",
+            observations=[f"key={comparison.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    async def stub_assessment(runner, scenario, available_styles):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"C. {scenario.title}",
+            review_focus="stub",
+            observations=[f"key={scenario.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    async def stub_language(runner, scenario, therapy_style):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"D. {scenario.title}",
+            review_focus="stub",
+            observations=[f"key={scenario.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    async def stub_longitudinal(runner, scenario, style):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"E. {scenario.title}",
+            review_focus="stub",
+            observations=[f"key={scenario.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    async def stub_attribution(runner, scenario, style):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"F. {scenario.title}",
+            review_focus="stub",
+            observations=[f"key={scenario.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    async def stub_intervention(runner, scenario, style):  # type: ignore[no-untyped-def]
+        return behavioral_report.ReportSection(
+            title=f"Appendix. {scenario.title}",
+            review_focus="stub",
+            observations=[f"key={scenario.key}"],
+            excerpts=[("stub", "ok")],
+        )
+
+    monkeypatch.setattr(behavioral_report, "_safety_section", stub_safety)
+    monkeypatch.setattr(behavioral_report, "_style_section", stub_style)
+    monkeypatch.setattr(behavioral_report, "_assessment_section", stub_assessment)
+    monkeypatch.setattr(behavioral_report, "_language_section", stub_language)
+    monkeypatch.setattr(behavioral_report, "_longitudinal_section", stub_longitudinal)
+    monkeypatch.setattr(behavioral_report, "_attribution_section", stub_attribution)
+    monkeypatch.setattr(behavioral_report, "_intervention_section", stub_intervention)
+
+    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
+    sections = await bounded_ordered_map(
+        behavioral_report.build_report_jobs(runner),
+        concurrency=1,
+    )
+    assert len(sections) == 34
+
+    for index, section in enumerate(sections[:18]):
+        assert section.title.startswith("A.")
+        scenario = BEHAVIORAL_SCENARIOS[index // len(SAFETY_STYLE_IDS)]
+        style_id = SAFETY_STYLE_IDS[index % len(SAFETY_STYLE_IDS)]
+        assert scenario.key in section.observations[0]
+        assert style_id in section.observations[1]
+        assert f"(`{style_id}`)" in section.title
+
+    for offset, comparison in enumerate(STYLE_COMPARISONS):
+        section = sections[18 + offset]
+        assert section.title.startswith("B.")
+        assert section.title == f"B. {comparison.title}"
+        assert f"key={comparison.key}" in section.observations
+
+    for offset, scenario in enumerate(ASSESSMENT_SCENARIOS):
+        section = sections[21 + offset]
+        assert section.title.startswith("C.")
+        assert section.title == f"C. {scenario.title}"
+        assert f"key={scenario.key}" in section.observations
+
+    for offset, scenario in enumerate(LANGUAGE_SCENARIOS):
+        section = sections[25 + offset]
+        assert section.title.startswith("D.")
+        assert section.title == f"D. {scenario.title}"
+        assert f"key={scenario.key}" in section.observations
+
+    for offset, scenario in enumerate(LONGITUDINAL_SUPERVISOR_SCENARIOS):
+        section = sections[28 + offset]
+        assert section.title.startswith("E.")
+        assert section.title == f"E. {scenario.title}"
+        assert f"key={scenario.key}" in section.observations
+
+    assert sections[32].title.startswith("F.")
+    assert sections[32].title == f"F. {ATTRIBUTION_SCENARIO.title}"
+    assert f"key={ATTRIBUTION_SCENARIO.key}" in sections[32].observations
+
+    assert sections[33].title.startswith("Appendix.")
+    assert sections[33].title == f"Appendix. {INTERVENTION_COMPLETENESS.title}"
+    assert f"key={INTERVENTION_COMPLETENESS.key}" in sections[33].observations
 
 
 @pytest.mark.asyncio
@@ -556,3 +645,69 @@ def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
     assert "attempts with usage: 1 / 1" in text
     assert "concurrency: 4" in text
     assert "request overlap factor: 1.00" in text
+
+
+def test_write_report_publishes_all_four_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(behavioral_report, "REPORT_DIR", tmp_path)
+    generated_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    paths = behavioral_report._write_report(
+        "# report\n",
+        {"schema_version": 1, "concurrency": 1},
+        generated_at,
+    )
+    stamp = "20260101T120000Z"
+    assert paths == [
+        tmp_path / "latest.md",
+        tmp_path / f"report-{stamp}.md",
+        tmp_path / "latest.metrics.json",
+        tmp_path / f"report-{stamp}.metrics.json",
+    ]
+    for path in paths:
+        assert path.is_file()
+    assert (tmp_path / "latest.md").read_text(encoding="utf-8") == "# report\n"
+    assert '"concurrency": 1' in (tmp_path / "latest.metrics.json").read_text(
+        encoding="utf-8"
+    )
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_write_report_staging_failure_leaves_prior_finals_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(behavioral_report, "REPORT_DIR", tmp_path)
+    prior_md = tmp_path / "latest.md"
+    prior_metrics = tmp_path / "latest.metrics.json"
+    prior_md.write_text("PRIOR_MARKDOWN\n", encoding="utf-8")
+    prior_metrics.write_text('{"prior": true}\n', encoding="utf-8")
+
+    real_ntf = tempfile.NamedTemporaryFile
+    calls = {"n": 0}
+
+    def flaky_ntf(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        handle = real_ntf(*args, **kwargs)
+        if calls["n"] == 3:
+            handle.close()
+            Path(handle.name).unlink(missing_ok=True)
+            raise OSError("simulated staging failure")
+        return handle
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", flaky_ntf)
+
+    with pytest.raises(OSError, match="simulated staging failure"):
+        behavioral_report._write_report(
+            "# NEW_REPORT\n",
+            {"schema_version": 1, "concurrency": 4},
+            datetime(2026, 1, 2, tzinfo=UTC),
+        )
+
+    assert prior_md.read_text(encoding="utf-8") == "PRIOR_MARKDOWN\n"
+    assert prior_metrics.read_text(encoding="utf-8") == '{"prior": true}\n'
+    assert not (tmp_path / "report-20260102T000000Z.md").exists()
+    assert not (tmp_path / "report-20260102T000000Z.metrics.json").exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert "NEW_REPORT" not in prior_md.read_text(encoding="utf-8")
