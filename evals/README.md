@@ -64,8 +64,10 @@ are not.
 
 `request_overlap_factor` is summed provider-attempt latency divided by
 evaluation wall time (time spent inside the bounded job map only). It
-measures **client-observed provider-request lifetime overlap**, not
-inference-server batching efficiency.
+measures **client-observed outstanding-request overlap**, not
+inference-server batching efficiency. A concurrent client can keep several
+requests outstanding while the server still executes them serially (the M4
+control row in the Phase 8B matrix exists to expose that distinction).
 
 Token totals in the report are **reported** usage. An attempt counts toward
 usage coverage only when **both** `prompt_tokens` and `completion_tokens`
@@ -76,12 +78,177 @@ are present. Streaming calls often omit usage; that lowers coverage and does
 processed by the report observer. `usage_coverage` means the provider
 supplied complete token usage. Both true with coverage below 1.0 is valid.
 
-Benchmark tip: restart (or otherwise equilibrate) the model server between
-measured concurrency settings so KV/prompt-cache warm state does not confound
-N=1 versus N=4. Record client concurrency, server parallelism, model,
-quantization, structured mode, evaluation wall, usage coverage, corrections,
-and `request_overlap_factor` in the PR—not as a fossilized default in this
-README.
+The metrics sidecar also records input-workload fingerprints:
+`prompt_chars_total`, `response_format_chars_total`, and `max_prompt_chars`.
+These are observational sanity checks for workload identity across timed
+rows. They are **not** equality gates (some report jobs are causal, so
+model-generated output can alter a later prompt) and must **not** be
+converted into tokens or used to size llama.cpp `--ctx-size`. Streaming
+`response_chars` are intentionally omitted: without a diagnostic recorder
+they are often `None`, so a partial sum would be misleading.
+
+### Phase 8B — server batching benchmark protocol
+
+Phase 8A unlocked bounded client concurrency for `eval-report`. Phase 8B
+measures how an OpenAI-compatible local inference server should execute that
+concurrent workload. Jung remains backend-neutral; only launch recipes and
+`LOCAL_LLM_SMOKE_*` exports change.
+
+Do **not** reuse Phase 8A wall times as a baseline when the requested API
+model name and the actually loaded artifact disagreed. Requested model ID ≠
+loaded artifact is a permanent provenance rule.
+
+#### Fixed Qwen3.8-27B fixture
+
+Every timed Phase 8B row uses **Qwen3.8-27B**:
+
+```text
+Model:                    Qwen3.8-27B
+llama.cpp artifact:       one pinned GGUF repository / quant / revision
+MTPLX artifact:           Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
+                          (exact revision; not Bare Speed)
+Thinking:                 enabled
+Common extras:            enable_thinking=true, top_p=0.95, top_k=20
+Jung temperatures:        unchanged (0.1 structured/supervisor, 0.7 therapy)
+Structured mode:          json_schema
+Request timeout:          LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+llama.cpp min_p:          --min-p 0 (server launch; not in shared extras)
+Persistent cross-run:     disabled for timed measurements
+Per-slot context:         one common frozen target after preflight
+Backend binaries:         frozen for the complete matrix
+```
+
+Export (do not mix with production `LLM_BASE_URL` / `MODEL_NAME`):
+
+```bash
+export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8080/v1
+export LOCAL_LLM_SMOKE_MODEL=<requested-model-id>
+export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
+export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
+```
+
+Do not inherit `.env.example`’s `enable_thinking:false` into this fixture.
+`.env.example` is intentionally not the Phase 8B product-default switch.
+
+Before timing, establish one Qwen3.8 reasoning configuration that both
+tested builds demonstrably honor. If equivalent effort cannot be
+established, label the cross-backend result an **operational configuration
+comparison**, not a controlled engine-only comparison. Within each backend,
+all scheduler rows must use the same reasoning configuration.
+
+GGUF and MTPLX quantizations are not bit-equivalent; record the mismatch.
+The goal is the best practical local Jung configuration among the matrix.
+
+#### Provenance checklist (every timed row)
+
+Record in the PR worksheet (not Jung auto-detection):
+
+- Jung commit; frozen backend binary/build (updating either invalidates that
+  backend’s cross-row comparisons)
+- requested `LOCAL_LLM_SMOKE_MODEL` vs actually loaded artifact
+- quantization / revision; MTPLX resolved profile + effective MTP depth +
+  scheduler / active lane
+- client concurrency `N`; server slots / active requests; batching mode
+- llama.cpp: `--ctx-size`, `--parallel`, `--cont-batching`, `--min-p 0`;
+  for LM1 also `--spec-draft-n-max`
+- MTPLX timed launches: `--ssd-session-cache off`
+- thinking / reasoning / sampling extras; structured mode; timeout
+- sanitized launch command
+
+Verification without Jung backend code:
+
+- llama.cpp: `GET /props` → `model_path`, `total_slots`, `build_info`;
+  `GET /slots` for per-slot `n_ctx`. Abort if `total_slots` ≠ intended
+  `--parallel`.
+- MTPLX: inspect `/health` and `/v1/models`; verify scheduler state using
+  fields the **exact tested build** exposes. Abort if observed state does
+  not match the intended configuration. Do not freeze an external JSON
+  schema into this README.
+
+#### llama.cpp context allocation
+
+`--ctx-size` is a shared KV budget. `--parallel N` partitions it among
+slots. Fix one explicit **per-slot** token-context target before the matrix
+(large enough for the largest expected eval prompt plus conservative
+generation/reasoning headroom). `eval-report` does not impose a completion
+cap today.
+
+Initial candidate: `32768` tokens/slot. After an L1/preflight that fits
+comfortably, freeze it. Then, if memory allows:
+
+```text
+L1: --ctx-size 32768  --parallel 1 --cont-batching --min-p 0
+L2: --ctx-size 65536  --parallel 2 --cont-batching --min-p 0
+L4: --ctx-size 131072 --parallel 4 --cont-batching --min-p 0
+```
+
+If L4 cannot provide the common per-slot target, mark **L4 infeasible**
+rather than benchmarking a smaller context. Set `--parallel` explicitly
+(default is auto). Pass `--cont-batching` even when it is the default.
+
+#### Screening matrix
+
+| ID | Backend | Client N | Server mode | Status |
+| --- | --- | ---: | --- | --- |
+| L1 | llama.cpp | 1 | `--parallel 1 --cont-batching --min-p 0` | mandatory serial baseline |
+| L2 | llama.cpp | 2 | `--parallel 2 --cont-batching --min-p 0` | mandatory |
+| L4 | llama.cpp | 4 | `--parallel 4 --cont-batching --min-p 0` | mandatory or infeasible |
+| LM1 | llama.cpp | 1 | native `draft-mtp` | conditional |
+| M1 | MTPLX | 1 | default/`serial` MTP | mandatory serial MTP |
+| M4 | MTPLX | 4 | default serial (queue) | mandatory client-concurrency control |
+| A2 | MTPLX | 2 | `--scheduler-mode ar_batch` | if Qwen3.8 admits `ar_batch` |
+| A4 | MTPLX | 4 | `--scheduler-mode ar_batch` | if Qwen3.8 admits `ar_batch` |
+| T4 | MTPLX | 4 | concurrent native-MTP lane | conditional |
+
+L1/L2/L4 and M1/M4 are mandatory. A2/A4 are mandatory when the released
+Qwen3.8 backend admits `ar_batch`; otherwise record unsupported. T4 and LM1
+run only when the installed released build supports them cleanly. Do not
+install an unreleased build merely to fill a row. Unsupported combinations
+are recorded, not repaired or emulated.
+
+Before expensive MTPLX timing, attempt scheduler construction against the
+pinned Optimized Speed artifact. Leave secondary MTPLX knobs at documented
+defaults unless Stage 2 is needed.
+
+#### Timed-row protocol
+
+```text
+stop → configure → start → readiness / provenance
+→ one fixed short dummy chat-completion (same text every row)
+→ timed make eval-report EVAL_REPORT_ARGS="--concurrency N"
+→ stop
+```
+
+`make smoke-local-llm` is the **json_schema compatibility gate**, not the
+warm-up. If smoke ran, restart and dummy-warm again before the timed row.
+MTPLX timed launches use `--ssd-session-cache off` so SSD session cache
+cannot persist across restarts and corrupt A/B alternation. Interactive
+recipes keep normal MTPLX cache behavior.
+
+#### Screening → confirmation
+
+1. Screen each admitted row once; drop clear losers; record
+   unsupported/infeasible rows.
+2. Take the best two practical configs; run each three times alternating
+   A B A B A B.
+3. Primary metric: **median `evaluation_wall_seconds`**.
+
+Metric priority: (1) median wall, (2) report completed, (3) corrections /
+failures, (4) client outstanding-request overlap, (5) input character
+fingerprints, (6) token usage if reported, (7) backend tok/s as
+explanation only.
+
+Stage 2 only if the best concurrent candidate has **verified backend-side
+concurrent execution** (llama.cpp slots / MTPLX scheduler telemetry) but
+wall time still disappoints: one focused follow-up (batch/ubatch around
+best slots, one MTPLX decode-batch/batch-wait probe, or LM4 if LM1 beat
+L1). Do not grid-search.
+
+Optimization target: ≥1.5× versus clean L1. A documented empirical ceiling
+is also a valid Phase 8B result. Word conclusions as the best configuration
+**among the Phase 8B matrix**, not a global backend ranking unless LM1 was
+successfully screened.
 
 Chapters (lettered in section titles):
 
@@ -322,7 +489,9 @@ uv run --locked pytest evals/test_hard_invariants.py -q      # all skipped
 
 The metrics sidecar includes provenance (`schema_version`, model, sanitized
 base URL, structured mode, concurrency) plus provider-attempt counters,
-reported token usage, `request_overlap_factor`, and `metrics_complete`.
+reported token usage, `request_overlap_factor` (client outstanding-request
+overlap), input-workload fingerprints (`prompt_chars_total`,
+`response_format_chars_total`, `max_prompt_chars`), and `metrics_complete`.
 
 `make simulate-local-llm` writes to `logs/simulations/run-<UTC>/` including
 `run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite,

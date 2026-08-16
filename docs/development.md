@@ -177,7 +177,75 @@ in PR notes rather than committing artifact trees.
 See [`tests/README.md`](../tests/README.md) and [`evals/README.md`](../evals/README.md)
 for suite ownership and hard-versus-diagnostic semantics.
 
-## Diagnostics
+## Local inference recipes (Phase 8B)
+
+Jung talks only to an OpenAI-compatible endpoint. Processor-level smoke,
+hard evals, and `eval-report` use `LOCAL_LLM_SMOKE_*`. Interactive `make run`
+uses `LLM_BASE_URL` / `MODEL_NAME`. Do not mix the namespaces.
+
+Phase 8B measures server-side scheduling for the concurrent `eval-report`
+workload on a frozen **Qwen3.8-27B** fixture. Full matrix, provenance, and
+acceptance rules live in [`evals/README.md`](../evals/README.md). Exact build
+IDs and measured winners belong in the PR worksheet, not as machine-independent
+defaults here.
+
+### Shared eval/smoke exports
+
+```bash
+export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8080/v1
+export LOCAL_LLM_SMOKE_MODEL=<requested-model-id>
+export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
+export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
+```
+
+### High-throughput evaluation recipe
+
+Use the matrix winner’s launch command. Typical shapes:
+
+**llama.cpp** (example with common 32K/slot context; adjust after preflight):
+
+```bash
+llama-server -m <pinned-qwen3.8-27b.gguf> \
+  --port 8080 \
+  --ctx-size $((32768 * N)) \
+  --parallel N \
+  --cont-batching \
+  --min-p 0
+```
+
+Then:
+
+```bash
+make eval-report EVAL_REPORT_ARGS="--concurrency N"
+```
+
+**MTPLX** (timed measurements must disable SSD session cache):
+
+```bash
+mtplx serve \
+  --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
+  --scheduler-mode <serial|ar_batch|…> \
+  --ssd-session-cache off \
+  --port 8080
+```
+
+Point `LOCAL_LLM_SMOKE_BASE_URL` at that server and run the same
+`eval-report` command. Restart between timed rows; use one fixed short dummy
+chat-completion as warm-up (not `make smoke-local-llm`).
+
+### Preferred serial / interactive recipe
+
+Prefer a successful serial candidate from L1 / LM1 / M1, informed by serial
+`eval-report` wall time and a manual responsiveness check. This is not a
+dedicated TTFT benchmark.
+
+For interactive Jung, leave MTPLX’s normal session/SSD cache behavior enabled
+unless product testing finds a reason to disable it. Point production
+`LLM_BASE_URL` / `MODEL_NAME` at the chosen serial server; keep
+`LOCAL_LLM_SMOKE_*` for smoke/evals/report only.
+
+### Diagnostics
 
 - Ordinary logs under the process logger / `./logs` as configured
 - Opt-in diagnostic capture via `JUNG_DEBUG_RUN_DIR` — see
