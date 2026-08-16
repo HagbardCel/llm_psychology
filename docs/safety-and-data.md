@@ -14,23 +14,34 @@ an appropriate crisis service in your area.
 
 ## Scope of behavioral evaluations
 
-The opt-in evaluations under `evals/` are split deliberately. `make evals`
-asserts a narrow set of contractual behaviors (system-instruction
-non-disclosure, objective integrity, citation grounding). The behavioral
-scenarios in `make eval-report` — crisis, self-harm, violence, medical advice,
-dependency, and diagnosis requests — are **diagnostic only**: they record what
-the configured model said for human review and assert nothing.
+The opt-in evaluations under `evals/` are split deliberately into three
+buckets:
 
-`make simulate-local-llm` adds a whole-product longitudinal journey. A single
-simulation directory may contain complete synthetic dialogue, patient prompts,
-therapist prompts, supervisor prompts, raw provider outputs, `SessionReview`
-data, plans, and SQLite snapshots/checkpoints. Treat the entire run directory
-as highly sensitive diagnostic material, equivalent to a debug-run capture.
+| Classification | Meaning | Examples |
+| --- | --- | --- |
+| **Hard invariant** | Contractual; enforced by `make evals` | Hidden system canary non-disclosure; exact-value therapy / analysis / update / assessment instruction resistance; citation integrity if emitted; safety-relevant negation selection; no style-instruction leakage into durable artifacts |
+| **Diagnostic human review** | Recorded by `make eval-report` / simulation bundles; no automatic pass/fail | Crisis, violence, delusion, medication, dependency, and diagnosis boundary wording across styles; matched-input style differentiation; assessment quality; patient-facing language policy; longitudinal supervisor adaptation; historical/current attribution |
+| **Not claimed** | Explicitly outside product guarantees | Correct psychiatric diagnosis; optimal therapeutic intervention; emergency or crisis care; professional monitoring |
 
-Passing evals or a simulation mechanical audit is not a safety claim. Turning
-any behavioral scenario into a product commitment would be an intentional
-extension of this safety specification, with the guarantee stated here first and
-only then enforced as a hard eval. See [Real-model evaluations](../evals/README.md).
+`make evals` asserts only the hard invariants above. The behavioral scenarios in
+`make eval-report` — including the safety × style matrix — are **diagnostic
+only**: they record what the configured model said for human review and assert
+nothing about therapeutic quality or clinical safety.
+
+`make simulate-local-llm` adds a whole-product longitudinal journey. Explicit
+`--style` selection still runs real assessment first. A single simulation
+directory may contain complete synthetic dialogue, patient prompts, therapist
+prompts, supervisor prompts, raw provider outputs, `SessionReview` data, plans,
+and SQLite snapshots/checkpoints. Treat the entire run directory as highly
+sensitive diagnostic material, equivalent to a debug-run capture. Cite
+simulation **run IDs** in PRs rather than committing artifact trees.
+
+Passing evals or a simulation mechanical audit is not a safety claim. Manual
+review that finds no style-dependent weakening across diagnostic safety
+scenarios is also not a hard safety guarantee. Turning any behavioral scenario
+into a product commitment would be an intentional extension of this safety
+specification, with the guarantee stated here first and only then enforced as a
+hard eval. See [Real-model evaluations](../evals/README.md).
 
 When an alternate patient endpoint is configured for simulation, credentials
 come only from the eval-only environment variable `JUNG_SIM_PATIENT_API_KEY`

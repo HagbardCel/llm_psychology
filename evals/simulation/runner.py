@@ -132,6 +132,8 @@ class SimulationConfig:
     require_provider_trace: bool = True
     profile_name: str = "Simulated Patient"
     profile_language: str = "English"
+    # None means assessment_top (auto); a style id means explicit selection.
+    requested_style: str | None = None
 
 
 ApplicationFactory = Callable[[JungSettings], AbstractAsyncContextManager[Any]]
@@ -260,13 +262,61 @@ async def collect_chat_completion(
     )
 
 
+def style_selection_mode(requested_style: str | None) -> str:
+    return "assessment_top" if requested_style is None else "explicit"
+
+
+def initial_style_selection_metadata(requested_style: str | None) -> dict[str, Any]:
+    """Selection intent recorded at run start; recommendations fill in later."""
+    return {
+        "mode": style_selection_mode(requested_style),
+        "requested_style": requested_style,
+        "recommendations": [],
+        "selected_style_id": None,
+    }
+
+
+def _recommendation_payload(recommendations: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "style_id": item.style_id,
+            "score": item.score,
+            "rationale": item.rationale,
+            "key_topics": list(item.key_topics),
+        }
+        for item in recommendations
+    ]
+
+
 def _select_style(recommendations: Sequence[Any]) -> Any:
+    """Pick the highest-scored recommendation (style_id tie-break)."""
     if not recommendations:
         raise SimulationError("style_selection", "no style recommendations available")
     return sorted(
         recommendations,
         key=lambda item: (-float(item.score), str(item.style_id)),
     )[0]
+
+
+def resolve_style_selection(
+    recommendations: Sequence[Any],
+    *,
+    requested_style: str | None,
+) -> Any:
+    """Resolve auto or explicit style from assessment recommendations."""
+    if not recommendations:
+        raise SimulationError("style_selection", "no style recommendations available")
+    if requested_style is None:
+        return _select_style(recommendations)
+    for item in recommendations:
+        if item.style_id == requested_style:
+            return item
+    available = sorted(str(item.style_id) for item in recommendations)
+    raise SimulationError(
+        "style_selection",
+        f"requested style {requested_style!r} not among assessment "
+        f"recommendations {available}",
+    )
 
 
 def _structured_output_modes(settings: JungSettings) -> dict[str, str]:
@@ -379,6 +429,7 @@ async def run_simulation(
     owns_patient = patient_actor is None
     patient = patient_actor or PatientSimulator(endpoint)
 
+    style_selection = initial_style_selection_metadata(config.requested_style)
     journey.append(
         "simulation.started",
         data={
@@ -387,6 +438,8 @@ async def run_simulation(
             "turns_per_session": config.turns_per_session,
             "provider_trace_required": provider_trace_required,
             "run_dir": str(run_dir),
+            "style_selection_mode": style_selection["mode"],
+            "requested_style": style_selection["requested_style"],
         },
     )
 
@@ -420,6 +473,7 @@ async def run_simulation(
         "structured_output_modes": _structured_output_modes(isolated),
         "git_commit": git_commit,
         "git_worktree_dirty": git_dirty,
+        "style_selection": style_selection,
     }
 
     try:
@@ -843,37 +897,43 @@ async def _select_initial_style(
     progress: SimulationProgress,
     style_selection_out: dict[str, Any],
 ) -> None:
+    selection = style_selection_out.setdefault(
+        "style_selection",
+        initial_style_selection_metadata(config.requested_style),
+    )
     styles = await client.get_styles()
-    selected = _select_style(styles.recommendations)
-    style_selection_out["style_selection"] = {
-        "recommendations": [
-            {
-                "style_id": item.style_id,
-                "score": item.score,
-                "rationale": item.rationale,
-                "key_topics": list(item.key_topics),
-            }
-            for item in styles.recommendations
-        ],
-        "selected_style_id": selected.style_id,
-    }
-    journey.append(
-        "style.selected",
-        data={
-            "selected_style_id": selected.style_id,
-            "score": selected.score,
-            "recommendations": style_selection_out["style_selection"][
-                "recommendations"
-            ],
-        },
+    recommendations = _recommendation_payload(styles.recommendations)
+    selection["recommendations"] = recommendations
+
+    selected = resolve_style_selection(
+        styles.recommendations,
+        requested_style=config.requested_style,
     )
     snapshot = await client.select_style(SelectStyleRequest(style_id=selected.style_id))
     if snapshot.stage != "ready":
-        await wait_for_stage(
+        snapshot = await wait_for_stage(
             client,
             desired={"ready"},
             workflow_timeout=config.workflow_timeout,
         )
+    if snapshot.selected_style != selected.style_id:
+        raise SimulationError(
+            "style_selection",
+            f"authoritative selected_style={snapshot.selected_style!r} "
+            f"does not match requested {selected.style_id!r}",
+        )
+
+    selection["selected_style_id"] = selected.style_id
+    journey.append(
+        "style.selected",
+        data={
+            "mode": selection["mode"],
+            "requested_style": selection["requested_style"],
+            "selected_style_id": selected.style_id,
+            "score": selected.score,
+            "recommendations": recommendations,
+        },
+    )
     progress.initial_ready_reached = True
     create_checkpoint(
         isolated.database_path,

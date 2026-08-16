@@ -8,8 +8,30 @@ from jung.domain.models import Profile
 from jung.llm.gateway import ChatRole
 from jung.phases.intake.completion import missing_items_from_record
 from jung.phases.intake.models import IntakeRecord
-from jung.phases.intake.prompts import build_response_messages
+from jung.phases.intake.prompts import (
+    PROMPT_VERSION,
+    build_patch_extraction_messages,
+    build_response_messages,
+)
 from jung.phases.transcript import TranscriptTurn
+
+
+def test_patch_extraction_requires_direct_ask_for_unknown_status() -> None:
+    assert PROMPT_VERSION == "intake-v2"
+    user_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=1,
+        role="user",
+        content="I've been anxious in seminars lately.",
+    )
+    messages = build_patch_extraction_messages(
+        record=IntakeRecord(),
+        latest_user_message=user_turn,
+        previous_assistant_message=None,
+    )
+    joined = "\n".join(message.content for message in messages)
+    assert "direct_ask=true" in joined
+    assert "do not mark unasked fields as unknown" in joined
 
 
 def test_opening_uses_multilingual_system_and_user_roles() -> None:

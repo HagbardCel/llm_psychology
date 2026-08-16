@@ -175,6 +175,7 @@ not substitutes for `make check`.
 | API contract                 | focused API/OpenAPI tests                                   |
 | LLM adapter/provider         | `make smoke-local-llm` when a server is available           |
 | prompt / structured output   | relevant deterministic tests + `make evals` when configured |
+| semantic therapeutic behavior | `make eval-report` when the change can affect it           |
 | session/supervisor context   | owning deterministic context tests                          |
 | whole-product longitudinal   | `make simulate-local-llm` when appropriate                  |
 | docs only                    | `make docs-links` during editing; `make check` before merge |

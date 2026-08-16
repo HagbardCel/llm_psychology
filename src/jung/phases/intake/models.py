@@ -23,8 +23,19 @@ class IntakeEvidence(BaseModel):
     source_message_sequence: int | None = Field(default=None, ge=1)
     source_role: Literal["user"] | None = None
     confidence: Confidence = "medium"
-    response_status: EvidenceResponseStatus = "informative"
-    direct_ask: bool = False
+    response_status: EvidenceResponseStatus = Field(
+        default="informative",
+        description=(
+            "informative when the patient supplied evidence; unknown or "
+            "unable_to_answer only after a direct ask that was not answered."
+        ),
+    )
+    direct_ask: bool = Field(
+        default=False,
+        description=(
+            "Required true when response_status is unknown or unable_to_answer."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_direct_ask_status(self) -> IntakeEvidence:

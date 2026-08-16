@@ -1115,6 +1115,15 @@ def render_audit_markdown(
         "Diagnostic capture: "
         f"{format_diagnostic_capture_status(runtime_diagnostics_status)}",
     ]
+    style_selection = run_config.get("style_selection")
+    if isinstance(style_selection, Mapping):
+        mode = style_selection.get("mode")
+        requested = style_selection.get("requested_style")
+        selected = style_selection.get("selected_style_id")
+        lines.append(
+            "Style selection: "
+            f"mode={mode!s}, requested={requested!r}, selected={selected!r}"
+        )
     if run_config.get("git_worktree_dirty") is True:
         lines.append(
             "WARNING: source worktree was dirty; exact executed source is not "
