@@ -8,6 +8,7 @@ documented in [`docs/development.md`](../docs/development.md).
 ```
 evals/
 ├── conftest.py              # Fixtures; no environment reads at import time
+├── execution.py             # Bounded ordered async map for independent jobs
 ├── harness.py               # Phase execution + citation-integrity verification
 ├── scenarios.py             # Scenario data and transcripts
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
@@ -45,7 +46,42 @@ how concerning the answers are. It is a human-review artifact, not a gate.
 
 ```bash
 make eval-report          # writes logs/evals/latest.md and a timestamped copy
+make eval-report EVAL_REPORT_ARGS="--concurrency 4"
 ```
+
+Independent report cases may overlap under `--concurrency N` (default `1`,
+serial). Within each case, dependent calls stay sequential (for example
+longitudinal session 1 before session 2; intake before therapy in language
+cases). Higher concurrency is not necessarily faster: server slot count,
+batching policy, and model workload matter. Measure on your local server
+rather than assuming an optimal `N`.
+
+Do **not** parallelize turns inside a single `simulate-local-llm` journey.
+Whole simulation runs are independent later; causal turns inside one journey
+are not.
+
+### Report concurrency and measurement
+
+`request_overlap_factor` is summed provider-attempt latency divided by
+evaluation wall time (time spent inside the bounded job map only). It
+measures **client-observed provider-request lifetime overlap**, not
+inference-server batching efficiency.
+
+Token totals in the report are **reported** usage. An attempt counts toward
+usage coverage only when **both** `prompt_tokens` and `completion_tokens`
+are present. Streaming calls often omit usage; that lowers coverage and does
+**not** mark metrics incomplete.
+
+`metrics_complete` means every provider-attempt event was successfully
+processed by the report observer. `usage_coverage` means the provider
+supplied complete token usage. Both true with coverage below 1.0 is valid.
+
+Benchmark tip: restart (or otherwise equilibrate) the model server between
+measured concurrency settings so KV/prompt-cache warm state does not confound
+N=1 versus N=4. Record client concurrency, server parallelism, model,
+quantization, structured mode, evaluation wall, usage coverage, corrections,
+and `request_overlap_factor` in the PR—not as a fossilized default in this
+README.
 
 Chapters (lettered in section titles):
 
@@ -281,6 +317,12 @@ uv run --locked pytest evals/test_hard_invariants.py -q      # all skipped
 
 - `logs/evals/latest.md` — most recent run
 - `logs/evals/report-<UTC timestamp>.md` — retained copy
+- `logs/evals/latest.metrics.json` — machine-readable performance sidecar
+- `logs/evals/report-<UTC timestamp>.metrics.json` — retained metrics copy
+
+The metrics sidecar includes provenance (`schema_version`, model, sanitized
+base URL, structured mode, concurrency) plus provider-attempt counters,
+reported token usage, `request_overlap_factor`, and `metrics_complete`.
 
 `make simulate-local-llm` writes to `logs/simulations/run-<UTC>/` including
 `run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite,

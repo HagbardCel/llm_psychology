@@ -594,3 +594,64 @@ async def test_observed_gateway_records_physical_role_not_task_expectation(
     assert completed["context"]["llm_role"] == "supervisor"
     assert completed["context"]["llm_task"] == "therapy_response"
     assert completed["context"]["llm_model"] == "session-model"
+
+
+async def test_concurrent_calls_isolate_diagnostic_context() -> None:
+    """ContextVar fields stay task-local under concurrent ObservedLLMGateway use."""
+    from jung.diagnostics import current_diagnostic_context
+
+    barrier = asyncio.Barrier(2)
+    seen: dict[str, dict[str, str | None]] = {}
+
+    class BlockingInner:
+        async def generate_structured(
+            self,
+            messages,  # type: ignore[no-untyped-def]
+            output_type,  # type: ignore[no-untyped-def]
+            policy,  # type: ignore[no-untyped-def]
+            validate_result=None,  # type: ignore[no-untyped-def]
+        ):
+            await barrier.wait()
+            ctx = current_diagnostic_context()
+            seen[policy.task.value] = {
+                "llm_task": ctx.llm_task,
+                "llm_role": ctx.llm_role,
+                "llm_model": ctx.llm_model,
+            }
+            await barrier.wait()
+            return output_type(value=policy.task.value)
+
+    gateway = ObservedLLMGateway(BlockingInner(), log_metadata=False)
+    therapy_policy = ModelPolicy(
+        task=LLMTask.THERAPY_RESPONSE,
+        model="session-model-a",
+        temperature=0.0,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+    assessment_policy = ModelPolicy(
+        task=LLMTask.ASSESSMENT,
+        model="supervisor-model-b",
+        temperature=0.0,
+        timeout_seconds=30.0,
+        structured_output_mode=StructuredOutputMode.PROMPT,
+    )
+    messages = [ChatMessage(role=ChatRole.USER, content="hi")]
+
+    therapy_result, assessment_result = await asyncio.gather(
+        gateway.generate_structured(messages, _Answer, therapy_policy),
+        gateway.generate_structured(messages, _Answer, assessment_policy),
+    )
+
+    assert therapy_result.value == "therapy_response"
+    assert assessment_result.value == "assessment"
+    assert seen["therapy_response"] == {
+        "llm_task": "therapy_response",
+        "llm_role": "session",
+        "llm_model": "session-model-a",
+    }
+    assert seen["assessment"] == {
+        "llm_task": "assessment",
+        "llm_role": "supervisor",
+        "llm_model": "supervisor-model-b",
+    }
