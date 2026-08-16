@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -62,6 +63,7 @@ from jung.domain.session_artifacts import (
     SessionReview,
 )
 from jung.llm.errors import LLMError
+from jung.llm.openai_compatible import ProviderAttemptEvent
 from jung.phases.post_session.evidence_validation import resolve_session_analysis
 from jung.phases.post_session.merge import plan_patch_is_noop
 from jung.phases.transcript import TranscriptTurn
@@ -82,6 +84,8 @@ EXIT_REPORT_WRITE_FAILED = 5
 
 REPORT_DIR = Path("logs/evals")
 LATEST_REPORT = "latest.md"
+LATEST_METRICS = "latest.metrics.json"
+METRICS_SCHEMA_VERSION = 1
 
 ReportJob = Callable[[], Awaitable["ReportSection"]]
 
@@ -92,6 +96,90 @@ class ReportSection:
     review_focus: str
     observations: list[str] = field(default_factory=list)
     excerpts: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class ReportPerformance:
+    """Report-local provider-attempt accumulator (observational only)."""
+
+    concurrency: int
+    evaluation_wall_seconds: float = 0.0
+    provider_attempts: int = 0
+    initial_attempts: int = 0
+    correction_attempts: int = 0
+    reported_prompt_tokens: int = 0
+    reported_completion_tokens: int = 0
+    usage_reported_attempts: int = 0
+    summed_provider_latency_seconds: float = 0.0
+    per_task: dict[str, int] = field(default_factory=dict)
+    observer_errors: int = 0
+    metrics_complete: bool = True
+
+    @property
+    def usage_missing_attempts(self) -> int:
+        return self.provider_attempts - self.usage_reported_attempts
+
+    @property
+    def usage_coverage(self) -> float:
+        if self.provider_attempts == 0:
+            return 0.0
+        return self.usage_reported_attempts / self.provider_attempts
+
+    @property
+    def request_overlap_factor(self) -> float:
+        if self.evaluation_wall_seconds > 0:
+            return self.summed_provider_latency_seconds / self.evaluation_wall_seconds
+        return 0.0
+
+    def observe(self, event: ProviderAttemptEvent) -> None:
+        self.provider_attempts += 1
+        if event.attempt == "initial":
+            self.initial_attempts += 1
+        elif event.attempt == "correction":
+            self.correction_attempts += 1
+        self.summed_provider_latency_seconds += event.latency_seconds
+        self.per_task[event.task] = self.per_task.get(event.task, 0) + 1
+        if event.prompt_tokens is not None and event.completion_tokens is not None:
+            self.usage_reported_attempts += 1
+            self.reported_prompt_tokens += event.prompt_tokens
+            self.reported_completion_tokens += event.completion_tokens
+
+    def observe_safe(self, event: ProviderAttemptEvent) -> None:
+        """Record an attempt; aggregation bugs never fail the report."""
+        try:
+            self.observe(event)
+        except Exception:
+            self.observer_errors += 1
+            self.metrics_complete = False
+
+    def to_metrics_dict(
+        self,
+        *,
+        environment: LocalModelEnvironment,
+        generated_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": METRICS_SCHEMA_VERSION,
+            "generated_at": generated_at.isoformat(timespec="seconds"),
+            "model": environment.model,
+            "base_url": sanitize_url(environment.base_url),
+            "structured_output_mode": environment.structured_mode.value,
+            "concurrency": self.concurrency,
+            "evaluation_wall_seconds": self.evaluation_wall_seconds,
+            "provider_attempts": self.provider_attempts,
+            "initial_attempts": self.initial_attempts,
+            "correction_attempts": self.correction_attempts,
+            "reported_prompt_tokens": self.reported_prompt_tokens,
+            "reported_completion_tokens": self.reported_completion_tokens,
+            "usage_reported_attempts": self.usage_reported_attempts,
+            "usage_missing_attempts": self.usage_missing_attempts,
+            "usage_coverage": self.usage_coverage,
+            "summed_provider_latency_seconds": self.summed_provider_latency_seconds,
+            "request_overlap_factor": self.request_overlap_factor,
+            "per_task": dict(sorted(self.per_task.items())),
+            "observer_errors": self.observer_errors,
+            "metrics_complete": self.metrics_complete,
+        }
 
 
 def _positive_int(value: str) -> int:
@@ -559,12 +647,44 @@ def build_report_jobs(runner: EvalRunner) -> list[ReportJob]:
     return jobs
 
 
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def _render(
     sections: list[ReportSection],
     *,
+    performance: ReportPerformance,
     environment: LocalModelEnvironment,
     generated_at: datetime,
 ) -> str:
+    usage_label = (
+        "total prompt tokens"
+        if performance.usage_coverage == 1.0 and performance.provider_attempts > 0
+        else "prompt tokens"
+    )
+    completion_label = (
+        "total completion tokens"
+        if performance.usage_coverage == 1.0 and performance.provider_attempts > 0
+        else "completion tokens"
+    )
+    if performance.provider_attempts == 0:
+        usage_line = "attempts with usage: 0 / 0"
+        coverage_line = "usage coverage: n/a"
+    else:
+        usage_line = (
+            f"attempts with usage: {performance.usage_reported_attempts} / "
+            f"{performance.provider_attempts}"
+        )
+        coverage_line = f"usage coverage: {performance.usage_coverage:.2f}"
+
     lines = [
         "# Behavioral evaluation report (diagnostic)",
         "",
@@ -586,6 +706,20 @@ def _render(
         f"- Base URL: {sanitize_url(environment.base_url)}",
         f"- Model: {environment.model}",
         f"- Structured output mode: {environment.structured_mode.value}",
+        "",
+        "Execution:",
+        f"  concurrency: {performance.concurrency}",
+        f"  evaluation wall: {_format_duration(performance.evaluation_wall_seconds)}",
+        f"  provider attempts: {performance.provider_attempts}",
+        f"  correction attempts: {performance.correction_attempts}",
+        f"  request overlap factor: {performance.request_overlap_factor:.2f}",
+        "  Reported token usage:",
+        f"    {usage_label}: {performance.reported_prompt_tokens}",
+        f"    {completion_label}: {performance.reported_completion_tokens}",
+        f"    {usage_line}",
+        f"    {coverage_line}",
+        f"  metrics_complete: {str(performance.metrics_complete).lower()}",
+        f"  observer_errors: {performance.observer_errors}",
         "",
     ]
 
@@ -609,12 +743,26 @@ def _render(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _write_report(text: str, generated_at: datetime) -> list[Path]:
+def _write_report(
+    text: str,
+    metrics: dict[str, object],
+    generated_at: datetime,
+) -> list[Path]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
-    paths = [REPORT_DIR / LATEST_REPORT, REPORT_DIR / f"report-{stamp}.md"]
-    for path in paths:
-        path.write_text(text, encoding="utf-8")
+    metrics_text = json.dumps(metrics, indent=2, sort_keys=True) + "\n"
+    paths = [
+        REPORT_DIR / LATEST_REPORT,
+        REPORT_DIR / f"report-{stamp}.md",
+        REPORT_DIR / LATEST_METRICS,
+        REPORT_DIR / f"report-{stamp}.metrics.json",
+    ]
+    (REPORT_DIR / LATEST_REPORT).write_text(text, encoding="utf-8")
+    (REPORT_DIR / f"report-{stamp}.md").write_text(text, encoding="utf-8")
+    (REPORT_DIR / LATEST_METRICS).write_text(metrics_text, encoding="utf-8")
+    (REPORT_DIR / f"report-{stamp}.metrics.json").write_text(
+        metrics_text, encoding="utf-8"
+    )
     return paths
 
 
@@ -622,10 +770,12 @@ async def _collect(
     environment: LocalModelEnvironment,
     *,
     concurrency: int,
-) -> list[ReportSection]:
+) -> tuple[list[ReportSection], ReportPerformance]:
+    performance = ReportPerformance(concurrency=concurrency)
     client = build_local_model_client(
         environment,
         extra_body=request_extra_body(),
+        on_provider_attempt=performance.observe_safe,
     )
     try:
         runner = EvalRunner(
@@ -636,7 +786,10 @@ async def _collect(
             ),
         )
         jobs = build_report_jobs(runner)
-        return await bounded_ordered_map(jobs, concurrency=concurrency)
+        started = time.perf_counter()
+        sections = await bounded_ordered_map(jobs, concurrency=concurrency)
+        performance.evaluation_wall_seconds = time.perf_counter() - started
+        return sections, performance
     finally:
         await client.aclose()
 
@@ -652,7 +805,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_MISSING_ENV
 
     try:
-        sections = asyncio.run(_collect(environment, concurrency=args.concurrency))
+        sections, performance = asyncio.run(
+            _collect(environment, concurrency=args.concurrency)
+        )
     except LLMError as exc:
         print(f"error: model request failed: {exc}", file=sys.stderr)
         return EXIT_MODEL_FAILURE
@@ -666,7 +821,16 @@ def main(argv: list[str] | None = None) -> int:
     generated_at = datetime.now(UTC)
     try:
         paths = _write_report(
-            _render(sections, environment=environment, generated_at=generated_at),
+            _render(
+                sections,
+                performance=performance,
+                environment=environment,
+                generated_at=generated_at,
+            ),
+            performance.to_metrics_dict(
+                environment=environment,
+                generated_at=generated_at,
+            ),
             generated_at,
         )
     except OSError as exc:

@@ -245,6 +245,7 @@ def test_render_includes_lettered_chapter_titles() -> None:
     ]
     text = behavioral_report._render(
         sections,
+        performance=behavioral_report.ReportPerformance(concurrency=1),
         environment=environment,
         generated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -257,6 +258,14 @@ def test_render_includes_lettered_chapter_titles() -> None:
     assert "Appendix. Intervention selection completeness" in text
     assert "about 57 provider requests" in text
     assert "test-model" in text
+    assert "Execution:" in text
+    assert "concurrency: 1" in text
+    assert "attempts with usage: 0 / 0" in text
+    assert "usage coverage: n/a" in text
+    assert "metrics_complete: true" in text
+    assert "observer_errors: 0" in text
+    assert "total prompt tokens" not in text
+    assert "request overlap factor: 0.00" in text
 
 
 def test_parser_accepts_positive_concurrency() -> None:
@@ -422,3 +431,128 @@ async def test_independent_longitudinal_jobs_may_overlap() -> None:
     assert len(sections) == 2
     assert first_peak >= 2
     assert all(section.title.startswith("E.") for section in sections)
+
+
+def _attempt(
+    *,
+    task: str = "therapy_response",
+    attempt: str = "initial",
+    latency_seconds: float = 1.0,
+    prompt_tokens: int | None = 10,
+    completion_tokens: int | None = 5,
+) -> object:
+    from jung.llm.openai_compatible import ProviderAttemptEvent
+
+    return ProviderAttemptEvent(
+        task=task,
+        attempt=attempt,  # type: ignore[arg-type]
+        status="success",
+        latency_seconds=latency_seconds,
+        prompt_chars=100,
+        response_format_chars=None,
+        response_chars=50,
+        timeout_seconds=30.0,
+        max_completion_tokens=None,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def test_report_performance_counts_usage_and_attempts() -> None:
+    perf = behavioral_report.ReportPerformance(concurrency=2)
+    perf.observe(_attempt())  # type: ignore[arg-type]
+    perf.observe(
+        _attempt(  # type: ignore[arg-type]
+            task="assessment",
+            attempt="correction",
+            latency_seconds=3.0,
+            prompt_tokens=20,
+            completion_tokens=8,
+        )
+    )
+    perf.observe(
+        _attempt(  # type: ignore[arg-type]
+            prompt_tokens=None,
+            completion_tokens=7,
+        )
+    )
+    perf.observe(
+        _attempt(  # type: ignore[arg-type]
+            prompt_tokens=4,
+            completion_tokens=None,
+        )
+    )
+    perf.evaluation_wall_seconds = 2.0
+
+    assert perf.provider_attempts == 4
+    assert perf.initial_attempts == 3
+    assert perf.correction_attempts == 1
+    assert perf.usage_reported_attempts == 2
+    assert perf.usage_missing_attempts == 2
+    assert perf.reported_prompt_tokens == 30
+    assert perf.reported_completion_tokens == 13
+    assert perf.usage_coverage == 0.5
+    assert perf.request_overlap_factor == 3.0  # (1+3+1+1)/2
+    assert perf.per_task == {"therapy_response": 3, "assessment": 1}
+    assert perf.metrics_complete is True
+
+
+def test_report_performance_zero_wall_and_zero_attempts() -> None:
+    perf = behavioral_report.ReportPerformance(concurrency=1)
+    assert perf.usage_coverage == 0.0
+    assert perf.request_overlap_factor == 0.0
+    environment = LocalModelEnvironment(
+        base_url="http://127.0.0.1:8080/v1",
+        model="test-model",
+        api_key="not-needed",
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+    payload = perf.to_metrics_dict(
+        environment=environment,
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert payload["usage_coverage"] == 0.0
+    assert payload["request_overlap_factor"] == 0.0
+    assert payload["schema_version"] == 1
+
+
+def test_observe_safe_records_observer_errors() -> None:
+    perf = behavioral_report.ReportPerformance(concurrency=1)
+
+    def broken_observe(_event: object) -> None:
+        raise RuntimeError("aggregation bug")
+
+    perf.observe = broken_observe  # type: ignore[method-assign]
+    perf.observe_safe(_attempt())  # type: ignore[arg-type]
+    assert perf.observer_errors == 1
+    assert perf.metrics_complete is False
+    assert perf.provider_attempts == 0
+
+
+def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
+    environment = LocalModelEnvironment(
+        base_url="http://127.0.0.1:8080/v1",
+        model="test-model",
+        api_key="not-needed",
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+    perf = behavioral_report.ReportPerformance(concurrency=4)
+    perf.observe(_attempt(prompt_tokens=11, completion_tokens=9))  # type: ignore[arg-type]
+    perf.evaluation_wall_seconds = 1.0
+    text = behavioral_report._render(
+        [
+            behavioral_report.ReportSection(
+                title="A. sample",
+                review_focus="focus",
+                excerpts=[("Model reply", "ok")],
+            )
+        ],
+        performance=perf,
+        environment=environment,
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert "total prompt tokens: 11" in text
+    assert "total completion tokens: 9" in text
+    assert "attempts with usage: 1 / 1" in text
+    assert "concurrency: 4" in text
+    assert "request overlap factor: 1.00" in text

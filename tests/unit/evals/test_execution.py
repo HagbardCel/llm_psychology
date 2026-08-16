@@ -44,10 +44,7 @@ async def test_concurrency_1_starts_and_finishes_in_order() -> None:
         return label
 
     result = await bounded_ordered_map(
-        [
-            (lambda label=label: job(label))
-            for label in ("a", "b", "c")
-        ],
+        [(lambda label=label: job(label)) for label in ("a", "b", "c")],
         concurrency=1,
     )
     assert result == ["a", "b", "c"]

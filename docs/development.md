@@ -147,6 +147,7 @@ Opt-in real-model surfaces (not part of `make test` or `make check`):
 make smoke-local-llm
 make evals
 make eval-report
+make eval-report EVAL_REPORT_ARGS="--concurrency 4"
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
 ```
