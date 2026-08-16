@@ -11,6 +11,7 @@ CONSOLE_E2E_TEST := tests/e2e/test_console_workflow.py
 PROBE_OUTPUT_DIR ?= logs/workflow-probes/console-v1
 PROBE_ABS_OUTPUT_DIR := $(abspath $(PROBE_OUTPUT_DIR))
 SIM_ARGS ?=
+EVAL_REPORT_ARGS ?=
 
 help:
 	@echo "Native uv workflow:"
@@ -73,9 +74,10 @@ evals:
 		-m "eval and real_llm" --no-mocks -o asyncio_mode=strict
 
 # Diagnostic report for human review; never a gate.
+# Example: make eval-report EVAL_REPORT_ARGS="--concurrency 4"
 eval-report:
 	@mkdir -p logs/evals
-	uv run --locked python -m evals.behavioral_report
+	uv run --locked python -m evals.behavioral_report $(EVAL_REPORT_ARGS)
 
 # Whole-product longitudinal journey over real HTTP. Opt-in; not part of check.
 # Uses production Jung LLM settings (LLM_BASE_URL / MODEL_NAME / …), not

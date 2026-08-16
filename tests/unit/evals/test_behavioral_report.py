@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 from pydantic import BaseModel
 
 from evals import behavioral_report
@@ -255,3 +257,168 @@ def test_render_includes_lettered_chapter_titles() -> None:
     assert "Appendix. Intervention selection completeness" in text
     assert "about 57 provider requests" in text
     assert "test-model" in text
+
+
+def test_parser_accepts_positive_concurrency() -> None:
+    parser = behavioral_report.build_parser()
+    for value in (1, 2, 4):
+        args = parser.parse_args(["--concurrency", str(value)])
+        assert args.concurrency == value
+    assert parser.parse_args([]).concurrency == 1
+
+
+def test_parser_rejects_non_positive_concurrency() -> None:
+    parser = behavioral_report.build_parser()
+    for value in ("0", "-1"):
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["--concurrency", value])
+        assert exc_info.value.code == 2
+
+
+def test_build_report_jobs_inventory_and_chapter_order() -> None:
+    from evals.harness import EvalRunner
+    from evals.scenarios import INTERVENTION_COMPLETENESS
+    from tests.support.fake_llm import FakeLLM
+
+    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
+    jobs = behavioral_report.build_report_jobs(runner)
+    assert len(jobs) == 34
+
+    expected_prefixes: list[str] = []
+    for scenario in BEHAVIORAL_SCENARIOS:
+        for style_id in SAFETY_STYLE_IDS:
+            expected_prefixes.append(
+                f"A. Safety × style — {scenario.title} (`{style_id}`)"
+            )
+    for comparison in STYLE_COMPARISONS:
+        expected_prefixes.append(f"B. {comparison.title}")
+    for scenario in ASSESSMENT_SCENARIOS:
+        expected_prefixes.append(f"C. {scenario.title}")
+    for scenario in LANGUAGE_SCENARIOS:
+        expected_prefixes.append(f"D. {scenario.title}")
+    for scenario in LONGITUDINAL_SUPERVISOR_SCENARIOS:
+        expected_prefixes.append(f"E. {scenario.title}")
+    expected_prefixes.append(f"F. {ATTRIBUTION_SCENARIO.title}")
+    expected_prefixes.append(f"Appendix. {INTERVENTION_COMPLETENESS.title}")
+    assert len(expected_prefixes) == 34
+    assert expected_prefixes[0].startswith("A.")
+    assert expected_prefixes[18].startswith("B.")
+    assert expected_prefixes[21].startswith("C.")
+    assert expected_prefixes[25].startswith("D.")
+    assert expected_prefixes[28].startswith("E.")
+    assert expected_prefixes[32].startswith("F.")
+    assert expected_prefixes[33].startswith("Appendix.")
+
+
+@pytest.mark.asyncio
+async def test_longitudinal_session_2_waits_for_session_1() -> None:
+    from jung.domain.session_artifacts import (
+        PlanPatch,
+        SessionAnalysis,
+        SessionBriefing,
+        SessionReview,
+    )
+    from jung.phases.post_session.models import PostSessionResult
+    from jung.styles import load_styles
+
+    scenario = LONGITUDINAL_SUPERVISOR_SCENARIOS[0]
+    style = load_styles()[scenario.style_id]
+    session_1_done = asyncio.Event()
+    session_2_started_before_1 = False
+    call_count = 0
+
+    class FakeRunner:
+        async def post_session(self, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal call_count, session_2_started_before_1
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(0.02)
+                session_1_done.set()
+            else:
+                if not session_1_done.is_set():
+                    session_2_started_before_1 = True
+            return PostSessionResult(
+                review=SessionReview(
+                    analysis=SessionAnalysis(
+                        summary=f"session-{call_count}",
+                        key_themes=("t",),
+                    ),
+                    briefing=SessionBriefing(
+                        narrative_handoff="handoff",
+                        recommended_opening_focus="focus",
+                    ),
+                    plan_recommendation=PlanPatch(),
+                )
+            )
+
+    section = await behavioral_report._longitudinal_section(
+        FakeRunner(),  # type: ignore[arg-type]
+        scenario,
+        style,
+    )
+    assert call_count == 2
+    assert session_2_started_before_1 is False
+    assert section.title.startswith("E.")
+
+
+@pytest.mark.asyncio
+async def test_independent_longitudinal_jobs_may_overlap() -> None:
+    from evals.execution import bounded_ordered_map
+    from jung.domain.session_artifacts import (
+        PlanPatch,
+        SessionAnalysis,
+        SessionBriefing,
+        SessionReview,
+    )
+    from jung.phases.post_session.models import PostSessionResult
+    from jung.styles import load_styles
+
+    styles = load_styles()
+    scenarios = LONGITUDINAL_SUPERVISOR_SCENARIOS[:2]
+    first_calls_active = 0
+    first_peak = 0
+    first_lock = asyncio.Lock()
+    both_first = asyncio.Event()
+
+    class TrackingRunner:
+        async def post_session(self, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal first_calls_active, first_peak
+            async with first_lock:
+                first_calls_active += 1
+                first_peak = max(first_peak, first_calls_active)
+                if first_calls_active == 2:
+                    both_first.set()
+            await both_first.wait()
+            async with first_lock:
+                first_calls_active -= 1
+            return PostSessionResult(
+                review=SessionReview(
+                    analysis=SessionAnalysis(
+                        summary="summary",
+                        key_themes=("t",),
+                    ),
+                    briefing=SessionBriefing(
+                        narrative_handoff="handoff",
+                        recommended_opening_focus="focus",
+                    ),
+                    plan_recommendation=PlanPatch(),
+                )
+            )
+
+    tracker = TrackingRunner()
+    sections = await bounded_ordered_map(
+        [
+            (
+                lambda scenario=scenario: behavioral_report._longitudinal_section(
+                    tracker,  # type: ignore[arg-type]
+                    scenario,
+                    styles[scenario.style_id],
+                )
+            )
+            for scenario in scenarios
+        ],
+        concurrency=2,
+    )
+    assert len(sections) == 2
+    assert first_peak >= 2
+    assert all(section.title.startswith("E.") for section in sections)

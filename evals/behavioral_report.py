@@ -15,14 +15,17 @@ structured-output call needs its single project-owned correction attempt).
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from evals.execution import bounded_ordered_map
 from evals.harness import (
     EvalRunner,
     build_transcript,
@@ -42,6 +45,13 @@ from evals.scenarios import (
     LONGITUDINAL_SUPERVISOR_SCENARIOS,
     SAFETY_STYLE_IDS,
     STYLE_COMPARISONS,
+    AssessmentScenario,
+    AttributionScenario,
+    LanguageScenario,
+    LongitudinalSupervisorScenario,
+    StyleComparison,
+    TherapyScenario,
+    TranscriptScenario,
 )
 from jung.diagnostics import sanitize_url
 from jung.domain.models import Message, MessageRole, Plan
@@ -55,7 +65,7 @@ from jung.llm.errors import LLMError
 from jung.phases.post_session.evidence_validation import resolve_session_analysis
 from jung.phases.post_session.merge import plan_patch_is_noop
 from jung.phases.transcript import TranscriptTurn
-from jung.styles import load_styles
+from jung.styles import StyleDefinition, load_styles
 from tests.support.local_llm import (
     LocalModelEnvironment,
     MissingLocalModelEnv,
@@ -73,6 +83,8 @@ EXIT_REPORT_WRITE_FAILED = 5
 REPORT_DIR = Path("logs/evals")
 LATEST_REPORT = "latest.md"
 
+ReportJob = Callable[[], Awaitable["ReportSection"]]
+
 
 @dataclass(frozen=True, slots=True)
 class ReportSection:
@@ -80,6 +92,28 @@ class ReportSection:
     review_focus: str
     observations: list[str] = field(default_factory=list)
     excerpts: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m evals.behavioral_report",
+        description="Diagnostic behavioral report for a configured local model.",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=_positive_int,
+        default=1,
+        help="Maximum number of independent report cases to run concurrently "
+        "(default: 1, serial)",
+    )
+    return parser
 
 
 def _plan_with_focus(
@@ -144,214 +178,199 @@ def _plan_patch_report(
     )
 
 
-async def _safety_sections(runner: EvalRunner) -> list[ReportSection]:
-    styles = load_styles()
-    sections: list[ReportSection] = []
-    for scenario in BEHAVIORAL_SCENARIOS:
-        for style_id in SAFETY_STYLE_IDS:
-            reply = await runner.therapy_reply(
-                style=styles[style_id],
-                patient_message=scenario.patient_message,
-            )
-            sections.append(
-                ReportSection(
-                    title=f"A. Safety × style — {scenario.title} (`{style_id}`)",
-                    review_focus=(
-                        f"{scenario.review_focus} Also: does changing style "
-                        "change method without an apparent weakening of this "
-                        "boundary?"
-                    ),
-                    observations=[f"Style: `{style_id}`"],
-                    excerpts=[
-                        ("Patient message", scenario.patient_message),
-                        ("Model reply", reply),
-                    ],
+async def _safety_section(
+    runner: EvalRunner,
+    scenario: TherapyScenario,
+    style_id: str,
+    style: StyleDefinition,
+) -> ReportSection:
+    reply = await runner.therapy_reply(
+        style=style,
+        patient_message=scenario.patient_message,
+    )
+    return ReportSection(
+        title=f"A. Safety × style — {scenario.title} (`{style_id}`)",
+        review_focus=(
+            f"{scenario.review_focus} Also: does changing style "
+            "change method without an apparent weakening of this "
+            "boundary?"
+        ),
+        observations=[f"Style: `{style_id}`"],
+        excerpts=[
+            ("Patient message", scenario.patient_message),
+            ("Model reply", reply),
+        ],
+    )
+
+
+async def _style_section(
+    runner: EvalRunner,
+    comparison: StyleComparison,
+    styles: dict[str, StyleDefinition],
+) -> ReportSection:
+    excerpts: list[tuple[str, str]] = [("Patient message", comparison.patient_message)]
+    for style_id in comparison.style_ids:
+        reply = await runner.therapy_reply(
+            style=styles[style_id],
+            patient_message=comparison.patient_message,
+        )
+        excerpts.append((f"Reply — `{style_id}`", reply))
+    return ReportSection(
+        title=f"B. {comparison.title}",
+        review_focus=comparison.review_focus,
+        excerpts=excerpts,
+    )
+
+
+async def _assessment_section(
+    runner: EvalRunner,
+    scenario: AssessmentScenario,
+    available_styles: Sequence[StyleDefinition],
+) -> ReportSection:
+    result = await runner.assess(
+        transcript=scenario.transcript(),
+        intake_record=scenario.intake_record(),
+        available_styles=available_styles,
+    )
+    lines = [
+        "| Style | Score | Rationale | Initial focus | Goals | Interventions |",
+        "| --- | ---: | --- | --- | --- | --- |",
+    ]
+    for item in result.style_recommendations:
+        goals = "; ".join(item.initial_plan.goals) or "(none)"
+        interventions = "; ".join(item.initial_plan.planned_interventions) or "(none)"
+        lines.append(
+            f"| `{item.style_id}` | {item.score:.2f} | "
+            f"{item.rationale} | {item.initial_plan.focus} | "
+            f"{goals} | {interventions} |"
+        )
+    return ReportSection(
+        title=f"C. {scenario.title}",
+        review_focus=scenario.review_focus,
+        observations=[
+            f"Formulation: {result.formulation}",
+            f"Presenting concerns: {', '.join(result.presenting_concerns)}",
+        ],
+        excerpts=[("Assessment table", "\n".join(lines))],
+    )
+
+
+async def _language_section(
+    runner: EvalRunner,
+    scenario: LanguageScenario,
+    therapy_style: StyleDefinition,
+) -> ReportSection:
+    profile = eval_profile(primary_language=scenario.profile_language)
+    intake_reply = await runner.intake_reply(
+        profile=profile,
+        patient_message=scenario.patient_message,
+    )
+    therapy_reply = await runner.therapy_reply(
+        style=therapy_style,
+        patient_message=scenario.patient_message,
+        profile=profile,
+    )
+    return ReportSection(
+        title=f"D. {scenario.title}",
+        review_focus=scenario.review_focus,
+        observations=[
+            f"Profile primary_language: `{scenario.profile_language}`",
+            "Surfaces: intake patient-facing response, therapy "
+            "patient-facing response only.",
+        ],
+        excerpts=[
+            ("Patient message", scenario.patient_message),
+            ("Intake reply", intake_reply),
+            ("Therapy reply", therapy_reply),
+        ],
+    )
+
+
+async def _longitudinal_section(
+    runner: EvalRunner,
+    scenario: LongitudinalSupervisorScenario,
+    style: StyleDefinition,
+) -> ReportSection:
+    plan_1 = _plan_with_focus(
+        scenario.style_id,
+        focus=scenario.initial_focus,
+        interventions=scenario.initial_interventions,
+    )
+    session_1_transcript = scenario.session_1_transcript()
+    result_1 = await runner.post_session(
+        style=style,
+        transcript=session_1_transcript,
+        current_plan=plan_1,
+    )
+    grounded = _grounded_messages_from_analysis(
+        session_1_transcript,
+        result_1.review.analysis,
+        session_id=uuid4(),
+    )
+    noop_1, patch_1_excerpt = _plan_patch_report(
+        "Session 1",
+        plan_1,
+        result_1.review.plan_recommendation,
+    )
+    plan_2 = next_plan_after_review(plan_1, result_1.review)
+    result_2 = await runner.post_session(
+        style=style,
+        transcript=scenario.session_2_transcript(),
+        current_plan=plan_2,
+        prior_reviews=(result_1.review,),
+        grounded_patient_messages=grounded,
+    )
+    noop_2, patch_2_excerpt = _plan_patch_report(
+        "Session 2",
+        plan_2,
+        result_2.review.plan_recommendation,
+    )
+    return ReportSection(
+        title=f"E. {scenario.title}",
+        review_focus=scenario.review_focus,
+        observations=[
+            f"Style: `{scenario.style_id}`",
+            f"Session 1 plan version: {plan_1.version}",
+            noop_1,
+            f"Session 2 plan version: {plan_2.version}",
+            f"Session 2 plan focus: {plan_2.focus}",
+            "Session 2 plan identity reused: "
+            f"{plan_2.id == plan_1.id and plan_2.version == plan_1.version}",
+            noop_2,
+        ],
+        excerpts=[
+            ("Session 1 summary", result_1.review.analysis.summary),
+            (
+                "Session 1 progress indicators",
+                "\n".join(result_1.review.analysis.progress_indicators) or "(none)",
+            ),
+            patch_1_excerpt,
+            (
+                "Grounded patient messages supplied to session 2",
+                "\n".join(
+                    f"[{message.sequence}] {message.content}" for message in grounded
                 )
-            )
-    return sections
+                or "(none)",
+            ),
+            ("Session 2 summary", result_2.review.analysis.summary),
+            (
+                "Session 2 progress indicators",
+                "\n".join(result_2.review.analysis.progress_indicators) or "(none)",
+            ),
+            patch_2_excerpt,
+            (
+                "Session 2 narrative handoff",
+                result_2.review.briefing.narrative_handoff,
+            ),
+        ],
+    )
 
 
-async def _style_sections(runner: EvalRunner) -> list[ReportSection]:
-    styles = load_styles()
-    sections: list[ReportSection] = []
-    for comparison in STYLE_COMPARISONS:
-        excerpts: list[tuple[str, str]] = [
-            ("Patient message", comparison.patient_message)
-        ]
-        for style_id in comparison.style_ids:
-            reply = await runner.therapy_reply(
-                style=styles[style_id],
-                patient_message=comparison.patient_message,
-            )
-            excerpts.append((f"Reply — `{style_id}`", reply))
-        sections.append(
-            ReportSection(
-                title=f"B. {comparison.title}",
-                review_focus=comparison.review_focus,
-                excerpts=excerpts,
-            )
-        )
-    return sections
-
-
-async def _assessment_sections(runner: EvalRunner) -> list[ReportSection]:
-    sections: list[ReportSection] = []
-    for scenario in ASSESSMENT_SCENARIOS:
-        result = await runner.assess(
-            transcript=scenario.transcript(),
-            intake_record=scenario.intake_record(),
-        )
-        lines = [
-            "| Style | Score | Rationale | Initial focus | Goals | Interventions |",
-            "| --- | ---: | --- | --- | --- | --- |",
-        ]
-        for item in result.style_recommendations:
-            goals = "; ".join(item.initial_plan.goals) or "(none)"
-            interventions = (
-                "; ".join(item.initial_plan.planned_interventions) or "(none)"
-            )
-            lines.append(
-                f"| `{item.style_id}` | {item.score:.2f} | "
-                f"{item.rationale} | {item.initial_plan.focus} | "
-                f"{goals} | {interventions} |"
-            )
-        sections.append(
-            ReportSection(
-                title=f"C. {scenario.title}",
-                review_focus=scenario.review_focus,
-                observations=[
-                    f"Formulation: {result.formulation}",
-                    f"Presenting concerns: {', '.join(result.presenting_concerns)}",
-                ],
-                excerpts=[("Assessment table", "\n".join(lines))],
-            )
-        )
-    return sections
-
-
-async def _language_sections(runner: EvalRunner) -> list[ReportSection]:
-    styles = load_styles()
-    sections: list[ReportSection] = []
-    for scenario in LANGUAGE_SCENARIOS:
-        profile = eval_profile(primary_language=scenario.profile_language)
-        intake_reply = await runner.intake_reply(
-            profile=profile,
-            patient_message=scenario.patient_message,
-        )
-        therapy_reply = await runner.therapy_reply(
-            style=styles["cbt"],
-            patient_message=scenario.patient_message,
-            profile=profile,
-        )
-        sections.append(
-            ReportSection(
-                title=f"D. {scenario.title}",
-                review_focus=scenario.review_focus,
-                observations=[
-                    f"Profile primary_language: `{scenario.profile_language}`",
-                    "Surfaces: intake patient-facing response, therapy "
-                    "patient-facing response only.",
-                ],
-                excerpts=[
-                    ("Patient message", scenario.patient_message),
-                    ("Intake reply", intake_reply),
-                    ("Therapy reply", therapy_reply),
-                ],
-            )
-        )
-    return sections
-
-
-async def _longitudinal_sections(runner: EvalRunner) -> list[ReportSection]:
-    styles = load_styles()
-    sections: list[ReportSection] = []
-    for scenario in LONGITUDINAL_SUPERVISOR_SCENARIOS:
-        style = styles[scenario.style_id]
-        plan_1 = _plan_with_focus(
-            scenario.style_id,
-            focus=scenario.initial_focus,
-            interventions=scenario.initial_interventions,
-        )
-        session_1_transcript = scenario.session_1_transcript()
-        result_1 = await runner.post_session(
-            style=style,
-            transcript=session_1_transcript,
-            current_plan=plan_1,
-        )
-        grounded = _grounded_messages_from_analysis(
-            session_1_transcript,
-            result_1.review.analysis,
-            session_id=uuid4(),
-        )
-        noop_1, patch_1_excerpt = _plan_patch_report(
-            "Session 1",
-            plan_1,
-            result_1.review.plan_recommendation,
-        )
-        plan_2 = next_plan_after_review(plan_1, result_1.review)
-        result_2 = await runner.post_session(
-            style=style,
-            transcript=scenario.session_2_transcript(),
-            current_plan=plan_2,
-            prior_reviews=(result_1.review,),
-            grounded_patient_messages=grounded,
-        )
-        noop_2, patch_2_excerpt = _plan_patch_report(
-            "Session 2",
-            plan_2,
-            result_2.review.plan_recommendation,
-        )
-        sections.append(
-            ReportSection(
-                title=f"E. {scenario.title}",
-                review_focus=scenario.review_focus,
-                observations=[
-                    f"Style: `{scenario.style_id}`",
-                    f"Session 1 plan version: {plan_1.version}",
-                    noop_1,
-                    f"Session 2 plan version: {plan_2.version}",
-                    f"Session 2 plan focus: {plan_2.focus}",
-                    "Session 2 plan identity reused: "
-                    f"{plan_2.id == plan_1.id and plan_2.version == plan_1.version}",
-                    noop_2,
-                ],
-                excerpts=[
-                    ("Session 1 summary", result_1.review.analysis.summary),
-                    (
-                        "Session 1 progress indicators",
-                        "\n".join(result_1.review.analysis.progress_indicators)
-                        or "(none)",
-                    ),
-                    patch_1_excerpt,
-                    (
-                        "Grounded patient messages supplied to session 2",
-                        "\n".join(
-                            f"[{message.sequence}] {message.content}"
-                            for message in grounded
-                        )
-                        or "(none)",
-                    ),
-                    ("Session 2 summary", result_2.review.analysis.summary),
-                    (
-                        "Session 2 progress indicators",
-                        "\n".join(result_2.review.analysis.progress_indicators)
-                        or "(none)",
-                    ),
-                    patch_2_excerpt,
-                    (
-                        "Session 2 narrative handoff",
-                        result_2.review.briefing.narrative_handoff,
-                    ),
-                ],
-            )
-        )
-    return sections
-
-
-async def _attribution_section(runner: EvalRunner) -> ReportSection:
-    scenario = ATTRIBUTION_SCENARIO
-    styles = load_styles()
-    style = styles[scenario.style_id]
+async def _attribution_section(
+    runner: EvalRunner,
+    scenario: AttributionScenario,
+    style: StyleDefinition,
+) -> ReportSection:
     prior_session_id = uuid4()
     prior_review = SessionReview(
         analysis=SessionAnalysis(
@@ -433,12 +452,14 @@ async def _attribution_section(runner: EvalRunner) -> ReportSection:
     )
 
 
-async def _intervention_section(runner: EvalRunner) -> ReportSection:
-    scenario = INTERVENTION_COMPLETENESS
-    styles = load_styles()
+async def _intervention_section(
+    runner: EvalRunner,
+    scenario: TranscriptScenario,
+    style: StyleDefinition,
+) -> ReportSection:
     transcript = scenario.transcript()
     result = await runner.post_session(
-        style=styles[scenario.style_id],
+        style=style,
         transcript=transcript,
     )
 
@@ -469,6 +490,73 @@ async def _intervention_section(runner: EvalRunner) -> ReportSection:
             ("Narrative handoff", result.review.briefing.narrative_handoff),
         ],
     )
+
+
+def build_report_jobs(runner: EvalRunner) -> list[ReportJob]:
+    """Build one lazy job per independent report case, in chapter order."""
+    styles = load_styles()
+    available_styles = tuple(styles.values())
+    jobs: list[ReportJob] = []
+
+    for scenario in BEHAVIORAL_SCENARIOS:
+        for style_id in SAFETY_STYLE_IDS:
+            jobs.append(
+                lambda scenario=scenario, style_id=style_id: _safety_section(
+                    runner,
+                    scenario,
+                    style_id,
+                    styles[style_id],
+                )
+            )
+
+    for comparison in STYLE_COMPARISONS:
+        jobs.append(
+            lambda comparison=comparison: _style_section(runner, comparison, styles)
+        )
+
+    for scenario in ASSESSMENT_SCENARIOS:
+        jobs.append(
+            lambda scenario=scenario: _assessment_section(
+                runner,
+                scenario,
+                available_styles,
+            )
+        )
+
+    therapy_style = styles["cbt"]
+    for scenario in LANGUAGE_SCENARIOS:
+        jobs.append(
+            lambda scenario=scenario: _language_section(
+                runner,
+                scenario,
+                therapy_style,
+            )
+        )
+
+    for scenario in LONGITUDINAL_SUPERVISOR_SCENARIOS:
+        jobs.append(
+            lambda scenario=scenario: _longitudinal_section(
+                runner,
+                scenario,
+                styles[scenario.style_id],
+            )
+        )
+
+    jobs.append(
+        lambda: _attribution_section(
+            runner,
+            ATTRIBUTION_SCENARIO,
+            styles[ATTRIBUTION_SCENARIO.style_id],
+        )
+    )
+    jobs.append(
+        lambda: _intervention_section(
+            runner,
+            INTERVENTION_COMPLETENESS,
+            styles[INTERVENTION_COMPLETENESS.style_id],
+        )
+    )
+    return jobs
 
 
 def _render(
@@ -530,7 +618,11 @@ def _write_report(text: str, generated_at: datetime) -> list[Path]:
     return paths
 
 
-async def _collect(environment: LocalModelEnvironment) -> list[ReportSection]:
+async def _collect(
+    environment: LocalModelEnvironment,
+    *,
+    concurrency: int,
+) -> list[ReportSection]:
     client = build_local_model_client(
         environment,
         extra_body=request_extra_body(),
@@ -543,20 +635,16 @@ async def _collect(environment: LocalModelEnvironment) -> list[ReportSection]:
                 request_timeout_seconds=request_timeout_seconds(),
             ),
         )
-        sections: list[ReportSection] = []
-        sections.extend(await _safety_sections(runner))
-        sections.extend(await _style_sections(runner))
-        sections.extend(await _assessment_sections(runner))
-        sections.extend(await _language_sections(runner))
-        sections.extend(await _longitudinal_sections(runner))
-        sections.append(await _attribution_section(runner))
-        sections.append(await _intervention_section(runner))
-        return sections
+        jobs = build_report_jobs(runner)
+        return await bounded_ordered_map(jobs, concurrency=concurrency)
     finally:
         await client.aclose()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
     try:
         environment = resolve_local_model_environment()
     except MissingLocalModelEnv as exc:
@@ -564,7 +652,7 @@ def main() -> int:
         return EXIT_MISSING_ENV
 
     try:
-        sections = asyncio.run(_collect(environment))
+        sections = asyncio.run(_collect(environment, concurrency=args.concurrency))
     except LLMError as exc:
         print(f"error: model request failed: {exc}", file=sys.stderr)
         return EXIT_MODEL_FAILURE
