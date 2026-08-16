@@ -112,6 +112,9 @@ class ReportPerformance:
     reported_completion_tokens: int = 0
     usage_reported_attempts: int = 0
     summed_provider_latency_seconds: float = 0.0
+    prompt_chars_total: int = 0
+    response_format_chars_total: int = 0
+    max_prompt_chars: int = 0
     per_task: dict[str, int] = field(default_factory=dict)
     observer_errors: int = 0
     metrics_complete: bool = True
@@ -140,6 +143,11 @@ class ReportPerformance:
             self.correction_attempts += 1
         self.summed_provider_latency_seconds += event.latency_seconds
         self.per_task[event.task] = self.per_task.get(event.task, 0) + 1
+        self.prompt_chars_total += event.prompt_chars
+        if event.prompt_chars > self.max_prompt_chars:
+            self.max_prompt_chars = event.prompt_chars
+        if event.response_format_chars is not None:
+            self.response_format_chars_total += event.response_format_chars
         if event.prompt_tokens is not None and event.completion_tokens is not None:
             self.usage_reported_attempts += 1
             self.reported_prompt_tokens += event.prompt_tokens
@@ -177,6 +185,9 @@ class ReportPerformance:
             "usage_coverage": self.usage_coverage,
             "summed_provider_latency_seconds": self.summed_provider_latency_seconds,
             "request_overlap_factor": self.request_overlap_factor,
+            "prompt_chars_total": self.prompt_chars_total,
+            "response_format_chars_total": self.response_format_chars_total,
+            "max_prompt_chars": self.max_prompt_chars,
             "per_task": dict(sorted(self.per_task.items())),
             "observer_errors": self.observer_errors,
             "metrics_complete": self.metrics_complete,
@@ -719,6 +730,10 @@ def _render(
         f"    {completion_label}: {performance.reported_completion_tokens}",
         f"    {usage_line}",
         f"    {coverage_line}",
+        "  Input workload shape:",
+        f"    prompt chars total: {performance.prompt_chars_total}",
+        f"    response format chars total: {performance.response_format_chars_total}",
+        f"    max prompt chars: {performance.max_prompt_chars}",
         f"  metrics_complete: {str(performance.metrics_complete).lower()}",
         f"  observer_errors: {performance.observer_errors}",
         "",

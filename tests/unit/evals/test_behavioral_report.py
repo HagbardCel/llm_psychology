@@ -527,6 +527,8 @@ def _attempt(
     task: str = "therapy_response",
     attempt: str = "initial",
     latency_seconds: float = 1.0,
+    prompt_chars: int = 100,
+    response_format_chars: int | None = None,
     prompt_tokens: int | None = 10,
     completion_tokens: int | None = 5,
 ) -> object:
@@ -537,8 +539,8 @@ def _attempt(
         attempt=attempt,  # type: ignore[arg-type]
         status="success",
         latency_seconds=latency_seconds,
-        prompt_chars=100,
-        response_format_chars=None,
+        prompt_chars=prompt_chars,
+        response_format_chars=response_format_chars,
         response_chars=50,
         timeout_seconds=30.0,
         max_completion_tokens=None,
@@ -555,18 +557,23 @@ def test_report_performance_counts_usage_and_attempts() -> None:
             task="assessment",
             attempt="correction",
             latency_seconds=3.0,
+            prompt_chars=250,
+            response_format_chars=40,
             prompt_tokens=20,
             completion_tokens=8,
         )
     )
     perf.observe(
         _attempt(  # type: ignore[arg-type]
+            prompt_chars=80,
             prompt_tokens=None,
             completion_tokens=7,
         )
     )
     perf.observe(
         _attempt(  # type: ignore[arg-type]
+            prompt_chars=180,
+            response_format_chars=15,
             prompt_tokens=4,
             completion_tokens=None,
         )
@@ -582,6 +589,9 @@ def test_report_performance_counts_usage_and_attempts() -> None:
     assert perf.reported_completion_tokens == 13
     assert perf.usage_coverage == 0.5
     assert perf.request_overlap_factor == 3.0  # (1+3+1+1)/2
+    assert perf.prompt_chars_total == 610
+    assert perf.response_format_chars_total == 55
+    assert perf.max_prompt_chars == 250
     assert perf.per_task == {"therapy_response": 3, "assessment": 1}
     assert perf.metrics_complete is True
 
@@ -602,6 +612,9 @@ def test_report_performance_zero_wall_and_zero_attempts() -> None:
     )
     assert payload["usage_coverage"] == 0.0
     assert payload["request_overlap_factor"] == 0.0
+    assert payload["prompt_chars_total"] == 0
+    assert payload["response_format_chars_total"] == 0
+    assert payload["max_prompt_chars"] == 0
     assert payload["schema_version"] == 1
 
 
@@ -626,7 +639,14 @@ def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
         structured_mode=StructuredOutputMode.JSON_SCHEMA,
     )
     perf = behavioral_report.ReportPerformance(concurrency=4)
-    perf.observe(_attempt(prompt_tokens=11, completion_tokens=9))  # type: ignore[arg-type]
+    perf.observe(
+        _attempt(  # type: ignore[arg-type]
+            prompt_chars=120,
+            response_format_chars=30,
+            prompt_tokens=11,
+            completion_tokens=9,
+        )
+    )
     perf.evaluation_wall_seconds = 1.0
     text = behavioral_report._render(
         [
@@ -645,6 +665,9 @@ def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
     assert "attempts with usage: 1 / 1" in text
     assert "concurrency: 4" in text
     assert "request overlap factor: 1.00" in text
+    assert "prompt chars total: 120" in text
+    assert "response format chars total: 30" in text
+    assert "max prompt chars: 120" in text
 
 
 def test_write_report_publishes_all_four_artifacts(
