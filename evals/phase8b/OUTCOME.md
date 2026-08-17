@@ -11,7 +11,7 @@ Protocol: [`evals/README.md`](../README.md) Phase 8B section. Operator scripts:
 | Benchmark source base | `6c221c2dcbafa172b7b1708bb68d64682acafd2d` (HEAD when matrix started 2026-08-16) |
 | Working tree at run time | dirty — uncommitted `evals.behavioral_report --workload {full,screen}` changes |
 | Relevant benchmark diff | `evals/behavioral_report.py`, tests, `evals/README.md`, `docs/development.md`, `Makefile` |
-| Final equivalent implementation commit | *(fill after merge commit SHA is verified identical)* |
+| Final equivalent implementation commit | `ad36cf9` — benchmarked dirty-tree implementation committed unchanged |
 | Model family | Qwen3.8-27B, thinking enabled |
 | Structured mode | `json_schema` |
 | Extras | `enable_thinking=true`, `top_p=0.95`, `top_k=20` |
