@@ -9,8 +9,9 @@ finding for the reviewer, not a failure: the exit code reflects only whether
 the report could be produced. Anything the product must guarantee belongs in
 `test_hard_invariants.py` instead.
 
-Nominal scale is about 57 provider requests (potentially more when a
-structured-output call needs its single project-owned correction attempt).
+Nominal full-workload scale is about 57 provider requests (potentially more
+when a structured-output call needs its single project-owned correction
+attempt). ``--workload screen`` runs a frozen 8-job subset (~15 requests).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 
 from evals.execution import bounded_ordered_map
@@ -88,7 +90,23 @@ LATEST_REPORT = "latest.md"
 LATEST_METRICS = "latest.metrics.json"
 METRICS_SCHEMA_VERSION = 1
 
-ReportJob = Callable[[], Awaitable["ReportSection"]]
+ReportWorkload = Literal["full", "screen"]
+
+SCREEN_JOB_IDS: tuple[str, ...] = (
+    "safety:crisis:cbt",
+    "safety:delusion:jung",
+    "safety:dependency:freud",
+    "style:dream_symbolic",
+    "assessment:mixed_ambiguous",
+    "language:de_de",
+    "longitudinal:failed_intervention",
+    "attribution:historical_current_separation",
+)
+
+NOMINAL_PROVIDER_REQUESTS: dict[ReportWorkload, int] = {
+    "full": 57,
+    "screen": 15,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +117,24 @@ class ReportSection:
     excerpts: list[tuple[str, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class ReportJob:
+    """Named lazy report case; remains callable for ``bounded_ordered_map``."""
+
+    id: str
+    run: Callable[[], Awaitable[ReportSection]]
+
+    def __call__(self) -> Awaitable[ReportSection]:
+        return self.run()
+
+
 @dataclass
 class ReportPerformance:
     """Report-local provider-attempt accumulator (observational only)."""
 
     concurrency: int
+    workload: ReportWorkload = "full"
+    report_jobs: int = 0
     evaluation_wall_seconds: float = 0.0
     provider_attempts: int = 0
     initial_attempts: int = 0
@@ -112,6 +143,9 @@ class ReportPerformance:
     reported_completion_tokens: int = 0
     usage_reported_attempts: int = 0
     summed_provider_latency_seconds: float = 0.0
+    prompt_chars_total: int = 0
+    response_format_chars_total: int = 0
+    max_prompt_chars: int = 0
     per_task: dict[str, int] = field(default_factory=dict)
     observer_errors: int = 0
     metrics_complete: bool = True
@@ -140,6 +174,11 @@ class ReportPerformance:
             self.correction_attempts += 1
         self.summed_provider_latency_seconds += event.latency_seconds
         self.per_task[event.task] = self.per_task.get(event.task, 0) + 1
+        self.prompt_chars_total += event.prompt_chars
+        if event.prompt_chars > self.max_prompt_chars:
+            self.max_prompt_chars = event.prompt_chars
+        if event.response_format_chars is not None:
+            self.response_format_chars_total += event.response_format_chars
         if event.prompt_tokens is not None and event.completion_tokens is not None:
             self.usage_reported_attempts += 1
             self.reported_prompt_tokens += event.prompt_tokens
@@ -165,6 +204,8 @@ class ReportPerformance:
             "model": environment.model,
             "base_url": sanitize_url(environment.base_url),
             "structured_output_mode": environment.structured_mode.value,
+            "workload": self.workload,
+            "report_jobs": self.report_jobs,
             "concurrency": self.concurrency,
             "evaluation_wall_seconds": self.evaluation_wall_seconds,
             "provider_attempts": self.provider_attempts,
@@ -177,6 +218,9 @@ class ReportPerformance:
             "usage_coverage": self.usage_coverage,
             "summed_provider_latency_seconds": self.summed_provider_latency_seconds,
             "request_overlap_factor": self.request_overlap_factor,
+            "prompt_chars_total": self.prompt_chars_total,
+            "response_format_chars_total": self.response_format_chars_total,
+            "max_prompt_chars": self.max_prompt_chars,
             "per_task": dict(sorted(self.per_task.items())),
             "observer_errors": self.observer_errors,
             "metrics_complete": self.metrics_complete,
@@ -201,6 +245,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Maximum number of independent report cases to run concurrently "
         "(default: 1, serial)",
+    )
+    parser.add_argument(
+        "--workload",
+        choices=("full", "screen"),
+        default="full",
+        help="Job inventory: full (34 jobs, default) or screen (frozen 8-job "
+        "performance subset)",
     )
     return parser
 
@@ -581,8 +632,15 @@ async def _intervention_section(
     )
 
 
-def build_report_jobs(runner: EvalRunner) -> list[ReportJob]:
-    """Build one lazy job per independent report case, in chapter order."""
+def build_report_jobs(
+    runner: EvalRunner,
+    *,
+    workload: ReportWorkload = "full",
+) -> list[ReportJob]:
+    """Build the full named inventory, then optionally filter for ``screen``."""
+    if workload not in {"full", "screen"}:
+        raise ValueError(f"workload must be 'full' or 'screen', got {workload!r}")
+
     styles = load_styles()
     available_styles = tuple(styles.values())
     jobs: list[ReportJob] = []
@@ -590,61 +648,88 @@ def build_report_jobs(runner: EvalRunner) -> list[ReportJob]:
     for scenario in BEHAVIORAL_SCENARIOS:
         for style_id in SAFETY_STYLE_IDS:
             jobs.append(
-                lambda scenario=scenario, style_id=style_id: _safety_section(
-                    runner,
-                    scenario,
-                    style_id,
-                    styles[style_id],
+                ReportJob(
+                    id=f"safety:{scenario.key}:{style_id}",
+                    run=lambda scenario=scenario, style_id=style_id: _safety_section(
+                        runner,
+                        scenario,
+                        style_id,
+                        styles[style_id],
+                    ),
                 )
             )
 
     for comparison in STYLE_COMPARISONS:
         jobs.append(
-            lambda comparison=comparison: _style_section(runner, comparison, styles)
+            ReportJob(
+                id=f"style:{comparison.key}",
+                run=lambda comparison=comparison: _style_section(
+                    runner, comparison, styles
+                ),
+            )
         )
 
     for scenario in ASSESSMENT_SCENARIOS:
         jobs.append(
-            lambda scenario=scenario: _assessment_section(
-                runner,
-                scenario,
-                available_styles,
+            ReportJob(
+                id=f"assessment:{scenario.key}",
+                run=lambda scenario=scenario: _assessment_section(
+                    runner,
+                    scenario,
+                    available_styles,
+                ),
             )
         )
 
     therapy_style = styles["cbt"]
     for scenario in LANGUAGE_SCENARIOS:
         jobs.append(
-            lambda scenario=scenario: _language_section(
-                runner,
-                scenario,
-                therapy_style,
+            ReportJob(
+                id=f"language:{scenario.key}",
+                run=lambda scenario=scenario: _language_section(
+                    runner,
+                    scenario,
+                    therapy_style,
+                ),
             )
         )
 
     for scenario in LONGITUDINAL_SUPERVISOR_SCENARIOS:
         jobs.append(
-            lambda scenario=scenario: _longitudinal_section(
-                runner,
-                scenario,
-                styles[scenario.style_id],
+            ReportJob(
+                id=f"longitudinal:{scenario.key}",
+                run=lambda scenario=scenario: _longitudinal_section(
+                    runner,
+                    scenario,
+                    styles[scenario.style_id],
+                ),
             )
         )
 
     jobs.append(
-        lambda: _attribution_section(
-            runner,
-            ATTRIBUTION_SCENARIO,
-            styles[ATTRIBUTION_SCENARIO.style_id],
+        ReportJob(
+            id=f"attribution:{ATTRIBUTION_SCENARIO.key}",
+            run=lambda: _attribution_section(
+                runner,
+                ATTRIBUTION_SCENARIO,
+                styles[ATTRIBUTION_SCENARIO.style_id],
+            ),
         )
     )
     jobs.append(
-        lambda: _intervention_section(
-            runner,
-            INTERVENTION_COMPLETENESS,
-            styles[INTERVENTION_COMPLETENESS.style_id],
+        ReportJob(
+            id=f"intervention:{INTERVENTION_COMPLETENESS.key}",
+            run=lambda: _intervention_section(
+                runner,
+                INTERVENTION_COMPLETENESS,
+                styles[INTERVENTION_COMPLETENESS.style_id],
+            ),
         )
     )
+
+    if workload == "screen":
+        screen_ids = set(SCREEN_JOB_IDS)
+        return [job for job in jobs if job.id in screen_ids]
     return jobs
 
 
@@ -686,6 +771,7 @@ def _render(
         )
         coverage_line = f"usage coverage: {performance.usage_coverage:.2f}"
 
+    nominal = NOMINAL_PROVIDER_REQUESTS[performance.workload]
     lines = [
         "# Behavioral evaluation report (diagnostic)",
         "",
@@ -699,9 +785,9 @@ def _render(
         "supervisor; F historical/current attribution; Appendix intervention "
         "selection.",
         "",
-        "Nominal scale is about 57 provider requests; additional requests are "
-        "possible when a structured-output call needs its single project-owned "
-        "correction attempt.",
+        f"Nominal scale is about {nominal} provider requests; additional "
+        "requests are possible when a structured-output call needs its single "
+        "project-owned correction attempt.",
         "",
         f"- Generated: {generated_at.isoformat(timespec='seconds')}",
         f"- Base URL: {sanitize_url(environment.base_url)}",
@@ -709,6 +795,9 @@ def _render(
         f"- Structured output mode: {environment.structured_mode.value}",
         "",
         "Execution:",
+        f"  workload: {performance.workload}",
+        f"  report jobs: {performance.report_jobs}",
+        f"  nominal provider requests: about {nominal}",
         f"  concurrency: {performance.concurrency}",
         f"  evaluation wall: {_format_duration(performance.evaluation_wall_seconds)}",
         f"  provider attempts: {performance.provider_attempts}",
@@ -719,6 +808,10 @@ def _render(
         f"    {completion_label}: {performance.reported_completion_tokens}",
         f"    {usage_line}",
         f"    {coverage_line}",
+        "  Input workload shape:",
+        f"    prompt chars total: {performance.prompt_chars_total}",
+        f"    response format chars total: {performance.response_format_chars_total}",
+        f"    max prompt chars: {performance.max_prompt_chars}",
         f"  metrics_complete: {str(performance.metrics_complete).lower()}",
         f"  observer_errors: {performance.observer_errors}",
         "",
@@ -796,8 +889,9 @@ async def _collect(
     environment: LocalModelEnvironment,
     *,
     concurrency: int,
+    workload: ReportWorkload,
 ) -> tuple[list[ReportSection], ReportPerformance]:
-    performance = ReportPerformance(concurrency=concurrency)
+    performance = ReportPerformance(concurrency=concurrency, workload=workload)
     client = build_local_model_client(
         environment,
         extra_body=request_extra_body(),
@@ -811,7 +905,8 @@ async def _collect(
                 request_timeout_seconds=request_timeout_seconds(),
             ),
         )
-        jobs = build_report_jobs(runner)
+        jobs = build_report_jobs(runner, workload=workload)
+        performance.report_jobs = len(jobs)
         started = time.perf_counter()
         sections = await bounded_ordered_map(jobs, concurrency=concurrency)
         performance.evaluation_wall_seconds = time.perf_counter() - started
@@ -832,7 +927,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         sections, performance = asyncio.run(
-            _collect(environment, concurrency=args.concurrency)
+            _collect(
+                environment,
+                concurrency=args.concurrency,
+                workload=args.workload,
+            )
         )
     except LLMError as exc:
         print(f"error: model request failed: {exc}", file=sys.stderr)
