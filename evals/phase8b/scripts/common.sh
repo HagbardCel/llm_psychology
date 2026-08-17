@@ -1,17 +1,25 @@
 #!/bin/bash
 # Shared Phase 8B operator helpers. Source from stage scripts only.
-# Runtime output goes to gitignored logs/evals/phase8b/ — never under evals/phase8b/.
+# Default runtime output: gitignored logs/evals/phase8b/mtplx-${MTPLX_VERSION}/.
+# Historical unversioned logs/evals/phase8b/ is 2.7.1 / v1 evidence — do not migrate.
 set -euo pipefail
 
 LLAMA_PORT=8080
 MTPLX_PORT=8000
 PER_SLOT_CTX=32768
+MTPLX_CURRENT_CHECK_DONE=0
 
 phase8b_common_init() {
   local script_path="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
   PHASE8B_SCRIPT_DIR="$(cd "$(dirname "$script_path")" && pwd)"
   ROOT="$(cd "$PHASE8B_SCRIPT_DIR/../../.." && pwd)"
-  LOGDIR="${PHASE8B_LOGDIR:-$ROOT/logs/evals/phase8b}"
+  MTPLX_VERSION="${MTPLX_VERSION:-2.8.1}"
+  export MTPLX_BREW_VENV="${MTPLX_BREW_VENV:-/opt/homebrew/var/mtplx/venv-${MTPLX_VERSION}}"
+  MTPLX_BIN="${MTPLX_BIN:-$MTPLX_BREW_VENV/bin/mtplx}"
+  MTPLX_PY="${MTPLX_PY:-$(dirname "$MTPLX_BIN")/python}"
+  export MTPLX_BIN
+  export MTPLX_VERSION
+  LOGDIR="${PHASE8B_LOGDIR:-$ROOT/logs/evals/phase8b/mtplx-${MTPLX_VERSION}}"
   WORKSHEET="$LOGDIR/worksheet.md"
   cd "$ROOT"
   mkdir -p "$LOGDIR"
@@ -19,11 +27,6 @@ phase8b_common_init() {
   LLAMA="${LLAMA_SERVER:-$HOME/experiments/llama.cpp/build/bin/llama-server}"
   GGUF="${GGUF_PATH:-$HOME/data/models/llm/gguf/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf}"
   MTPLX_MODEL="${MTPLX_MODEL:-Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed}"
-  export MTPLX_BREW_VENV="${MTPLX_BREW_VENV:-/opt/homebrew/var/mtplx/venv-2.7.1}"
-  MTPLX_BIN="${MTPLX_BIN:-$MTPLX_BREW_VENV/bin/mtplx}"
-  MTPLX_PY="${MTPLX_PY:-$MTPLX_BREW_VENV/bin/python}"
-  export MTPLX_BIN
-  MTPLX_EXPECT_VERSION="${MTPLX_EXPECT_VERSION:-2.7.1}"
   LLAMA_BUILD_ID="${LLAMA_BUILD_ID:-b10428-885c5bbe8}"
   FIXTURE_MANIFEST="$LOGDIR/fixture-manifest.json"
 
@@ -65,11 +68,15 @@ write_fixture_manifest() {
   python3 - <<PY
 import json, pathlib
 manifest = {
-    "schema": "phase8b-fixture-v1",
+    "schema": "phase8b-fixture-v2",
     "source_revision": "$revision",
-    "mtplx_version": "$MTPLX_EXPECT_VERSION",
+    "mtplx_version": "$MTPLX_VERSION",
     "mtplx_model": "$MTPLX_MODEL",
     "mtplx_bin": "$MTPLX_BIN",
+    "llguidance_version": None,
+    "ssd_session_cache": False,
+    "server_reasoning_effort": "medium",
+    "request_reasoning_effort": None,
     "llama_build": "$LLAMA_BUILD_ID",
     "gguf_path": "$GGUF",
     "structured_mode": "json_schema",
@@ -98,11 +105,14 @@ assert_fixture_resume_ok() {
   python3 - <<PY
 import json, pathlib, sys
 expected = {
-    "schema": "phase8b-fixture-v1",
+    "schema": "phase8b-fixture-v2",
     "source_revision": "$revision",
-    "mtplx_version": "$MTPLX_EXPECT_VERSION",
+    "mtplx_version": "$MTPLX_VERSION",
     "mtplx_model": "$MTPLX_MODEL",
     "mtplx_bin": "$MTPLX_BIN",
+    "ssd_session_cache": False,
+    "server_reasoning_effort": "medium",
+    "request_reasoning_effort": None,
     "llama_build": "$LLAMA_BUILD_ID",
     "gguf_path": "$GGUF",
     "structured_mode": "json_schema",
@@ -146,8 +156,43 @@ validate_stage3_resume() {
   esac
 }
 
-_mtpx_cli_version() {
-  "$MTPLX_BIN" --version 2>&1 | head -1 | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/'
+assert_mtplx_current_stable() {
+  if [[ "${MTPLX_CURRENT_CHECK_DONE:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${PHASE8B_ALLOW_OLD_MTPLX:-}" == "1" ]]; then
+    echo "PHASE8B_ALLOW_OLD_MTPLX=1: skipping PyPI freshness check"
+    MTPLX_CURRENT_CHECK_DONE=1
+    return 0
+  fi
+  local current
+  current=$(
+    python3 - <<'PY'
+import json, sys, urllib.request
+
+try:
+    with urllib.request.urlopen("https://pypi.org/pypi/mtplx/json", timeout=5) as resp:
+        payload = json.load(resp)
+except Exception as exc:
+    print(
+        f"Refusing to continue: could not query PyPI for mtplx: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+version = (payload.get("info") or {}).get("version")
+if not version:
+    print("Refusing to continue: PyPI mtplx JSON missing info.version", file=sys.stderr)
+    sys.exit(1)
+print(version)
+PY
+  ) || return 1
+  if [[ "$current" != "$MTPLX_VERSION" ]]; then
+    echo "Refusing to continue: PyPI current mtplx is $current, selected MTPLX_VERSION is $MTPLX_VERSION."
+    echo "Install the $current benchmark venv and update/override MTPLX_VERSION."
+    echo "To keep this version deliberately, set PHASE8B_ALLOW_OLD_MTPLX=1."
+    return 1
+  fi
+  MTPLX_CURRENT_CHECK_DONE=1
 }
 
 assert_mtplx_freeze() {
@@ -155,18 +200,51 @@ assert_mtplx_freeze() {
     echo "Refusing to continue: MTPLX_BIN not executable: $MTPLX_BIN"
     return 1
   fi
-  local meta_ver cli_ver
+  if [[ ! -x "$MTPLX_PY" ]]; then
+    echo "Refusing to continue: MTPLX_PY not executable: $MTPLX_PY"
+    return 1
+  fi
+  local meta_ver cli_banner
   meta_ver=$("$MTPLX_PY" -c 'import importlib.metadata as md; print(md.version("mtplx"))')
-  cli_ver=$(_mtpx_cli_version)
-  echo "mtplx metadata: $meta_ver CLI: $cli_ver (MTPLX_BIN=$MTPLX_BIN)"
-  if [[ "$meta_ver" != "$MTPLX_EXPECT_VERSION" ]]; then
-    echo "Refusing to continue: expected mtplx metadata $MTPLX_EXPECT_VERSION, got: $meta_ver"
+  cli_banner=$("$MTPLX_BIN" --version 2>&1 | head -1)
+  echo "mtplx metadata: $meta_ver CLI: $cli_banner (MTPLX_BIN=$MTPLX_BIN)"
+  if [[ "$meta_ver" != "$MTPLX_VERSION" ]]; then
+    echo "Refusing to continue: expected mtplx metadata $MTPLX_VERSION, got: $meta_ver"
     return 1
   fi
-  if [[ "$cli_ver" != "$MTPLX_EXPECT_VERSION" ]]; then
-    echo "Refusing to continue: expected mtplx CLI $MTPLX_EXPECT_VERSION, got: $cli_ver"
+  if [[ "$cli_banner" != *"$MTPLX_VERSION"* ]]; then
+    echo "Refusing to continue: MTPLX CLI banner does not identify $MTPLX_VERSION: $cli_banner"
     return 1
   fi
+  assert_mtplx_current_stable
+}
+
+seal_llguidance_version() {
+  python3 - <<PY
+import json, pathlib, subprocess, sys
+
+path = pathlib.Path("$FIXTURE_MANIFEST")
+manifest = json.loads(path.read_text())
+observed = subprocess.check_output(
+    [
+        "$MTPLX_PY",
+        "-c",
+        "import importlib.metadata as md; print(md.version('llguidance'))",
+    ],
+    text=True,
+).strip()
+existing = manifest.get("llguidance_version")
+if existing is None:
+    manifest["llguidance_version"] = observed
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Sealed llguidance_version={observed}")
+elif existing != observed:
+    print(
+        f"Refusing: fixture-manifest llguidance_version={existing!r}, observed {observed!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
 }
 
 ensure_llguidance() {
@@ -480,6 +558,8 @@ start_mtplx() {
   local mode=$1
   local log=$2
   assert_mtplx_freeze
+  ensure_llguidance
+  seal_llguidance_version
   stop_mtplx
   "$MTPLX_BIN" serve \
     --model "$MTPLX_MODEL" \
@@ -497,14 +577,6 @@ start_mtplx() {
   local wait_i
   for wait_i in $(seq 1 90); do
     if curl -s -m 2 "http://127.0.0.1:$MTPLX_PORT/health" | grep -q '"ok":true\|"ok": true'; then
-      if head -n 40 "$log" | grep -q 'MTPLX 2\.7\.0'; then
-        echo "Abort: server log shows MTPLX 2.7.0"
-        return 1
-      fi
-      if ! head -n 40 "$log" | grep -q "MTPLX ${MTPLX_EXPECT_VERSION}"; then
-        echo "Abort: server log missing MTPLX $MTPLX_EXPECT_VERSION banner"
-        return 1
-      fi
       echo "MTPLX ready ($mode) after ${wait_i}s"
       return 0
     fi
@@ -528,7 +600,7 @@ export_mtplx_smoke_env() {
   export LOCAL_LLM_SMOKE_BASE_URL="http://127.0.0.1:$MTPLX_PORT/v1"
   export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
   export LOCAL_LLM_SMOKE_SERVER=mtplx
-  export LOCAL_LLM_SMOKE_SERVER_VERSION="$MTPLX_EXPECT_VERSION"
+  export LOCAL_LLM_SMOKE_SERVER_VERSION="$MTPLX_VERSION"
   export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT="${LOCAL_LLM_SMOKE_REQUEST_TIMEOUT:-600}"
 }
 

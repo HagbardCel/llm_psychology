@@ -33,13 +33,22 @@ observations mitigate that.
 
 ## Frozen fixture
 
-Phase 8C reuses the Phase 8B MTPLX/runtime with **one intentional inference
-change**: Qwen 3.8 reasoning effort is `low` at both the MTPLX launch flag and
-the request extra body. Do **not** compare absolute 8C walls to Phase 8B
-timings. All 8C concurrency rows use this same fixture.
+Phase 8C uses the current MTPLX backend with **one intentional inference
+change** from the reusable 8B launch: Qwen 3.8 reasoning effort is `low` at
+both the MTPLX launch flag and the request extra body. Do **not** compare
+absolute 8C walls to original Phase 8B timings. Backend version and reasoning
+effort both differ. All 8C concurrency rows use this same fixture.
+
+```text
+Original Phase 8B measurements: MTPLX 2.7.1, effective Qwen3.8
+reasoning effort medium via the then-default behavior.
+The reusable 8B common.sh pins that effective behavior explicitly as medium.
+
+Phase 8C: MTPLX 2.8.1, reasoning_effort=low at both server and request.
+```
 
 - Qwen3.8-27B: `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed`
-- MTPLX 2.7.1, serial scheduler, `--ssd-session-cache off`,
+- MTPLX 2.8.1, serial scheduler, `--ssd-session-cache off`,
   `--reasoning-effort low`
 - thinking enabled; request `reasoning_effort=low`; `top_p=0.95`; `top_k=20`
 - default Jung task policies (`json_schema` for structured supervisor/state
@@ -50,6 +59,14 @@ timings. All 8C concurrency rows use this same fixture.
 - omit `--patient-model` and `--patient-base-url` (patient uses the session
   endpoint/model and inherits session extra body)
 - explicit frozen `--style` (assessment still runs)
+
+Before the first timed 8C row, the freeze may move to a newer validated
+stable MTPLX. After the first timed row, the selected `MTPLX_VERSION` is
+immutable until C1/C2/C4 closes. If PyPI publishes a newer stable before the
+remaining rows complete, keep the frozen version and set
+`PHASE8B_ALLOW_OLD_MTPLX=1`. That bypasses **only** freshness; metadata
+equality and CLI-banner containment must still validate the frozen version.
+Record the override in the worksheet / eventual `OUTCOME.md`.
 
 ```bash
 export JUNG_LLM_EXTRA_BODY_JSON='{"chat_template_kwargs":{"enable_thinking":true},"reasoning_effort":"low","top_p":0.95,"top_k":20}'
@@ -169,7 +186,7 @@ source revision / clean worktree
 resolved LLM_BASE_URL / MODEL_NAME (and supervisor if set) = same MTPLX/Qwen3.8
 resolved LOCAL_LLM_SMOKE_* = same fixture
 preflight short-suite run.json matches expected endpoints/models/structured modes
-MTPLX 2.7.1, serial, SSD session cache off, --reasoning-effort low
+MTPLX 2.8.1, serial, SSD session cache off, --reasoning-effort low
 enable_thinking true, request reasoning_effort low, top_p .95, top_k 20
 default Jung task policies; JUNG_LLM_TASK_CONFIG_JSON empty
 JUNG_SIM_PATIENT_THINKING_PREFILL absent/false

@@ -157,8 +157,10 @@ The goal is the best practical local Jung configuration among the matrix.
 
 #### Provenance checklist (every timed row)
 
-Record in gitignored `logs/evals/phase8b/worksheet.md` (row-level detail) and
-summarize in [`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
+Record in gitignored `logs/evals/phase8b/mtplx-<version>/worksheet.md`
+(row-level detail; historical 2.7.1 evidence remains under unversioned
+`logs/evals/phase8b/`) and summarize in
+[`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
 [`evals/phase8b/README.md`](phase8b/README.md). Jung auto-detection is not used.
 
 - Benchmark source commit (at matrix start; do not rewrite to merge-time HEAD)

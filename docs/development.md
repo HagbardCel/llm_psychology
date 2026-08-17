@@ -200,7 +200,8 @@ workload on a frozen **Qwen3.8-27B** fixture. Protocol and acceptance rules:
 [`evals/phase8b/README.md`](../evals/phase8b/README.md).
 
 This document records **recommended operational recipes** only. Measured walls
-and row-level provenance live in OUTCOME and gitignored `logs/evals/phase8b/`.
+and row-level provenance live in OUTCOME and gitignored
+`logs/evals/phase8b/` (current runs: `logs/evals/phase8b/mtplx-<version>/`).
 
 ### Shared eval/smoke exports
 
@@ -219,10 +220,11 @@ concurrency 4. **Interactive/reference serial configuration:** MTPLX **M1**
 (client concurrency 1). Phase 8B did not benchmark interactive TTFT; do not
 treat M4 as an interactive-performance result.
 
-Timed MTPLX launches for benchmarking:
+Timed MTPLX launches for benchmarking. Original Phase 8B M4 measurements used
+MTPLX 2.7.1; current recipes use 2.8.1.
 
 ```bash
-export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.7.1
+export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.8.1
 MTPLX_BIN=$MTPLX_BREW_VENV/bin/mtplx
 export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8000/v1
 export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
@@ -230,7 +232,7 @@ export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
 export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
 export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
 export LOCAL_LLM_SMOKE_SERVER=mtplx
-export LOCAL_LLM_SMOKE_SERVER_VERSION=2.7.1
+export LOCAL_LLM_SMOKE_SERVER_VERSION=2.8.1
 
 $MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
@@ -268,7 +270,7 @@ Use `--workload full` (or omit `--workload`) for finalist validation runs.
 **MTPLX** (generic shape; see M4 recipe above for the closed-matrix winner):
 
 ```bash
-MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.7.1/bin/mtplx
+MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.8.1/bin/mtplx
 $MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
   --scheduler-mode <serial|ar_batch|…> \
