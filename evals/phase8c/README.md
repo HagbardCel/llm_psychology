@@ -40,11 +40,12 @@ absolute 8C walls to original Phase 8B timings. Backend version and reasoning
 effort both differ. All 8C concurrency rows use this same fixture.
 
 ```text
-Original Phase 8B measurements: MTPLX 2.7.1, effective Qwen3.8
-reasoning effort medium via the then-default behavior.
-The reusable 8B common.sh pins that effective behavior explicitly as medium.
+Original Phase 8B measurements: MTPLX 2.7.1, with server
+`--reasoning-effort medium`. Requests did not specify request-level
+`reasoning_effort`, so they did not override the server-level medium setting.
 
-Phase 8C: MTPLX 2.8.1, reasoning_effort=low at both server and request.
+Phase 8C: MTPLX 2.8.1, with `reasoning_effort=low` explicitly at both
+server and request.
 ```
 
 - Qwen3.8-27B: `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed`
