@@ -214,6 +214,7 @@ Timed MTPLX launches for benchmarking:
 
 ```bash
 export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.7.1
+MTPLX_BIN=$MTPLX_BREW_VENV/bin/mtplx
 export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8000/v1
 export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
 export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
@@ -222,7 +223,7 @@ export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":tr
 export LOCAL_LLM_SMOKE_SERVER=mtplx
 export LOCAL_LLM_SMOKE_SERVER_VERSION=2.7.1
 
-mtplx serve \
+$MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
   --scheduler-mode serial \
   --ssd-session-cache off \
@@ -258,7 +259,8 @@ Use `--workload full` (or omit `--workload`) for finalist validation runs.
 **MTPLX** (generic shape; see M4 recipe above for the closed-matrix winner):
 
 ```bash
-mtplx serve \
+MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.7.1/bin/mtplx
+$MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
   --scheduler-mode <serial|ar_batch|…> \
   --ssd-session-cache off \

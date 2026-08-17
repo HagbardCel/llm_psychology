@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 phase8b_common_init
+phase8b_bootstrap
 
 export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
 export_mtplx_smoke_env
@@ -49,18 +50,21 @@ ensure_llguidance
 assert_mtplx_freeze
 
 start_mtplx serial "$LOGDIR/mtplx-confirm-smoke.log"
-preflight_json_schema http://127.0.0.1:8000/v1
-dummy_warm http://127.0.0.1:8000/v1
-make smoke-local-llm | tee "$LOGDIR/smoke-confirm-mtplx.log" || {
-  echo "WARNING: mtplx smoke failed; continuing to confirmation rows"
-}
+preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
+if ! run_smoke_gate "$LOGDIR/smoke-confirm-mtplx.log"; then
+  record_compatibility_failure mtplx-confirm mtplx "$LOGDIR/smoke-confirm-mtplx.log"
+  echo "Stage 2 aborted: MTPLX compatibility failure"
+  exit 1
+fi
+stop_mtplx
 
 for round in 1 2 3; do
   echo "=== confirm round ${round} / 3: M1 ==="
   assert_metrics_resume_ok "M1-c${round}" screen 8
   start_mtplx serial "$LOGDIR/mtplx-M1-c${round}.log"
-  preflight_json_schema http://127.0.0.1:8000/v1
-  dummy_warm http://127.0.0.1:8000/v1
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
   run_eval_screen 1
   record_metrics "M1-c${round}"
   cp "$ROOT/logs/evals/latest.md" "$LOGDIR/M1-c${round}.md" 2>/dev/null || true
@@ -68,14 +72,14 @@ for round in 1 2 3; do
   echo "=== confirm round ${round} / 3: M4 ==="
   assert_metrics_resume_ok "M4-c${round}" screen 8
   start_mtplx serial "$LOGDIR/mtplx-M4-c${round}.log"
-  preflight_json_schema http://127.0.0.1:8000/v1
-  dummy_warm http://127.0.0.1:8000/v1
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
   run_eval_screen 4
   record_metrics "M4-c${round}"
   cp "$ROOT/logs/evals/latest.md" "$LOGDIR/M4-c${round}.md" 2>/dev/null || true
 done
 
-mtplx stop --port 8000 2>/dev/null || true
+stop_mtplx
 echo "=== Stage 2 confirmation complete ==="
 summarize_confirmation
 echo "Next: stage3-full.sh for full L1 + top two (+ auto Stage 4)."

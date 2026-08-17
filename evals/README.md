@@ -273,6 +273,9 @@ Stage 4, only when necessary
   extra alternating full pair if:
     screen/full ranking reverses, or
     full finalists differ by <~10%
+
+After Stage 4, rank finalists by the **arithmetic mean** of their Stage 3 and
+Stage 4 full-workload walls (two observations per finalist).
 ```
 
 Normally 6 confirmation runs; occasionally 9. After confirmed medians,

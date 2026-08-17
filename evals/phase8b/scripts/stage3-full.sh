@@ -5,8 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 phase8b_common_init
+phase8b_bootstrap
+
+MTPLX_SMOKE_OK=0
 
 decide_and_run_stage4() {
+  local stage4_smoke_ok=${1:-1}
   python3 - <<PY >"$LOGDIR/stage3-decision.json"
 import json, pathlib
 logdir = pathlib.Path("$LOGDIR")
@@ -69,6 +73,11 @@ PY
     return 0
   fi
 
+  if [[ "$stage4_smoke_ok" != 1 ]]; then
+    echo "Stage 4 aborted: MTPLX compatibility failure"
+    return 1
+  fi
+
   echo "=== Stage 4: extra alternating full pair ==="
   local first second n_first n_second
   first=$(python3 -c 'import json;print(json.load(open("'"$LOGDIR/stage3-decision.json"'"))["pair"][0])')
@@ -81,8 +90,8 @@ PY
     local n=$2
     export_mtplx_smoke_env
     start_mtplx serial "$LOGDIR/mtplx-${tag}.log"
-    preflight_json_schema http://127.0.0.1:8000/v1
-    dummy_warm http://127.0.0.1:8000/v1
+    preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+    dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
     run_eval_full "$n"
     record_metrics "$tag"
     cp "$ROOT/logs/evals/latest.md" "$LOGDIR/${tag}.md" 2>/dev/null || true
@@ -115,6 +124,7 @@ PY
 echo "=== Phase 8B Stage 3 full validation ==="
 echo "Worksheet: $WORKSHEET"
 RESUME="${PHASE8B_STAGE3_RESUME:-}"
+validate_stage3_resume "$RESUME"
 
 if [[ "$RESUME" == "STAGE4" ]]; then
   echo "=== Resuming at Stage 4 (M4-full/M1-full must exist) ==="
@@ -123,8 +133,18 @@ if [[ "$RESUME" == "STAGE4" ]]; then
   ensure_llguidance
   assert_mtplx_freeze
   export_mtplx_smoke_env
-  decide_and_run_stage4
-  mtplx stop --port 8000 2>/dev/null || true
+  export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+  start_mtplx serial "$LOGDIR/mtplx-stage4-smoke.log"
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
+  if ! run_smoke_gate "$LOGDIR/smoke-mtplx-stage4.log"; then
+    record_compatibility_failure mtplx-stage4 mtplx "$LOGDIR/smoke-mtplx-stage4.log"
+    echo "Stage 4 aborted: MTPLX compatibility failure"
+    exit 1
+  fi
+  stop_mtplx
+  decide_and_run_stage4 1
+  stop_mtplx
   print_final_walls
   exit 0
 fi
@@ -132,23 +152,48 @@ fi
 if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
   echo "=== Stage 3: L1-full ==="
   export_llama_smoke_env
-  export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=1800
-  mtplx stop --port 8000 2>/dev/null || true
-  start_llama 1 "$LOGDIR/llama-L1-full.log"
-  dummy_warm http://127.0.0.1:8080/v1
-  make smoke-local-llm | tee "$LOGDIR/smoke-llama-full.log" || {
-    echo "WARNING: llama smoke failed; continuing to timed L1-full"
-  }
-  start_llama 1 "$LOGDIR/llama-L1-full.log"
-  dummy_warm http://127.0.0.1:8080/v1
-  if run_eval_full 1; then
-    record_metrics L1-full
-    cp "$ROOT/logs/evals/latest.md" "$LOGDIR/L1-full.md" 2>/dev/null || true
+  export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+  stop_mtplx
+  start_llama 1 "$LOGDIR/llama-L1-full-smoke.log"
+  dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
+  l1_failed=0
+  if run_smoke_gate "$LOGDIR/smoke-llama-full.log"; then
+    stop_llama
+    start_llama 1 "$LOGDIR/llama-L1-full.log"
+    dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
+    if run_eval_full 1; then
+      record_metrics L1-full
+      cp "$ROOT/logs/evals/latest.md" "$LOGDIR/L1-full.md" 2>/dev/null || true
+    else
+      l1_failed=1
+      echo "L1-full failed at canonical timeout=600; continuing to MTPLX finalists"
+      printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"eval-report failed","server":"llama.cpp","request_timeout":600}' \
+        >"$LOGDIR/L1-full.metrics.json"
+      echo "L1-full FAILED (timeout=600)" >"$LOGDIR/L1-full.FAILED.txt"
+    fi
   else
-    echo "WARNING: L1-full failed; continuing to MTPLX finalists"
-    printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"eval-report failed","server":"llama.cpp"}' \
+    record_compatibility_failure L1-full llama.cpp "$LOGDIR/smoke-llama-full.log"
+    echo "L1-full: compatibility failure — continuing to MTPLX finalists"
+    l1_failed=1
+    printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"smoke compatibility failure","server":"llama.cpp","request_timeout":600}' \
       >"$LOGDIR/L1-full.metrics.json"
-    echo "L1-full FAILED" >"$LOGDIR/L1-full.FAILED.txt"
+    echo "L1-full COMPAT-FAIL (timeout=600)" >"$LOGDIR/L1-full.FAILED.txt"
+  fi
+
+  if [[ "$l1_failed" == 1 && "${PHASE8B_L1_RETRY_1800:-0}" == 1 ]]; then
+    echo "=== L1-full-retry-1800 (diagnostic only) ==="
+    export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=1800
+    export_llama_smoke_env
+    start_llama 1 "$LOGDIR/llama-L1-full-retry.log"
+    dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
+    if run_eval_full 1; then
+      record_metrics L1-full-retry-1800
+      cp "$ROOT/logs/evals/latest.md" "$LOGDIR/L1-full-retry-1800.md" 2>/dev/null || true
+    else
+      printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"eval-report failed","server":"llama.cpp","request_timeout":1800,"diagnostic":true}' \
+        >"$LOGDIR/L1-full-retry-1800.metrics.json"
+      echo "L1-full-retry-1800 FAILED (diagnostic)" >"$LOGDIR/L1-full-retry-1800.FAILED.txt"
+    fi
   fi
   stop_llama
   RESUME=""
@@ -165,14 +210,18 @@ if [[ -z "$RESUME" || "$RESUME" == "M4" ]]; then
   assert_metrics_resume_ok M4-full full 34
   echo "=== Stage 3: M4-full ==="
   start_mtplx serial "$LOGDIR/mtplx-M4-full-smoke.log"
-  preflight_json_schema http://127.0.0.1:8000/v1
-  dummy_warm http://127.0.0.1:8000/v1
-  make smoke-local-llm | tee "$LOGDIR/smoke-mtplx-full.log" || {
-    echo "WARNING: mtplx smoke failed; continuing to timed full rows"
-  }
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
+  if ! run_smoke_gate "$LOGDIR/smoke-mtplx-full.log"; then
+    record_compatibility_failure M4-full mtplx "$LOGDIR/smoke-mtplx-full.log"
+    echo "Stage 3 aborted: MTPLX compatibility failure before M4-full"
+    exit 1
+  fi
+  MTPLX_SMOKE_OK=1
+  stop_mtplx
   start_mtplx serial "$LOGDIR/mtplx-M4-full.log"
-  preflight_json_schema http://127.0.0.1:8000/v1
-  dummy_warm http://127.0.0.1:8000/v1
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
   run_eval_full 4
   record_metrics M4-full
   cp "$ROOT/logs/evals/latest.md" "$LOGDIR/M4-full.md" 2>/dev/null || true
@@ -182,17 +231,29 @@ fi
 if [[ -z "$RESUME" || "$RESUME" == "M1" ]]; then
   assert_metrics_resume_ok M1-full full 34
   echo "=== Stage 3: M1-full ==="
+  if [[ "$MTPLX_SMOKE_OK" != 1 ]]; then
+    start_mtplx serial "$LOGDIR/mtplx-M1-full-smoke.log"
+    preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+    dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
+    if ! run_smoke_gate "$LOGDIR/smoke-mtplx-full.log"; then
+      record_compatibility_failure M1-full mtplx "$LOGDIR/smoke-mtplx-full.log"
+      echo "Stage 3 aborted: MTPLX compatibility failure before M1-full"
+      exit 1
+    fi
+    MTPLX_SMOKE_OK=1
+    stop_mtplx
+  fi
   start_mtplx serial "$LOGDIR/mtplx-M1-full.log"
-  preflight_json_schema http://127.0.0.1:8000/v1
-  dummy_warm http://127.0.0.1:8000/v1
+  preflight_json_schema "http://127.0.0.1:$MTPLX_PORT/v1"
+  dummy_warm "http://127.0.0.1:$MTPLX_PORT/v1"
   run_eval_full 1
   record_metrics M1-full
   cp "$ROOT/logs/evals/latest.md" "$LOGDIR/M1-full.md" 2>/dev/null || true
 fi
 
 echo "=== Stage 3 complete; evaluating Stage 4 trigger ==="
-decide_and_run_stage4
-mtplx stop --port 8000 2>/dev/null || true
+decide_and_run_stage4 "$MTPLX_SMOKE_OK"
+stop_mtplx
 stop_llama
 print_final_walls
 echo "Update evals/phase8b/OUTCOME.md if re-running; see tracked outcome for closed matrix."
