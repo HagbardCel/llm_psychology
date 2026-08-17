@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -119,32 +120,88 @@ class JourneyLog:
         return event
 
 
+def _allocation_stamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _allocation_suffix() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def _mkdir_exclusive_private(path: Path) -> None:
+    """Create ``path`` exclusively with mode ``0700``."""
+    path.mkdir(parents=True, exist_ok=False, mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _mkdir_private_child(path: Path) -> None:
+    path.mkdir(mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _prepare_run_directory(run_dir: Path) -> Path:
+    _mkdir_exclusive_private(run_dir)
+    _mkdir_private_child(run_dir / "data")
+    _mkdir_private_child(run_dir / "checkpoints")
+    return run_dir
+
+
+def _prepare_suite_directory(suite_dir: Path) -> Path:
+    """Create the suite root plus ``workers/`` and ``runs/`` only.
+
+    Individual ``runs/run-00N`` directories are reserved names; the child
+    process creates them via :func:`allocate_run_directory`.
+    """
+    _mkdir_exclusive_private(suite_dir)
+    _mkdir_private_child(suite_dir / "workers")
+    _mkdir_private_child(suite_dir / "runs")
+    return suite_dir
+
+
 def allocate_run_directory(output_dir: Path | None = None) -> Path:
     """Create an exclusive run directory with private permissions."""
-    if output_dir is None:
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        output_dir = Path("logs") / "simulations" / f"run-{stamp}"
-    run_dir = Path(output_dir)
-    if run_dir.exists():
-        raise FileExistsError(f"simulation output directory already exists: {run_dir}")
-    run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-    try:
-        os.chmod(run_dir, 0o700)
-    except OSError:
-        pass
-    data_dir = run_dir / "data"
-    data_dir.mkdir(mode=0o700)
-    try:
-        os.chmod(data_dir, 0o700)
-    except OSError:
-        pass
-    checkpoints = run_dir / "checkpoints"
-    checkpoints.mkdir(mode=0o700)
-    try:
-        os.chmod(checkpoints, 0o700)
-    except OSError:
-        pass
-    return run_dir
+    if output_dir is not None:
+        run_dir = Path(output_dir)
+        if run_dir.exists():
+            raise FileExistsError(
+                f"simulation output directory already exists: {run_dir}"
+            )
+        return _prepare_run_directory(run_dir)
+
+    stamp = _allocation_stamp()
+    while True:
+        candidate = Path("logs") / "simulations" / f"run-{stamp}-{_allocation_suffix()}"
+        try:
+            return _prepare_run_directory(candidate)
+        except FileExistsError:
+            continue
+
+
+def allocate_suite_directory(output_dir: Path | None = None) -> Path:
+    """Create an exclusive suite directory with private permissions."""
+    if output_dir is not None:
+        suite_dir = Path(output_dir)
+        if suite_dir.exists():
+            raise FileExistsError(
+                f"simulation suite directory already exists: {suite_dir}"
+            )
+        return _prepare_suite_directory(suite_dir)
+
+    stamp = _allocation_stamp()
+    while True:
+        candidate = (
+            Path("logs") / "simulations" / f"suite-{stamp}-{_allocation_suffix()}"
+        )
+        try:
+            return _prepare_suite_directory(candidate)
+        except FileExistsError:
+            continue
 
 
 def create_checkpoint(source_db: Path, destination: Path) -> None:

@@ -13,10 +13,13 @@ evals/
 ├── scenarios.py             # Scenario data and transcripts
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
 ├── behavioral_report.py     # make eval-report — diagnostic report
+├── phase8b/                 # closed server-scheduling benchmark
+├── phase8c/                 # simulation-concurrency experiment contract
 └── simulation/              # make simulate-local-llm — whole-product journey
     ├── scenarios.py
     ├── patient.py
-    ├── runner.py
+    ├── runner.py            # one journey
+    ├── suite.py             # --runs > 1 subprocess orchestrator
     └── audit.py
 ```
 
@@ -65,8 +68,9 @@ Execution block and metrics sidecar record `workload` and `report_jobs` so
 runs are not mixed by accident.
 
 Do **not** parallelize turns inside a single `simulate-local-llm` journey.
-Whole simulation runs are independent later; causal turns inside one journey
-are not.
+`--runs` / `--concurrency` overlap **whole independent journeys** only; causal
+turns inside one journey stay sequential. See
+[`evals/phase8c/README.md`](phase8c/README.md).
 
 ### Report concurrency and measurement
 
@@ -153,8 +157,10 @@ The goal is the best practical local Jung configuration among the matrix.
 
 #### Provenance checklist (every timed row)
 
-Record in gitignored `logs/evals/phase8b/worksheet.md` (row-level detail) and
-summarize in [`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
+Record in gitignored `logs/evals/phase8b/mtplx-<version>/worksheet.md`
+(row-level detail; historical 2.7.1 evidence remains under unversioned
+`logs/evals/phase8b/`) and summarize in
+[`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
 [`evals/phase8b/README.md`](phase8b/README.md). Jung auto-detection is not used.
 
 - Benchmark source commit (at matrix start; do not rewrite to merge-time HEAD)
@@ -341,12 +347,51 @@ Synthetic patient → JungApiClient → real loopback HTTP → TherapyApplicatio
 ```
 
 It does **not** call processors directly, mutate the store to advance workflow,
-or use an ASGI shortcut. Artifacts land under `logs/simulations/run-<UTC>/`.
+or use an ASGI shortcut. A single run (`--runs 1`, the default) writes an
+isolated evidence bundle under `logs/simulations/run-<UTC>-<suffix>/`.
 
 ```bash
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 5 --turns-per-session 10"
 ```
+
+Independent replicas of the same configuration (`--runs N`, `--concurrency C`,
+`1 <= C <= N`) are scheduled as child subprocesses. Extra tokens after `make`
+are Make options, not simulation flags — pass CLI arguments through
+`SIM_ARGS`:
+
+```bash
+make simulate-local-llm \
+  SIM_ARGS="--scenario social_anxiety --sessions 2 --turns-per-session 4 \
+  --style jung --runs 4 --concurrency 4"
+```
+
+`--output-dir` is mode-dependent: with `--runs 1` it is the exact journey
+directory; with `--runs > 1` it is the exact suite directory (children under
+`<dir>/runs/run-001`, …). Default `--concurrency` remains `1` even when a
+local measurement later recommends a higher value.
+
+`--runs > 1` writes:
+
+```text
+logs/simulations/suite-<UTC>-<suffix>/
+├── suite.json
+├── workers/run-00N.stdout.log
+├── workers/run-00N.stderr.log
+└── runs/run-00N/          # existing per-journey evidence bundle
+```
+
+`suite.json` records requested vs observed process overlap
+(`run_overlap_factor` = sum of parent-observed child walls / suite wall).
+That metric is **outstanding simulation-process overlap**, not MTPLX inference
+parallelism — the same distinction as Phase 8B `request_overlap_factor`.
+`requested_style` is the CLI `--style` value (`auto` or an explicit id);
+observed selections live in each child `run.json`.
+
+A suite succeeds only when every child exits 0 **and** its `run.json` status
+is `complete`. One failed replica does not cancel siblings. Ctrl-C cancels
+active children and exits `130`. Live Phase 8C measurement protocol:
+[`evals/phase8c/README.md`](phase8c/README.md).
 
 Style selection after assessment:
 
@@ -553,9 +598,11 @@ provider-attempt counters, reported token usage, `request_overlap_factor`
 and `metrics_complete`. `latest.md` is the most recent run of either
 workload; compare only runs that share the same `workload` value.
 
-`make simulate-local-llm` writes to `logs/simulations/run-<UTC>/` including
-`run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite,
-runtime diagnostics, and session checkpoints.
+`make simulate-local-llm` writes to `logs/simulations/run-<UTC>-<suffix>/`
+including `run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated
+SQLite, runtime diagnostics, and session checkpoints. Multi-run suites
+(`--runs > 1`) write `logs/simulations/suite-<UTC>-<suffix>/` with `suite.json`
+plus one child bundle per replica.
 
 `logs/` is gitignored. Reports and simulation bundles contain full model
 output; treat them as sensitive and erase them with the rest of `./logs` (see

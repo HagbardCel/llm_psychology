@@ -151,6 +151,9 @@ make eval-report EVAL_REPORT_ARGS="--concurrency 4"
 make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency 4"
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
+make simulate-local-llm \
+  SIM_ARGS="--scenario social_anxiety --sessions 2 --turns-per-session 4 \
+  --style jung --runs 4 --concurrency 4"
 ```
 
 Style-path comparison (ecological longitudinal evidence; assessment is never
@@ -167,13 +170,19 @@ make simulate-local-llm \
 
 `simulate-local-llm` uses normal Jung production LLM settings (`LLM_BASE_URL`,
 `MODEL_NAME`, `LLM_API_KEY`, `JUNG_SUPERVISOR_*`, …), not `LOCAL_LLM_SMOKE_*`.
-The latter remain exclusive to the processor-level smoke/eval tooling. Each run
-writes an isolated evidence bundle under `logs/simulations/run-<UTC>/` (SQLite,
-checkpoints, `journey.jsonl`, `transcript.md`, `audit.md`, runtime diagnostics).
-Optional flags include `--style` (`auto` or a packaged style id),
-`--patient-timeout`, `--workflow-timeout`, `--overall-timeout`,
-`--patient-history-chars`, and `--patient-base-url`. Cite simulation **run IDs**
-in PR notes rather than committing artifact trees.
+The latter remain exclusive to the processor-level smoke/eval tooling. Pass
+simulation flags through `SIM_ARGS`; extra tokens after `make` are Make
+options. `--runs 1` (default) writes an isolated evidence bundle under
+`logs/simulations/run-<UTC>-<suffix>/`. `--runs N` with `--concurrency C`
+(`1 <= C <= N`, default `C=1`) schedules independent replica subprocesses
+under `logs/simulations/suite-<UTC>-<suffix>/`. `--output-dir` is the journey
+directory when `--runs 1` and the suite directory when `--runs > 1`. Optional
+flags include `--style` (`auto` or a packaged style id), `--patient-timeout`,
+`--workflow-timeout`, `--overall-timeout`, `--patient-history-chars`, and
+`--patient-base-url`. Do not parallelize turns inside one journey. Cite
+simulation **run IDs** or suite IDs in PR notes rather than committing artifact
+trees. Phase 8C measurement protocol:
+[`evals/phase8c/README.md`](../evals/phase8c/README.md).
 
 See [`tests/README.md`](../tests/README.md) and [`evals/README.md`](../evals/README.md)
 for suite ownership and hard-versus-diagnostic semantics.
@@ -191,7 +200,8 @@ workload on a frozen **Qwen3.8-27B** fixture. Protocol and acceptance rules:
 [`evals/phase8b/README.md`](../evals/phase8b/README.md).
 
 This document records **recommended operational recipes** only. Measured walls
-and row-level provenance live in OUTCOME and gitignored `logs/evals/phase8b/`.
+and row-level provenance live in OUTCOME and gitignored
+`logs/evals/phase8b/` (current runs: `logs/evals/phase8b/mtplx-<version>/`).
 
 ### Shared eval/smoke exports
 
@@ -210,10 +220,11 @@ concurrency 4. **Interactive/reference serial configuration:** MTPLX **M1**
 (client concurrency 1). Phase 8B did not benchmark interactive TTFT; do not
 treat M4 as an interactive-performance result.
 
-Timed MTPLX launches for benchmarking:
+Timed MTPLX launches for benchmarking. Original Phase 8B M4 measurements used
+MTPLX 2.7.1; current recipes use 2.8.1.
 
 ```bash
-export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.7.1
+export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.8.1
 MTPLX_BIN=$MTPLX_BREW_VENV/bin/mtplx
 export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8000/v1
 export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
@@ -221,7 +232,7 @@ export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
 export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
 export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
 export LOCAL_LLM_SMOKE_SERVER=mtplx
-export LOCAL_LLM_SMOKE_SERVER_VERSION=2.7.1
+export LOCAL_LLM_SMOKE_SERVER_VERSION=2.8.1
 
 $MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
@@ -259,7 +270,7 @@ Use `--workload full` (or omit `--workload`) for finalist validation runs.
 **MTPLX** (generic shape; see M4 recipe above for the closed-matrix winner):
 
 ```bash
-MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.7.1/bin/mtplx
+MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.8.1/bin/mtplx
 $MTPLX_BIN serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
   --scheduler-mode <serial|ar_batch|…> \
