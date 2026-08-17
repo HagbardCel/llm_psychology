@@ -51,7 +51,7 @@ acquire_phase8b_lock() {
 }
 
 assert_clean_worktree() {
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
     echo "Refusing Phase 8B benchmark: working tree is dirty."
     echo "Commit/stash changes first so source_revision identifies the executed code."
     exit 1
@@ -84,6 +84,11 @@ PY
 
 assert_fixture_resume_ok() {
   if [[ ! -f "$FIXTURE_MANIFEST" ]]; then
+    if compgen -G "$LOGDIR/*.metrics.json" >/dev/null; then
+      echo "Refusing to initialize a fixture manifest over existing benchmark artifacts."
+      echo "Use a fresh PHASE8B_LOGDIR or archive/remove the old artifacts."
+      exit 1
+    fi
     write_fixture_manifest
     return 0
   fi

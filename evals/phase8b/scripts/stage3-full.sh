@@ -156,7 +156,7 @@ if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
   stop_mtplx
   start_llama 1 "$LOGDIR/llama-L1-full-smoke.log"
   dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
-  l1_failed=0
+  l1_timed_failed=0
   if run_smoke_gate "$LOGDIR/smoke-llama-full.log"; then
     stop_llama
     start_llama 1 "$LOGDIR/llama-L1-full.log"
@@ -165,7 +165,7 @@ if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
       record_metrics L1-full
       cp "$ROOT/logs/evals/latest.md" "$LOGDIR/L1-full.md" 2>/dev/null || true
     else
-      l1_failed=1
+      l1_timed_failed=1
       echo "L1-full failed at canonical timeout=600; continuing to MTPLX finalists"
       printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"eval-report failed","server":"llama.cpp","request_timeout":600}' \
         >"$LOGDIR/L1-full.metrics.json"
@@ -174,13 +174,12 @@ if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
   else
     record_compatibility_failure L1-full llama.cpp "$LOGDIR/smoke-llama-full.log"
     echo "L1-full: compatibility failure — continuing to MTPLX finalists"
-    l1_failed=1
     printf '%s\n' '{"status":"failed","workload":"full","concurrency":1,"error":"smoke compatibility failure","server":"llama.cpp","request_timeout":600}' \
       >"$LOGDIR/L1-full.metrics.json"
     echo "L1-full COMPAT-FAIL (timeout=600)" >"$LOGDIR/L1-full.FAILED.txt"
   fi
 
-  if [[ "$l1_failed" == 1 && "${PHASE8B_L1_RETRY_1800:-0}" == 1 ]]; then
+  if [[ "$l1_timed_failed" == 1 && "${PHASE8B_L1_RETRY_1800:-0}" == 1 ]]; then
     echo "=== L1-full-retry-1800 (diagnostic only) ==="
     export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=1800
     export_llama_smoke_env

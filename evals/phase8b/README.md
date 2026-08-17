@@ -23,8 +23,12 @@ Runtime output (metrics, logs, local worksheet) goes to **gitignored**
 ## Prerequisites
 
 - Jung dev env (`uv sync`, `make check` baseline)
-- **Clean Git working tree** — scripts refuse to run with uncommitted changes so
-  `fixture-manifest.json` `source_revision` identifies executed code
+- **Clean Git working tree** — scripts refuse to run with uncommitted or
+  untracked changes so `fixture-manifest.json` `source_revision` identifies
+  executed code
+- When using the promoted scripts after the original Phase 8B run, use a fresh
+  `PHASE8B_LOGDIR`; pre-manifest historical artifacts are evidence, not
+  resumable script state
 - Qwen3.8-27B llama.cpp GGUF and MTPLX Optimized Speed artifact (see OUTCOME)
 - MTPLX **2.7.1** venv with `llguidance` for `json_schema`:
 

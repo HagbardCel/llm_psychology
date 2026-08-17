@@ -13,6 +13,9 @@ export_mtplx_smoke_env
 RESUME="${PHASE8B_RESUME:-}"
 validate_stage1_resume "$RESUME"
 
+RUN_LLAMA=0
+[[ -z "${PHASE8B_RESUME:-}" || "${PHASE8B_RESUME:-}" == "L1" ]] && RUN_LLAMA=1
+
 echo "=== Phase 8B Stage 1 screening ==="
 echo "Worksheet: $WORKSHEET"
 echo "Logdir: $LOGDIR"
@@ -32,6 +35,7 @@ if [[ -z "$RESUME" || "$RESUME" == "M1" || "$RESUME" == "M4" || "$RESUME" == "A2
   else
     record_compatibility_failure mtplx-screen mtplx "$LOGDIR/smoke-mtplx.log"
     echo "MTPLX screen: compatibility failure — skipping all MTPLX timed rows"
+    RUN_LLAMA=1
   fi
   stop_mtplx
 fi
@@ -99,7 +103,7 @@ fi
 stop_mtplx
 sleep 1
 
-if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
+if [[ "$RUN_LLAMA" == 1 ]]; then
   export_llama_smoke_env
   start_llama 1 "$LOGDIR/llama-L1-smoke.log"
   dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
@@ -112,7 +116,7 @@ if [[ -z "$RESUME" || "$RESUME" == "L1" ]]; then
   stop_llama
 fi
 
-if [[ "$LLAMA_SMOKE_OK" == 1 && ( -z "$RESUME" || "$RESUME" == "L1" ) ]]; then
+if [[ "$LLAMA_SMOKE_OK" == 1 && "$RUN_LLAMA" == 1 ]]; then
   start_llama 1 "$LOGDIR/llama-L1.log"
   dummy_warm "http://127.0.0.1:$LLAMA_PORT/v1"
   run_eval_screen 1
