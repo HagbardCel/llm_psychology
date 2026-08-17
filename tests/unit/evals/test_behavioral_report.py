@@ -245,9 +245,14 @@ def test_render_includes_lettered_chapter_titles() -> None:
             excerpts=[("Session summary", "ok")],
         ),
     ]
+    performance = behavioral_report.ReportPerformance(
+        concurrency=1,
+        workload="full",
+        report_jobs=34,
+    )
     text = behavioral_report._render(
         sections,
-        performance=behavioral_report.ReportPerformance(concurrency=1),
+        performance=performance,
         environment=environment,
         generated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -259,6 +264,9 @@ def test_render_includes_lettered_chapter_titles() -> None:
     assert "F. Historical / current-session attribution" in text
     assert "Appendix. Intervention selection completeness" in text
     assert "about 57 provider requests" in text
+    assert "workload: full" in text
+    assert "report jobs: 34" in text
+    assert "nominal provider requests: about 57" in text
     assert "test-model" in text
     assert "Execution:" in text
     assert "concurrency: 1" in text
@@ -268,6 +276,36 @@ def test_render_includes_lettered_chapter_titles() -> None:
     assert "observer_errors: 0" in text
     assert "total prompt tokens" not in text
     assert "request overlap factor: 0.00" in text
+
+
+def test_render_screen_workload_nominal_scale() -> None:
+    environment = LocalModelEnvironment(
+        base_url="http://127.0.0.1:8080/v1",
+        model="test-model",
+        api_key="not-needed",
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+    performance = behavioral_report.ReportPerformance(
+        concurrency=4,
+        workload="screen",
+        report_jobs=8,
+    )
+    text = behavioral_report._render(
+        [
+            behavioral_report.ReportSection(
+                title="A. sample",
+                review_focus="focus",
+                excerpts=[("Model reply", "ok")],
+            )
+        ],
+        performance=performance,
+        environment=environment,
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert "workload: screen" in text
+    assert "report jobs: 8" in text
+    assert "nominal provider requests: about 15" in text
+    assert "about 15 provider requests" in text
 
 
 def test_parser_accepts_positive_concurrency() -> None:
@@ -284,6 +322,77 @@ def test_parser_rejects_non_positive_concurrency() -> None:
         with pytest.raises(SystemExit) as exc_info:
             parser.parse_args(["--concurrency", value])
         assert exc_info.value.code == 2
+
+
+def test_parser_accepts_workload_choices() -> None:
+    parser = behavioral_report.build_parser()
+    assert parser.parse_args([]).workload == "full"
+    assert parser.parse_args(["--workload", "full"]).workload == "full"
+    assert parser.parse_args(["--workload", "screen"]).workload == "screen"
+
+
+def test_parser_rejects_unknown_workload() -> None:
+    parser = behavioral_report.build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--workload", "scren"])
+    assert exc_info.value.code == 2
+
+
+def test_build_report_jobs_rejects_unknown_workload() -> None:
+    from evals.harness import EvalRunner
+    from tests.support.fake_llm import FakeLLM
+
+    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="workload must be"):
+        behavioral_report.build_report_jobs(runner, workload="scren")  # type: ignore[arg-type]
+
+
+def test_report_job_ids_full_and_screen() -> None:
+    from evals.harness import EvalRunner
+    from tests.support.fake_llm import FakeLLM
+
+    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
+    full_ids = tuple(
+        job.id for job in behavioral_report.build_report_jobs(runner, workload="full")
+    )
+    screen_ids = tuple(
+        job.id for job in behavioral_report.build_report_jobs(runner, workload="screen")
+    )
+    assert len(full_ids) == 34
+    assert len(full_ids) == len(set(full_ids))
+    assert screen_ids == behavioral_report.SCREEN_JOB_IDS
+    assert set(behavioral_report.SCREEN_JOB_IDS) <= set(full_ids)
+
+
+def test_nominal_provider_requests_by_workload() -> None:
+    assert behavioral_report.NOMINAL_PROVIDER_REQUESTS["full"] == 57
+    assert behavioral_report.NOMINAL_PROVIDER_REQUESTS["screen"] == 15
+
+
+def test_workload_does_not_change_concurrency_semantics() -> None:
+    full_perf = behavioral_report.ReportPerformance(
+        concurrency=4, workload="full", report_jobs=34
+    )
+    screen_perf = behavioral_report.ReportPerformance(
+        concurrency=4, workload="screen", report_jobs=8
+    )
+    assert full_perf.concurrency == screen_perf.concurrency == 4
+    assert full_perf.report_jobs == 34
+    assert screen_perf.report_jobs == 8
+    assert len(behavioral_report.SCREEN_JOB_IDS) == 8
+
+
+def test_screen_job_ids_are_strict_subset_of_full_inventory() -> None:
+    from evals.harness import EvalRunner
+    from tests.support.fake_llm import FakeLLM
+
+    runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
+    full_ids = {
+        job.id for job in behavioral_report.build_report_jobs(runner, workload="full")
+    }
+    screen_ids = set(behavioral_report.SCREEN_JOB_IDS)
+    assert screen_ids < full_ids
+    assert len(full_ids) - len(screen_ids) == 26
 
 
 @pytest.mark.asyncio
@@ -361,10 +470,9 @@ async def test_build_report_jobs_execute_in_chapter_order(
     monkeypatch.setattr(behavioral_report, "_intervention_section", stub_intervention)
 
     runner = EvalRunner(gateway=FakeLLM([]), policies={})  # type: ignore[arg-type]
-    sections = await bounded_ordered_map(
-        behavioral_report.build_report_jobs(runner),
-        concurrency=1,
-    )
+    jobs = behavioral_report.build_report_jobs(runner, workload="full")
+    assert all(isinstance(job, behavioral_report.ReportJob) for job in jobs)
+    sections = await bounded_ordered_map(jobs, concurrency=1)
     assert len(sections) == 34
 
     for index, section in enumerate(sections[:18]):
@@ -616,6 +724,30 @@ def test_report_performance_zero_wall_and_zero_attempts() -> None:
     assert payload["response_format_chars_total"] == 0
     assert payload["max_prompt_chars"] == 0
     assert payload["schema_version"] == 1
+    assert payload["workload"] == "full"
+    assert payload["report_jobs"] == 0
+
+
+def test_to_metrics_dict_includes_workload_and_report_jobs() -> None:
+    environment = LocalModelEnvironment(
+        base_url="http://127.0.0.1:8080/v1",
+        model="test-model",
+        api_key="not-needed",
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+    perf = behavioral_report.ReportPerformance(
+        concurrency=4,
+        workload="screen",
+        report_jobs=8,
+    )
+    payload = perf.to_metrics_dict(
+        environment=environment,
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert payload["workload"] == "screen"
+    assert payload["report_jobs"] == 8
+    assert payload["concurrency"] == 4
+    assert payload["schema_version"] == 1
 
 
 def test_observe_safe_records_observer_errors() -> None:
@@ -638,7 +770,11 @@ def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
         api_key="not-needed",
         structured_mode=StructuredOutputMode.JSON_SCHEMA,
     )
-    perf = behavioral_report.ReportPerformance(concurrency=4)
+    perf = behavioral_report.ReportPerformance(
+        concurrency=4,
+        workload="full",
+        report_jobs=34,
+    )
     perf.observe(
         _attempt(  # type: ignore[arg-type]
             prompt_chars=120,
@@ -663,6 +799,8 @@ def test_render_uses_total_token_labels_only_at_full_coverage() -> None:
     assert "total prompt tokens: 11" in text
     assert "total completion tokens: 9" in text
     assert "attempts with usage: 1 / 1" in text
+    assert "workload: full" in text
+    assert "report jobs: 34" in text
     assert "concurrency: 4" in text
     assert "request overlap factor: 1.00" in text
     assert "prompt chars total: 120" in text

@@ -74,7 +74,7 @@ evals:
 		-m "eval and real_llm" --no-mocks -o asyncio_mode=strict
 
 # Diagnostic report for human review; never a gate.
-# Example: make eval-report EVAL_REPORT_ARGS="--concurrency 4"
+# Example: make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency 4"
 eval-report:
 	@mkdir -p logs/evals
 	uv run --locked python -m evals.behavioral_report $(EVAL_REPORT_ARGS)

@@ -148,6 +148,7 @@ make smoke-local-llm
 make evals
 make eval-report
 make eval-report EVAL_REPORT_ARGS="--concurrency 4"
+make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency 4"
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
 ```
@@ -184,10 +185,13 @@ hard evals, and `eval-report` use `LOCAL_LLM_SMOKE_*`. Interactive `make run`
 uses `LLM_BASE_URL` / `MODEL_NAME`. Do not mix the namespaces.
 
 Phase 8B measures server-side scheduling for the concurrent `eval-report`
-workload on a frozen **Qwen3.8-27B** fixture. Full matrix, provenance, and
-acceptance rules live in [`evals/README.md`](../evals/README.md). Exact build
-IDs and measured winners belong in the PR worksheet, not as machine-independent
-defaults here.
+workload on a frozen **Qwen3.8-27B** fixture. Protocol and acceptance rules:
+[`evals/README.md`](../evals/README.md). Frozen measurements and rationale:
+[`evals/phase8b/OUTCOME.md`](../evals/phase8b/OUTCOME.md). Operator scripts:
+[`evals/phase8b/README.md`](../evals/phase8b/README.md).
+
+This document records **recommended operational recipes** only. Measured walls
+and row-level provenance live in OUTCOME and gitignored `logs/evals/phase8b/`.
 
 ### Shared eval/smoke exports
 
@@ -199,9 +203,38 @@ export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
 export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
 ```
 
-### High-throughput evaluation recipe
+### High-throughput evaluation recipe (Phase 8B winner: M4)
 
-Use the matrix winner’s launch command. Typical shapes:
+**Concurrent eval-report default:** MTPLX **M4** — serial scheduler, client
+concurrency 4. **Interactive/reference serial configuration:** MTPLX **M1**
+(client concurrency 1). Phase 8B did not benchmark interactive TTFT; do not
+treat M4 as an interactive-performance result.
+
+Timed MTPLX launches for benchmarking:
+
+```bash
+export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.7.1
+export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8000/v1
+export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
+export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
+export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
+export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
+export LOCAL_LLM_SMOKE_SERVER=mtplx
+export LOCAL_LLM_SMOKE_SERVER_VERSION=2.7.1
+
+mtplx serve \
+  --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
+  --scheduler-mode serial \
+  --ssd-session-cache off \
+  --reasoning on --reasoning-effort medium \
+  --default-top-p 0.95 --default-top-k 20 \
+  --host 127.0.0.1 --port 8000 --no-auth
+
+make eval-report EVAL_REPORT_ARGS="--workload full --concurrency 4"
+```
+
+Use `--workload screen` for screening rows (~15 provider calls). See
+[`evals/phase8b/OUTCOME.md`](../evals/phase8b/OUTCOME.md) for closed-matrix margins.
 
 **llama.cpp** (example with common 32K/slot context; adjust after preflight):
 
@@ -217,18 +250,24 @@ llama-server -m <pinned-qwen3.8-27b.gguf> \
 Then:
 
 ```bash
-make eval-report EVAL_REPORT_ARGS="--concurrency N"
+make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency N"
 ```
 
-**MTPLX** (timed measurements must disable SSD session cache):
+Use `--workload full` (or omit `--workload`) for finalist validation runs.
+
+**MTPLX** (generic shape; see M4 recipe above for the closed-matrix winner):
 
 ```bash
 mtplx serve \
   --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
   --scheduler-mode <serial|ar_batch|…> \
   --ssd-session-cache off \
-  --port 8080
+  --port 8000
 ```
+
+MTPLX constrained `json_schema` serving requires `llguidance` (`mtplx[server]`;
+included by the desktop runtime). For bare/custom CLI environments, install
+it into the Python environment running the MTPLX server.
 
 Point `LOCAL_LLM_SMOKE_BASE_URL` at that server and run the same
 `eval-report` command. Restart between timed rows; use one fixed short dummy
@@ -236,8 +275,8 @@ chat-completion as warm-up (not `make smoke-local-llm`).
 
 ### Preferred serial / interactive recipe
 
-Prefer a successful serial candidate from L1 / LM1 / M1, informed by serial
-`eval-report` wall time and a manual responsiveness check. This is not a
+For interactive Jung, prefer **M1** (MTPLX serial, client concurrency 1) informed
+by manual responsiveness — not Phase 8B concurrent-eval wall time. This is not a
 dedicated TTFT benchmark.
 
 For interactive Jung, leave MTPLX’s normal session/SSD cache behavior enabled

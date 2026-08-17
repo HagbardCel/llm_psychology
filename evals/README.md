@@ -47,6 +47,7 @@ how concerning the answers are. It is a human-review artifact, not a gate.
 ```bash
 make eval-report          # writes logs/evals/latest.md and a timestamped copy
 make eval-report EVAL_REPORT_ARGS="--concurrency 4"
+make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency 4"
 ```
 
 Independent report cases may overlap under `--concurrency N` (default `1`,
@@ -55,6 +56,13 @@ longitudinal session 1 before session 2; intake before therapy in language
 cases). Higher concurrency is not necessarily faster: server slot count,
 batching policy, and model workload matter. Measure on your local server
 rather than assuming an optimal `N`.
+
+`--workload full` (default) runs the existing 34-job behavioral diagnostic
+report (~57 provider requests). `--workload screen` runs a frozen 8-job
+subset of those same jobs (~15 requests) for performance screening. Both
+workloads write through the same `latest.md` / metrics artifacts; the
+Execution block and metrics sidecar record `workload` and `report_jobs` so
+runs are not mixed by accident.
 
 Do **not** parallelize turns inside a single `simulate-local-llm` journey.
 Whole simulation runs are independent later; causal turns inside one journey
@@ -88,6 +96,9 @@ converted into tokens or used to size llama.cpp `--ctx-size`. Streaming
 they are often `None`, so a partial sum would be misleading.
 
 ### Phase 8B — server batching benchmark protocol
+
+Phase 8B is **closed**. Frozen outcome: [`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md).
+Winner for concurrent `eval-report`: **M4** (MTPLX serial + client N=4).
 
 Phase 8A unlocked bounded client concurrency for `eval-report`. Phase 8B
 measures how an OpenAI-compatible local inference server should execute that
@@ -142,10 +153,13 @@ The goal is the best practical local Jung configuration among the matrix.
 
 #### Provenance checklist (every timed row)
 
-Record in the PR worksheet (not Jung auto-detection):
+Record in gitignored `logs/evals/phase8b/worksheet.md` (row-level detail) and
+summarize in [`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
+[`evals/phase8b/README.md`](phase8b/README.md). Jung auto-detection is not used.
 
-- Jung commit; frozen backend binary/build (updating either invalidates that
-  backend’s cross-row comparisons)
+- Benchmark source commit (at matrix start; do not rewrite to merge-time HEAD)
+- frozen backend binary/build (updating either invalidates that backend's
+  cross-row comparisons)
 - requested `LOCAL_LLM_SMOKE_MODEL` vs actually loaded artifact
 - quantization / revision; MTPLX resolved profile + effective MTP depth +
   scheduler / active lane
@@ -213,42 +227,83 @@ defaults unless Stage 2 is needed.
 
 #### Timed-row protocol
 
+Screening and confirmation timed rows use the screen workload:
+
 ```text
 stop → configure → start → readiness / provenance
 → one fixed short dummy chat-completion (same text every row)
-→ timed make eval-report EVAL_REPORT_ARGS="--concurrency N"
+→ timed make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency N"
 → stop
 ```
 
+Full-workload validation rows use the default report (omit `--workload` or
+pass `--workload full`).
+
 `make smoke-local-llm` is the **json_schema compatibility gate**, not the
 warm-up. If smoke ran, restart and dummy-warm again before the timed row.
+MTPLX constrained `json_schema` serving requires `llguidance` (`mtplx[server]`;
+included by the desktop runtime). For bare/custom CLI environments, install
+it into the Python environment running the MTPLX server.
 MTPLX timed launches use `--ssd-session-cache off` so SSD session cache
 cannot persist across restarts and corrupt A/B alternation. Interactive
 recipes keep normal MTPLX cache behavior.
 
-#### Screening → confirmation
+#### Screening → confirmation → full validation
 
-1. Screen each admitted row once; drop clear losers; record
-   unsupported/infeasible rows.
-2. Take the best two practical configs; run each three times alternating
-   A B A B A B.
-3. Primary metric: **median `evaluation_wall_seconds`**.
+Stage 1 is coarse elimination from one noisy run, not a precise top-two pick:
 
-Metric priority: (1) median wall, (2) report completed, (3) corrections /
-failures, (4) client outstanding-request overlap, (5) input character
-fingerprints, (6) token usage if reported, (7) backend tok/s as
+```text
+Stage 1
+  one screen run for every admitted candidate
+  eliminate only clear losers / failures / unsupported modes
+  (~40% slower, structured-output failure, intended scheduler not active)
+
+Stage 2
+  confirm top two
+  + any near-tied third (~within 10% of second after Stage 1)
+  three alternating screen runs each
+  rank by median screen wall
+
+Stage 3
+  full L1
+  full top two confirmed candidates
+  (two full runs if L1 is already a finalist)
+
+Stage 4, only when necessary
+  extra alternating full pair if:
+    screen/full ranking reverses, or
+    full finalists differ by <~10%
+```
+
+Normally 6 confirmation runs; occasionally 9. After confirmed medians,
+reduce to the **top two for full validation**. Primary Stage 1/2 metric:
+**median `evaluation_wall_seconds` on `--workload screen`**. Stage 3 metric:
+full-workload wall. Never compute a speedup across workloads.
+
+```text
+valid:    A4 screen / L1 screen
+valid:    A4 full / L1 full
+invalid:  A4 screen / historical L1 full
+```
+
+Do not mix MTPLX builds or full vs screen metrics as if they were the same
+matrix.
+
+Metric priority: (1) median wall (same workload), (2) report completed, (3)
+corrections / failures, (4) client outstanding-request overlap, (5) input
+character fingerprints, (6) token usage if reported, (7) backend tok/s as
 explanation only.
 
-Stage 2 only if the best concurrent candidate has **verified backend-side
-concurrent execution** (llama.cpp slots / MTPLX scheduler telemetry) but
-wall time still disappoints: one focused follow-up (batch/ubatch around
-best slots, one MTPLX decode-batch/batch-wait probe, or LM4 if LM1 beat
-L1). Do not grid-search.
+Stage 2 follow-up (knob probe) only if the best concurrent candidate has
+**verified backend-side concurrent execution** (llama.cpp slots / MTPLX
+scheduler telemetry) but wall time still disappoints: one focused follow-up
+(batch/ubatch around best slots, one MTPLX decode-batch/batch-wait probe, or
+LM4 if LM1 beat L1). Do not grid-search.
 
-Optimization target: ≥1.5× versus clean L1. A documented empirical ceiling
-is also a valid Phase 8B result. Word conclusions as the best configuration
-**among the Phase 8B matrix**, not a global backend ranking unless LM1 was
-successfully screened.
+Optimization target: ≥1.5× versus clean L1 on the **same workload**. A
+documented empirical ceiling is also a valid Phase 8B result. Word
+conclusions as the best configuration **among the Phase 8B matrix**, not a
+global backend ranking unless LM1 was successfully screened.
 
 Chapters (lettered in section titles):
 
@@ -262,10 +317,10 @@ Chapters (lettered in section titles):
 | F | Historical vs current-session attribution (review + briefing + grounded A) |
 | Appendix | Intervention selection completeness |
 
-Nominal scale is about **57 provider requests**; additional requests are possible
-when a structured-output call needs its single project-owned correction
-attempt. Style-path simulations remain ecological longitudinal evidence;
-Section B is the matched-input comparison.
+`full` nominal scale is about **57 provider requests**; `screen` is about
+**15**. Additional requests are possible when a structured-output call needs
+its single project-owned correction attempt. Style-path simulations remain
+ecological longitudinal evidence; Section B is the matched-input comparison.
 
 The report exits non-zero only when it could not be produced: missing
 environment, unreachable server, failed or timed-out request, a scenario that
@@ -488,10 +543,12 @@ uv run --locked pytest evals/test_hard_invariants.py -q      # all skipped
 - `logs/evals/report-<UTC timestamp>.metrics.json` — retained metrics copy
 
 The metrics sidecar includes provenance (`schema_version`, model, sanitized
-base URL, structured mode, concurrency) plus provider-attempt counters,
-reported token usage, `request_overlap_factor` (client outstanding-request
-overlap), input-workload fingerprints (`prompt_chars_total`,
-`response_format_chars_total`, `max_prompt_chars`), and `metrics_complete`.
+base URL, structured mode, `workload`, `report_jobs`, concurrency) plus
+provider-attempt counters, reported token usage, `request_overlap_factor`
+(client outstanding-request overlap), input-workload fingerprints
+(`prompt_chars_total`, `response_format_chars_total`, `max_prompt_chars`),
+and `metrics_complete`. `latest.md` is the most recent run of either
+workload; compare only runs that share the same `workload` value.
 
 `make simulate-local-llm` writes to `logs/simulations/run-<UTC>/` including
 `run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite,
