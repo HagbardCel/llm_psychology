@@ -223,6 +223,31 @@ if m.get("status") == "failed" and "$expect_workload" == "full" and "full" in "$
 PY
 }
 
+require_completed_metrics() {
+  local id=$1
+  local expect_workload=$2
+  local expect_jobs=$3
+  local metrics="$LOGDIR/${id}.metrics.json"
+  python3 - <<PY
+import json, sys
+p = "$metrics"
+try:
+    m = json.loads(open(p).read())
+except FileNotFoundError:
+    print(f"Refusing resume: missing required row {p}", file=sys.stderr)
+    sys.exit(1)
+if m.get("workload") != "$expect_workload":
+    print(f"Refusing resume: {p} workload={m.get('workload')!r}, expected $expect_workload", file=sys.stderr)
+    sys.exit(1)
+if m.get("report_jobs") != $expect_jobs:
+    print(f"Refusing resume: {p} report_jobs={m.get('report_jobs')!r}, expected $expect_jobs", file=sys.stderr)
+    sys.exit(1)
+if m.get("evaluation_wall_seconds") is None:
+    print(f"Refusing resume: {p} missing evaluation_wall_seconds", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 preflight_json_schema() {
   local base=$1
   local model

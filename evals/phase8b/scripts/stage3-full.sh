@@ -108,7 +108,14 @@ print_final_walls() {
 import json, pathlib
 logdir = pathlib.Path("$LOGDIR")
 print("=== Final Phase 8B full walls ===")
-for name in ("L1-full", "M4-full", "M1-full", "M4-full-s4a", "M1-full-s4b"):
+names = ["L1-full", "M4-full", "M1-full"]
+decision_path = logdir / "stage3-decision.json"
+if decision_path.exists():
+    decision = json.loads(decision_path.read_text())
+    pair = decision.get("pair", [])
+    if len(pair) == 2:
+        names.extend([f"{pair[0]}-full-s4a", f"{pair[1]}-full-s4b"])
+for name in names:
     p = logdir / f"{name}.metrics.json"
     if not p.exists():
         continue
@@ -128,8 +135,8 @@ validate_stage3_resume "$RESUME"
 
 if [[ "$RESUME" == "STAGE4" ]]; then
   echo "=== Resuming at Stage 4 (M4-full/M1-full must exist) ==="
-  assert_metrics_resume_ok M4-full full 34
-  assert_metrics_resume_ok M1-full full 34
+  require_completed_metrics M4-full full 34
+  require_completed_metrics M1-full full 34
   ensure_llguidance
   assert_mtplx_freeze
   export_mtplx_smoke_env
@@ -228,6 +235,7 @@ if [[ -z "$RESUME" || "$RESUME" == "M4" ]]; then
 fi
 
 if [[ -z "$RESUME" || "$RESUME" == "M1" ]]; then
+  require_completed_metrics M4-full full 34
   assert_metrics_resume_ok M1-full full 34
   echo "=== Stage 3: M1-full ==="
   if [[ "$MTPLX_SMOKE_OK" != 1 ]]; then
