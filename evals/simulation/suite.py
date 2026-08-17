@@ -321,7 +321,7 @@ def interpret_finished_child(
         )
     try:
         payload = json.loads(run_json_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return replace(
             base,
             error_code="malformed_run_json",
@@ -477,6 +477,13 @@ class _SuiteScheduler:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            try:
+                await terminate_child(process, grace_seconds=self.grace_seconds)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             self.children[index - 1] = _child_result(
                 index,
                 status="failed",

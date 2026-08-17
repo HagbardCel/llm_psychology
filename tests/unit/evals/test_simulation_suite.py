@@ -522,6 +522,76 @@ async def test_missing_and_malformed_run_json(tmp_path: Path) -> None:
     assert result.children[1].error_code == "malformed_run_json"
 
 
+async def test_invalid_utf8_run_json_siblings_continue(tmp_path: Path) -> None:
+    async def spawn(
+        argv: Sequence[str], *, stdout_path: Path, stderr_path: Path
+    ) -> FakeProcess:
+        run_dir = _output_dir_from_argv(argv)
+        if run_dir.name == "run-002":
+            _touch_logs(stdout_path, stderr_path)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "run.json").write_bytes(b'{"status":"failed","error":"\xff')
+            return FakeProcess(0)
+        return await _complete_spawn(
+            argv, stdout_path=stdout_path, stderr_path=stderr_path
+        )
+
+    result = await run_simulation_suite(
+        _config(tmp_path, runs=3, concurrency=2),
+        spawn=spawn,
+    )
+    assert [child.status for child in result.children] == [
+        "complete",
+        "failed",
+        "complete",
+    ]
+    assert result.children[1].error_code == "malformed_run_json"
+    assert result.status == "failed"
+    assert exit_code_for_suite(result) == 1
+
+
+async def test_wait_failure_terminates_live_child_and_siblings_continue(
+    tmp_path: Path,
+) -> None:
+    failed: FakeProcess | None = None
+
+    class WaitFailsWhileAlive(FakeProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self._wait_calls = 0
+
+        async def wait(self) -> int:
+            self._wait_calls += 1
+            if self._wait_calls == 1:
+                raise RuntimeError("wait exploded")
+            return await super().wait()
+
+    async def spawn(
+        argv: Sequence[str], *, stdout_path: Path, stderr_path: Path
+    ) -> FakeProcess:
+        nonlocal failed
+        run_dir = _output_dir_from_argv(argv)
+        if run_dir.name == "run-001":
+            _touch_logs(stdout_path, stderr_path)
+            failed = WaitFailsWhileAlive()
+            return failed
+        return await _complete_spawn(
+            argv, stdout_path=stdout_path, stderr_path=stderr_path
+        )
+
+    result = await run_simulation_suite(
+        _config(tmp_path, runs=2, concurrency=1),
+        spawn=spawn,
+    )
+    assert failed is not None
+    assert failed.terminated or failed.killed
+    assert result.children[0].error_code == "child_wait_failed"
+    assert result.children[0].status == "failed"
+    assert result.children[1].status == "complete"
+    assert result.status == "failed"
+    assert exit_code_for_suite(result) == 1
+
+
 async def test_suite_json_write_failure_is_infrastructure_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
