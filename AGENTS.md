@@ -180,6 +180,8 @@ not substitutes for `make check`.
 | whole-product longitudinal   | `make simulate-local-llm` when appropriate                  |
 | docs only                    | `make docs-links` during editing; `make check` before merge |
 
+Real-model validation is **change-sensitive, not cumulative**: reuse existing frozen live evidence unless the change can plausibly invalidate the property that evidence measured. Tier selection does **not** waive the explicit preconditions/gates of a particular experiment contract.
+
 If a real-model surface could not be executed because no suitable model
 server was available, state **not run**. Never infer success from
 deterministic tests.
