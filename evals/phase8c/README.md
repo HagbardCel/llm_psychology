@@ -1,8 +1,8 @@
 # Phase 8C — parallel independent longitudinal simulations
 
 Experiment contract for overlapping complete `simulate-local-llm` journeys.
-`OUTCOME.md` exists as a protocol-amended template; fill/update it only
-after the live benchmark measurements exist.
+`OUTCOME.md` records the live benchmark outcome and the protocol-amendment
+history.
 
 **Protocol amended: 2026-08-19.** The original Stage 1-4 escalation was
 replaced with a cost-bounded two-stage decision contract: Stage 1 C1/C2/C4
@@ -10,6 +10,9 @@ screen, then a conditional single Stage 2 confirmation pair. Long-workload
 Stage 3/4 benchmarks are removed. Reason: the original escalation imposed
 disproportionate real-model runtime relative to the engineering decision
 Phase 8C actually needs to make.
+
+This protocol amendment was made in-flight to cap experiment cost/runtime;
+it should not be interpreted as a preregistered statistical protocol.
 
 Raw machine evidence stays under gitignored `logs/simulations/` (and any
 operator worksheet under `logs/evals/phase8c/`).
@@ -62,8 +65,9 @@ server and request.
 - thinking enabled; request `reasoning_effort=low`; `top_p=0.95`; `top_k=20`
 - default Jung task policies (`json_schema` for structured supervisor/state
   calls)
-- `JUNG_LLM_TASK_CONFIG_JSON` absent/empty unless recorded as part of this
-  fixture
+- frozen `JUNG_LLM_TASK_CONFIG_JSON` timeout override (timeout_seconds=600
+  on all six tasks):
+  `{"intake_patch":{"timeout_seconds":600},"intake_response":{"timeout_seconds":600},"therapy_response":{"timeout_seconds":600},"assessment":{"timeout_seconds":600},"post_session_analysis":{"timeout_seconds":600},"post_session_update":{"timeout_seconds":600}}`
 - `JUNG_SIM_PATIENT_THINKING_PREFILL` absent/false
 - omit `--patient-model` and `--patient-base-url` (patient uses the session
   endpoint/model and inherits session extra body)
@@ -355,7 +359,8 @@ resolved LOCAL_LLM_SMOKE_* = same fixture
 preflight short-suite run.json matches expected endpoints/models/structured modes
 MTPLX 2.8.1, serial, SSD session cache off, --reasoning-effort low
 enable_thinking true, request reasoning_effort low, top_p .95, top_k 20
-default Jung task policies; JUNG_LLM_TASK_CONFIG_JSON empty
+default Jung task policies except frozen timeout override via
+JUNG_LLM_TASK_CONFIG_JSON={"intake_patch":{"timeout_seconds":600},"intake_response":{"timeout_seconds":600},"therapy_response":{"timeout_seconds":600},"assessment":{"timeout_seconds":600},"post_session_analysis":{"timeout_seconds":600},"post_session_update":{"timeout_seconds":600}}
 JUNG_SIM_PATIENT_THINKING_PREFILL absent/false
 same patient endpoint/model (no --patient-model / --patient-base-url)
 scenario / requested_style / sessions / turns

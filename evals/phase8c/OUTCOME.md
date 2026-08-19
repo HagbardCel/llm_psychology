@@ -24,7 +24,7 @@ Phase 8B.
 | Item | Value |
 |---|---|
 | Source revision | `2eab7d8debb6bcee811a61e90c1a8e3619e61153` (merge of PR #69) |
-| Working tree | clean |
+| Working tree | varies by row: C1 clean, C2 dirty/invalid, C4 cancelled |
 | Model | `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed` (`mtplx-qwen38-27b-optimized-speed`) |
 | MTPLX | **2.8.1** (`venv-2.8.1`; metadata 2.8.1; CLI `mtplx 2.8.0 (2.8.1)`) |
 | llguidance | 1.8.0 |
@@ -67,7 +67,7 @@ timeout on `intake_patch`. The MTPLX log showed short thinking completions
 
 | Row | Status | Suite wall | Mechanical validity / result |
 |---|---|---:|---|
-| C1 (`--concurrency 1`) | failed | 6030.60s | genuine workload failure: child timeout and patient-generation failures |
+| C1 (`--concurrency 1`) | failed | 6030.60s | genuine workload failure with `git_worktree_dirty=false`: child timeout and patient-generation failures |
 | C2 (`--concurrency 2`) | complete | 7427.88s | invalid for timing selection: `git_worktree_dirty=true`; otherwise all 4 children complete and observed concurrency reached 2 |
 | C4 (`--concurrency 4`) | cancelled | N/A | cancelled after the genuine C1 failure closed Stage 1 |
 
