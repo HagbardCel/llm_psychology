@@ -1,8 +1,18 @@
 # Phase 8C — parallel independent longitudinal simulations
 
 Experiment contract for overlapping complete `simulate-local-llm` journeys.
-Write `OUTCOME.md` in this directory only after the live benchmark; do not
-create that file until measurements exist.
+`OUTCOME.md` records the live benchmark outcome and the protocol-amendment
+history.
+
+**Protocol amended: 2026-08-19.** The original Stage 1-4 escalation was
+replaced with a cost-bounded two-stage decision contract: Stage 1 C1/C2/C4
+screen, then a conditional single Stage 2 confirmation pair. Long-workload
+Stage 3/4 benchmarks are removed. Reason: the original escalation imposed
+disproportionate real-model runtime relative to the engineering decision
+Phase 8C actually needs to make.
+
+This protocol amendment was made in-flight to cap experiment cost/runtime;
+it should not be interpreted as a preregistered statistical protocol.
 
 Raw machine evidence stays under gitignored `logs/simulations/` (and any
 operator worksheet under `logs/evals/phase8c/`).
@@ -28,8 +38,9 @@ simulation-process overlap, **not** MTPLX inference parallelism.
 Configured replica/session/turn counts are identical across C1/C2/C4. That is
 **fixed configured workload**, not bit-identical computational work: the
 synthetic patient and therapist are stochastic, so intake length, response
-lengths, token counts, and correction attempts can vary. Repeated Stage 2
-observations mitigate that.
+lengths, token counts, and correction attempts can vary. Phase 8C uses a
+decision-oriented confirmation boundary rather than repeated median
+estimation.
 
 ## Frozen fixture
 
@@ -54,8 +65,9 @@ server and request.
 - thinking enabled; request `reasoning_effort=low`; `top_p=0.95`; `top_k=20`
 - default Jung task policies (`json_schema` for structured supervisor/state
   calls)
-- `JUNG_LLM_TASK_CONFIG_JSON` absent/empty unless recorded as part of this
-  fixture
+- frozen `JUNG_LLM_TASK_CONFIG_JSON` timeout override (timeout_seconds=600
+  on all six tasks):
+  `{"intake_patch":{"timeout_seconds":600},"intake_response":{"timeout_seconds":600},"therapy_response":{"timeout_seconds":600},"assessment":{"timeout_seconds":600},"post_session_analysis":{"timeout_seconds":600},"post_session_update":{"timeout_seconds":600}}`
 - `JUNG_SIM_PATIENT_THINKING_PREFILL` absent/false
 - omit `--patient-model` and `--patient-base-url` (patient uses the session
   endpoint/model and inherits session extra body)
@@ -139,10 +151,10 @@ timed simulation suite
 stop MTPLX
 ```
 
-## Stages
+## Stages (cost-bounded decision: short Stage 1 -> conditional Stage 2 -> stop)
 
 Short workload example: `social_anxiety`, explicit frozen style, 2 sessions ×
-4 turns, 4 replicas. Long workload example: 4 runs × 4 sessions × 8 turns.
+4 turns, 4 replicas.
 
 ```text
 C1: --runs 4 --concurrency 1
@@ -150,35 +162,193 @@ C2: --runs 4 --concurrency 2
 C4: --runs 4 --concurrency 4
 ```
 
-**Stage 1.** Run C1, C2, C4 once on the short workload. C1 must succeed. At
-least one of C2/C4 must succeed. Failed rows do not advance. Among successful
-rows, the two lowest suite-wall times advance to Stage 2. Do not pool Stage 1
-timings into Stage 2. Without a viable serial control, the benchmark cannot
-close as a speedup comparison.
+### Mechanically valid timed row (minimum)
 
-**Stage 2.** Three **counterbalanced** short observations per finalist
-(`A→B`, `B→A`, `A→B`). Rank by median suite wall.
+For a timed row to count toward speedup decisions, it must be mechanically valid:
 
-Define `selected_concurrent_candidate`:
+`suite.json` exists and parses,
+`suite.status == complete`,
+all 4 child runs are complete,
+`suite_wall_seconds > 0`,
+`git_worktree_dirty == false`,
+fixture identity fields match (scenario/style/sessions/turns/runs and the frozen
+short-workload config),
+clean accepted provenance/protocol-freeze match,
+and for C2/C4: `max_observed_concurrency == requested_concurrency`.
 
-- finalists C2+C4 → their median winner
-- finalists C1+Cx → Cx (the concurrent row, even if C1 beat it)
+`run_overlap_factor` is diagnostic/explanatory only (not a pass/fail gate).
 
-**Stage 3.** Always `selected_concurrent_candidate vs C1`, one long
-observation each, opposite/counterbalanced order.
+### External invalidation vs valid observed failure (replacement-cap contract)
 
-**Stage 4.** One further long observation each, reversing Stage 3 execution
-order, if:
+Use a strict two-category interpretation. This is how we avoid an accidental
+infinite rerun loop.
 
-- absolute Stage 3 gap `< 10%`, or
-- the long result contradicts the relevant screen conclusion, or
-- C1 was absent from Stage 2 and Stage 3 is a C1 win
+Observation invalid (external invalidation) - may be replaced:
 
-Final ranking = mean(Stage 3, Stage 4).
+- wrong MTPLX version/model/config
+- wrong reasoning/sampling/configuration
+- wrong scenario/style/session/turn/replica/concurrency fixture
+- accidental wrong endpoint/model
+- dirty/unapproved source state
+- wrong server lifecycle/configuration
+- provenance/config provenance mismatch discovered before interpretation
+- operator interruption
+- machine sleep/reboot or unrelated process termination
+- missing/corrupt timing evidence caused by measurement infrastructure defect
 
-No required speedup threshold. A measured ceiling (including C1 ≈ C4) is a
-valid result. Document the measured recommendation in `OUTCOME.md`; do not
-change the CLI default (`--concurrency 1`).
+Observation valid but unsuccessful - counts against that row and is not retried:
+
+- patient generation failure
+- structured-output/correction failure
+- application failure
+- request/workflow timeout under the frozen fixture
+- child process failure / non-zero exit
+- MTPLX crash/OOM/instability while executing the correctly configured frozen workload
+  (counts as evidence against that row)
+- correction attempts
+- unusually long generated responses
+- poor timing
+- near tie / ranking reversal
+
+Retry policy:
+
+- no automatic retries
+- at most one documented replacement attempt per externally invalidated observation
+- if the replacement is also externally invalidated, close Phase 8C as inconclusive
+  and retain the default `--concurrency 1`
+
+### Stage 1: existing C1/C2/C4 short fixture (one observation each)
+
+Run C1, C2, C4 once on the short workload (the runs you are already doing).
+
+Preconditions:
+
+- C1 must be mechanically valid and successful
+- at least one of C2/C4 must be mechanically valid and successful
+
+If Stage 1 preconditions fail:
+
+- Valid C1 + no successful valid C2/C4 -> close Phase 8C, retain C1, stop reason:
+  no viable concurrent candidate
+- No valid C1 after the permitted external-invalid replacement -> close Phase 8C
+  as inconclusive; keep CLI default `--concurrency 1`; no concurrency recommendation
+- C1 has a genuine (counted) workload failure -> close Phase 8C as inconclusive; retain C1
+
+Candidate selection (no top-two finalist pooling):
+
+- `candidate = fastest mechanically-valid successful row among {C2, C4}`
+- `control = C1`
+
+Decision function (closed boundary, exact +10% does not advance):
+
+`stage1_speedup = (stage1_C1_wall - stage1_candidate_wall) / stage1_C1_wall`
+
+| Condition | Result |
+|---|---|
+| `stage1_speedup <= 0.10` | stop; retain `C1` |
+| `stage1_speedup > 0.10` | run Stage 2 |
+
+### Stage 2: conditional single confirmation pair only
+
+Stage 2 runs only when Stage 1 produces `stage1_speedup > 0.10`.
+
+Execution order (deterministic counterbalancing):
+
+- If Stage 1 ran `C1` before the selected `candidate`, run `candidate -> C1` in Stage 2.
+- If the selected `candidate` occurred before `C1` in Stage 1, run `C1 -> candidate` in Stage 2.
+
+Stage 2 workload:
+
+- `C1` and `candidate` each run once on the same short fixture:
+  `--runs 4 --concurrency 1` vs `--runs 4 --concurrency {2|4}`
+
+Stage 2 statistics framing:
+
+- one suite observation per arm (`n=1` suites)
+- each suite contains four independent journey replicas (`4` child runs)
+
+Stage 2 compares its own paired observations only:
+
+`stage2_speedup = (stage2_C1_wall - stage2_candidate_wall) / stage2_C1_wall`
+
+Stage 2 decision (closed boundary, exact +10% does not advance):
+
+- if Stage 2 cannot produce a valid comparison -> stop; retain C1; do not recommend candidate
+- if `stage2_speedup <= 0.10` -> stop; retain C1
+- if `stage2_speedup > 0.10` -> recommend candidate
+
+Stage 2 failure outcomes:
+
+- Stage 2 candidate has a genuine workload failure -> retain C1
+- Stage 2 `C1` has a genuine workload failure -> confirmation is inconclusive; retain C1
+  and do not promote candidate from timing evidence alone
+
+### Stage 3 and Stage 4
+
+Deleted from Phase 8C. No long-workload benchmark work is part of this decision contract.
+
+### In-flight protocol amendment: source revision grandfathering
+
+`OUTCOME.md` and the amended contract must treat source revision carefully because Stage 1 was
+already started before this documentation-only amendment.
+
+- `stage1 benchmark source revision` (the commit recorded for the Stage 1 timed rows)
+- `stage2 benchmark source revision` (may differ if only Markdown/docs changed after Stage 1 started)
+- `protocol revision/date` (this amendment: 2026-08-19)
+
+Freeze rule:
+
+The 2026-08-19 protocol-only documentation amendment does not invalidate already-running Stage 1
+observations as long as the diff since the Stage 1 benchmark revision contains no changes to:
+Jung runtime code, `evals/simulation/**`, dependency resolution, or the frozen short benchmark fixture.
+
+### Recommendation impact (what “recommend candidate” changes)
+
+Phase 8C recommendation selects the preferred operator concurrency for the frozen local simulation
+fixture. It does not change the CLI default, production behavior, or simulation scheduler code.
+“Retain C1” means the operator default remains `--concurrency 1`.
+
+### Evidence invalidation policy for Phase 8C
+
+Phase 8C evidence is invalidated by changes to:
+
+- whole-journey concurrency scheduling semantics
+- subprocess orchestration
+- concurrency limit semantics
+- MTPLX scheduler configuration or MTPLX version where performance characteristics may differ
+- model or quant
+- reasoning mode/effort
+- sampling configuration with material generation-cost implications
+- simulation request topology
+- number/type of product LLM calls
+- patient simulator behavior that materially changes workload
+- the frozen benchmark fixture
+
+Phase 8C evidence is not invalidated by:
+
+- report formatting, Markdown changes, or JSON rendering changes
+- documentation updates
+- artifact naming, logs rendering, or parsing/reporting of already-captured data
+- unrelated production changes that do not alter the LLM call path
+
+### Validation hierarchy (Tier A–D) for Phase 8-style work
+
+Tier selection is change-sensitive, but it does not waive experiment-contract preconditions.
+
+- Tier A (deterministic software correctness): `make check` + focused deterministic tests
+  required when executable/product code can be affected
+- Tier B (live provider/model compatibility): `make smoke-local-llm` + targeted hard real-model checks
+  required when provider/config/structured-output compatibility can be affected
+- Tier C (targeted empirical performance/concurrency property): frozen short benchmark evidence
+  required when the change/decision concerns performance/concurrency
+- Tier D (broad longitudinal whole-product behavior): meaningful multi-session `simulate-local-llm` evidence
+  required when longitudinal behavior/memory/supervision can plausibly change
+
+Governing rule:
+
+Tiers are not cumulative maturity levels. Use the lowest-cost tier(s) that measure the properties the
+change can plausibly invalidate; existing higher-tier frozen evidence remains valid when the change
+cannot affect the property it measured.
 
 ## Provenance freeze (every timed row)
 
@@ -189,7 +359,8 @@ resolved LOCAL_LLM_SMOKE_* = same fixture
 preflight short-suite run.json matches expected endpoints/models/structured modes
 MTPLX 2.8.1, serial, SSD session cache off, --reasoning-effort low
 enable_thinking true, request reasoning_effort low, top_p .95, top_k 20
-default Jung task policies; JUNG_LLM_TASK_CONFIG_JSON empty
+default Jung task policies except frozen timeout override via
+JUNG_LLM_TASK_CONFIG_JSON={"intake_patch":{"timeout_seconds":600},"intake_response":{"timeout_seconds":600},"therapy_response":{"timeout_seconds":600},"assessment":{"timeout_seconds":600},"post_session_analysis":{"timeout_seconds":600},"post_session_update":{"timeout_seconds":600}}
 JUNG_SIM_PATIENT_THINKING_PREFILL absent/false
 same patient endpoint/model (no --patient-model / --patient-base-url)
 scenario / requested_style / sessions / turns

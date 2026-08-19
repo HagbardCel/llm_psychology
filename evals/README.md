@@ -32,6 +32,8 @@ evals/
 | `make eval-report` | fixed difficult scenarios | human review |
 | `make simulate-local-llm` | whole-product longitudinal behavior over real HTTP | mechanical gate + human review |
 
+Validation surfaces are **not cumulatively required** for every eval-related PR. Use the lowest-cost surface(s) whose property the change can plausibly invalidate (deterministic regression for correctness, live compatibility for provider/config/schema support, performance experiment for concurrency/performance decisions, longitudinal audit for whole-product behavior). Frozen higher-tier evidence remains valid when the change cannot affect the property it measured.
+
 ## Hard evals versus the diagnostic report
 
 **Hard evals are contractual.** Every assertion in `test_hard_invariants.py`
