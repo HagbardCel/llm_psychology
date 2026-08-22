@@ -14,12 +14,11 @@ evals/
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
 ├── behavioral_report.py     # make eval-report — diagnostic report
 ├── phase8b/                 # closed server-scheduling benchmark
-├── phase8c/                 # simulation-concurrency experiment contract
+├── phase8c/                 # closed parallel-journey experiment (see OUTCOME)
 └── simulation/              # make simulate-local-llm — whole-product journey
     ├── scenarios.py
     ├── patient.py
     ├── runner.py            # one journey
-    ├── suite.py             # --runs > 1 subprocess orchestrator
     └── audit.py
 ```
 
@@ -70,9 +69,8 @@ Execution block and metrics sidecar record `workload` and `report_jobs` so
 runs are not mixed by accident.
 
 Do **not** parallelize turns inside a single `simulate-local-llm` journey.
-`--runs` / `--concurrency` overlap **whole independent journeys** only; causal
-turns inside one journey stay sequential. See
-[`evals/phase8c/README.md`](phase8c/README.md).
+One CLI invocation runs one isolated journey. Phase 8C parallel replicas were
+removed; see [`evals/phase8c/OUTCOME.md`](phase8c/OUTCOME.md).
 
 ### Report concurrency and measurement
 

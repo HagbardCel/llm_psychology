@@ -152,18 +152,6 @@ def _prepare_run_directory(run_dir: Path) -> Path:
     return run_dir
 
 
-def _prepare_suite_directory(suite_dir: Path) -> Path:
-    """Create the suite root plus ``workers/`` and ``runs/`` only.
-
-    Individual ``runs/run-00N`` directories are reserved names; the child
-    process creates them via :func:`allocate_run_directory`.
-    """
-    _mkdir_exclusive_private(suite_dir)
-    _mkdir_private_child(suite_dir / "workers")
-    _mkdir_private_child(suite_dir / "runs")
-    return suite_dir
-
-
 def allocate_run_directory(output_dir: Path | None = None) -> Path:
     """Create an exclusive run directory with private permissions."""
     if output_dir is not None:
@@ -179,27 +167,6 @@ def allocate_run_directory(output_dir: Path | None = None) -> Path:
         candidate = Path("logs") / "simulations" / f"run-{stamp}-{_allocation_suffix()}"
         try:
             return _prepare_run_directory(candidate)
-        except FileExistsError:
-            continue
-
-
-def allocate_suite_directory(output_dir: Path | None = None) -> Path:
-    """Create an exclusive suite directory with private permissions."""
-    if output_dir is not None:
-        suite_dir = Path(output_dir)
-        if suite_dir.exists():
-            raise FileExistsError(
-                f"simulation suite directory already exists: {suite_dir}"
-            )
-        return _prepare_suite_directory(suite_dir)
-
-    stamp = _allocation_stamp()
-    while True:
-        candidate = (
-            Path("logs") / "simulations" / f"suite-{stamp}-{_allocation_suffix()}"
-        )
-        try:
-            return _prepare_suite_directory(candidate)
         except FileExistsError:
             continue
 

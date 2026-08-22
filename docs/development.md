@@ -153,7 +153,7 @@ make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
 make simulate-local-llm \
   SIM_ARGS="--scenario social_anxiety --sessions 2 --turns-per-session 4 \
-  --style jung --runs 4 --concurrency 4"
+  --style jung"
 ```
 
 Style-path comparison (ecological longitudinal evidence; assessment is never
@@ -172,17 +172,14 @@ make simulate-local-llm \
 `MODEL_NAME`, `LLM_API_KEY`, `JUNG_SUPERVISOR_*`, …), not `LOCAL_LLM_SMOKE_*`.
 The latter remain exclusive to the processor-level smoke/eval tooling. Pass
 simulation flags through `SIM_ARGS`; extra tokens after `make` are Make
-options. `--runs 1` (default) writes an isolated evidence bundle under
-`logs/simulations/run-<UTC>-<suffix>/`. `--runs N` with `--concurrency C`
-(`1 <= C <= N`, default `C=1`) schedules independent replica subprocesses
-under `logs/simulations/suite-<UTC>-<suffix>/`. `--output-dir` is the journey
-directory when `--runs 1` and the suite directory when `--runs > 1`. Optional
-flags include `--style` (`auto` or a packaged style id), `--patient-timeout`,
-`--workflow-timeout`, `--overall-timeout`, `--patient-history-chars`, and
-`--patient-base-url`. Do not parallelize turns inside one journey. Cite
-simulation **run IDs** or suite IDs in PR notes rather than committing artifact
-trees. Phase 8C measurement protocol:
-[`evals/phase8c/README.md`](../evals/phase8c/README.md).
+options. Each invocation writes an isolated evidence bundle under
+`logs/simulations/run-<UTC>-<suffix>/`. `--output-dir` is the exact journey
+directory when provided. Optional flags include `--style` (`auto` or a packaged
+style id), `--patient-timeout`, `--workflow-timeout`, `--overall-timeout`,
+`--patient-history-chars`, `--patient-base-url`, and `--patient-model`. Do not
+parallelize turns inside one journey. Cite simulation **run IDs** in PR notes
+rather than committing artifact trees. Closed Phase 8C experiment:
+[`evals/phase8c/OUTCOME.md`](../evals/phase8c/OUTCOME.md).
 
 See [`tests/README.md`](../tests/README.md) and [`evals/README.md`](../evals/README.md)
 for suite ownership and hard-versus-diagnostic semantics.
