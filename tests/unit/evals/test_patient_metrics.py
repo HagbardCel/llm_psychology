@@ -8,9 +8,25 @@ from evals.simulation.audit import (
 )
 
 
-def test_sanitize_patient_extra_body_provenance_preserves_object() -> None:
+def test_sanitize_patient_extra_body_provenance_preserves_non_sensitive_keys() -> None:
     body = {"chat_template_kwargs": {"enable_thinking": False}, "top_p": 0.95}
     assert sanitize_patient_extra_body_provenance(body) == body
+
+
+def test_sanitize_patient_extra_body_provenance_redacts_sensitive_keys() -> None:
+    body = {
+        "top_p": 0.95,
+        "api_key": "SECRET",
+        "authorization": "Bearer SECRET",
+        "nested": {"access_token": "SECRET"},
+    }
+    sanitized = sanitize_patient_extra_body_provenance(body)
+    assert sanitized == {
+        "top_p": 0.95,
+        "api_key": "[REDACTED]",
+        "authorization": "[REDACTED]",
+        "nested": {"access_token": "[REDACTED]"},
+    }
 
 
 def test_sanitize_patient_extra_body_provenance_empty_object() -> None:

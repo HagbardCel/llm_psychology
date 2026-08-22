@@ -12,6 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from evals.simulation.audit import (
+    sanitize_patient_extra_body_provenance,
+    write_run_json,
+)
 from evals.simulation.patient import (
     PatientSimulator,
     PatientTurnContext,
@@ -20,6 +24,7 @@ from evals.simulation.patient import (
 )
 from evals.simulation.scenarios import get_scenario
 from jung.config import load_settings
+from jung.diagnostics import sanitize_url
 
 ContextId = Literal["A", "B", "C", "D"]
 ArmId = Literal["P0", "P1", "P2"]
@@ -111,9 +116,23 @@ def build_p1_patient_extra_body(
         copied["chat_template_kwargs"] = {"enable_thinking": False}
     else:
         copied["chat_template_kwargs"] = {"enable_thinking": False}
-    if "reasoning_effort" in copied:
-        copied["reasoning_effort"] = "low"
     return copied
+
+
+def _sanitize_p2_candidate(
+    p2_candidate: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if p2_candidate is None:
+        return None
+    sanitized: dict[str, Any] = {}
+    for key, value in p2_candidate.items():
+        if key == "patient_base_url" and isinstance(value, str):
+            sanitized[key] = sanitize_url(value)
+        elif key == "patient_extra_body":
+            sanitized[key] = sanitize_patient_extra_body_provenance(value)
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 def social_anxiety_contexts() -> dict[ContextId, PatientTurnContext]:
@@ -272,7 +291,7 @@ def build_benchmark_payload(
     invocation: str,
     session: SessionTransport,
     calls: Sequence[ContextCallResult],
-    p2_candidate: dict[str, Any] | None = None,
+    p2_candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     by_arm: dict[str, list[ContextCallResult]] = {"P0": [], "P1": [], "P2": []}
     for call in calls:
@@ -282,11 +301,11 @@ def build_benchmark_payload(
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "invocation": invocation,
         "session": {
-            "base_url": session.base_url,
+            "base_url": sanitize_url(session.base_url),
             "model": session.model,
-            "extra_body": session.extra_body,
+            "extra_body": sanitize_patient_extra_body_provenance(session.extra_body),
         },
-        "p2_candidate": p2_candidate,
+        "p2_candidate": _sanitize_p2_candidate(p2_candidate),
         "calls": [call.to_dict() for call in calls],
         "arm_totals": {
             arm: _arm_totals(items) for arm, items in by_arm.items() if items
@@ -296,6 +315,7 @@ def build_benchmark_payload(
 
 async def run_p0_p1_benchmark(
     *,
+    p2_candidate_label: str | None = None,
     output_dir: Path | None = None,
     generate=None,
 ) -> tuple[Path, list[ContextCallResult]]:
@@ -324,16 +344,16 @@ async def run_p0_p1_benchmark(
         await simulator.aclose()
 
     run_dir = _allocate_run_directory(output_dir)
+    candidate_payload = (
+        None if p2_candidate_label is None else {"model": p2_candidate_label}
+    )
     payload = build_benchmark_payload(
         invocation="p0-p1",
         session=session,
         calls=results,
-        p2_candidate={"model": "Gemma4-E4B", "note": "named upfront; run separately"},
+        p2_candidate=candidate_payload,
     )
-    (run_dir / "benchmark.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_run_json(run_dir / "benchmark.json", payload)
     return run_dir, results
 
 
@@ -385,10 +405,7 @@ async def run_p2_benchmark(
             "patient_extra_body": patient_extra_body,
         },
     )
-    (run_dir / "benchmark.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_run_json(run_dir / "benchmark.json", payload)
     return run_dir, results
 
 
@@ -399,7 +416,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("run-p0-p1", help="Run balanced P0/P1 benchmark (8 calls)")
+    p0_p1 = sub.add_parser("run-p0-p1", help="Run balanced P0/P1 benchmark (8 calls)")
+    p0_p1.add_argument(
+        "--p2-candidate",
+        default=None,
+        help="Optional P2 candidate label named before P0/P1 (e.g. gemma4-e4b)",
+    )
 
     p2 = sub.add_parser("run-p2", help="Run P2-only benchmark (4 calls)")
     p2.add_argument("--patient-base-url", required=True)
@@ -416,7 +438,9 @@ async def _async_main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "run-p0-p1":
-        run_dir, _ = await run_p0_p1_benchmark()
+        run_dir, _ = await run_p0_p1_benchmark(
+            p2_candidate_label=args.p2_candidate,
+        )
         print(f"wrote {run_dir / 'benchmark.json'}")
         return 0
     extra_body = None

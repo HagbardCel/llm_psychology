@@ -369,8 +369,20 @@ async def test_patient_simulator_rejects_blank_and_accepts_length_truncation() -
     truncated.usage = None
     client.chat.completions.create = AsyncMock(return_value=truncated)
     evidence = await simulator.generate(context)
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert "max_completion_tokens" not in kwargs
     assert evidence.submitted_text == "partial"
     assert evidence.finish_reason == "length"
+
+    max_tokens = MagicMock()
+    max_tokens.choices = [
+        MagicMock(message=MagicMock(content="partial"), finish_reason="max_tokens")
+    ]
+    max_tokens.usage = None
+    client.chat.completions.create = AsyncMock(return_value=max_tokens)
+    evidence = await simulator.generate(context)
+    assert evidence.submitted_text == "partial"
+    assert evidence.finish_reason == "max_tokens"
 
 
 @pytest.mark.asyncio

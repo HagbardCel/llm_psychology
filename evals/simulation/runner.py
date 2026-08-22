@@ -634,6 +634,22 @@ def _finalize_run(
     if journey_error is not None and error_code is None:
         error_code = "journey_error"
         error_message = str(journey_error)
+
+    patient_metrics: dict[str, Any] | None = None
+    try:
+        journey_records = load_jsonl(run_dir / "journey.jsonl")
+        patient_metrics = roll_up_patient_metrics(
+            journey_records,
+            patient_model=str(run_config["patient_model"]),
+            patient_endpoint=str(run_config["patient_endpoint"]),
+            patient_extra_body=run_config.get("patient_extra_body"),
+        )
+    except Exception as exc:
+        audit.fail(
+            "patient_metrics_failed",
+            f"{type(exc).__name__}: {exc}",
+        )
+
     if journey_error is None and not audit.ok:
         codes = sorted({finding.code for finding in audit.findings})
         error_code = "mechanical_audit_failed"
@@ -699,16 +715,8 @@ def _finalize_run(
     }
     if api_error is not None:
         run_payload["api_error"] = api_error
-    try:
-        journey_records = load_jsonl(run_dir / "journey.jsonl")
-        run_payload["patient_metrics"] = roll_up_patient_metrics(
-            journey_records,
-            patient_model=str(run_config["patient_model"]),
-            patient_endpoint=str(run_config["patient_endpoint"]),
-            patient_extra_body=run_config.get("patient_extra_body"),
-        )
-    except Exception:
-        pass
+    if patient_metrics is not None:
+        run_payload["patient_metrics"] = patient_metrics
     try:
         write_run_json(run_dir / "run.json", run_payload)
     except Exception:

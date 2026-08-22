@@ -43,6 +43,16 @@ INTAKE_MESSAGES = ("first concern", "more detail", "final intake")
 THERAPY_MESSAGES = ("I slept badly again.",)
 
 
+def _assert_scripted_patient_metrics(run_payload: dict[str, object]) -> None:
+    metrics = run_payload["patient_metrics"]
+    assert isinstance(metrics, dict)
+    assert metrics["calls"] == 4
+    assert metrics["usage_complete_calls"] == 4
+    assert metrics["usage_coverage"] == 1.0
+    assert metrics["prompt_tokens_complete_usage"] == 4
+    assert metrics["completion_tokens_complete_usage"] == 4
+
+
 @dataclass
 class ScriptedPatient:
     """Deterministic patient actor for FakeLLM journeys."""
@@ -232,6 +242,7 @@ async def test_simulation_success_journey(
     assert run_payload["style_selection"]["mode"] == "assessment_top"
     assert run_payload["style_selection"]["requested_style"] is None
     assert run_payload["style_selection"]["selected_style_id"] == "cbt"
+    _assert_scripted_patient_metrics(run_payload)
     journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
     assert "simulation.completed" in journey_text
     assert "simulation.failed" not in journey_text
@@ -409,6 +420,7 @@ async def test_simulation_post_session_failure_preserves_evidence(
     run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_payload["status"] == "failed"
     assert run_payload["error_code"] == result.error_code
+    _assert_scripted_patient_metrics(run_payload)
     journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
     assert "simulation.failed" in journey_text
     assert "simulation.completed" not in journey_text

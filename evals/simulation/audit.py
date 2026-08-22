@@ -14,7 +14,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from jung.diagnostics import open_private_file, sanitize_url, snapshot_database
+from jung.diagnostics import (
+    open_private_file,
+    sanitize_url,
+    sanitize_value,
+    snapshot_database,
+)
 from jung.domain.session_artifacts import SessionAnalysis, SessionReview
 from jung.domain.text import normalize_content
 from jung.phases.context_projection import minimal_session_briefing_projection
@@ -1809,11 +1814,13 @@ def sanitize_patient_extra_body_provenance(
     if value is None:
         return None
     try:
-        parsed = json.loads(json.dumps(dict(value)))
+        raw = dict(value)
+        json.dumps(raw)
     except (TypeError, ValueError):
         return {"__redacted__": True}
-    if isinstance(parsed, dict):
-        return parsed
+    sanitized = sanitize_value(raw)
+    if isinstance(sanitized, dict):
+        return sanitized
     return {"__redacted__": True}
 
 

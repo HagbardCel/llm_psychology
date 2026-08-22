@@ -204,13 +204,15 @@ Important configuration notes:
   `--overall-timeout` bounds only the live journey (not shutdown/audit).
 - Patient history is hard-bounded (`--patient-history-chars`, default 40000)
   against the exact serialized history inserted into the patient prompt.
-- Optional patient endpoint override (`--patient-base-url`) never inherits the
-  session API key or default headers. Alternate-origin credentials come only
-  from `JUNG_SIM_PATIENT_API_KEY` (or the local `"not-needed"` placeholder).
-- Optional `--patient-extra-body-json` merges into patient requests with
-  explicit replacement semantics (`None` inherit, `{}` clear, object replace).
-  `run.json` records sanitized `patient_extra_body` provenance and compact
-  `patient_metrics` rolled up from `patient.response` journey events.
+- An **alternate-origin** patient endpoint (`--patient-base-url`) never inherits
+  session credentials or default headers; explicit same-origin overrides may
+  inherit credentials/headers per resolver semantics. Alternate-origin
+  credentials come only from `JUNG_SIM_PATIENT_API_KEY` (or the local
+  `"not-needed"` placeholder).
+- Optional `--patient-extra-body-json` **overrides** the effective patient
+  `extra_body` with replacement semantics (`None` inherit, `{}` clear, object
+  replace). `run.json` records sanitized `patient_extra_body` provenance and
+  compact `patient_metrics` rolled up from `patient.response` journey events.
 - `provider_trace_required` is explicit run metadata. Deterministic FakeLLM
   tests set it false; live runs require full provider-request evidence.
 
