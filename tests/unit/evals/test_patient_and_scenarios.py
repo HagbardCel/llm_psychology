@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import fields
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -135,6 +137,87 @@ def test_resolve_patient_endpoint_uses_sim_env_for_alternate_origin(
     assert config.api_key == "PATIENT_ONLY"
     assert config.default_headers is None
     assert config.model == "session-model"
+
+
+def test_resolve_patient_endpoint_preserves_session_empty_extra_body() -> None:
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body={},
+    )
+    assert config.extra_body == {}
+
+
+@pytest.mark.parametrize(
+    ("patient_base_url", "patient_extra_body", "expected_extra_body"),
+    [
+        (None, None, {"thinking": True}),
+        (None, {}, {}),
+        (None, {"patient_only": True}, {"patient_only": True}),
+        ("http://other.test/v1", None, None),
+        ("http://other.test/v1", {}, {}),
+        ("http://other.test/v1", {"patient_only": True}, {"patient_only": True}),
+    ],
+)
+def test_resolve_patient_endpoint_extra_body_semantics(
+    patient_base_url: str | None,
+    patient_extra_body: dict[str, Any] | None,
+    expected_extra_body: dict[str, Any] | None,
+) -> None:
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body={"thinking": True},
+        patient_base_url=patient_base_url,
+        patient_extra_body=patient_extra_body,
+    )
+    assert config.extra_body == expected_extra_body
+
+
+def test_resolve_patient_endpoint_explicit_same_url_inherits_credentials_not_extras(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(PATIENT_API_KEY_ENV, raising=False)
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="SESSION_SECRET",
+        session_default_headers={"Authorization": "Bearer SESSION_SECRET"},
+        session_extra_body={"thinking": True},
+        patient_base_url="http://session.test/v1",
+        patient_model="patient-model",
+    )
+    assert config.base_url == "http://session.test/v1"
+    assert config.model == "patient-model"
+    assert config.api_key == "SESSION_SECRET"
+    assert config.default_headers == {"Authorization": "Bearer SESSION_SECRET"}
+    assert config.extra_body is None
+
+
+def test_resolve_patient_endpoint_does_not_mutate_session_extra_body() -> None:
+    session_extra_body = {
+        "chat_template_kwargs": {"enable_thinking": True},
+        "top_p": 0.95,
+    }
+    patient_override = {"patient_only": True}
+    original_session = json.dumps(session_extra_body, sort_keys=True)
+    original_override = json.dumps(patient_override, sort_keys=True)
+
+    resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body=session_extra_body,
+        patient_extra_body=patient_override,
+    )
+
+    assert json.dumps(session_extra_body, sort_keys=True) == original_session
+    assert json.dumps(patient_override, sort_keys=True) == original_override
 
 
 def test_pack_visible_history_fits_everything() -> None:

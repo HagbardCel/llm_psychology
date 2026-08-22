@@ -134,6 +134,8 @@ class SimulationConfig:
     profile_language: str = "English"
     # None means assessment_top (auto); a style id means explicit selection.
     requested_style: str | None = None
+    # None = no patient extra_body override; {} = explicit empty replacement.
+    patient_extra_body: dict[str, Any] | None = None
 
 
 ApplicationFactory = Callable[[JungSettings], AbstractAsyncContextManager[Any]]
@@ -425,6 +427,7 @@ async def run_simulation(
         patient_model=config.patient_model,
         timeout_seconds=config.patient_timeout,
         session_extra_body=isolated.llm_extra_body,
+        patient_extra_body=config.patient_extra_body,
     )
     owns_patient = patient_actor is None
     patient = patient_actor or PatientSimulator(endpoint)

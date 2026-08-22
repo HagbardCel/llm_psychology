@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import math
 from pathlib import Path
+from typing import Any
 
 from evals.simulation.patient import (
     PATIENT_HISTORY_MAX_CHARS,
@@ -28,6 +30,16 @@ def _positive_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive finite number")
+    return parsed
+
+
+def _parse_patient_extra_body_json(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
     return parsed
 
 
@@ -68,6 +80,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--patient-model", default=None)
     parser.add_argument("--patient-base-url", default=None)
     parser.add_argument(
+        "--patient-extra-body-json",
+        type=_parse_patient_extra_body_json,
+        default=None,
+        help=(
+            "JSON object replacing inherited session extra_body for patient "
+            "calls only. Omit for no override; '{}' for explicit empty."
+        ),
+    )
+    parser.add_argument(
         "--patient-timeout",
         type=_positive_float,
         default=PATIENT_TIMEOUT_SECONDS,
@@ -100,6 +121,7 @@ def simulation_config_from_args(args: argparse.Namespace) -> SimulationConfig:
         output_dir=args.output_dir,
         patient_base_url=args.patient_base_url,
         patient_model=args.patient_model,
+        patient_extra_body=args.patient_extra_body_json,
         patient_timeout=args.patient_timeout,
         workflow_timeout=args.workflow_timeout,
         overall_timeout=args.overall_timeout,
