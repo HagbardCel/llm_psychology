@@ -24,7 +24,9 @@ from evals.simulation.audit import (
     load_jsonl,
     render_audit_markdown,
     render_transcript_from_snapshot,
+    roll_up_patient_metrics,
     run_mechanical_audit,
+    sanitize_patient_extra_body_provenance,
     sanitized_endpoint,
     scenario_snapshot,
     write_private_text,
@@ -472,6 +474,9 @@ async def run_simulation(
         ),
         "patient_model": endpoint.model,
         "patient_endpoint": sanitized_endpoint(endpoint.base_url),
+        "patient_extra_body": sanitize_patient_extra_body_provenance(
+            endpoint.extra_body
+        ),
         "structured_output_modes": _structured_output_modes(isolated),
         "git_commit": git_commit,
         "git_worktree_dirty": git_dirty,
@@ -694,6 +699,16 @@ def _finalize_run(
     }
     if api_error is not None:
         run_payload["api_error"] = api_error
+    try:
+        journey_records = load_jsonl(run_dir / "journey.jsonl")
+        run_payload["patient_metrics"] = roll_up_patient_metrics(
+            journey_records,
+            patient_model=str(run_config["patient_model"]),
+            patient_endpoint=str(run_config["patient_endpoint"]),
+            patient_extra_body=run_config.get("patient_extra_body"),
+        )
+    except Exception:
+        pass
     try:
         write_run_json(run_dir / "run.json", run_payload)
     except Exception:

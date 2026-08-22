@@ -1802,6 +1802,81 @@ def _audit_grounded_prompt_contents(
             )
 
 
+def sanitize_patient_extra_body_provenance(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a JSON-safe patient extra_body snapshot for run artifacts."""
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(json.dumps(dict(value)))
+    except (TypeError, ValueError):
+        return {"__redacted__": True}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"__redacted__": True}
+
+
+def roll_up_patient_metrics(
+    journey_records: Sequence[Mapping[str, Any]],
+    *,
+    patient_model: str,
+    patient_endpoint: str,
+    patient_extra_body: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Derive patient cost metrics from authoritative patient.response events."""
+    responses = [
+        dict(record.get("data") or {})
+        for record in journey_records
+        if record.get("kind") == "patient.response"
+    ]
+    calls = len(responses)
+    latencies = [
+        float(item["latency_seconds"])
+        for item in responses
+        if isinstance(item.get("latency_seconds"), (int, float))
+    ]
+    usage_complete = [
+        item
+        for item in responses
+        if isinstance(item.get("prompt_tokens"), int)
+        and isinstance(item.get("completion_tokens"), int)
+    ]
+    usage_complete_calls = len(usage_complete)
+    usage_coverage = (usage_complete_calls / calls) if calls else 0.0
+    prompt_tokens_complete_usage = sum(
+        int(item["prompt_tokens"]) for item in usage_complete
+    )
+    completion_tokens_complete_usage = sum(
+        int(item["completion_tokens"]) for item in usage_complete
+    )
+    prompt_chars_total = sum(
+        len(str(item.get("resolved_prompt") or "")) for item in responses
+    )
+    submitted_chars_total = sum(
+        len(str(item.get("submitted_text") or "")) for item in responses
+    )
+    latency_total = sum(latencies)
+    latency_mean = (latency_total / len(latencies)) if latencies else 0.0
+    latency_max = max(latencies) if latencies else 0.0
+
+    return {
+        "calls": calls,
+        "latency_seconds_total": latency_total,
+        "latency_seconds_mean": latency_mean,
+        "latency_seconds_max": latency_max,
+        "usage_complete_calls": usage_complete_calls,
+        "usage_coverage": usage_coverage,
+        "prompt_tokens_complete_usage": prompt_tokens_complete_usage,
+        "completion_tokens_complete_usage": completion_tokens_complete_usage,
+        "prompt_chars_total": prompt_chars_total,
+        "submitted_chars_total": submitted_chars_total,
+        "patient_model": patient_model,
+        "patient_endpoint": patient_endpoint,
+        "patient_extra_body": patient_extra_body,
+    }
+
+
 def diagnostics_end_status(trace: Sequence[Mapping[str, Any]]) -> str | None:
     for event in reversed(list(trace)):
         if event.get("kind") == "diagnostics.end":
