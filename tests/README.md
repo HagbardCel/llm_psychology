@@ -108,16 +108,18 @@ commands run in `make test` or `make check`.
 | `make smoke-local-llm` (`tests/smoke/`) | Can this server and model run our paths at all — streaming works, structured output parses, latency is within budget? | The model or server is incompatible with the runtime |
 | `make evals` (`evals/test_hard_invariants.py`) | Does the model honor contractual trust-boundary behavior — canaries, objective injection resistance (therapy / analysis / update / assessment), citation integrity, negation selection? | The model is unsuitable, or a prompt/validation regression let something through |
 | `make eval-report` (`evals/behavioral_report.py`) | What does the model say across the diagnostic matrix (safety × style, matched-input style differentiation, assessment quality, patient-facing language, longitudinal supervisor, historical attribution)? | Nothing — the report exits non-zero only if it could not be produced |
-| `make simulate-local-llm` (`evals/simulation/`) | Does the whole HTTP product preserve longitudinal state across multi-session journeys with a synthetic patient (optional `--style`)? | Mechanical audit failed, or the run could not complete |
+| `make simulate-local-llm` (`evals/simulation/`) | Does the whole HTTP product preserve longitudinal state across multi-session journeys with a synthetic patient (optional `--style`, `--patient-extra-body-json`)? | Mechanical audit failed, or the run could not complete |
 
 Smoke deliberately does **not** assert grounding or negation behavior; those
 are hard-eval invariants. Report scenarios deliberately assert nothing about
 semantic quality; they exist for human review under `logs/evals/`.
 
 The simulation harness has deterministic unit/integration coverage under
-`tests/unit/evals` and `tests/integration/evals` (FakeLLM + scripted patient).
-Those tests run in `make check`. The live multi-session real-model journey is
-manual and is **not** part of `make check`.
+`tests/unit/evals` and `tests/integration/evals` (FakeLLM + scripted patient,
+including patient endpoint resolution, `patient_metrics` roll-up, and the
+phase-local Phase 8D benchmark mechanics). Those tests run in `make check`. The
+live multi-session real-model journey is manual and is **not** part of
+`make check`.
 
 ## Running tests
 

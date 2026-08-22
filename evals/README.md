@@ -13,8 +13,9 @@ evals/
 ├── scenarios.py             # Scenario data and transcripts
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
 ├── behavioral_report.py     # make eval-report — diagnostic report
-├── phase8b/                 # closed server-scheduling benchmark
+├── phase8b/                 # closed server-scheduling benchmark (archived)
 ├── phase8c/                 # closed parallel-journey experiment (see OUTCOME)
+├── phase8d/                 # phase-local patient-cost benchmark
 └── simulation/              # make simulate-local-llm — whole-product journey
     ├── scenarios.py
     ├── patient.py
@@ -78,8 +79,7 @@ removed; see [`evals/phase8c/OUTCOME.md`](phase8c/OUTCOME.md).
 evaluation wall time (time spent inside the bounded job map only). It
 measures **client-observed outstanding-request overlap**, not
 inference-server batching efficiency. A concurrent client can keep several
-requests outstanding while the server still executes them serially (the M4
-control row in the Phase 8B matrix exists to expose that distinction).
+requests outstanding while the server still executes them serially.
 
 Token totals in the report are **reported** usage. An attempt counts toward
 usage coverage only when **both** `prompt_tokens` and `completion_tokens`
@@ -99,220 +99,36 @@ converted into tokens or used to size llama.cpp `--ctx-size`. Streaming
 `response_chars` are intentionally omitted: without a diagnostic recorder
 they are often `None`, so a partial sum would be misleading.
 
-### Phase 8B — server batching benchmark protocol
+### Evaluating a new local backend
 
-Phase 8B is **closed**. Frozen outcome: [`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md).
-Winner for concurrent `eval-report`: **M4** (MTPLX serial + client N=4).
+Jung talks only to an OpenAI-compatible endpoint. Use the same standard
+`eval-report` concurrency for every candidate; do **not** tune concurrency as
+part of routine backend comparison.
 
-Phase 8A unlocked bounded client concurrency for `eval-report`. Phase 8B
-measures how an OpenAI-compatible local inference server should execute that
-concurrent workload. Jung remains backend-neutral; only launch recipes and
-`LOCAL_LLM_SMOKE_*` exports change.
+1. Start the candidate OpenAI-compatible backend (outside Jung).
+2. Run provider compatibility smoke if needed (`make smoke-local-llm`).
+3. Run the fixed screen workload once:
 
-Do **not** reuse Phase 8A wall times as a baseline when the requested API
-model name and the actually loaded artifact disagreed. Requested model ID ≠
-loaded artifact is a permanent provenance rule.
+   ```bash
+   make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency <standard>"
+   ```
 
-#### Fixed Qwen3.8-27B fixture
+4. Repeat with the same workload and concurrency for the comparison backend.
+5. Compare wall time, failures, request count, and reported token usage.
+6. Run one representative confirmation only if the screen result would change
+   the selected backend.
+7. Stop.
 
-Every timed Phase 8B row uses **Qwen3.8-27B**:
+Backend launch tuning belongs outside Jung. Request-specific extensions use
+`LOCAL_LLM_SMOKE_EXTRA_BODY` / production `extra_body` — not backend-specific
+Python classes.
 
-```text
-Model:                    Qwen3.8-27B
-llama.cpp artifact:       one pinned GGUF repository / quant / revision
-MTPLX artifact:           Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
-                          (exact revision; not Bare Speed)
-Thinking:                 enabled
-Common extras:            enable_thinking=true, top_p=0.95, top_k=20
-Jung temperatures:        unchanged (0.1 structured/supervisor, 0.7 therapy)
-Structured mode:          json_schema
-Request timeout:          LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
-llama.cpp min_p:          --min-p 0 (server launch; not in shared extras)
-Persistent cross-run:     disabled for timed measurements
-Per-slot context:         one common frozen target after preflight
-Backend binaries:         frozen for the complete matrix
-```
+Historical Phase 8B measurements are archived under
+[`evals/phase8b/README.md`](phase8b/README.md). Closed Phase 8C parallel-journey
+experiment: [`evals/phase8c/OUTCOME.md`](phase8c/OUTCOME.md).
 
-Export (do not mix with production `LLM_BASE_URL` / `MODEL_NAME`):
-
-```bash
-export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8080/v1
-export LOCAL_LLM_SMOKE_MODEL=<requested-model-id>
-export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
-export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
-export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
-```
-
-Do not inherit `.env.example`’s `enable_thinking:false` into this fixture.
-`.env.example` is intentionally not the Phase 8B product-default switch.
-
-Before timing, establish one Qwen3.8 reasoning configuration that both
-tested builds demonstrably honor. If equivalent effort cannot be
-established, label the cross-backend result an **operational configuration
-comparison**, not a controlled engine-only comparison. Within each backend,
-all scheduler rows must use the same reasoning configuration.
-
-GGUF and MTPLX quantizations are not bit-equivalent; record the mismatch.
-The goal is the best practical local Jung configuration among the matrix.
-
-#### Provenance checklist (every timed row)
-
-Record in gitignored `logs/evals/phase8b/mtplx-<version>/worksheet.md`
-(row-level detail; historical 2.7.1 evidence remains under unversioned
-`logs/evals/phase8b/`) and summarize in
-[`evals/phase8b/OUTCOME.md`](phase8b/OUTCOME.md). Operator entry:
-[`evals/phase8b/README.md`](phase8b/README.md). Jung auto-detection is not used.
-
-- Benchmark source commit (at matrix start; do not rewrite to merge-time HEAD)
-- frozen backend binary/build (updating either invalidates that backend's
-  cross-row comparisons)
-- requested `LOCAL_LLM_SMOKE_MODEL` vs actually loaded artifact
-- quantization / revision; MTPLX resolved profile + effective MTP depth +
-  scheduler / active lane
-- client concurrency `N`; server slots / active requests; batching mode
-- llama.cpp: `--ctx-size`, `--parallel`, `--cont-batching`, `--min-p 0`;
-  for LM1 also `--spec-draft-n-max`
-- MTPLX timed launches: `--ssd-session-cache off`
-- thinking / reasoning / sampling extras; structured mode; timeout
-- sanitized launch command
-
-Verification without Jung backend code:
-
-- llama.cpp: `GET /props` → `model_path`, `total_slots`, `build_info`;
-  `GET /slots` for per-slot `n_ctx`. Abort if `total_slots` ≠ intended
-  `--parallel`.
-- MTPLX: inspect `/health` and `/v1/models`; verify scheduler state using
-  fields the **exact tested build** exposes. Abort if observed state does
-  not match the intended configuration. Do not freeze an external JSON
-  schema into this README.
-
-#### llama.cpp context allocation
-
-`--ctx-size` is a shared KV budget. `--parallel N` partitions it among
-slots. Fix one explicit **per-slot** token-context target before the matrix
-(large enough for the largest expected eval prompt plus conservative
-generation/reasoning headroom). `eval-report` does not impose a completion
-cap today.
-
-Initial candidate: `32768` tokens/slot. After an L1/preflight that fits
-comfortably, freeze it. Then, if memory allows:
-
-```text
-L1: --ctx-size 32768  --parallel 1 --cont-batching --min-p 0
-L2: --ctx-size 65536  --parallel 2 --cont-batching --min-p 0
-L4: --ctx-size 131072 --parallel 4 --cont-batching --min-p 0
-```
-
-If L4 cannot provide the common per-slot target, mark **L4 infeasible**
-rather than benchmarking a smaller context. Set `--parallel` explicitly
-(default is auto). Pass `--cont-batching` even when it is the default.
-
-#### Screening matrix
-
-| ID | Backend | Client N | Server mode | Status |
-| --- | --- | ---: | --- | --- |
-| L1 | llama.cpp | 1 | `--parallel 1 --cont-batching --min-p 0` | mandatory serial baseline |
-| L2 | llama.cpp | 2 | `--parallel 2 --cont-batching --min-p 0` | mandatory |
-| L4 | llama.cpp | 4 | `--parallel 4 --cont-batching --min-p 0` | mandatory or infeasible |
-| LM1 | llama.cpp | 1 | native `draft-mtp` | conditional |
-| M1 | MTPLX | 1 | default/`serial` MTP | mandatory serial MTP |
-| M4 | MTPLX | 4 | default serial (queue) | mandatory client-concurrency control |
-| A2 | MTPLX | 2 | `--scheduler-mode ar_batch` | if Qwen3.8 admits `ar_batch` |
-| A4 | MTPLX | 4 | `--scheduler-mode ar_batch` | if Qwen3.8 admits `ar_batch` |
-| T4 | MTPLX | 4 | concurrent native-MTP lane | conditional |
-
-L1/L2/L4 and M1/M4 are mandatory. A2/A4 are mandatory when the released
-Qwen3.8 backend admits `ar_batch`; otherwise record unsupported. T4 and LM1
-run only when the installed released build supports them cleanly. Do not
-install an unreleased build merely to fill a row. Unsupported combinations
-are recorded, not repaired or emulated.
-
-Before expensive MTPLX timing, attempt scheduler construction against the
-pinned Optimized Speed artifact. Leave secondary MTPLX knobs at documented
-defaults unless Stage 2 is needed.
-
-#### Timed-row protocol
-
-Screening and confirmation timed rows use the screen workload:
-
-```text
-stop → configure → start → readiness / provenance
-→ one fixed short dummy chat-completion (same text every row)
-→ timed make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency N"
-→ stop
-```
-
-Full-workload validation rows use the default report (omit `--workload` or
-pass `--workload full`).
-
-`make smoke-local-llm` is the **json_schema compatibility gate**, not the
-warm-up. If smoke ran, restart and dummy-warm again before the timed row.
-MTPLX constrained `json_schema` serving requires `llguidance` (`mtplx[server]`;
-included by the desktop runtime). For bare/custom CLI environments, install
-it into the Python environment running the MTPLX server.
-MTPLX timed launches use `--ssd-session-cache off` so SSD session cache
-cannot persist across restarts and corrupt A/B alternation. Interactive
-recipes keep normal MTPLX cache behavior.
-
-#### Screening → confirmation → full validation
-
-Stage 1 is coarse elimination from one noisy run, not a precise top-two pick:
-
-```text
-Stage 1
-  one screen run for every admitted candidate
-  eliminate only clear losers / failures / unsupported modes
-  (~40% slower, structured-output failure, intended scheduler not active)
-
-Stage 2
-  confirm top two
-  + any near-tied third (~within 10% of second after Stage 1)
-  three alternating screen runs each
-  rank by median screen wall
-
-Stage 3
-  full L1
-  full top two confirmed candidates
-  (two full runs if L1 is already a finalist)
-
-Stage 4, only when necessary
-  extra alternating full pair if:
-    screen/full ranking reverses, or
-    full finalists differ by <~10%
-
-After Stage 4, rank finalists by the **arithmetic mean** of their Stage 3 and
-Stage 4 full-workload walls (two observations per finalist).
-```
-
-Normally 6 confirmation runs; occasionally 9. After confirmed medians,
-reduce to the **top two for full validation**. Primary Stage 1/2 metric:
-**median `evaluation_wall_seconds` on `--workload screen`**. Stage 3 metric:
-full-workload wall. Never compute a speedup across workloads.
-
-```text
-valid:    A4 screen / L1 screen
-valid:    A4 full / L1 full
-invalid:  A4 screen / historical L1 full
-```
-
-Do not mix MTPLX builds or full vs screen metrics as if they were the same
-matrix.
-
-Metric priority: (1) median wall (same workload), (2) report completed, (3)
-corrections / failures, (4) client outstanding-request overlap, (5) input
-character fingerprints, (6) token usage if reported, (7) backend tok/s as
-explanation only.
-
-Stage 2 follow-up (knob probe) only if the best concurrent candidate has
-**verified backend-side concurrent execution** (llama.cpp slots / MTPLX
-scheduler telemetry) but wall time still disappoints: one focused follow-up
-(batch/ubatch around best slots, one MTPLX decode-batch/batch-wait probe, or
-LM4 if LM1 beat L1). Do not grid-search.
-
-Optimization target: ≥1.5× versus clean L1 on the **same workload**. A
-documented empirical ceiling is also a valid Phase 8B result. Word
-conclusions as the best configuration **among the Phase 8B matrix**, not a
-global backend ranking unless LM1 was successfully screened.
+Phase 8D patient-cost benchmark (phase-local):
+[`evals/phase8d/README.md`](phase8d/README.md).
 
 Chapters (lettered in section titles):
 
@@ -347,51 +163,24 @@ Synthetic patient → JungApiClient → real loopback HTTP → TherapyApplicatio
 ```
 
 It does **not** call processors directly, mutate the store to advance workflow,
-or use an ASGI shortcut. A single run (`--runs 1`, the default) writes an
-isolated evidence bundle under `logs/simulations/run-<UTC>-<suffix>/`.
+or use an ASGI shortcut. Each invocation writes one isolated evidence bundle
+under `logs/simulations/run-<UTC>-<suffix>/`.
 
 ```bash
 make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 5 --turns-per-session 10"
 ```
 
-Independent replicas of the same configuration (`--runs N`, `--concurrency C`,
-`1 <= C <= N`) are scheduled as child subprocesses. Extra tokens after `make`
-are Make options, not simulation flags — pass CLI arguments through
-`SIM_ARGS`:
+Extra tokens after `make` are Make options, not simulation flags — pass CLI
+arguments through `SIM_ARGS`:
 
 ```bash
 make simulate-local-llm \
   SIM_ARGS="--scenario social_anxiety --sessions 2 --turns-per-session 4 \
-  --style jung --runs 4 --concurrency 4"
+  --style jung --patient-extra-body-json '{\"chat_template_kwargs\":{\"enable_thinking\":false}}'"
 ```
 
-`--output-dir` is mode-dependent: with `--runs 1` it is the exact journey
-directory; with `--runs > 1` it is the exact suite directory (children under
-`<dir>/runs/run-001`, …). Default `--concurrency` remains `1` even when a
-local measurement later recommends a higher value.
-
-`--runs > 1` writes:
-
-```text
-logs/simulations/suite-<UTC>-<suffix>/
-├── suite.json
-├── workers/run-00N.stdout.log
-├── workers/run-00N.stderr.log
-└── runs/run-00N/          # existing per-journey evidence bundle
-```
-
-`suite.json` records requested vs observed process overlap
-(`run_overlap_factor` = sum of parent-observed child walls / suite wall).
-That metric is **outstanding simulation-process overlap**, not MTPLX inference
-parallelism — the same distinction as Phase 8B `request_overlap_factor`.
-`requested_style` is the CLI `--style` value (`auto` or an explicit id);
-observed selections live in each child `run.json`.
-
-A suite succeeds only when every child exits 0 **and** its `run.json` status
-is `complete`. One failed replica does not cancel siblings. Ctrl-C cancels
-active children and exits `130`. Live Phase 8C measurement protocol:
-[`evals/phase8c/README.md`](phase8c/README.md).
+`--output-dir`, when provided, is the exact journey directory.
 
 Style selection after assessment:
 
@@ -418,6 +207,10 @@ Important configuration notes:
 - Optional patient endpoint override (`--patient-base-url`) never inherits the
   session API key or default headers. Alternate-origin credentials come only
   from `JUNG_SIM_PATIENT_API_KEY` (or the local `"not-needed"` placeholder).
+- Optional `--patient-extra-body-json` merges into patient requests with
+  explicit replacement semantics (`None` inherit, `{}` clear, object replace).
+  `run.json` records sanitized `patient_extra_body` provenance and compact
+  `patient_metrics` rolled up from `patient.response` journey events.
 - `provider_trace_required` is explicit run metadata. Deterministic FakeLLM
   tests set it false; live runs require full provider-request evidence.
 
@@ -554,8 +347,8 @@ The synthetic patient actor is eval-only and has its own knobs under the
 - Optional `JUNG_SIM_PATIENT_THINKING_PREFILL=1` appends a minimal assistant
   prefill (`" \n"`) on patient requests so thinking-capable servers return
   patient text in `content`.
-- If patient `content` is still empty, the actor may fall back to
-  `reasoning_content` for that eval-only boundary only.
+- Patient speech uses `message.content` only (via `normalize_patient_text()`).
+  `reasoning_content` is ignored.
 
 Slow local models may exceed the default 120s per-task timeout during
 structured phases. Raise limits via `JUNG_LLM_TASK_CONFIG_JSON` and pass a
@@ -599,10 +392,9 @@ and `metrics_complete`. `latest.md` is the most recent run of either
 workload; compare only runs that share the same `workload` value.
 
 `make simulate-local-llm` writes to `logs/simulations/run-<UTC>-<suffix>/`
-including `run.json`, `journey.jsonl`, `transcript.md`, `audit.md`, isolated
-SQLite, runtime diagnostics, and session checkpoints. Multi-run suites
-(`--runs > 1`) write `logs/simulations/suite-<UTC>-<suffix>/` with `suite.json`
-plus one child bundle per replica.
+including `run.json` (with `patient_extra_body` and `patient_metrics`),
+`journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite, runtime
+diagnostics, and session checkpoints.
 
 `logs/` is gitignored. Reports and simulation bundles contain full model
 output; treat them as sensitive and erase them with the rest of `./logs` (see
