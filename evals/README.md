@@ -210,9 +210,10 @@ Important configuration notes:
   credentials come only from `JUNG_SIM_PATIENT_API_KEY` (or the local
   `"not-needed"` placeholder).
 - Optional `--patient-extra-body-json` **overrides** the effective patient
-  `extra_body` with replacement semantics (`None` inherit, `{}` clear, object
-  replace). `run.json` records sanitized `patient_extra_body` provenance and
-  compact `patient_metrics` rolled up from `patient.response` journey events.
+  `extra_body`. Omitted means “no patient override”: an implicit patient endpoint
+  inherits session extras, while an explicit patient endpoint leaves extras unset.
+  `{}` explicitly clears; an object explicitly replaces. Effective extra-body
+  provenance is recorded under `patient_metrics` only.
 - `provider_trace_required` is explicit run metadata. Deterministic FakeLLM
   tests set it false; live runs require full provider-request evidence.
 
@@ -394,8 +395,7 @@ and `metrics_complete`. `latest.md` is the most recent run of either
 workload; compare only runs that share the same `workload` value.
 
 `make simulate-local-llm` writes to `logs/simulations/run-<UTC>-<suffix>/`
-including `run.json` (with `patient_extra_body` and `patient_metrics`),
-`journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite, runtime
+including `run.json` (with `patient_metrics`), `journey.jsonl`, `transcript.md`, `audit.md`, isolated SQLite, runtime
 diagnostics, and session checkpoints.
 
 `logs/` is gitignored. Reports and simulation bundles contain full model

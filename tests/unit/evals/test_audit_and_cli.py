@@ -498,7 +498,6 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
             "scenario_id": "anxiety_sleep",
             "patient_model": "test-model",
             "patient_endpoint": "http://127.0.0.1:8000/v1",
-            "patient_extra_body": None,
         },
         therapy_records=[],
         progress=SimulationProgress(),
@@ -508,6 +507,7 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
         error_code=None,
         error_message=None,
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "mechanical_audit_failed"
@@ -549,7 +549,6 @@ def test_audit_md_write_failure_sets_primary_error(
             "scenario_id": "anxiety_sleep",
             "patient_model": "test-model",
             "patient_endpoint": "http://127.0.0.1:8000/v1",
-            "patient_extra_body": None,
         },
         therapy_records=[],
         progress=SimulationProgress(),
@@ -559,6 +558,7 @@ def test_audit_md_write_failure_sets_primary_error(
         error_code=None,
         error_message=None,
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "audit_write_failed"
@@ -606,7 +606,6 @@ def test_audit_md_write_failure_preserves_primary_error(
             "scenario_id": "anxiety_sleep",
             "patient_model": "test-model",
             "patient_endpoint": "http://127.0.0.1:8000/v1",
-            "patient_extra_body": None,
         },
         therapy_records=[],
         progress=SimulationProgress(),
@@ -616,6 +615,7 @@ def test_audit_md_write_failure_preserves_primary_error(
         error_code="chat_invalid_llm_output",
         error_message="bad model output",
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "chat_invalid_llm_output"

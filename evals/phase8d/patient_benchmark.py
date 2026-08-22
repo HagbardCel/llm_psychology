@@ -162,10 +162,30 @@ def social_anxiety_contexts() -> dict[ContextId, PatientTurnContext]:
             scenario=scenario,
             phase="therapy",
             session_number=1,
-            turn_number=1,
+            turn_number=3,
             visible_history=(
-                VisibleTurn("patient", "Last week I almost skipped the group meeting."),
-                VisibleTurn("therapist", "What made you decide to go anyway?"),
+                VisibleTurn(
+                    "patient",
+                    (
+                        "I was nervous during a team meeting yesterday and "
+                        "barely said anything."
+                    ),
+                ),
+                VisibleTurn(
+                    "therapist",
+                    "What were you worried might happen if you spoke up?",
+                ),
+                VisibleTurn(
+                    "patient",
+                    (
+                        "I kept thinking I'd say something stupid and "
+                        "everyone would notice."
+                    ),
+                ),
+                VisibleTurn(
+                    "therapist",
+                    "What did you notice yourself doing when that thought came up?",
+                ),
             ),
         ),
         "D": PatientTurnContext(

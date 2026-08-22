@@ -100,5 +100,7 @@ def test_roll_up_patient_metrics_zero_calls() -> None:
     )
     assert metrics["calls"] == 0
     assert metrics["usage_coverage"] == 0.0
+    assert metrics["latency_seconds_mean"] is None
+    assert metrics["latency_seconds_max"] is None
     assert metrics["prompt_tokens_complete_usage"] == 0
     assert metrics["completion_tokens_complete_usage"] == 0

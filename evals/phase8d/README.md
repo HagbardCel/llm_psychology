@@ -21,7 +21,8 @@ This benchmark compares patient inference cost for three arms:
 5. If P1 passes quality and total latency ≤ 90% of P0 → select P1 and stop.
 6. Otherwise run P2 (4 calls) only if a candidate was named upfront on step 2.
 7. If P2 passes quality and total latency ≤ 85% of P0 → select P2; else P0.
-8. One short `simulate-local-llm` canary with the selected flags (post-merge).
+8. Run exactly one whole-product canary with `--sessions 1 --turns-per-session 2`.
+   This is an integration check, not a performance benchmark (post-merge).
 
 Do not add repetitions, retries, or sample chasing near thresholds.
 
@@ -53,3 +54,14 @@ uv run --locked python -m evals.phase8d.patient_benchmark run-p2 \
 ```
 
 P2 flags are **not** hard-coded into generic simulation defaults.
+
+## Post-merge canary
+
+```bash
+make simulate-local-llm \
+  SIM_ARGS="--scenario social_anxiety --sessions 1 --turns-per-session 2"
+```
+
+Add the exact selected patient flags recorded by the P0/P1/P2 decision. P0 adds
+none; P1 adds the complete measured `--patient-extra-body-json` replacement object;
+P2 adds the selected patient endpoint/model and any measured patient extras.

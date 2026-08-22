@@ -1864,8 +1864,8 @@ def roll_up_patient_metrics(
         len(str(item.get("submitted_text") or "")) for item in responses
     )
     latency_total = sum(latencies)
-    latency_mean = (latency_total / len(latencies)) if latencies else 0.0
-    latency_max = max(latencies) if latencies else 0.0
+    latency_mean = latency_total / calls if calls else None
+    latency_max = max(latencies) if latencies else None
 
     return {
         "calls": calls,

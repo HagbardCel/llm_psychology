@@ -99,4 +99,7 @@ def test_social_anxiety_contexts_cover_abcd() -> None:
     contexts = benchmark.social_anxiety_contexts()
     assert set(contexts) == {"A", "B", "C", "D"}
     assert contexts["A"].turn_number == 1
+    assert contexts["C"].session_number == 1
+    assert contexts["C"].turn_number == 3
+    assert len(contexts["C"].visible_history) == 4
     assert contexts["D"].session_number == 2

@@ -455,6 +455,9 @@ async def run_simulation(
     therapy_records: list[TherapySessionRecord] = []
     progress = SimulationProgress()
     prior_patient_sessions: list[tuple[PatientExchange, ...]] = []
+    patient_extra_body_provenance = sanitize_patient_extra_body_provenance(
+        endpoint.extra_body
+    )
     run_config: dict[str, Any] = {
         "artifact_schema_version": 1,
         "scenario": scenario_snapshot(config.scenario),
@@ -474,9 +477,6 @@ async def run_simulation(
         ),
         "patient_model": endpoint.model,
         "patient_endpoint": sanitized_endpoint(endpoint.base_url),
-        "patient_extra_body": sanitize_patient_extra_body_provenance(
-            endpoint.extra_body
-        ),
         "structured_output_modes": _structured_output_modes(isolated),
         "git_commit": git_commit,
         "git_worktree_dirty": git_dirty,
@@ -548,6 +548,7 @@ async def run_simulation(
             error_code=error_code,
             error_message=error_message,
             api_error=api_error,
+            patient_extra_body_provenance=patient_extra_body_provenance,
         )
     finally:
         if owns_patient:
@@ -571,6 +572,7 @@ def _finalize_run(
     error_code: str | None,
     error_message: str | None,
     api_error: dict[str, Any] | None,
+    patient_extra_body_provenance: dict[str, Any] | None,
 ) -> SimulationResult:
     try:
         audit = run_mechanical_audit(
@@ -642,7 +644,7 @@ def _finalize_run(
             journey_records,
             patient_model=str(run_config["patient_model"]),
             patient_endpoint=str(run_config["patient_endpoint"]),
-            patient_extra_body=run_config.get("patient_extra_body"),
+            patient_extra_body=patient_extra_body_provenance,
         )
     except Exception as exc:
         audit.fail(
