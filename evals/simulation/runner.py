@@ -469,7 +469,6 @@ async def run_simulation(
         ),
         "patient_model": endpoint.model,
         "patient_endpoint": sanitized_endpoint(endpoint.base_url),
-        "patient_max_completion_tokens": endpoint.max_completion_tokens,
         "structured_output_modes": _structured_output_modes(isolated),
         "git_commit": git_commit,
         "git_worktree_dirty": git_dirty,

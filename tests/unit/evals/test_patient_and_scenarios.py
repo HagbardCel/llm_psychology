@@ -11,7 +11,6 @@ from openai import AsyncOpenAI
 from evals.simulation.patient import (
     PATIENT_API_KEY_ENV,
     PATIENT_HISTORY_MAX_CHARS,
-    PATIENT_MAX_COMPLETION_TOKENS,
     PatientEndpointConfig,
     PatientExchange,
     PatientGenerationError,
@@ -79,10 +78,6 @@ def test_normalize_rejects_blank_and_collapses_whitespace() -> None:
     assert normalize_patient_text("   \n\t  ") == ""
 
 
-def test_patient_max_completion_tokens_is_frozen() -> None:
-    assert PATIENT_MAX_COMPLETION_TOKENS == 400
-
-
 def test_resolve_patient_endpoint_inherits_session_when_same_origin() -> None:
     config = resolve_patient_endpoint(
         session_base_url="http://session.test/v1",
@@ -95,7 +90,6 @@ def test_resolve_patient_endpoint_inherits_session_when_same_origin() -> None:
     assert config.model == "session-model"
     assert config.api_key == "SESSION_SECRET"
     assert config.default_headers == {"Authorization": "Bearer SESSION_SECRET"}
-    assert config.max_completion_tokens == 400
     assert config.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
@@ -256,7 +250,7 @@ def test_build_patient_prompt_contains_only_allowed_inputs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_patient_simulator_rejects_blank_and_truncation() -> None:
+async def test_patient_simulator_rejects_blank_and_accepts_length_truncation() -> None:
     client = MagicMock(spec=AsyncOpenAI)
     client.max_retries = 0
 
@@ -272,7 +266,6 @@ async def test_patient_simulator_rejects_blank_and_truncation() -> None:
             api_key="k",
             default_headers=None,
             timeout_seconds=30.0,
-            max_completion_tokens=400,
         ),
         client=client,
     )
@@ -292,7 +285,40 @@ async def test_patient_simulator_rejects_blank_and_truncation() -> None:
     ]
     truncated.usage = None
     client.chat.completions.create = AsyncMock(return_value=truncated)
-    with pytest.raises(PatientGenerationError, match="truncated"):
+    evidence = await simulator.generate(context)
+    assert evidence.submitted_text == "partial"
+    assert evidence.finish_reason == "length"
+
+
+@pytest.mark.asyncio
+async def test_patient_simulator_ignores_reasoning_content() -> None:
+    client = MagicMock(spec=AsyncOpenAI)
+    client.max_retries = 0
+    message = MagicMock(content="")
+    message.reasoning_content = "internal reasoning only"
+    response = MagicMock()
+    response.choices = [MagicMock(message=message, finish_reason="stop")]
+    response.usage = None
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    simulator = PatientSimulator(
+        PatientEndpointConfig(
+            base_url="http://test/v1",
+            model="m",
+            api_key="k",
+            default_headers=None,
+            timeout_seconds=30.0,
+        ),
+        client=client,
+    )
+    context = PatientTurnContext(
+        scenario=get_scenario("anxiety_sleep"),
+        phase="intake",
+        session_number=0,
+        turn_number=1,
+        visible_history=(),
+    )
+    with pytest.raises(PatientGenerationError, match="blank"):
         await simulator.generate(context)
 
 
@@ -307,7 +333,6 @@ async def test_patient_simulator_requires_zero_retries_on_owned_client() -> None
             api_key="k",
             default_headers=None,
             timeout_seconds=30.0,
-            max_completion_tokens=400,
         ),
         client=client,
     )

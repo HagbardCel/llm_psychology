@@ -227,7 +227,6 @@ async def test_simulation_success_journey(
     run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_payload["status"] == "complete"
     assert run_payload["provider_trace_required"] is False
-    assert run_payload["patient_max_completion_tokens"] == 400
     assert "structured_output_modes" in run_payload
     assert run_payload["structured_output_modes"]["post_session_analysis"]
     assert run_payload["style_selection"]["mode"] == "assessment_top"
