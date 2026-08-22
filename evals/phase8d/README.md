@@ -17,7 +17,11 @@ This benchmark compares patient inference cost for three arms:
    `--p2-candidate`. If `--p2-candidate` is omitted, P2 is not applicable for that
    experiment and must not be selected after inspecting P0/P1 results.
 3. Run balanced P0/P1 (8 calls): `P0-A P1-A P0-B P1-B P1-C P0-C P1-D P0-D`.
-4. Human quality check per context (A–D) per arm.
+4. Human quality check per context (A–D) per arm. Quality is a binary human
+   review: first-person patient voice, no meta/reasoning leakage, consistency with
+   the supplied history, and a plausible patient utterance. Do not use an LLM
+   judge. Record PASS/FAIL per context per arm; add a short note only when
+   needed.
 5. If P1 passes quality and total latency ≤ 90% of P0 → select P1 and stop.
 6. Otherwise run P2 (4 calls) only if a candidate was named upfront on step 2.
 7. If P2 passes quality and total latency ≤ 85% of P0 → select P2; else P0.

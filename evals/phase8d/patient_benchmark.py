@@ -192,7 +192,7 @@ def social_anxiety_contexts() -> dict[ContextId, PatientTurnContext]:
             scenario=scenario,
             phase="therapy",
             session_number=2,
-            turn_number=3,
+            turn_number=1,
             visible_history=(
                 VisibleTurn(
                     "patient",
@@ -380,7 +380,7 @@ async def run_p0_p1_benchmark(
 async def run_p2_benchmark(
     *,
     patient_base_url: str,
-    patient_model: str | None = None,
+    patient_model: str,
     patient_extra_body: dict[str, Any] | None = None,
     output_dir: Path | None = None,
     generate=None,
@@ -445,7 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p2 = sub.add_parser("run-p2", help="Run P2-only benchmark (4 calls)")
     p2.add_argument("--patient-base-url", required=True)
-    p2.add_argument("--patient-model", default=None)
+    p2.add_argument("--patient-model", required=True)
     p2.add_argument(
         "--patient-extra-body-json",
         default=None,
