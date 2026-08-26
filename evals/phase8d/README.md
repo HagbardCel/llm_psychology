@@ -61,11 +61,14 @@ P2 flags are **not** hard-coded into generic simulation defaults.
 
 ## Post-merge canary
 
+Selected arm **P1** (see [`OUTCOME.md`](OUTCOME.md)):
+
 ```bash
 make simulate-local-llm \
-  SIM_ARGS="--scenario social_anxiety --sessions 1 --turns-per-session 2"
+  SIM_ARGS="--scenario social_anxiety --sessions 1 --turns-per-session 2 --patient-extra-body-json '{\"chat_template_kwargs\":{\"enable_thinking\":false}}'"
 ```
 
 Add the exact selected patient flags recorded by the P0/P1/P2 decision. P0 adds
 none; P1 adds the complete measured `--patient-extra-body-json` replacement object;
 P2 adds the selected patient endpoint/model and any measured patient extras.
+Do not set therapist `JUNG_LLM_EXTRA_BODY_JSON` merely to help the canary.
