@@ -219,7 +219,6 @@ async def test_smoke_intake_patch(gateway: SmokeGatewayContext) -> None:
             "applied",
             "empty_patch",
             "empty_after_validation",
-            "merge_failure",
         }
         assert plan.merge_diagnostics.raw_evidence_count >= 0
         assert plan.merge_diagnostics.retained_evidence_count >= 0

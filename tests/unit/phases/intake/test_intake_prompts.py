@@ -16,7 +16,7 @@ from jung.phases.intake.prompts import (
 from jung.phases.transcript import TranscriptTurn
 
 
-def test_patch_extraction_omits_provenance_and_includes_prompted_item() -> None:
+def test_patch_extraction_uses_negative_ownership_boundary() -> None:
     assert PROMPT_VERSION == "intake-v3"
     user_turn = TranscriptTurn(
         message_id=uuid4(),
@@ -32,10 +32,12 @@ def test_patch_extraction_omits_provenance_and_includes_prompted_item() -> None:
     )
     joined = "\n".join(message.content for message in messages)
     assert "Prompted item: presenting_problem" in joined
-    assert "direct_ask" not in joined
-    assert "source_role" not in joined
-    assert "source_message_sequence" not in joined
-    assert "Do not invent provenance" in joined
+    assert "source_role=" not in joined
+    assert "source_message_sequence=" not in joined
+    assert "direct_ask=" not in joined
+    assert (
+        "Do not invent provenance, source identifiers, or direct-ask flags." in joined
+    )
 
 
 def test_opening_targets_presenting_problem() -> None:
