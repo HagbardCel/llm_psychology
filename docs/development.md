@@ -153,7 +153,7 @@ make simulate-local-llm \
   SIM_ARGS="--scenario anxiety_sleep --sessions 2 --turns-per-session 4"
 make simulate-local-llm \
   SIM_ARGS="--scenario social_anxiety --sessions 2 --turns-per-session 4 \
-  --style jung --runs 4 --concurrency 4"
+  --style jung"
 ```
 
 Style-path comparison (ecological longitudinal evidence; assessment is never
@@ -172,38 +172,46 @@ make simulate-local-llm \
 `MODEL_NAME`, `LLM_API_KEY`, `JUNG_SUPERVISOR_*`, …), not `LOCAL_LLM_SMOKE_*`.
 The latter remain exclusive to the processor-level smoke/eval tooling. Pass
 simulation flags through `SIM_ARGS`; extra tokens after `make` are Make
-options. `--runs 1` (default) writes an isolated evidence bundle under
-`logs/simulations/run-<UTC>-<suffix>/`. `--runs N` with `--concurrency C`
-(`1 <= C <= N`, default `C=1`) schedules independent replica subprocesses
-under `logs/simulations/suite-<UTC>-<suffix>/`. `--output-dir` is the journey
-directory when `--runs 1` and the suite directory when `--runs > 1`. Optional
-flags include `--style` (`auto` or a packaged style id), `--patient-timeout`,
-`--workflow-timeout`, `--overall-timeout`, `--patient-history-chars`, and
-`--patient-base-url`. Do not parallelize turns inside one journey. Cite
-simulation **run IDs** or suite IDs in PR notes rather than committing artifact
-trees. Phase 8C measurement protocol:
-[`evals/phase8c/README.md`](../evals/phase8c/README.md).
+options. Each invocation writes an isolated evidence bundle under
+`logs/simulations/run-<UTC>-<suffix>/`. `--output-dir`, when provided, is the
+exact journey directory. Optional flags include `--style` (`auto` or a packaged
+style id), `--patient-timeout`, `--workflow-timeout`, `--overall-timeout`,
+`--patient-history-chars`, `--patient-base-url`, `--patient-model`, and
+`--patient-extra-body-json`. Do not parallelize turns inside one journey. Cite
+simulation **run IDs** in PR notes rather than committing artifact trees. Closed
+Phase 8C experiment: [`evals/phase8c/OUTCOME.md`](../evals/phase8c/OUTCOME.md).
 
 See [`tests/README.md`](../tests/README.md) and [`evals/README.md`](../evals/README.md)
-for suite ownership and hard-versus-diagnostic semantics.
+for hard-versus-diagnostic semantics.
 
-## Local inference recipes (Phase 8B)
+## Evaluating a new local backend
 
-Jung talks only to an OpenAI-compatible endpoint. Processor-level smoke,
-hard evals, and `eval-report` use `LOCAL_LLM_SMOKE_*`. Interactive `make run`
-uses `LLM_BASE_URL` / `MODEL_NAME`. Do not mix the namespaces.
+Jung talks only to an OpenAI-compatible endpoint. Processor-level smoke, hard
+evals, and `eval-report` use `LOCAL_LLM_SMOKE_*`. Interactive `make run` uses
+`LLM_BASE_URL` / `MODEL_NAME`. Do not mix the namespaces.
 
-Phase 8B measures server-side scheduling for the concurrent `eval-report`
-workload on a frozen **Qwen3.8-27B** fixture. Protocol and acceptance rules:
-[`evals/README.md`](../evals/README.md). Frozen measurements and rationale:
-[`evals/phase8b/OUTCOME.md`](../evals/phase8b/OUTCOME.md). Operator scripts:
-[`evals/phase8b/README.md`](../evals/phase8b/README.md).
+Use the same standard `eval-report` concurrency for every backend candidate;
+do **not** tune concurrency as part of routine backend comparison.
 
-This document records **recommended operational recipes** only. Measured walls
-and row-level provenance live in OUTCOME and gitignored
-`logs/evals/phase8b/` (current runs: `logs/evals/phase8b/mtplx-<version>/`).
+1. Start the candidate OpenAI-compatible backend (outside Jung).
+2. Run provider compatibility smoke if needed (`make smoke-local-llm`).
+3. Run the fixed screen workload once:
 
-### Shared eval/smoke exports
+   ```bash
+   make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency <standard>"
+   ```
+
+4. Repeat with the same workload and concurrency for the comparison backend.
+5. Compare wall time, failures, request count, and reported token usage.
+6. Run one representative confirmation only if the screen result would change
+   the selected backend.
+7. Stop.
+
+Backend launch tuning belongs outside Jung. Request-specific extensions use
+`LOCAL_LLM_SMOKE_EXTRA_BODY` / production `extra_body` — not backend-specific
+Python classes.
+
+Shared eval/smoke exports:
 
 ```bash
 export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8080/v1
@@ -213,89 +221,8 @@ export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
 export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
 ```
 
-### High-throughput evaluation recipe (Phase 8B winner: M4)
-
-**Concurrent eval-report default:** MTPLX **M4** — serial scheduler, client
-concurrency 4. **Interactive/reference serial configuration:** MTPLX **M1**
-(client concurrency 1). Phase 8B did not benchmark interactive TTFT; do not
-treat M4 as an interactive-performance result.
-
-Timed MTPLX launches for benchmarking. Original Phase 8B M4 measurements used
-MTPLX 2.7.1; current recipes use 2.8.1.
-
-```bash
-export MTPLX_BREW_VENV=/opt/homebrew/var/mtplx/venv-2.8.1
-MTPLX_BIN=$MTPLX_BREW_VENV/bin/mtplx
-export LOCAL_LLM_SMOKE_BASE_URL=http://127.0.0.1:8000/v1
-export LOCAL_LLM_SMOKE_MODEL=mtplx-qwen38-27b-optimized-speed
-export LOCAL_LLM_SMOKE_STRUCTURED_MODE=json_schema
-export LOCAL_LLM_SMOKE_REQUEST_TIMEOUT=600
-export LOCAL_LLM_SMOKE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.95,"top_k":20}'
-export LOCAL_LLM_SMOKE_SERVER=mtplx
-export LOCAL_LLM_SMOKE_SERVER_VERSION=2.8.1
-
-$MTPLX_BIN serve \
-  --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
-  --scheduler-mode serial \
-  --ssd-session-cache off \
-  --reasoning on --reasoning-effort medium \
-  --default-top-p 0.95 --default-top-k 20 \
-  --host 127.0.0.1 --port 8000 --no-auth
-
-make eval-report EVAL_REPORT_ARGS="--workload full --concurrency 4"
-```
-
-Use `--workload screen` for screening rows (~15 provider calls). See
-[`evals/phase8b/OUTCOME.md`](../evals/phase8b/OUTCOME.md) for closed-matrix margins.
-
-**llama.cpp** (example with common 32K/slot context; adjust after preflight):
-
-```bash
-llama-server -m <pinned-qwen3.8-27b.gguf> \
-  --port 8080 \
-  --ctx-size $((32768 * N)) \
-  --parallel N \
-  --cont-batching \
-  --min-p 0
-```
-
-Then:
-
-```bash
-make eval-report EVAL_REPORT_ARGS="--workload screen --concurrency N"
-```
-
-Use `--workload full` (or omit `--workload`) for finalist validation runs.
-
-**MTPLX** (generic shape; see M4 recipe above for the closed-matrix winner):
-
-```bash
-MTPLX_BIN=/opt/homebrew/var/mtplx/venv-2.8.1/bin/mtplx
-$MTPLX_BIN serve \
-  --model Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed \
-  --scheduler-mode <serial|ar_batch|…> \
-  --ssd-session-cache off \
-  --port 8000
-```
-
-MTPLX constrained `json_schema` serving requires `llguidance` (`mtplx[server]`;
-included by the desktop runtime). For bare/custom CLI environments, install
-it into the Python environment running the MTPLX server.
-
-Point `LOCAL_LLM_SMOKE_BASE_URL` at that server and run the same
-`eval-report` command. Restart between timed rows; use one fixed short dummy
-chat-completion as warm-up (not `make smoke-local-llm`).
-
-### Preferred serial / interactive recipe
-
-For interactive Jung, prefer **M1** (MTPLX serial, client concurrency 1) informed
-by manual responsiveness — not Phase 8B concurrent-eval wall time. This is not a
-dedicated TTFT benchmark.
-
-For interactive Jung, leave MTPLX’s normal session/SSD cache behavior enabled
-unless product testing finds a reason to disable it. Point production
-`LLM_BASE_URL` / `MODEL_NAME` at the chosen serial server; keep
-`LOCAL_LLM_SMOKE_*` for smoke/evals/report only.
+Historical Phase 8B measurements are archived under
+[`evals/phase8b/README.md`](../evals/phase8b/README.md).
 
 ### Diagnostics
 

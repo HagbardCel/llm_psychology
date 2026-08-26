@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import fields
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,7 +13,6 @@ from openai import AsyncOpenAI
 from evals.simulation.patient import (
     PATIENT_API_KEY_ENV,
     PATIENT_HISTORY_MAX_CHARS,
-    PATIENT_MAX_COMPLETION_TOKENS,
     PatientEndpointConfig,
     PatientExchange,
     PatientGenerationError,
@@ -79,10 +80,6 @@ def test_normalize_rejects_blank_and_collapses_whitespace() -> None:
     assert normalize_patient_text("   \n\t  ") == ""
 
 
-def test_patient_max_completion_tokens_is_frozen() -> None:
-    assert PATIENT_MAX_COMPLETION_TOKENS == 400
-
-
 def test_resolve_patient_endpoint_inherits_session_when_same_origin() -> None:
     config = resolve_patient_endpoint(
         session_base_url="http://session.test/v1",
@@ -95,7 +92,6 @@ def test_resolve_patient_endpoint_inherits_session_when_same_origin() -> None:
     assert config.model == "session-model"
     assert config.api_key == "SESSION_SECRET"
     assert config.default_headers == {"Authorization": "Bearer SESSION_SECRET"}
-    assert config.max_completion_tokens == 400
     assert config.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
@@ -141,6 +137,87 @@ def test_resolve_patient_endpoint_uses_sim_env_for_alternate_origin(
     assert config.api_key == "PATIENT_ONLY"
     assert config.default_headers is None
     assert config.model == "session-model"
+
+
+def test_resolve_patient_endpoint_preserves_session_empty_extra_body() -> None:
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body={},
+    )
+    assert config.extra_body == {}
+
+
+@pytest.mark.parametrize(
+    ("patient_base_url", "patient_extra_body", "expected_extra_body"),
+    [
+        (None, None, {"thinking": True}),
+        (None, {}, {}),
+        (None, {"patient_only": True}, {"patient_only": True}),
+        ("http://other.test/v1", None, None),
+        ("http://other.test/v1", {}, {}),
+        ("http://other.test/v1", {"patient_only": True}, {"patient_only": True}),
+    ],
+)
+def test_resolve_patient_endpoint_extra_body_semantics(
+    patient_base_url: str | None,
+    patient_extra_body: dict[str, Any] | None,
+    expected_extra_body: dict[str, Any] | None,
+) -> None:
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body={"thinking": True},
+        patient_base_url=patient_base_url,
+        patient_extra_body=patient_extra_body,
+    )
+    assert config.extra_body == expected_extra_body
+
+
+def test_resolve_patient_endpoint_explicit_same_url_inherits_credentials_not_extras(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(PATIENT_API_KEY_ENV, raising=False)
+    config = resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="SESSION_SECRET",
+        session_default_headers={"Authorization": "Bearer SESSION_SECRET"},
+        session_extra_body={"thinking": True},
+        patient_base_url="http://session.test/v1",
+        patient_model="patient-model",
+    )
+    assert config.base_url == "http://session.test/v1"
+    assert config.model == "patient-model"
+    assert config.api_key == "SESSION_SECRET"
+    assert config.default_headers == {"Authorization": "Bearer SESSION_SECRET"}
+    assert config.extra_body is None
+
+
+def test_resolve_patient_endpoint_does_not_mutate_session_extra_body() -> None:
+    session_extra_body = {
+        "chat_template_kwargs": {"enable_thinking": True},
+        "top_p": 0.95,
+    }
+    patient_override = {"patient_only": True}
+    original_session = json.dumps(session_extra_body, sort_keys=True)
+    original_override = json.dumps(patient_override, sort_keys=True)
+
+    resolve_patient_endpoint(
+        session_base_url="http://session.test/v1",
+        session_model="session-model",
+        session_api_key="k",
+        session_default_headers=None,
+        session_extra_body=session_extra_body,
+        patient_extra_body=patient_override,
+    )
+
+    assert json.dumps(session_extra_body, sort_keys=True) == original_session
+    assert json.dumps(patient_override, sort_keys=True) == original_override
 
 
 def test_pack_visible_history_fits_everything() -> None:
@@ -256,7 +333,7 @@ def test_build_patient_prompt_contains_only_allowed_inputs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_patient_simulator_rejects_blank_and_truncation() -> None:
+async def test_patient_simulator_rejects_blank_and_accepts_length_truncation() -> None:
     client = MagicMock(spec=AsyncOpenAI)
     client.max_retries = 0
 
@@ -272,7 +349,6 @@ async def test_patient_simulator_rejects_blank_and_truncation() -> None:
             api_key="k",
             default_headers=None,
             timeout_seconds=30.0,
-            max_completion_tokens=400,
         ),
         client=client,
     )
@@ -292,7 +368,52 @@ async def test_patient_simulator_rejects_blank_and_truncation() -> None:
     ]
     truncated.usage = None
     client.chat.completions.create = AsyncMock(return_value=truncated)
-    with pytest.raises(PatientGenerationError, match="truncated"):
+    evidence = await simulator.generate(context)
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert "max_completion_tokens" not in kwargs
+    assert evidence.submitted_text == "partial"
+    assert evidence.finish_reason == "length"
+
+    max_tokens = MagicMock()
+    max_tokens.choices = [
+        MagicMock(message=MagicMock(content="partial"), finish_reason="max_tokens")
+    ]
+    max_tokens.usage = None
+    client.chat.completions.create = AsyncMock(return_value=max_tokens)
+    evidence = await simulator.generate(context)
+    assert evidence.submitted_text == "partial"
+    assert evidence.finish_reason == "max_tokens"
+
+
+@pytest.mark.asyncio
+async def test_patient_simulator_ignores_reasoning_content() -> None:
+    client = MagicMock(spec=AsyncOpenAI)
+    client.max_retries = 0
+    message = MagicMock(content="")
+    message.reasoning_content = "internal reasoning only"
+    response = MagicMock()
+    response.choices = [MagicMock(message=message, finish_reason="stop")]
+    response.usage = None
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    simulator = PatientSimulator(
+        PatientEndpointConfig(
+            base_url="http://test/v1",
+            model="m",
+            api_key="k",
+            default_headers=None,
+            timeout_seconds=30.0,
+        ),
+        client=client,
+    )
+    context = PatientTurnContext(
+        scenario=get_scenario("anxiety_sleep"),
+        phase="intake",
+        session_number=0,
+        turn_number=1,
+        visible_history=(),
+    )
+    with pytest.raises(PatientGenerationError, match="blank"):
         await simulator.generate(context)
 
 
@@ -307,7 +428,6 @@ async def test_patient_simulator_requires_zero_retries_on_owned_client() -> None
             api_key="k",
             default_headers=None,
             timeout_seconds=30.0,
-            max_completion_tokens=400,
         ),
         client=client,
     )

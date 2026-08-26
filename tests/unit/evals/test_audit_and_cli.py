@@ -22,7 +22,6 @@ from evals.simulation.audit import (
     AuditResult,
     JourneyLog,
     allocate_run_directory,
-    allocate_suite_directory,
     artifact_relative_paths,
     audit_grounding,
     audit_supervisor_chain_from_fixture,
@@ -203,31 +202,6 @@ def test_allocate_run_directory_retries_forced_suffix_collision(
     assert second.is_dir()
     assert (first / "data").is_dir()
     assert (second / "checkpoints").is_dir()
-
-
-def test_allocate_suite_directory_refuses_existing(tmp_path: Path) -> None:
-    target = tmp_path / "suite"
-    allocate_suite_directory(target)
-    with pytest.raises(FileExistsError):
-        allocate_suite_directory(target)
-    assert (target / "workers").is_dir()
-    assert (target / "runs").is_dir()
-    assert not (target / "runs" / "run-001").exists()
-
-
-def test_allocate_suite_directory_retries_forced_suffix_collision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(audit_mod, "_allocation_stamp", lambda: "20260817T113412Z")
-    suffixes = iter(("deadbeef", "deadbeef", "cafebabe"))
-    monkeypatch.setattr(audit_mod, "_allocation_suffix", lambda: next(suffixes))
-
-    first = allocate_suite_directory()
-    second = allocate_suite_directory()
-    assert first.name == "suite-20260817T113412Z-deadbeef"
-    assert second.name == "suite-20260817T113412Z-cafebabe"
-    assert not (first / "runs" / "run-001").exists()
 
 
 def test_extract_context_data_requires_exactly_one_block() -> None:
@@ -520,7 +494,11 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
         ),
         run_dir=run_dir,
         journey=journey,
-        run_config={"scenario_id": "anxiety_sleep"},
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
         therapy_records=[],
         progress=SimulationProgress(),
         provider_trace_required=False,
@@ -529,6 +507,7 @@ def test_malformed_trace_still_writes_terminal_artifacts(tmp_path: Path) -> None
         error_code=None,
         error_message=None,
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "mechanical_audit_failed"
@@ -566,7 +545,11 @@ def test_audit_md_write_failure_sets_primary_error(
         ),
         run_dir=run_dir,
         journey=journey,
-        run_config={"scenario_id": "anxiety_sleep"},
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
         therapy_records=[],
         progress=SimulationProgress(),
         provider_trace_required=False,
@@ -575,6 +558,7 @@ def test_audit_md_write_failure_sets_primary_error(
         error_code=None,
         error_message=None,
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "audit_write_failed"
@@ -618,7 +602,11 @@ def test_audit_md_write_failure_preserves_primary_error(
         ),
         run_dir=run_dir,
         journey=journey,
-        run_config={"scenario_id": "anxiety_sleep"},
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
         therapy_records=[],
         progress=SimulationProgress(),
         provider_trace_required=False,
@@ -627,6 +615,7 @@ def test_audit_md_write_failure_preserves_primary_error(
         error_code="chat_invalid_llm_output",
         error_message="bad model output",
         api_error=None,
+        patient_extra_body_provenance=None,
     )
     assert result.status == "failed"
     assert result.error_code == "chat_invalid_llm_output"

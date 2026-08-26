@@ -19,7 +19,6 @@ from openai import AsyncOpenAI
 from evals.simulation.scenarios import SimulationScenario
 
 PATIENT_TIMEOUT_SECONDS = 120.0
-PATIENT_MAX_COMPLETION_TOKENS = 400
 PATIENT_HISTORY_MAX_CHARS = 40_000
 WORKFLOW_TIMEOUT_SECONDS = 600.0
 
@@ -81,7 +80,6 @@ class PatientEndpointConfig:
     api_key: str
     default_headers: Mapping[str, str] | None
     timeout_seconds: float
-    max_completion_tokens: int
     extra_body: Mapping[str, Any] | None = None
 
 
@@ -139,6 +137,10 @@ def pack_visible_history(
     return tuple(selected)
 
 
+def _same_origin_url(left: str, right: str) -> bool:
+    return left.rstrip("/") == right.rstrip("/")
+
+
 def resolve_patient_endpoint(
     *,
     session_base_url: str,
@@ -149,12 +151,20 @@ def resolve_patient_endpoint(
     patient_model: str | None = None,
     patient_api_key_env: str | None = None,
     timeout_seconds: float = PATIENT_TIMEOUT_SECONDS,
-    max_completion_tokens: int = PATIENT_MAX_COMPLETION_TOKENS,
     session_extra_body: Mapping[str, Any] | None = None,
+    patient_extra_body: Mapping[str, Any] | None = None,
 ) -> PatientEndpointConfig:
     """Resolve patient transport without leaking credentials across origins."""
     model = patient_model or session_model
-    if patient_base_url is None:
+    implicit_endpoint = patient_base_url is None
+
+    if implicit_endpoint:
+        if patient_extra_body is None:
+            extra_body = (
+                dict(session_extra_body) if session_extra_body is not None else None
+            )
+        else:
+            extra_body = dict(patient_extra_body)
         return PatientEndpointConfig(
             base_url=session_base_url,
             model=model,
@@ -165,21 +175,38 @@ def resolve_patient_endpoint(
                 else None
             ),
             timeout_seconds=timeout_seconds,
-            max_completion_tokens=max_completion_tokens,
-            extra_body=dict(session_extra_body) if session_extra_body else None,
+            extra_body=extra_body,
         )
+
+    if patient_extra_body is None:
+        extra_body = None
+    else:
+        extra_body = dict(patient_extra_body)
 
     if patient_api_key_env is None:
         patient_api_key_env = os.environ.get(PATIENT_API_KEY_ENV, "").strip() or None
-    api_key = patient_api_key_env or _LOCAL_PLACEHOLDER_API_KEY
+
+    same_origin = _same_origin_url(patient_base_url, session_base_url)
+    if same_origin:
+        api_key = session_api_key or _LOCAL_PLACEHOLDER_API_KEY
+        default_headers = (
+            dict(session_default_headers)
+            if session_default_headers is not None
+            else None
+        )
+        if patient_api_key_env is not None:
+            api_key = patient_api_key_env
+    else:
+        api_key = patient_api_key_env or _LOCAL_PLACEHOLDER_API_KEY
+        default_headers = None
+
     return PatientEndpointConfig(
         base_url=patient_base_url,
         model=model,
         api_key=api_key,
-        default_headers=None,
+        default_headers=default_headers,
         timeout_seconds=timeout_seconds,
-        max_completion_tokens=max_completion_tokens,
-        extra_body=None,
+        extra_body=extra_body,
     )
 
 
@@ -285,10 +312,9 @@ class PatientSimulator:
             create_kwargs: dict[str, Any] = {
                 "model": self._config.model,
                 "messages": messages,
-                "max_completion_tokens": self._config.max_completion_tokens,
                 "temperature": 0.7,
             }
-            if self._config.extra_body:
+            if self._config.extra_body is not None:
                 create_kwargs["extra_body"] = dict(self._config.extra_body)
             response = await self._client.chat.completions.create(**create_kwargs)
         except Exception as exc:
@@ -301,15 +327,7 @@ class PatientSimulator:
         if choice is None:
             raise PatientGenerationError("patient provider returned no choices")
         raw = (choice.message.content or "") if choice.message is not None else ""
-        if not raw.strip() and choice.message is not None:
-            reasoning = getattr(choice.message, "reasoning_content", None)
-            if isinstance(reasoning, str) and reasoning.strip():
-                raw = reasoning
         finish_reason = choice.finish_reason
-        if finish_reason in {"length", "max_tokens"}:
-            raise PatientGenerationError(
-                "patient generation truncated by completion-length cap"
-            )
         submitted = normalize_patient_text(raw)
         if not submitted:
             raise PatientGenerationError("patient emitted blank text")
