@@ -118,6 +118,9 @@ Structured output is Jung-owned.
 - The production OpenAI SDK client uses `max_retries=0`.
 - Do not enable a hidden provider, wrapper, or SDK retry layer that changes
   physical-attempt semantics.
+- Structured-output schemas contain only facts or judgments the model can own.
+  Identifiers, provenance, routing decisions, workflow state, and generation
+  metadata are injected by Jung after model validation.
 
 Preserve enough bounded diagnostic context to identify the phase, schema,
 provider, model, and parse failure without leaking full prompts or

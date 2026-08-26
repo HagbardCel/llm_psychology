@@ -184,6 +184,11 @@ class IntakeTurnInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_transcript_coherence(self) -> IntakeTurnInput:
+        user_turn_count = sum(1 for turn in self.transcript if turn.role == "user")
+        if self.patient_turn_count != user_turn_count:
+            raise ValueError(
+                "patient_turn_count must equal the number of user turns in transcript"
+            )
         if not self.transcript and self.latest_user_message is None:
             return self
         if not self.transcript:

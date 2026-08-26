@@ -35,7 +35,7 @@ from jung.llm.tracing import ObservedLLMGateway
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
     PostSessionUpdateResult,
@@ -80,7 +80,7 @@ def _default_new_id() -> UUID:
 
 
 _SCHEMA_OUTPUT_TYPES = {
-    LLMTask.INTAKE_PATCH: IntakeRecordPatch,
+    LLMTask.INTAKE_PATCH: IntakeExtraction,
     LLMTask.ASSESSMENT: AssessmentResult,
     LLMTask.POST_SESSION_ANALYSIS: SessionAnalysis,
     LLMTask.POST_SESSION_UPDATE: PostSessionUpdateResult,

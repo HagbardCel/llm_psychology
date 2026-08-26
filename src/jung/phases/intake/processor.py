@@ -6,10 +6,17 @@ from collections.abc import AsyncGenerator
 
 from jung.llm.gateway import LLMGateway, ModelPolicy
 from jung.phases.intake.completion import intake_record_completion_decision
-from jung.phases.intake.merge import merge_intake_record_patch_with_diagnostics
+from jung.phases.intake.extraction import (
+    IntakeExtraction,
+    materialize_extraction,
+    prompted_item_for_extraction,
+)
+from jung.phases.intake.merge import (
+    MAX_INTAKE_DROP_REASONS,
+    merge_intake_record_patch_with_diagnostics,
+)
 from jung.phases.intake.models import (
     IntakeMergeDiagnostics,
-    IntakeRecordPatch,
     IntakeTurnInput,
     IntakeTurnPlan,
     TranscriptTurn,
@@ -44,33 +51,57 @@ class IntakeProcessor:
         latest_turn = self._latest_user_turn(input)
 
         if latest_turn is not None and input.latest_user_message:
-            patch = await self._gateway.generate_structured(
+            prompted_item = prompted_item_for_extraction(
+                record,
+                patient_turn_count=input.patient_turn_count,
+            )
+            extraction = await self._gateway.generate_structured(
                 build_patch_extraction_messages(
                     record=record,
                     latest_user_message=latest_turn,
                     previous_assistant_message=input.previous_assistant_message,
+                    prompted_item=prompted_item,
                 ),
-                IntakeRecordPatch,
+                IntakeExtraction,
                 self._patch_policy,
+            )
+            materialization = materialize_extraction(
+                extraction,
+                latest_user_turn=latest_turn,
+                prompted_item=prompted_item,
             )
             merge_result = merge_intake_record_patch_with_diagnostics(
                 record,
-                patch,
+                materialization.patch,
                 latest_user_message=latest_turn,
                 source_message_sequence=latest_turn.sequence,
                 strict_quote_validation=input.strict_quote_validation,
             )
+            raw_count = materialization.raw_candidate_count
+            retained_count = merge_result.retained_evidence_count
+            if merge_result.status == "merge_failure":
+                status = "merge_failure"
+            elif raw_count == 0:
+                status = "empty_patch"
+            elif retained_count == 0:
+                status = "empty_after_validation"
+            else:
+                status = merge_result.status
+            combined_reasons = (
+                *materialization.drop_reasons,
+                *merge_result.drop_reasons,
+            )[:MAX_INTAKE_DROP_REASONS]
             record = merge_result.record
             record_changed = merge_result.record_changed
-            extraction_failed = merge_result.status in _FAILURE_STATUSES
+            extraction_failed = status in _FAILURE_STATUSES
             merge_diagnostics = IntakeMergeDiagnostics(
-                status=merge_result.status,
+                status=status,
                 applied=merge_result.applied,
                 record_changed=merge_result.record_changed,
-                raw_evidence_count=merge_result.raw_evidence_count,
-                retained_evidence_count=merge_result.retained_evidence_count,
-                dropped_evidence_count=merge_result.dropped_evidence_count,
-                drop_reasons=merge_result.drop_reasons,
+                raw_evidence_count=raw_count,
+                retained_evidence_count=retained_count,
+                dropped_evidence_count=raw_count - retained_count,
+                drop_reasons=combined_reasons,
             )
 
         completeness = intake_record_completion_decision(

@@ -35,7 +35,7 @@ from jung.llm.errors import InvalidLLMOutput, LLMTimeout, LLMUnavailable
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from jung.phases.post_session.models import (
     PostSessionUpdateResult,
 )
@@ -52,7 +52,7 @@ from .application_fixtures import (
     assessment_result,
     build_test_application,
     collect_stream,
-    completing_intake_patch,
+    completing_intake_extraction,
     post_session_expectations,
     wait_for_operation_status,
     wait_for_stage,
@@ -831,8 +831,6 @@ async def test_retry_operation_schedules_when_assemble_raises(
 
 def _final_intake_expectations(
     turn_messages: tuple[str, ...],
-    *,
-    final_message_sequence: int,
 ) -> list[StructuredExpectation | StreamExpectation]:
     expectations: list[StructuredExpectation | StreamExpectation] = []
     for index, content in enumerate(turn_messages, start=1):
@@ -841,8 +839,8 @@ def _final_intake_expectations(
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=IntakeRecordPatch(),
+                        output_type=IntakeExtraction,
+                        response=IntakeExtraction(),
                     ),
                     StreamExpectation(
                         task=LLMTask.INTAKE_RESPONSE,
@@ -855,9 +853,8 @@ def _final_intake_expectations(
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=completing_intake_patch(
-                            message_sequence=final_message_sequence,
+                        output_type=IntakeExtraction,
+                        response=completing_intake_extraction(
                             quote=content,
                         ),
                     ),
@@ -881,7 +878,7 @@ async def test_final_intake_spawn_failure_keeps_completion_and_pending_operation
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     turn_messages = ("first turn", "second turn", "third turn")
-    fake = FakeLLM(_final_intake_expectations(turn_messages, final_message_sequence=5))
+    fake = FakeLLM(_final_intake_expectations(turn_messages))
     run_dir = tmp_path / "schedule-failure"
 
     def boom_spawn(self, operation):  # type: ignore[no-untyped-def]

@@ -20,7 +20,7 @@ from jung.client.api_client import ServerEventAdapter
 from jung.domain.errors import InvariantViolation
 from jung.llm.errors import LLMUnavailable
 from jung.llm.gateway import LLMTask
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from tests.integration.application.application_fixtures import (
     intake_message_expectations,
 )
@@ -171,8 +171,8 @@ async def test_accepted_llm_failure_leaves_unanswered_user(
     fake_llm._expectations = [
         StructuredExpectation(
             task=LLMTask.INTAKE_PATCH,
-            output_type=IntakeRecordPatch,
-            response=IntakeRecordPatch(),
+            output_type=IntakeExtraction,
+            response=IntakeExtraction(),
         ),
         FailureExpectation(
             task=LLMTask.INTAKE_RESPONSE,
