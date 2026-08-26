@@ -13,6 +13,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI
 
@@ -25,6 +26,10 @@ WORKFLOW_TIMEOUT_SECONDS = 600.0
 PATIENT_API_KEY_ENV = "JUNG_SIM_PATIENT_API_KEY"
 PATIENT_THINKING_PREFILL_ENV = "JUNG_SIM_PATIENT_THINKING_PREFILL"
 _LOCAL_PLACEHOLDER_API_KEY = "not-needed"
+_DEFAULT_PORTS = {
+    "http": 80,
+    "https": 443,
+}
 
 PatientPhase = Literal["intake", "therapy"]
 
@@ -137,8 +142,40 @@ def pack_visible_history(
     return tuple(selected)
 
 
+def _url_origin(url: str) -> tuple[str, str, int] | None:
+    """Return an HTTP(S) origin tuple, or None for unsupported/malformed URLs."""
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+
+        if scheme not in _DEFAULT_PORTS or hostname is None:
+            return None
+
+        # urlsplit treats "host:" as port=None; do not normalize that to default.
+        authority = parsed.netloc.rsplit("@", 1)[-1]
+        if authority.endswith(":"):
+            return None
+
+        port = parsed.port
+    except ValueError:
+        return None
+
+    return (
+        scheme,
+        hostname.lower(),
+        port if port is not None else _DEFAULT_PORTS[scheme],
+    )
+
+
 def _same_origin_url(left: str, right: str) -> bool:
-    return left.rstrip("/") == right.rstrip("/")
+    left_origin = _url_origin(left)
+    right_origin = _url_origin(right)
+    return (
+        left_origin is not None
+        and right_origin is not None
+        and left_origin == right_origin
+    )
 
 
 def resolve_patient_endpoint(

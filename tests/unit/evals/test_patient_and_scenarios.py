@@ -198,6 +198,67 @@ def test_resolve_patient_endpoint_explicit_same_url_inherits_credentials_not_ext
     assert config.extra_body is None
 
 
+@pytest.mark.parametrize(
+    ("session_base_url", "patient_base_url", "expect_inherit"),
+    [
+        (
+            "http://localhost:8000/v1",
+            "http://localhost:8000/openai/v1",
+            True,
+        ),
+        (
+            "http://localhost:8000/v1",
+            "http://localhost:1234/v1",
+            False,
+        ),
+        (
+            "http://foo.test/v1",
+            "https://foo.test/v1",
+            False,
+        ),
+        (
+            "https://foo.test/v1",
+            "https://foo.test:443/openai/v1",
+            True,
+        ),
+        (
+            "http://foo.test/v1",
+            "custom://foo.test:80/v1",
+            False,
+        ),
+        (
+            "http://foo.test/v1",
+            "http://foo.test:/v1",
+            False,
+        ),
+    ],
+)
+def test_resolve_patient_endpoint_origin_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    session_base_url: str,
+    patient_base_url: str,
+    expect_inherit: bool,
+) -> None:
+    monkeypatch.delenv(PATIENT_API_KEY_ENV, raising=False)
+    headers = {"Authorization": "Bearer SESSION_SECRET"}
+    config = resolve_patient_endpoint(
+        session_base_url=session_base_url,
+        session_model="session-model",
+        session_api_key="SESSION_SECRET",
+        session_default_headers=headers,
+        patient_base_url=patient_base_url,
+        patient_model="patient-model",
+    )
+    assert config.base_url == patient_base_url
+    assert config.model == "patient-model"
+    if expect_inherit:
+        assert config.api_key == "SESSION_SECRET"
+        assert config.default_headers == headers
+    else:
+        assert config.api_key == "not-needed"
+        assert config.default_headers is None
+
+
 def test_resolve_patient_endpoint_does_not_mutate_session_extra_body() -> None:
     session_extra_body = {
         "chat_template_kwargs": {"enable_thinking": True},
