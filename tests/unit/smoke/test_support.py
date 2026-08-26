@@ -327,7 +327,7 @@ def test_provider_attempt_snapshots_survive_failure_and_mutation() -> None:
     asyncio.run(_run())
 
 
-def test_aggregate_provider_attempts_sums_all_four_tasks() -> None:
+def test_aggregate_provider_attempts_sums_all_five_tasks() -> None:
     therapy = SmokePathResult(
         success=True,
         status="success",
@@ -351,17 +351,28 @@ def test_aggregate_provider_attempts_sums_all_four_tasks() -> None:
             "assessment": ProviderAttemptSnapshot(1, 0, ()),
         },
     )
-    aggregated = aggregate_provider_attempts((therapy, assessment, post_session))
+    intake = SmokePathResult(
+        success=True,
+        status="success",
+        provider_attempts_by_task={
+            "intake_patch": ProviderAttemptSnapshot(1, 0, ()),
+        },
+    )
+    aggregated = aggregate_provider_attempts(
+        (therapy, assessment, post_session, intake)
+    )
     assert set(aggregated) == {
         "therapy_response",
         "assessment",
         "post_session_analysis",
         "post_session_update",
+        "intake_patch",
     }
     assert aggregated["assessment"].provider_attempt_count == 3
     assert aggregated["assessment"].correction_count == 1
     assert aggregated["assessment"].correction_triggers == ("schema",)
     assert aggregated["post_session_update"].correction_triggers == ("a", "b")
+    assert aggregated["intake_patch"].provider_attempt_count == 1
 
     collector = SmokeEvidenceCollector(
         server="llama.cpp",
@@ -370,6 +381,7 @@ def test_aggregate_provider_attempts_sums_all_four_tasks() -> None:
         therapy=therapy,
         assessment=assessment,
         post_session=post_session,
+        intake=intake,
     )
     payload = collector.to_payload()
     assert set(payload["provider_attempts_by_task"]) == {
@@ -377,4 +389,6 @@ def test_aggregate_provider_attempts_sums_all_four_tasks() -> None:
         "assessment",
         "post_session_analysis",
         "post_session_update",
+        "intake_patch",
     }
+    assert "intake" in payload

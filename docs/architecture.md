@@ -281,6 +281,11 @@ SDK client uses `max_retries=0`, preventing SDK-level automatic retries from
 multiplying Jung-owned provider attempts. Jung does not delegate this
 validation/correction boundary to a structured-output wrapper.
 
+The `intake_patch` task uses an extraction-only `IntakeExtraction` schema
+(semantic candidates). Jung materializes durable `IntakeEvidence` provenance and
+`direct_ask` after validation; the provider schema does not include those
+application-owned fields.
+
 The concrete provider is OpenAI-compatible and must work with llama.cpp,
 LM Studio, OpenRouter, and equivalent endpoints by changing configuration
 rather than application code.

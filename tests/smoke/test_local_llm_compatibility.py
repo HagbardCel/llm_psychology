@@ -17,6 +17,8 @@ from jung.llm.gateway import LLMTask
 from jung.llm.tracing import ObservedLLMGateway
 from jung.phases.assessment.models import AssessmentInput, IntakeRecord
 from jung.phases.assessment.processor import AssessmentProcessor
+from jung.phases.intake.models import IntakeTurnInput
+from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import PostSessionInput
 from jung.phases.post_session.processor import PostSessionProcessor
 from jung.phases.therapy.models import TherapyTurnInput
@@ -123,6 +125,7 @@ def configure_smoke_metadata(
         "therapy": smoke_path_budget_seconds("therapy"),
         "assessment": smoke_path_budget_seconds("assessment"),
         "post_session": smoke_path_budget_seconds("post_session"),
+        "intake": smoke_path_budget_seconds("intake"),
     }
 
 
@@ -184,6 +187,59 @@ async def test_smoke_therapy_stream(gateway: SmokeGatewayContext) -> None:
         provider_attempts_snapshot=gateway.attempts.snapshot,
     )
     assert result
+
+
+@pytest.mark.real_llm
+@pytest.mark.asyncio
+async def test_smoke_intake_patch(gateway: SmokeGatewayContext) -> None:
+    policies = _policies()
+    processor = IntakeProcessor(
+        gateway.gateway,
+        patch_policy=policies[LLMTask.INTAKE_PATCH],
+        response_policy=policies[LLMTask.INTAKE_RESPONSE],
+    )
+    user_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=1,
+        role="user",
+        content="I'm not sure how to describe what's wrong.",
+    )
+
+    async def operation() -> SmokeOperationResult[object]:
+        plan = await processor.prepare_turn(
+            IntakeTurnInput(
+                profile=Profile(name="Alex", primary_language="English"),
+                transcript=(user_turn,),
+                latest_user_message=user_turn.content,
+                patient_turn_count=1,
+            )
+        )
+        assert plan.merge_diagnostics is not None
+        assert plan.merge_diagnostics.status in {
+            "applied",
+            "empty_patch",
+            "empty_after_validation",
+        }
+        assert plan.merge_diagnostics.raw_evidence_count >= 0
+        assert plan.merge_diagnostics.retained_evidence_count >= 0
+        assert (
+            plan.merge_diagnostics.dropped_evidence_count
+            == plan.merge_diagnostics.raw_evidence_count
+            - plan.merge_diagnostics.retained_evidence_count
+        )
+        return SmokeOperationResult(value=plan)
+
+    plan = await run_smoke_path(
+        collector=COLLECTOR,
+        name="intake",
+        budget_seconds=smoke_path_budget_seconds("intake"),
+        operation=operation,
+        provider_attempts_snapshot=gateway.attempts.snapshot,
+    )
+    assert plan.merge_diagnostics is not None
+    path = COLLECTOR.intake
+    assert path is not None
+    path.result_shape_valid = True
 
 
 @pytest.mark.real_llm

@@ -6,12 +6,13 @@ from jung.domain.models import Profile
 from jung.llm.gateway import ChatMessage, ChatRole
 from jung.phases.intake.completion import (
     IntakeCompleteness,
+    IntakeItem,
     missing_items_from_record,
 )
 from jung.phases.intake.models import IntakeRecord
 from jung.phases.transcript import TranscriptTurn
 
-PROMPT_VERSION = "intake-v2"
+PROMPT_VERSION = "intake-v3"
 
 
 def _record_summary(record: IntakeRecord, completeness: IntakeCompleteness) -> str:
@@ -24,7 +25,7 @@ def _record_summary(record: IntakeRecord, completeness: IntakeCompleteness) -> s
     )
 
 
-def build_direct_ask_instruction(next_item: str | None) -> str:
+def build_direct_ask_instruction(next_item: IntakeItem | None) -> str:
     if next_item is None:
         return (
             "Ask one concise clarification question that helps complete the intake "
@@ -43,19 +44,17 @@ def build_patch_extraction_messages(
     record: IntakeRecord,
     latest_user_message: TranscriptTurn,
     previous_assistant_message: str | None,
+    prompted_item: IntakeItem | None,
 ) -> list[ChatMessage]:
     context_parts = [
-        "Extract a structured intake patch grounded only in the latest patient message.",
+        "Extract grounded intake evidence candidates from the latest patient message.",
         "Do not infer unsupported facts.",
-        "Evidence must reference patient-authored text with source_role=user.",
-        f"Use source_message_sequence={latest_user_message.sequence}.",
-        "Omit whole sections (presenting_problem, safety, coping, goals) that the "
-        "latest turn does not support. Prefer no_new_information=true when the "
-        "turn adds no grounded evidence.",
-        "Never invent unknown/unable evidence for unasked topics. If "
-        "response_status is unknown or unable_to_answer, direct_ask must be true "
-        "(the patient was asked and could not answer). Otherwise leave "
-        "unaddressed evidence at defaults or omit the section.",
+        "Return only semantic evidence: field, value, evidence_quote, confidence, "
+        "and response_status.",
+        "Use response_status unknown or unable_to_answer only when the patient "
+        f"could not answer the prompted item ({prompted_item or 'none'}).",
+        "Prefer an empty evidence list when the turn adds no grounded evidence.",
+        f"Prompted item: {prompted_item or 'none'}",
         f"Current record summary:\n{_record_summary(record, missing_items_from_record(record))}",
         f"Latest patient message:\n{latest_user_message.content}",
     ]
@@ -69,8 +68,7 @@ def build_patch_extraction_messages(
             content=(
                 "You extract patient-grounded intake evidence as JSON. "
                 "Return only fields supported by the latest patient turn. "
-                "unknown/unable response_status requires direct_ask=true; "
-                "do not mark unasked fields as unknown."
+                "Do not invent provenance, source identifiers, or direct-ask flags."
             ),
         ),
         ChatMessage(role=ChatRole.USER, content="\n\n".join(context_parts)),
@@ -105,7 +103,8 @@ def build_response_messages(
                 content=(
                     "You are a compassionate intake therapist. "
                     f"Respond in {profile.primary_language}. "
-                    "Generate a brief welcoming intake opening and ask one main question."
+                    "Generate a brief welcoming intake opening and ask one main "
+                    "question about the patient's presenting problem."
                 ),
             ),
             ChatMessage(

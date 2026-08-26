@@ -21,11 +21,11 @@ from jung.domain.results import ChatCompleted
 from jung.llm.gateway import AdapterConfig, LLMTask
 from jung.llm.openai_compatible import OpenAICompatibleLLM
 from jung.phases.assessment.models import AssessmentResult
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from tests.integration.application.application_fixtures import (
     assessment_result,
     collect_stream,
-    completing_intake_patch,
+    completing_intake_extraction,
     post_session_expectations,
     wait_for_stage,
 )
@@ -202,7 +202,6 @@ async def test_lifecycle_routes_tasks_to_role_gateways(
     tmp_path: Path,
 ) -> None:
     turn_messages = ("first turn", "second turn", "third turn")
-    final_message_sequence = 5
     session_expectations: list[StructuredExpectation | StreamExpectation] = []
     for index, content in enumerate(turn_messages, start=1):
         if index < len(turn_messages):
@@ -210,8 +209,8 @@ async def test_lifecycle_routes_tasks_to_role_gateways(
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=IntakeRecordPatch(),
+                        output_type=IntakeExtraction,
+                        response=IntakeExtraction(),
                     ),
                     StreamExpectation(
                         task=LLMTask.INTAKE_RESPONSE,
@@ -224,9 +223,8 @@ async def test_lifecycle_routes_tasks_to_role_gateways(
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=completing_intake_patch(
-                            message_sequence=final_message_sequence,
+                        output_type=IntakeExtraction,
+                        response=completing_intake_extraction(
                             quote=content,
                         ),
                     ),

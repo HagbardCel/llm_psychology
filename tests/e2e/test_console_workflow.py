@@ -22,7 +22,7 @@ from jung.domain.models import OperationKind, OperationStatus, SessionKind
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from tests.e2e.support import (
     ProbeRecorder,
     ScriptedInputProvider,
@@ -31,7 +31,7 @@ from tests.e2e.support import (
 )
 from tests.integration.application.application_fixtures import (
     assessment_result,
-    completing_intake_patch,
+    completing_intake_extraction,
     post_session_expectations,
 )
 from tests.support.api import application_factory, run_uvicorn_api
@@ -41,7 +41,6 @@ pytestmark = pytest.mark.asyncio
 
 SCENARIO_TIMEOUT = 120.0
 TURN_MESSAGES = ("first turn", "second turn", "third turn")
-FINAL_MESSAGE_SEQUENCE = 5
 STYLE_ID = "cbt"
 
 
@@ -61,8 +60,8 @@ def _intake_expectations() -> list[StructuredExpectation | StreamExpectation]:
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=IntakeRecordPatch(),
+                        output_type=IntakeExtraction,
+                        response=IntakeExtraction(),
                     ),
                     StreamExpectation(
                         task=LLMTask.INTAKE_RESPONSE,
@@ -75,9 +74,8 @@ def _intake_expectations() -> list[StructuredExpectation | StreamExpectation]:
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=completing_intake_patch(
-                            message_sequence=FINAL_MESSAGE_SEQUENCE,
+                        output_type=IntakeExtraction,
+                        response=completing_intake_extraction(
                             quote=content,
                         ),
                     ),

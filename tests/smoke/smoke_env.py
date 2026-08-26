@@ -16,6 +16,7 @@ from tests.support.local_llm import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 _SMOKE_COMPLETION_CAP_KEYS = {
     "assessment": LLMTask.ASSESSMENT,
+    "intake_patch": LLMTask.INTAKE_PATCH,
     "post_session_analysis": LLMTask.POST_SESSION_ANALYSIS,
     "post_session_update": LLMTask.POST_SESSION_UPDATE,
     "therapy_response": LLMTask.THERAPY_RESPONSE,
@@ -73,6 +74,7 @@ def smoke_path_budget_seconds(name: str, *, default: float = 300.0) -> float:
         "therapy": "LOCAL_LLM_SMOKE_THERAPY_MAX_SECONDS",
         "assessment": "LOCAL_LLM_SMOKE_ASSESSMENT_MAX_SECONDS",
         "post_session": "LOCAL_LLM_SMOKE_POST_SESSION_MAX_SECONDS",
+        "intake": "LOCAL_LLM_SMOKE_INTAKE_MAX_SECONDS",
     }[name]
     return parse_positive_finite_float_env(env_name, default=default)
 

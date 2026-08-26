@@ -15,7 +15,7 @@ from jung.domain.results import ChatCompleted, ChatFailed, ChatStreamResult, Cha
 from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from tests.support.fake_llm import (
     FailureExpectation,
     FakeLLM,
@@ -25,7 +25,7 @@ from tests.support.fake_llm import (
 
 from .application_fixtures import (
     build_test_application,
-    completing_intake_patch,
+    completing_intake_extraction,
     intake_message_expectations,
 )
 
@@ -172,8 +172,8 @@ async def test_unanswered_user_retry_same_id_and_content(store: SQLiteStore) -> 
         [
             StructuredExpectation(
                 task=LLMTask.INTAKE_PATCH,
-                output_type=IntakeRecordPatch,
-                response=IntakeRecordPatch(),
+                output_type=IntakeExtraction,
+                response=IntakeExtraction(),
             ),
             FailureExpectation(
                 task=LLMTask.INTAKE_RESPONSE,
@@ -351,7 +351,6 @@ async def test_final_intake_advances_to_assessment(store: SQLiteStore) -> None:
         "Work stress and poor sleep are constant.",
         "I want help rebuilding a sleep routine.",
     )
-    final_message_sequence = 5
     expectations: list[object] = []
     for index, content in enumerate(turn_messages, start=1):
         if index < len(turn_messages):
@@ -361,9 +360,8 @@ async def test_final_intake_advances_to_assessment(store: SQLiteStore) -> None:
                 [
                     StructuredExpectation(
                         task=LLMTask.INTAKE_PATCH,
-                        output_type=IntakeRecordPatch,
-                        response=completing_intake_patch(
-                            message_sequence=final_message_sequence,
+                        output_type=IntakeExtraction,
+                        response=completing_intake_extraction(
                             quote=content,
                         ),
                     ),

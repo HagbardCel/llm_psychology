@@ -17,7 +17,7 @@ from jung.llm.structured import (
     validate_structured_text,
 )
 from jung.phases.assessment.models import AssessmentResult
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from jung.phases.post_session.models import (
     PostSessionUpdateResult,
 )
@@ -63,7 +63,7 @@ def test_response_format_uses_strict_provider_schema() -> None:
 @pytest.mark.parametrize(
     "output_type",
     [
-        IntakeRecordPatch,
+        IntakeExtraction,
         AssessmentResult,
         SessionAnalysis,
         PostSessionUpdateResult,

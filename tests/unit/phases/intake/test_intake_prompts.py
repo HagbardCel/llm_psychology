@@ -16,8 +16,8 @@ from jung.phases.intake.prompts import (
 from jung.phases.transcript import TranscriptTurn
 
 
-def test_patch_extraction_requires_direct_ask_for_unknown_status() -> None:
-    assert PROMPT_VERSION == "intake-v2"
+def test_patch_extraction_uses_negative_ownership_boundary() -> None:
+    assert PROMPT_VERSION == "intake-v3"
     user_turn = TranscriptTurn(
         message_id=uuid4(),
         sequence=1,
@@ -28,13 +28,19 @@ def test_patch_extraction_requires_direct_ask_for_unknown_status() -> None:
         record=IntakeRecord(),
         latest_user_message=user_turn,
         previous_assistant_message=None,
+        prompted_item="presenting_problem",
     )
     joined = "\n".join(message.content for message in messages)
-    assert "direct_ask=true" in joined
-    assert "do not mark unasked fields as unknown" in joined
+    assert "Prompted item: presenting_problem" in joined
+    assert "source_role=" not in joined
+    assert "source_message_sequence=" not in joined
+    assert "direct_ask=" not in joined
+    assert (
+        "Do not invent provenance, source identifiers, or direct-ask flags." in joined
+    )
 
 
-def test_opening_uses_multilingual_system_and_user_roles() -> None:
+def test_opening_targets_presenting_problem() -> None:
     profile = Profile(name="Alex", primary_language="Deutsch")
     messages = build_response_messages(
         profile=profile,
@@ -46,6 +52,7 @@ def test_opening_uses_multilingual_system_and_user_roles() -> None:
     )
     assert messages[0].role is ChatRole.SYSTEM
     assert "Deutsch" in messages[0].content
+    assert "presenting problem" in messages[0].content
     assert messages[1].role is ChatRole.USER
     assert "Alex" in messages[1].content
 

@@ -14,7 +14,7 @@ from jung.composition import application_context
 from jung.domain.models import Stage
 from jung.llm.gateway import AdapterConfig, LLMRole, LLMTask
 from jung.llm.structured import UnsupportedStrictSchema
-from jung.phases.intake.models import IntakeRecordPatch
+from jung.phases.intake.extraction import IntakeExtraction
 from tests.support.fake_llm import FakeLLM
 from tests.support.settings import make_test_settings
 
@@ -77,7 +77,7 @@ async def test_application_context_rejects_unsupported_schema(
         }
 
     monkeypatch.setattr(
-        IntakeRecordPatch,
+        IntakeExtraction,
         "model_json_schema",
         unsupported_schema,
     )

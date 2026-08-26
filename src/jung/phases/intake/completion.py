@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from jung.phases.intake.models import IntakeEvidence, IntakeRecord
@@ -9,32 +11,42 @@ from jung.phases.intake.models import IntakeEvidence, IntakeRecord
 MIN_INTAKE_PATIENT_TURNS = 3
 MAX_INTAKE_PATIENT_TURNS = 12
 
-HARD_ITEM_ORDER = [
+IntakeItem = Literal[
+    "risk_screen",
+    "presenting_problem",
+    "duration",
+    "functional_impairment",
+    "goal_preference",
+    "coping_attempts",
+    "sleep_impact",
+]
+
+HARD_ITEM_ORDER: list[IntakeItem] = [
     "risk_screen",
     "presenting_problem",
     "duration",
     "functional_impairment",
     "goal_preference",
 ]
-SOFT_ITEM_ORDER = ["coping_attempts", "sleep_impact"]
-ITEM_ORDER = HARD_ITEM_ORDER + SOFT_ITEM_ORDER
+SOFT_ITEM_ORDER: list[IntakeItem] = ["coping_attempts", "sleep_impact"]
+ITEM_ORDER: list[IntakeItem] = HARD_ITEM_ORDER + SOFT_ITEM_ORDER
 
 
 class IntakeCompleteness(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     complete: bool
-    missing_required_items: tuple[str, ...] = ()
-    missing_hard_items: tuple[str, ...] = ()
-    missing_soft_items: tuple[str, ...] = ()
-    directly_asked_items: tuple[str, ...] = ()
-    unable_to_answer_items: tuple[str, ...] = ()
-    addressed_hard_items: tuple[str, ...] = ()
-    next_required_item: str | None = None
+    missing_required_items: tuple[IntakeItem, ...] = ()
+    missing_hard_items: tuple[IntakeItem, ...] = ()
+    missing_soft_items: tuple[IntakeItem, ...] = ()
+    directly_asked_items: tuple[IntakeItem, ...] = ()
+    unable_to_answer_items: tuple[IntakeItem, ...] = ()
+    addressed_hard_items: tuple[IntakeItem, ...] = ()
+    next_required_item: IntakeItem | None = None
     max_turn_completion: bool = False
 
 
-def _item_evidence(record: IntakeRecord, item: str) -> list[IntakeEvidence]:
+def _item_evidence(record: IntakeRecord, item: IntakeItem) -> list[IntakeEvidence]:
     if item == "risk_screen":
         return [
             record.safety.self_harm,
@@ -65,7 +77,7 @@ def _item_evidence(record: IntakeRecord, item: str) -> list[IntakeEvidence]:
     return []
 
 
-def _has_informative(record: IntakeRecord, item: str) -> bool:
+def _has_informative(record: IntakeRecord, item: IntakeItem) -> bool:
     if item == "risk_screen":
         return record.safety.is_complete()
     if item == "duration":
@@ -77,7 +89,7 @@ def _has_informative(record: IntakeRecord, item: str) -> bool:
     return any(evidence.is_present() for evidence in _item_evidence(record, item))
 
 
-def _has_addressed(record: IntakeRecord, item: str) -> bool:
+def _has_addressed(record: IntakeRecord, item: IntakeItem) -> bool:
     if item == "risk_screen":
         return record.safety.is_addressed()
     if item == "duration":
@@ -89,17 +101,17 @@ def _has_addressed(record: IntakeRecord, item: str) -> bool:
     return any(evidence.is_addressed() for evidence in _item_evidence(record, item))
 
 
-def _was_directly_asked(record: IntakeRecord, item: str) -> bool:
+def _was_directly_asked(record: IntakeRecord, item: IntakeItem) -> bool:
     return any(evidence.direct_ask for evidence in _item_evidence(record, item))
 
 
-def _has_unable_or_unknown(record: IntakeRecord, item: str) -> bool:
+def _has_unable_or_unknown(record: IntakeRecord, item: IntakeItem) -> bool:
     return any(
         evidence.is_unable_or_unknown() for evidence in _item_evidence(record, item)
     )
 
 
-def _still_needs_direct_ask(record: IntakeRecord, item: str) -> bool:
+def _still_needs_direct_ask(record: IntakeRecord, item: IntakeItem) -> bool:
     if _has_informative(record, item):
         return False
     if _was_directly_asked(record, item) and _has_addressed(record, item):

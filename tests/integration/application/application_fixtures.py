@@ -28,14 +28,10 @@ from jung.llm.policies import TaskOverride, build_model_policies
 from jung.persistence.sqlite_store import SQLiteStore
 from jung.phases.assessment.models import AssessmentResult
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.intake.models import (
-    CopingRecord,
-    GoalsRecord,
-    IntakeEvidence,
-    IntakeRecordPatch,
-    PresentingProblemRecord,
-    SafetyRecord,
-    TimeCourseRecord,
+from jung.phases.intake.extraction import (
+    ExtractedIntakeEvidence,
+    IntakeEvidenceField,
+    IntakeExtraction,
 )
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import (
@@ -97,8 +93,8 @@ def intake_message_expectations(
     return [
         StructuredExpectation(
             task=LLMTask.INTAKE_PATCH,
-            output_type=IntakeRecordPatch,
-            response=IntakeRecordPatch(),
+            output_type=IntakeExtraction,
+            response=IntakeExtraction(),
         ),
         StreamExpectation(
             task=LLMTask.INTAKE_RESPONSE,
@@ -107,51 +103,41 @@ def intake_message_expectations(
     ]
 
 
-def _intake_evidence(
-    value: str,
-    *,
-    quote: str,
-    sequence: int,
-) -> IntakeEvidence:
-    return IntakeEvidence(
-        value=value,
-        evidence_quote=quote,
-        source_message_sequence=sequence,
-        source_role="user",
-        confidence="high",
-    )
+def completing_intake_extraction(*, quote: str) -> IntakeExtraction:
+    """Extraction candidates satisfying intake completion for the final patient turn."""
 
+    def candidate(
+        field: IntakeEvidenceField,
+        value: str,
+    ) -> ExtractedIntakeEvidence:
+        return ExtractedIntakeEvidence(
+            field=field,
+            value=value,
+            evidence_quote=quote,
+            confidence="high",
+        )
 
-def completing_intake_patch(
-    *,
-    message_sequence: int,
-    quote: str,
-) -> IntakeRecordPatch:
-    """Patch satisfying intake completion rules for the final patient turn."""
-
-    def evidence(value: str) -> IntakeEvidence:
-        return _intake_evidence(value, quote=quote, sequence=message_sequence)
-
-    return IntakeRecordPatch(
-        presenting_problem=PresentingProblemRecord(
-            main_concern=evidence("anxiety"),
-            time_course=TimeCourseRecord(
-                duration_or_onset=evidence("3 months"),
+    return IntakeExtraction(
+        evidence=(
+            candidate(IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN, "anxiety"),
+            candidate(
+                IntakeEvidenceField.PRESENTING_PROBLEM_DURATION_OR_ONSET, "3 months"
             ),
-            functional_impairment=evidence("work stress"),
-            sleep_impact=evidence("poor sleep"),
-        ),
-        safety=SafetyRecord(
-            self_harm=evidence("none"),
-            harm_to_others=evidence("none"),
-            medical_urgency=evidence("none"),
-        ),
-        coping=CopingRecord(
-            attempted_strategies=(evidence("breathing exercises"),),
-        ),
-        goals=GoalsRecord(
-            preferred_start=evidence("sleep routine"),
-        ),
+            candidate(
+                IntakeEvidenceField.PRESENTING_PROBLEM_FUNCTIONAL_IMPAIRMENT,
+                "work stress",
+            ),
+            candidate(
+                IntakeEvidenceField.PRESENTING_PROBLEM_SLEEP_IMPACT, "poor sleep"
+            ),
+            candidate(IntakeEvidenceField.SAFETY_SELF_HARM, "none"),
+            candidate(IntakeEvidenceField.SAFETY_HARM_TO_OTHERS, "none"),
+            candidate(IntakeEvidenceField.SAFETY_MEDICAL_URGENCY, "none"),
+            candidate(
+                IntakeEvidenceField.COPING_ATTEMPTED_STRATEGIES, "breathing exercises"
+            ),
+            candidate(IntakeEvidenceField.GOALS_PREFERRED_START, "sleep routine"),
+        )
     )
 
 
@@ -340,7 +326,7 @@ __all__ = [
     "assessment_result",
     "build_test_application",
     "collect_stream",
-    "completing_intake_patch",
+    "completing_intake_extraction",
     "intake_message_expectations",
     "plan_content",
     "post_session_expectations",
