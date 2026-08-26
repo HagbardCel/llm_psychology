@@ -27,7 +27,7 @@ evals/
 
 | Surface | Purpose | Gate |
 | --- | --- | --- |
-| `make smoke-local-llm` | provider compatibility at processor level | manual |
+| `make smoke-local-llm` | provider compatibility at processor level (includes `intake_patch`) | manual |
 | `make evals` | contractual model invariants | pass/fail |
 | `make eval-report` | fixed difficult scenarios | human review |
 | `make simulate-local-llm` | whole-product longitudinal behavior over real HTTP | mechanical gate + human review |

@@ -116,11 +116,17 @@ class SmokeEvidenceCollector:
     therapy: SmokePathResult | None = None
     assessment: SmokePathResult | None = None
     post_session: SmokePathResult | None = None
+    intake: SmokePathResult | None = None
 
     def to_payload(self) -> dict[str, Any]:
         path_results = [
             result
-            for result in (self.therapy, self.assessment, self.post_session)
+            for result in (
+                self.therapy,
+                self.assessment,
+                self.post_session,
+                self.intake,
+            )
             if result is not None
         ]
         payload: dict[str, Any] = {
@@ -140,7 +146,7 @@ class SmokeEvidenceCollector:
         }
         if self.base_url is not None:
             payload["base_url"] = self.base_url
-        for key in ("therapy", "assessment", "post_session"):
+        for key in ("therapy", "assessment", "post_session", "intake"):
             result = getattr(self, key)
             if result is None:
                 continue
@@ -186,6 +192,7 @@ class SmokeEvidenceCollector:
                 self.therapy,
                 self.assessment,
                 self.post_session,
+                self.intake,
             )
         )
 

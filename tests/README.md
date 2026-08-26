@@ -105,7 +105,7 @@ commands run in `make test` or `make check`.
 
 | Surface | Question | Failure means |
 | --- | --- | --- |
-| `make smoke-local-llm` (`tests/smoke/`) | Can this server and model run our paths at all — streaming works, structured output parses, latency is within budget? | The model or server is incompatible with the runtime |
+| `make smoke-local-llm` (`tests/smoke/`) | Can this server and model run our paths at all — streaming works, structured output parses (`therapy_response`, `intake_patch`, `assessment`, post-session), latency is within budget? | The model or server is incompatible with the runtime |
 | `make evals` (`evals/test_hard_invariants.py`) | Does the model honor contractual trust-boundary behavior — canaries, objective injection resistance (therapy / analysis / update / assessment), citation integrity, negation selection? | The model is unsuitable, or a prompt/validation regression let something through |
 | `make eval-report` (`evals/behavioral_report.py`) | What does the model say across the diagnostic matrix (safety × style, matched-input style differentiation, assessment quality, patient-facing language, longitudinal supervisor, historical attribution)? | Nothing — the report exits non-zero only if it could not be produced |
 | `make simulate-local-llm` (`evals/simulation/`) | Does the whole HTTP product preserve longitudinal state across multi-session journeys with a synthetic patient (optional `--style`, `--patient-extra-body-json`)? | Mechanical audit failed, or the run could not complete |
