@@ -892,7 +892,7 @@ def test_render_audit_markdown_includes_not_applicable_and_dirty_warning() -> No
             "event_type": "message_failed",
         },
     )
-    assert "Diagnostic capture: COMPLETE" in text
+    assert "diagnostic_capture: COMPLETE" in text
     assert "WARNING: source worktree was dirty" in text
     assert "Style selection: mode=explicit, requested='jung', selected=None" in text
     assert "## Not applicable" in text
@@ -2241,3 +2241,188 @@ def test_artifact_relative_paths_includes_pending_audit_and_run(
     assert "run.json" in paths
     assert "journey.jsonl" in paths
     assert "transcript.md" not in paths
+
+
+def test_immutable_manifest_hashes_trace_and_excludes_mutable_artifacts(
+    tmp_path: Path,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-manifest")
+    runtime = run_dir / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    trace_path = runtime / "trace.jsonl"
+    trace_bytes = b'{"sequence":1,"kind":"llm.call.started","context":{},"data":{}}\n'
+    trace_path.write_bytes(trace_bytes)
+    snapshot = runtime / "db_snapshot.sqlite"
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    write_private_text(run_dir / "transcript.md", "Patient-visible dialogue")
+    manifest_text = "\n".join(audit_mod._immutable_manifest_lines(run_dir))
+    assert "`runtime/trace.jsonl`" in manifest_text
+    assert "`transcript.md`" in manifest_text
+    assert "run.json" not in manifest_text.split("|")[0]
+    assert "journey.jsonl" not in manifest_text.split("SHA-256")[0]
+    expected_size, expected_digest = audit_mod._sha256_file(trace_path)
+    assert f"| {expected_size} | `{expected_digest}` |" in manifest_text
+    trace_path.write_bytes(trace_bytes + b"\n")
+    _, changed_digest = audit_mod._sha256_file(trace_path)
+    assert changed_digest != expected_digest
+
+
+def test_section_f_reviewer_checklist_template_is_immutable() -> None:
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"scenario_id": "anxiety_sleep"},
+        artifact_index=[],
+    )
+    assert audit_mod._REVIEWER_CHECKLIST_SECTION.strip() in rendered
+    assert "REVIEW_REQUIRED — record answers in PR summary only" in rendered
+
+
+def test_render_audit_excludes_privacy_sentinels_but_allows_patient_visible(
+    tmp_path: Path,
+) -> None:
+    auth_sentinel = "PRIVACY_SENTINEL_AUTH_TOKEN_XYZ"
+    system_sentinel = "PRIVACY_SENTINEL_SYSTEM_PROMPT_ABC"
+    reasoning_sentinel = "PRIVACY_SENTINEL_REASONING_DEF"
+    raw_sentinel = "PRIVACY_SENTINEL_RAW_PROVIDER_GHI"
+    patient_text = "I feel anxious in seminars lately."
+    run_dir = allocate_run_directory(tmp_path / "run-privacy")
+    session_id = str(uuid4())
+    client_message_id = str(uuid4())
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 1, 'user', ?, ?, '2020-01-01T00:00:01Z')
+            """,
+            (str(uuid4()), session_id, patient_text, client_message_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "llm.provider.request",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_message_id,
+            },
+            "data": {
+                "task": "intake_patch",
+                "authorization": auth_sentinel,
+                "messages": [
+                    {"role": "system", "content": system_sentinel},
+                    {"role": "user", "content": patient_text},
+                ],
+                "reasoning": reasoning_sentinel,
+                "raw_provider_payload": raw_sentinel,
+            },
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "session_id": session_id,
+                "client_message_id": client_message_id,
+            },
+            "data": {
+                "extraction_target": "presenting_problem",
+                "raw_evidence_count": 0,
+                "retained_evidence_count": 0,
+                "record_changed": False,
+                "merge_status": "empty_patch",
+            },
+        },
+    ]
+    _write_trace(run_dir, trace)
+    rendered = render_audit_markdown(
+        status="failed",
+        runtime_diagnostics_status="success",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"scenario_id": "anxiety_sleep"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    for sentinel in (
+        auth_sentinel,
+        system_sentinel,
+        reasoning_sentinel,
+        raw_sentinel,
+    ):
+        assert sentinel not in rendered
+    assert patient_text in rendered
+
+
+def test_fallback_audit_on_runtime_complete_never_emits_simulation_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-fallback-complete")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    monkeypatch.setattr(
+        "evals.simulation.runner.run_mechanical_audit",
+        lambda **_kwargs: AuditResult(),
+    )
+
+    def _render_failure(**_kwargs: Any) -> str:
+        raise RuntimeError("simulated render failure")
+
+    monkeypatch.setattr(
+        "evals.simulation.runner.render_audit_markdown",
+        _render_failure,
+    )
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code=None,
+        error_message=None,
+        api_error=None,
+        patient_extra_body_provenance=None,
+    )
+    assert result.status == "failed"
+    journey_text = (run_dir / "journey.jsonl").read_text(encoding="utf-8")
+    assert "simulation.completed" not in journey_text
+    terminal = [json.loads(line) for line in journey_text.splitlines() if line.strip()][
+        -1
+    ]
+    assert terminal["kind"] == "simulation.failed"
+    assert terminal["data"]["audit_status"] == "FALLBACK"
+    fallback = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "audit_status: FALLBACK" in fallback

@@ -23,6 +23,7 @@ from evals.simulation.audit import (
     git_provenance,
     load_jsonl,
     render_audit_markdown,
+    render_fallback_audit_markdown,
     render_transcript_from_snapshot,
     roll_up_patient_metrics,
     run_mechanical_audit,
@@ -637,6 +638,12 @@ def _finalize_run(
         error_code = "journey_error"
         error_message = str(journey_error)
 
+    primary_runtime_failure = error_code
+    primary_runtime_message = error_message
+    runtime_mechanical_status = (
+        "RUNTIME_FAILED" if journey_error is not None else "RUNTIME_COMPLETE"
+    )
+
     patient_metrics: dict[str, Any] | None = None
     try:
         journey_records = load_jsonl(run_dir / "journey.jsonl")
@@ -661,6 +668,31 @@ def _finalize_run(
         "failed" if journey_error is not None or not audit.ok else "complete"
     )
 
+    trace_events: list[dict[str, Any]] = []
+    try:
+        trace_events = load_jsonl(run_dir / "runtime" / "trace.jsonl")
+    except Exception:
+        trace_events = []
+
+    journey_records = load_jsonl(run_dir / "journey.jsonl")
+    journey_kinds = {record.get("kind") for record in journey_records}
+    workflow_reachability = {
+        "assessment": "reached" if progress.initial_ready_reached else "N/A",
+        "style_selection": "reached"
+        if "style.selected" in journey_kinds
+        else ("N/A" if not progress.initial_ready_reached else "not_observed"),
+        "therapy": "reached" if therapy_records else "N/A",
+        "post_session": "reached"
+        if any(record.post_session_entered for record in therapy_records)
+        else "N/A",
+    }
+    intake_session_ended_in_intake = (
+        journey_error is not None
+        and primary_runtime_failure == "intake_turn_limit_exceeded"
+    )
+
+    audit_render_status = "FULL"
+    audit_failure: str | None = None
     try:
         write_private_text(
             run_dir / "audit.md",
@@ -672,27 +704,66 @@ def _finalize_run(
                 not_applicable=audit.not_applicable,
                 run_config=run_config,
                 artifact_index=artifact_relative_paths(run_dir),
-                journey_error_code=error_code,
-                journey_error_message=error_message,
+                journey_error_code=primary_runtime_failure,
+                journey_error_message=primary_runtime_message,
                 journey_api_error=api_error,
+                run_id=run_dir.name,
+                runtime_status=runtime_mechanical_status,
+                audit_status=audit_render_status,
+                primary_runtime_failure=primary_runtime_failure,
+                trace=trace_events,
+                run_dir=run_dir,
+                intake_session_ended_in_intake=intake_session_ended_in_intake,
+                workflow_reachability=workflow_reachability,
             ),
         )
     except Exception as exc:
-        final_status = "failed"
+        audit_render_status = "FALLBACK"
+        audit_failure = "audit_write_failed"
         detail = f"{type(exc).__name__}: {exc}"
         audit.fail("audit_write_failed", detail)
+        final_status = "failed"
         if error_code is None:
             error_code = "audit_write_failed"
             error_message = detail
+        try:
+            write_private_text(
+                run_dir / "audit.md",
+                render_fallback_audit_markdown(
+                    run_id=run_dir.name,
+                    primary_runtime_failure=primary_runtime_failure,
+                    audit_exception_type=type(exc).__name__,
+                    artifact_paths=sorted(
+                        str(path.relative_to(run_dir))
+                        for path in run_dir.rglob("*")
+                        if path.is_file() and path.name != "audit.md"
+                    ),
+                ),
+            )
+        except Exception:
+            pass
 
-    terminal_kind = (
-        "simulation.completed" if final_status == "complete" else "simulation.failed"
-    )
+    if audit_failure is not None:
+        terminal_kind = "simulation.failed"
+        terminal_error_code = primary_runtime_failure or error_code or audit_failure
+        terminal_error_message = primary_runtime_message or error_message
+    elif runtime_mechanical_status == "RUNTIME_COMPLETE" and audit.ok:
+        terminal_kind = "simulation.completed"
+        terminal_error_code = None
+        terminal_error_message = None
+    else:
+        terminal_kind = "simulation.failed"
+        terminal_error_code = primary_runtime_failure or error_code
+        terminal_error_message = primary_runtime_message or error_message
+
     terminal_data: dict[str, Any] = {
-        "status": final_status,
-        "error_code": error_code,
-        "error_message": error_message,
+        "status": "complete" if terminal_kind == "simulation.completed" else "failed",
+        "error_code": terminal_error_code,
+        "error_message": terminal_error_message,
         "finding_codes": [item.code for item in audit.findings],
+        "runtime_status": runtime_mechanical_status,
+        "audit_status": audit_render_status,
+        "primary_runtime_failure": primary_runtime_failure,
     }
     if api_error is not None:
         terminal_data["api_error"] = api_error
