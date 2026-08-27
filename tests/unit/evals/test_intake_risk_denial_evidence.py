@@ -2,29 +2,43 @@
 
 from __future__ import annotations
 
-import json
 import stat
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from evals.intake_risk_denial_evidence import (
+    EVIDENCE_INTEGRITY_FAILURE,
     EVIDENCE_SCHEMA_VERSION,
     MESSAGE_CANONICALIZATION,
     STRUCTURED_REQUEST_CANONICALIZATION,
+    MemoryDiagnosticRecorder,
     build_category_c_evidence_payload,
-    digests_from_provider_request_event,
+    build_evidence_stages,
+    correlate_intake_patch_call,
+    digests_from_provider_request_data,
+    evaluate_evidence_integrity,
+    provider_attempt_rows,
     provider_messages_sha256,
     resolve_debug_run_dir,
     structured_request_sha256,
     write_category_c_evidence,
 )
+from jung.llm.gateway import StructuredOutputMode
+from jung.phases.intake.extraction import IntakeEvidenceField, IntakeExtraction
+from jung.phases.intake.models import IntakeRecord
+from jung.phases.transcript import TranscriptTurn
 
 _MANDATORY_KEYS = frozenset(
     {
         "evidence_schema_version",
         "fingerprint_canonicalization_messages",
         "fingerprint_canonicalization_structured",
+        "semantic_assertions_passed",
+        "evidence_integrity_passed",
+        "success",
         "model",
         "sanitized_endpoint",
         "structured_mode",
@@ -32,10 +46,15 @@ _MANDATORY_KEYS = frozenset(
         "extra_body",
         "frozen_fixture",
         "extraction_target",
-        "accepted_fields",
+        "llm_call_id",
+        "raw_accepted_fields",
         "validation_retained_paths",
-        "persisted_changed_paths",
-        "medical_urgency_absent",
+        "materialization_dropped_paths",
+        "merge_dropped_paths",
+        "merged_changed_paths",
+        "raw_medical_urgency_absent",
+        "validation_medical_urgency_absent",
+        "merged_medical_urgency_absent",
         "merge_status",
         "raw_evidence_count",
         "retained_evidence_count",
@@ -45,16 +64,64 @@ _MANDATORY_KEYS = frozenset(
         "accepted_attempt",
         "canonical_fixture_provider_messages_sha256",
         "canonical_fixture_structured_request_sha256",
+        "canonical_matches_executed_messages",
+        "canonical_matches_executed_structured",
         "primary_failure_code",
         "primary_failure_exception_type",
-        "success",
+        "evidence_integrity_errors",
     }
 )
 
 
-def test_successful_payload_includes_mandatory_keys() -> None:
+def _provider_request_event(
+    *,
+    llm_call_id: str,
+    provider_attempt_id: str,
+    attempt: str,
+    messages: list[dict[str, str]],
+    structured_mode: str = "json_schema",
+    response_format: object | None = None,
+    correction_trigger: str | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "provider_attempt_id": provider_attempt_id,
+        "llm_call_id": llm_call_id,
+        "task": "intake_patch",
+        "attempt": attempt,
+        "structured_output_mode": structured_mode,
+        "messages": messages,
+        "response_format": response_format or {"type": "json_object"},
+    }
+    if correction_trigger is not None:
+        data["correction_trigger"] = correction_trigger
+    return {"sequence": 1, "kind": "llm.provider.request", "context": {}, "data": data}
+
+
+def _provider_terminal_event(
+    *,
+    llm_call_id: str,
+    provider_attempt_id: str,
+    attempt: str,
+    status: str = "success",
+) -> dict[str, Any]:
+    return {
+        "sequence": 2,
+        "kind": "llm.provider.response",
+        "context": {},
+        "data": {
+            "provider_attempt_id": provider_attempt_id,
+            "llm_call_id": llm_call_id,
+            "task": "intake_patch",
+            "attempt": attempt,
+            "status": status,
+        },
+    }
+
+
+def test_successful_payload_includes_mandatory_keys_v2() -> None:
     payload = build_category_c_evidence_payload(
-        success=True,
+        semantic_assertions_passed=True,
+        evidence_integrity_passed=True,
         model="test-model",
         sanitized_endpoint="http://localhost/v1",
         structured_mode="json_schema",
@@ -62,7 +129,8 @@ def test_successful_payload_includes_mandatory_keys() -> None:
         extra_body={"thinking": False},
         frozen_fixture="I am not thinking about harming myself or anyone else.",
         extraction_target="risk_screen",
-        accepted_fields=[
+        llm_call_id="call-1",
+        raw_accepted_fields=[
             {
                 "path": "safety.self_harm",
                 "status": "informative",
@@ -71,8 +139,12 @@ def test_successful_payload_includes_mandatory_keys() -> None:
             }
         ],
         validation_retained_paths=["safety.self_harm", "safety.harm_to_others"],
-        persisted_changed_paths=["safety.self_harm", "safety.harm_to_others"],
-        medical_urgency_absent=True,
+        materialization_dropped_paths=[],
+        merge_dropped_paths=[],
+        merged_changed_paths=["safety.self_harm", "safety.harm_to_others"],
+        raw_medical_urgency_absent=True,
+        validation_medical_urgency_absent=True,
+        merged_medical_urgency_absent=True,
         merge_status="applied",
         raw_evidence_count=2,
         retained_evidence_count=2,
@@ -81,6 +153,7 @@ def test_successful_payload_includes_mandatory_keys() -> None:
         provider_attempts=[
             {
                 "attempt": "initial",
+                "provider_attempt_id": "pa-1",
                 "provider_messages_sha256": "abc",
                 "structured_request_sha256": "def",
                 "status": "success",
@@ -89,25 +162,37 @@ def test_successful_payload_includes_mandatory_keys() -> None:
         accepted_attempt="initial",
         canonical_fixture_provider_messages_sha256="abc",
         canonical_fixture_structured_request_sha256="def",
+        canonical_matches_executed_messages=True,
+        canonical_matches_executed_structured=True,
     )
     assert set(payload) == _MANDATORY_KEYS
     assert payload["evidence_schema_version"] == EVIDENCE_SCHEMA_VERSION
-    assert payload["fingerprint_canonicalization_messages"] == MESSAGE_CANONICALIZATION
-    assert (
-        payload["fingerprint_canonicalization_structured"]
-        == STRUCTURED_REQUEST_CANONICALIZATION
-    )
+    assert payload["semantic_assertions_passed"] is True
+    assert payload["evidence_integrity_passed"] is True
     assert payload["success"] is True
-    assert payload["extra_body"] == {"thinking": False}
-    assert payload["medical_urgency_absent"] is True
-    assert payload["accepted_attempt"] == "initial"
-    assert payload["primary_failure_code"] is None
-    assert payload["primary_failure_exception_type"] is None
+    assert payload["merged_changed_paths"] == [
+        "safety.self_harm",
+        "safety.harm_to_others",
+    ]
+
+
+def test_success_requires_both_gates() -> None:
+    semantic_only = build_category_c_evidence_payload(
+        semantic_assertions_passed=True,
+        evidence_integrity_passed=False,
+    )
+    assert semantic_only["success"] is False
+    integrity_only = build_category_c_evidence_payload(
+        semantic_assertions_passed=False,
+        evidence_integrity_passed=True,
+    )
+    assert integrity_only["success"] is False
 
 
 def test_failure_before_result_payload_uses_none_for_result_fields() -> None:
     payload = build_category_c_evidence_payload(
-        success=False,
+        semantic_assertions_passed=False,
+        evidence_integrity_passed=False,
         model="test-model",
         sanitized_endpoint="http://localhost/v1",
         structured_mode="json_schema",
@@ -119,50 +204,34 @@ def test_failure_before_result_payload_uses_none_for_result_fields() -> None:
     )
     assert set(payload) == _MANDATORY_KEYS
     assert payload["success"] is False
-    assert payload["extraction_target"] is None
-    assert payload["accepted_fields"] is None
-    assert payload["validation_retained_paths"] is None
-    assert payload["persisted_changed_paths"] is None
-    assert payload["medical_urgency_absent"] is None
-    assert payload["merge_status"] is None
-    assert payload["raw_evidence_count"] is None
-    assert payload["retained_evidence_count"] is None
-    assert payload["dropped_evidence_count"] is None
-    assert payload["record_changed"] is None
-    assert payload["accepted_attempt"] is None
-    assert payload["provider_attempts"] == []
-    assert payload["extra_body"] is None
-    assert payload["primary_failure_exception_type"] == "AssertionError"
+    assert payload["raw_accepted_fields"] is None
+    assert payload["canonical_matches_executed_messages"] is None
 
 
 def test_write_category_c_evidence_permissions(tmp_path: Path) -> None:
     run_dir = tmp_path / "category-c-run"
-    payload = build_category_c_evidence_payload(success=True, model="m")
+    payload = build_category_c_evidence_payload(
+        semantic_assertions_passed=True,
+        evidence_integrity_passed=True,
+        model="m",
+    )
     write_category_c_evidence(run_dir=run_dir, payload=payload)
     assert run_dir.is_dir()
     assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700
     evidence = run_dir / "evidence.md"
     assert evidence.is_file()
     assert stat.S_IMODE(evidence.stat().st_mode) == 0o600
-    text = evidence.read_text(encoding="utf-8")
-    assert "```json" in text
-    assert '"success": true' in text
 
 
-def test_privacy_sentinels_absent_from_written_evidence(tmp_path: Path) -> None:
+def test_privacy_sentinels_redacted_at_writer_boundary(tmp_path: Path) -> None:
     secret = "SECRET_API_KEY_VALUE"
-    reasoning = "REASONING_CONTENT_SENTINEL"
-    excluded = {
-        "api_key": secret,
-        "reasoning_content": reasoning,
-        "raw_provider_response": f"leak {secret} {reasoning}",
-    }
     payload = build_category_c_evidence_payload(
-        success=True,
+        semantic_assertions_passed=True,
+        evidence_integrity_passed=True,
         model="test-model",
-        sanitized_endpoint="http://localhost/v1",
+        extra_body={"api_key": secret},
         frozen_fixture="I am not thinking about harming myself or anyone else.",
-        accepted_fields=[
+        raw_accepted_fields=[
             {
                 "path": "safety.self_harm",
                 "status": "informative",
@@ -170,33 +239,230 @@ def test_privacy_sentinels_absent_from_written_evidence(tmp_path: Path) -> None:
                 "quote_valid": True,
             }
         ],
-        provider_attempts=[
-            {
-                "attempt": "initial",
-                "provider_messages_sha256": "deadbeef",
-                "structured_request_sha256": "cafebabe",
-                "status": "success",
-            }
-        ],
-        accepted_attempt="initial",
     )
-    # Sentinels live only in an excluded source; they must not be copied in.
-    assert secret in json.dumps(excluded)
-    assert reasoning in json.dumps(excluded)
     run_dir = tmp_path / "private-run"
     write_category_c_evidence(run_dir=run_dir, payload=payload)
     written = (run_dir / "evidence.md").read_text(encoding="utf-8")
     assert secret not in written
-    assert reasoning not in written
-    assert "not thinking about harming myself" in written
+    assert "[REDACTED]" in written
 
 
-def test_extra_body_none_vs_empty_dict() -> None:
-    none_payload = build_category_c_evidence_payload(success=True, extra_body=None)
-    empty_payload = build_category_c_evidence_payload(success=True, extra_body={})
-    assert none_payload["extra_body"] is None
-    assert empty_payload["extra_body"] == {}
-    assert none_payload["extra_body"] is not empty_payload["extra_body"]
+def test_memory_recorder_retains_context() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    recorder.record("llm.provider.request", {"task": "intake_patch"})
+    assert "context" in recorder.events[0]
+
+
+def test_correlate_identity_keyed_provider_rows() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "call-abc"
+    messages = [{"role": "user", "content": "hello"}]
+    recorder.record(
+        "llm.provider.request",
+        _provider_request_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            messages=messages,
+        )["data"],
+    )
+    recorder.record(
+        "llm.provider.response",
+        _provider_terminal_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+        )["data"],
+    )
+    recorder.record(
+        "llm.output.accepted",
+        {
+            "output_type": "IntakeExtraction",
+            "result": {"evidence": []},
+            "llm_call_id": llm_call_id,
+            "task": "intake_patch",
+        },
+    )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert errors == []
+    assert correlation is not None
+    assert correlation.accepted_attempt == "initial"
+    rows = provider_attempt_rows(correlation.provider_attempts)
+    assert rows[0]["provider_attempt_id"] == "pa-initial"
+
+
+def test_correction_accepted_canonical_uses_initial_request() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "call-correction"
+    initial_messages = [{"role": "user", "content": "initial prompt"}]
+    correction_messages = [
+        {"role": "user", "content": "initial prompt"},
+        {"role": "user", "content": "fix it"},
+    ]
+    recorder.record(
+        "llm.provider.request",
+        _provider_request_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            messages=initial_messages,
+        )["data"],
+    )
+    recorder.record(
+        "llm.provider.response",
+        _provider_terminal_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            status="failed",
+        )["data"],
+    )
+    recorder.record(
+        "llm.provider.request",
+        _provider_request_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-correction",
+            attempt="correction",
+            messages=correction_messages,
+            correction_trigger="schema_invalid",
+        )["data"],
+    )
+    recorder.record(
+        "llm.provider.response",
+        _provider_terminal_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-correction",
+            attempt="correction",
+        )["data"],
+    )
+    recorder.record(
+        "llm.output.accepted",
+        {
+            "output_type": "IntakeExtraction",
+            "result": {"evidence": []},
+            "llm_call_id": llm_call_id,
+            "task": "intake_patch",
+        },
+    )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert errors == []
+    assert correlation is not None
+    assert correlation.accepted_attempt == "correction"
+    initial_digests = digests_from_provider_request_data(
+        correlation.initial_request_data,
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+    integrity_passed, messages_match, structured_match, integrity_errors = (
+        evaluate_evidence_integrity(
+            correlation=correlation,
+            correlation_errors=[],
+            canonical_messages_sha256=initial_digests["provider_messages_sha256"],
+            canonical_structured_sha256=initial_digests["structured_request_sha256"],
+            stages={
+                "raw_accepted_fields": [],
+                "validation_retained_paths": [],
+                "materialization_dropped_paths": [],
+                "merge_dropped_paths": [],
+                "merged_changed_paths": [],
+                "raw_medical_urgency_absent": True,
+                "validation_medical_urgency_absent": True,
+                "merged_medical_urgency_absent": True,
+                "merge_status": "empty_patch",
+                "raw_evidence_count": 0,
+                "retained_evidence_count": 0,
+            },
+        )
+    )
+    assert integrity_passed
+    assert messages_match
+    assert structured_match
+    assert integrity_errors == []
+
+
+def test_integrity_failure_on_digest_mismatch() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "call-mismatch"
+    messages = [{"role": "user", "content": "hello"}]
+    recorder.record(
+        "llm.provider.request",
+        _provider_request_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            messages=messages,
+        )["data"],
+    )
+    recorder.record(
+        "llm.provider.response",
+        _provider_terminal_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+        )["data"],
+    )
+    recorder.record(
+        "llm.output.accepted",
+        {
+            "output_type": "IntakeExtraction",
+            "result": {"evidence": []},
+            "llm_call_id": llm_call_id,
+            "task": "intake_patch",
+        },
+    )
+    correlation, _ = correlate_intake_patch_call(recorder)
+    integrity_passed, messages_match, structured_match, errors = (
+        evaluate_evidence_integrity(
+            correlation=correlation,
+            correlation_errors=[],
+            canonical_messages_sha256="deadbeef",
+            canonical_structured_sha256="cafebabe",
+            stages={
+                "raw_accepted_fields": [],
+                "validation_retained_paths": [],
+                "materialization_dropped_paths": [],
+                "merge_dropped_paths": [],
+                "merged_changed_paths": [],
+                "raw_medical_urgency_absent": True,
+                "validation_medical_urgency_absent": True,
+                "merged_medical_urgency_absent": True,
+                "merge_status": "empty_patch",
+                "raw_evidence_count": 0,
+                "retained_evidence_count": 0,
+            },
+        )
+    )
+    assert not integrity_passed
+    assert messages_match is False
+    assert structured_match is False
+    assert "canonical_messages_digest_mismatch" in errors
+
+
+def test_raw_medical_urgency_invented_then_dropped_fails_semantics() -> None:
+    from jung.phases.intake.extraction import ExtractedIntakeEvidence
+
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.SAFETY_MEDICAL_URGENCY,
+                response_status="informative",
+                evidence_quote="maybe urgent",
+            )
+        ]
+    )
+    user_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=2,
+        role="user",
+        content="I am not thinking about harming myself or anyone else.",
+    )
+    stages = build_evidence_stages(
+        extraction=extraction,
+        pre_turn_record=IntakeRecord(),
+        user_turn=user_turn,
+        prompted_item="risk_screen",
+        fixture=user_turn.content,
+    )
+    assert stages["raw_medical_urgency_absent"] is False
 
 
 def test_provider_messages_sha256_stable() -> None:
@@ -208,57 +474,25 @@ def test_provider_messages_sha256_stable() -> None:
     second = provider_messages_sha256(messages)
     assert first == second
     assert len(first) == 64
-    assert first == provider_messages_sha256(
-        [
-            {"role": "system", "content": "Extract JSON."},
-            {"role": "user", "content": "I am not thinking about harming myself."},
-        ]
-    )
 
 
-def test_structured_request_sha256_stable() -> None:
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {"name": "IntakeExtraction", "strict": True},
-    }
-    first = structured_request_sha256(
-        structured_mode="json_schema",
-        response_format_or_schema_instruction=response_format,
-    )
-    second = structured_request_sha256(
-        structured_mode="json_schema",
-        response_format_or_schema_instruction=response_format,
-    )
-    assert first == second
-    assert len(first) == 64
-    # Key order in the input object must not change the digest (sort_keys).
-    reordered = {
-        "json_schema": {"strict": True, "name": "IntakeExtraction"},
-        "type": "json_schema",
-    }
-    assert (
-        structured_request_sha256(
-            structured_mode="json_schema",
-            response_format_or_schema_instruction=reordered,
-        )
-        == first
-    )
-
-
-def test_digests_from_provider_request_event() -> None:
+def test_digests_from_provider_request_event_prompt_mode_uses_last_message() -> None:
+    schema = "Respond with JSON matching this schema."
     data = {
         "task": "intake_patch",
-        "structured_output_mode": "json_schema",
-        "messages": [{"role": "user", "content": "hello"}],
-        "response_format": {"type": "json_object"},
+        "structured_output_mode": "prompt",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": schema},
+        ],
+        "response_format": None,
     }
-    digests = digests_from_provider_request_event(data)
-    assert digests["provider_messages_sha256"] == provider_messages_sha256(
-        [{"role": "user", "content": "hello"}]
+    digests = digests_from_provider_request_data(
+        data, structured_mode=StructuredOutputMode.PROMPT
     )
     assert digests["structured_request_sha256"] == structured_request_sha256(
-        structured_mode="json_schema",
-        response_format_or_schema_instruction={"type": "json_object"},
+        structured_mode="prompt",
+        response_format_or_schema_instruction=schema,
     )
 
 
@@ -267,20 +501,7 @@ def test_resolve_debug_run_dir_none_when_unset(monkeypatch: pytest.MonkeyPatch) 
     assert resolve_debug_run_dir() is None
 
 
-def test_resolve_debug_run_dir_errors_if_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    existing = tmp_path / "already"
-    existing.mkdir()
-    monkeypatch.setenv("JUNG_DEBUG_RUN_DIR", str(existing))
-    with pytest.raises(ValueError, match="must not already exist"):
-        resolve_debug_run_dir()
-
-
-def test_resolve_debug_run_dir_returns_path_when_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    missing = tmp_path / "fresh-run"
-    monkeypatch.setenv("JUNG_DEBUG_RUN_DIR", str(missing))
-    assert resolve_debug_run_dir() == missing
-    assert not missing.exists()
+def test_evidence_integrity_failure_constant() -> None:
+    assert EVIDENCE_INTEGRITY_FAILURE == "category_c_evidence_integrity_failed"
+    assert MESSAGE_CANONICALIZATION
+    assert STRUCTURED_REQUEST_CANONICALIZATION

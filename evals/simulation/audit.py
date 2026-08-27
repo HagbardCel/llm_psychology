@@ -16,10 +16,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 from evals.simulation.intake_forensics import (
+    UNKNOWN,
     IntakeAttemptReport,
     IntakeTurnReport,
     build_intake_turn_reports,
     fence_markdown,
+    format_count_evidence,
+    format_merge_status_evidence,
+    format_path_evidence,
+    format_target_evidence,
 )
 from jung.diagnostics import (
     open_private_file,
@@ -1192,10 +1197,10 @@ def _format_intake_attempt_detail(attempt: IntakeAttemptReport) -> list[str]:
         f"- attempt_outcome: `{attempt.attempt_outcome}`",
         f"- persisted_attempt: `{attempt.persisted_attempt}`",
         f"- failure_code: `{attempt.failure_code or 'none'}`",
-        f"- extraction_target: `{attempt.extraction_target or 'none'}`",
-        f"- raw_count: {attempt.raw_count}",
-        f"- retained_count: {attempt.retained_count}",
-        f"- merge_status: `{attempt.merge_status or 'none'}`",
+        f"- extraction_target: `{format_target_evidence(attempt.extraction_target)}`",
+        f"- raw_count: {format_count_evidence(attempt.raw_count)}",
+        f"- retained_count: {format_count_evidence(attempt.retained_count)}",
+        f"- merge_status: `{format_merge_status_evidence(attempt.merge_status)}`",
         f"- planned_record_changed: {attempt.planned_record_changed}",
         f"- persisted_record_changed: {attempt.persisted_record_changed}",
         f"- pre_turn_next_item: `{attempt.pre_turn_next_item}`",
@@ -1205,21 +1210,12 @@ def _format_intake_attempt_detail(attempt: IntakeAttemptReport) -> list[str]:
         f"- planned_max_turn_completion_blocked: "
         f"{attempt.planned_max_turn_completion_blocked}",
         "- validation_retained_paths: "
-        + (
-            ", ".join(f"`{path}`" for path in attempt.validation_retained_paths)
-            or "none"
-        ),
+        + format_path_evidence(attempt.validation_retained_paths),
         "- persisted_changed_paths: "
-        + (
-            ", ".join(f"`{path}`" for path in attempt.persisted_changed_paths) or "none"
-        ),
+        + format_path_evidence(attempt.persisted_changed_paths),
         "- materialization_dropped_paths: "
-        + (
-            ", ".join(f"`{path}`" for path in attempt.materialization_dropped_paths)
-            or "none"
-        ),
-        "- merge_dropped_paths: "
-        + (", ".join(f"`{path}`" for path in attempt.merge_dropped_paths) or "none"),
+        + format_path_evidence(attempt.materialization_dropped_paths),
+        "- merge_dropped_paths: " + format_path_evidence(attempt.merge_dropped_paths),
         f"- deterministic_flags: {', '.join(attempt.flags) or 'none'}",
         "",
         "| Field | Status | Grounded quote | Quote valid? |",
@@ -1379,22 +1375,31 @@ def render_audit_markdown(  # noqa: C901
             correlation = ", ".join(report.correlation_findings) or "none"
             for attempt in report.attempts:
                 planned_next = (
-                    "none"
-                    if attempt.planned_next_item is None
-                    else str(attempt.planned_next_item)
+                    UNKNOWN
+                    if attempt.planned_next_item == UNKNOWN
+                    else (
+                        "none"
+                        if attempt.planned_next_item is None
+                        else str(attempt.planned_next_item)
+                    )
                 )
                 persisted_next = (
-                    "none"
-                    if attempt.persisted_next_item is None
-                    else str(attempt.persisted_next_item)
+                    UNKNOWN
+                    if attempt.persisted_next_item == UNKNOWN
+                    else (
+                        "none"
+                        if attempt.persisted_next_item is None
+                        else str(attempt.persisted_next_item)
+                    )
                 )
                 lines.append(
                     f"| {report.turn} | {report.durable_commit} | "
                     f"{report.commit_status} | {attempt.attempt_index} | "
                     f"`{attempt.request_id or 'none'}` | "
                     f"{attempt.attempt_outcome} | {attempt.persisted_attempt} | "
-                    f"{attempt.extraction_target or 'none'} | "
-                    f"{attempt.raw_count} | {attempt.retained_count} | "
+                    f"{format_target_evidence(attempt.extraction_target)} | "
+                    f"{format_count_evidence(attempt.raw_count)} | "
+                    f"{format_count_evidence(attempt.retained_count)} | "
                     f"{planned_next} | {persisted_next} | {correlation} |"
                 )
         for report in intake_reports:

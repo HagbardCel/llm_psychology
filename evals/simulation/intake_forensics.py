@@ -24,11 +24,21 @@ from jung.phases.intake.extraction import (
     materialize_extraction,
     prompted_item_for_extraction,
 )
-from jung.phases.intake.merge import merge_intake_record_patch_with_diagnostics
+from jung.phases.intake.merge import (
+    IntakePatchMergeStatus,
+    merge_intake_record_patch_with_diagnostics,
+)
 from jung.phases.intake.models import IntakeEvidence, IntakeRecord, IntakeRecordPatch
 from jung.phases.transcript import TranscriptTurn
 
 UNKNOWN = "unknown_after_ambiguous_commit"
+
+PathEvidence = tuple[str, ...] | Literal["unknown_after_ambiguous_commit"]
+CountEvidence = int | Literal["unknown_after_ambiguous_commit"]
+TargetEvidence = str | None | Literal["unknown_after_ambiguous_commit"]
+MergeStatusEvidence = (
+    IntakePatchMergeStatus | None | Literal["unknown_after_ambiguous_commit"]
+)
 
 CommitStatus = Literal[
     "committed_exact",
@@ -48,6 +58,36 @@ _LIFECYCLE_KINDS = frozenset(
 _FAILURE_MERGE_STATUSES = frozenset({"empty_after_validation", "merge_failure"})
 
 
+def format_path_evidence(value: PathEvidence) -> str:
+    if value == UNKNOWN:
+        return UNKNOWN
+    if not value:
+        return "none"
+    return ", ".join(f"`{path}`" for path in value)
+
+
+def format_count_evidence(value: CountEvidence) -> str:
+    if value == UNKNOWN:
+        return UNKNOWN
+    return str(value)
+
+
+def format_target_evidence(value: TargetEvidence) -> str:
+    if value == UNKNOWN:
+        return UNKNOWN
+    if value is None:
+        return "none"
+    return str(value)
+
+
+def format_merge_status_evidence(value: MergeStatusEvidence) -> str:
+    if value == UNKNOWN:
+        return UNKNOWN
+    if value is None:
+        return "none"
+    return str(value)
+
+
 @dataclass(frozen=True, slots=True)
 class IntakeAttemptReport:
     attempt_index: int  # 1-based
@@ -56,10 +96,10 @@ class IntakeAttemptReport:
     attempt_outcome: Literal["completed", "failed", "cancelled", "unknown"]
     persisted_attempt: Literal["yes", "no", "unknown"]
     failure_code: str | None  # bounded project code or None
-    extraction_target: str | None
-    raw_count: int
-    retained_count: int
-    merge_status: str | None
+    extraction_target: TargetEvidence
+    raw_count: CountEvidence
+    retained_count: CountEvidence
+    merge_status: MergeStatusEvidence
     planned_record_changed: bool | str  # bool or UNKNOWN
     persisted_record_changed: bool | str
     pre_turn_next_item: str | None | str  # may be UNKNOWN
@@ -69,10 +109,10 @@ class IntakeAttemptReport:
     planned_max_turn_completion_blocked: bool | str
     # (field, status, quote, quote_valid)
     extraction_rows: tuple[tuple[str, str, str, bool], ...]
-    validation_retained_paths: tuple[str, ...]
-    persisted_changed_paths: tuple[str, ...]
-    materialization_dropped_paths: tuple[str, ...]  # evidence[N]
-    merge_dropped_paths: tuple[str, ...]  # record field paths
+    validation_retained_paths: PathEvidence
+    persisted_changed_paths: PathEvidence
+    materialization_dropped_paths: PathEvidence
+    merge_dropped_paths: PathEvidence
     drop_reasons: tuple[tuple[str, str], ...]  # path, reason
     flags: tuple[str, ...]
 
@@ -200,6 +240,33 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _eval_count(eval_data: Mapping[str, Any] | None, key: str) -> CountEvidence:
+    if eval_data is None or key not in eval_data:
+        return UNKNOWN
+    value = eval_data.get(key)
+    if value is None:
+        return UNKNOWN
+    return int(value)
+
+
+def _eval_merge_status(eval_data: Mapping[str, Any] | None) -> MergeStatusEvidence:
+    if eval_data is None or "merge_status" not in eval_data:
+        return UNKNOWN
+    value = eval_data.get("merge_status")
+    if value is None:
+        return None
+    return str(value)  # type: ignore[return-value]
+
+
+def _eval_target(eval_data: Mapping[str, Any] | None) -> TargetEvidence:
+    if eval_data is None or "extraction_target" not in eval_data:
+        return UNKNOWN
+    value = eval_data.get("extraction_target")
+    if value is None:
+        return None
+    return str(value)
 
 
 def _quote_valid(quote: str | None, message: str) -> bool:
@@ -420,7 +487,6 @@ def _decide_commit(
             persisted[request_id] = "yes" if request_id == matched_request else "no"
         return "committed_exact", persisted, (), flags
 
-    # No matching completion diagnostic.
     if len(request_ids) == 0:
         return "committed_ambiguous", {}, (), flags
 
@@ -433,7 +499,6 @@ def _decide_commit(
                 (),
                 flags,
             )
-        # One clean identity, no failed/cancelled terminal → fallback.
         flags.append("missing_chat_completion_diagnostic")
         return (
             "committed_fallback",
@@ -442,7 +507,6 @@ def _decide_commit(
             flags,
         )
 
-    # Multiple attempts, no unique matching completion.
     return (
         "committed_ambiguous",
         dict.fromkeys(request_ids, "unknown"),
@@ -453,52 +517,68 @@ def _decide_commit(
 
 @dataclass(frozen=True, slots=True)
 class _ReplayResult:
-    extraction_target: str | None
-    raw_count: int
-    retained_count: int
-    merge_status: str | None
+    extraction_target: TargetEvidence
+    raw_count: CountEvidence
+    retained_count: CountEvidence
+    merge_status: MergeStatusEvidence
     planned_record_changed: bool
     planned_next_item: str | None
     planned_completeness_complete: bool
     planned_max_turn_completion_blocked: bool
     merged_record: IntakeRecord
     extraction_rows: tuple[tuple[str, str, str, bool], ...]
-    validation_retained_paths: tuple[str, ...]
-    persisted_changed_paths: tuple[str, ...]
-    materialization_dropped_paths: tuple[str, ...]
-    merge_dropped_paths: tuple[str, ...]
+    validation_retained_paths: PathEvidence
+    persisted_changed_paths: PathEvidence
+    materialization_dropped_paths: PathEvidence
+    merge_dropped_paths: PathEvidence
     drop_reasons: tuple[tuple[str, str], ...]
     flags: tuple[str, ...]
+
+
+def _drop_paths_from_eval(
+    eval_data: Mapping[str, Any] | None,
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+    materialization_dropped: list[str] = []
+    merge_dropped: list[str] = []
+    drop_reasons: list[tuple[str, str]] = []
+    if not eval_data:
+        return materialization_dropped, merge_dropped, drop_reasons
+    for item in eval_data.get("drop_reasons") or []:
+        if not isinstance(item, Mapping):
+            continue
+        path = str(item.get("field_path", ""))
+        reason = str(item.get("reason", ""))
+        drop_reasons.append((path, reason))
+        if path.startswith("evidence["):
+            materialization_dropped.append(path)
+        elif path:
+            merge_dropped.append(path)
+    return materialization_dropped, merge_dropped, drop_reasons
 
 
 def _empty_replay(
     *,
     pre_turn_record: IntakeRecord,
-    extraction_target: str | None,
+    extraction_target: TargetEvidence,
     eval_data: Mapping[str, Any] | None,
 ) -> _ReplayResult:
-    merge_status = None
-    raw_count = 0
-    retained_count = 0
     planned_record_changed = False
     planned_next_item = missing_items_from_record(pre_turn_record).next_required_item
     planned_complete = False
     planned_blocked = False
+    raw_count: CountEvidence = UNKNOWN
+    retained_count: CountEvidence = UNKNOWN
+    merge_status: MergeStatusEvidence = UNKNOWN
+    target = extraction_target
     drop_reasons: list[tuple[str, str]] = []
     if eval_data:
-        extraction_target = (
-            str(eval_data["extraction_target"])
-            if eval_data.get("extraction_target") is not None
-            else extraction_target
-        )
-        raw_count = int(eval_data.get("raw_evidence_count") or 0)
-        retained_count = int(eval_data.get("retained_evidence_count") or 0)
-        merge_status = (
-            str(eval_data["merge_status"])
-            if eval_data.get("merge_status") is not None
-            else None
-        )
-        planned_record_changed = bool(eval_data.get("record_changed"))
+        if "extraction_target" in eval_data:
+            target = _eval_target(eval_data)
+        raw_count = _eval_count(eval_data, "raw_evidence_count")
+        retained_count = _eval_count(eval_data, "retained_evidence_count")
+        merge_status = _eval_merge_status(eval_data)
+        if "record_changed" in eval_data:
+            planned_record_changed = bool(eval_data.get("record_changed"))
         if "next_required_item" in eval_data:
             next_item = eval_data.get("next_required_item")
             planned_next_item = str(next_item) if next_item is not None else None
@@ -506,13 +586,10 @@ def _empty_replay(
             planned_complete = bool(eval_data.get("completeness_complete"))
         if "max_turn_completion_blocked" in eval_data:
             planned_blocked = bool(eval_data.get("max_turn_completion_blocked"))
-        for item in eval_data.get("drop_reasons") or []:
-            if isinstance(item, Mapping):
-                drop_reasons.append(
-                    (str(item.get("field_path", "")), str(item.get("reason", "")))
-                )
+        _, _, drop_reasons = _drop_paths_from_eval(eval_data)
+    materialization_dropped, merge_dropped, _ = _drop_paths_from_eval(eval_data)
     return _ReplayResult(
-        extraction_target=extraction_target,
+        extraction_target=target,
         raw_count=raw_count,
         retained_count=retained_count,
         merge_status=merge_status,
@@ -524,8 +601,8 @@ def _empty_replay(
         extraction_rows=(),
         validation_retained_paths=(),
         persisted_changed_paths=(),
-        materialization_dropped_paths=(),
-        merge_dropped_paths=(),
+        materialization_dropped_paths=tuple(materialization_dropped),
+        merge_dropped_paths=tuple(merge_dropped),
         drop_reasons=tuple(drop_reasons),
         flags=(),
     )
@@ -547,20 +624,15 @@ def _replay_attempt(  # noqa: C901
         patient_turn_count=patient_turn_count,
     )
     if state_unknown:
-        # Still surface raw extraction rows; skip state-dependent reconstruction.
         extraction_rows: list[tuple[str, str, str, bool]] = []
         materialization_dropped: list[str] = []
         merge_dropped: list[str] = []
         drop_reasons: list[tuple[str, str]] = []
         flags: list[str] = []
-        raw_count = 0
-        retained_count = 0
-        merge_status: str | None = None
-        extraction_target: str | None = (
-            str(eval_data["extraction_target"])
-            if eval_data and eval_data.get("extraction_target") is not None
-            else (str(default_target) if default_target is not None else None)
-        )
+        raw_count: CountEvidence = UNKNOWN
+        retained_count: CountEvidence = UNKNOWN
+        merge_status: MergeStatusEvidence = UNKNOWN
+        extraction_target: TargetEvidence = _eval_target(eval_data)
         if extraction is not None:
             raw_count = len(extraction.evidence)
             for candidate in extraction.evidence:
@@ -576,22 +648,12 @@ def _replay_attempt(  # noqa: C901
                 if valid:
                     flags.append("quote_found")
         elif eval_data:
-            raw_count = int(eval_data.get("raw_evidence_count") or 0)
-            retained_count = int(eval_data.get("retained_evidence_count") or 0)
-            merge_status = (
-                str(eval_data["merge_status"])
-                if eval_data.get("merge_status") is not None
-                else None
+            raw_count = _eval_count(eval_data, "raw_evidence_count")
+            retained_count = _eval_count(eval_data, "retained_evidence_count")
+            merge_status = _eval_merge_status(eval_data)
+            materialization_dropped, merge_dropped, drop_reasons = (
+                _drop_paths_from_eval(eval_data)
             )
-            for item in eval_data.get("drop_reasons") or []:
-                if isinstance(item, Mapping):
-                    path = str(item.get("field_path", ""))
-                    reason = str(item.get("reason", ""))
-                    drop_reasons.append((path, reason))
-                    if path.startswith("evidence["):
-                        materialization_dropped.append(path)
-                    elif path:
-                        merge_dropped.append(path)
         return _ReplayResult(
             extraction_target=extraction_target,
             raw_count=raw_count,
@@ -603,10 +665,14 @@ def _replay_attempt(  # noqa: C901
             planned_max_turn_completion_blocked=False,
             merged_record=pre_turn_record,
             extraction_rows=tuple(extraction_rows),
-            validation_retained_paths=(),
-            persisted_changed_paths=(),
-            materialization_dropped_paths=tuple(materialization_dropped),
-            merge_dropped_paths=tuple(merge_dropped),
+            validation_retained_paths=UNKNOWN,
+            persisted_changed_paths=UNKNOWN,
+            materialization_dropped_paths=(
+                UNKNOWN
+                if not materialization_dropped
+                else tuple(materialization_dropped)
+            ),
+            merge_dropped_paths=UNKNOWN if not merge_dropped else tuple(merge_dropped),
             drop_reasons=tuple(drop_reasons),
             flags=tuple(dict.fromkeys(flags)),
         )
@@ -621,7 +687,7 @@ def _replay_attempt(  # noqa: C901
         )
 
     prompted: IntakeItem | None = default_target
-    extraction_target: str | None = (
+    extraction_target: TargetEvidence = (
         str(default_target) if default_target is not None else None
     )
     if eval_data and eval_data.get("extraction_target") is not None:
@@ -660,16 +726,16 @@ def _replay_attempt(  # noqa: C901
         latest_user_message=turn_model,
         source_message_sequence=turn_model.sequence,
     )
-    raw_count = materialization.raw_candidate_count
+    raw_count: CountEvidence = materialization.raw_candidate_count
     if merge.status == "merge_failure":
-        merge_status = "merge_failure"
-    elif raw_count == 0:
+        merge_status: MergeStatusEvidence = "merge_failure"
+    elif materialization.raw_candidate_count == 0:
         merge_status = "empty_patch"
     elif merge.retained_evidence_count == 0:
         merge_status = "empty_after_validation"
     else:
         merge_status = merge.status
-    retained_count = merge.retained_evidence_count
+    retained_count: CountEvidence = merge.retained_evidence_count
     planned_record_changed = merge.record_changed
 
     materialization_dropped = [
@@ -680,10 +746,12 @@ def _replay_attempt(  # noqa: C901
         (str(reason.get("field_path", "")), str(reason.get("reason", "")))
         for reason in (*materialization.drop_reasons, *merge.drop_reasons)
     ]
-    validation_retained = _validation_retained_paths(
+    validation_retained: PathEvidence = _validation_retained_paths(
         materialization.patch, merge.drop_reasons
     )
-    persisted_changed = _changed_record_paths(pre_turn_record, merge.record)
+    persisted_changed: PathEvidence = _changed_record_paths(
+        pre_turn_record, merge.record
+    )
 
     if merge.retained_evidence_count > 0:
         flags.append("evidence_retained")
@@ -702,16 +770,13 @@ def _replay_attempt(  # noqa: C901
     planned_complete = completeness.complete and not planned_blocked
     planned_next = completeness.next_required_item
 
-    # Prefer evaluated diagnostics for planned_* when present.
     if eval_data:
         if eval_data.get("merge_status") is not None:
-            merge_status = str(eval_data["merge_status"])
+            merge_status = str(eval_data["merge_status"])  # type: ignore[assignment]
         if "raw_evidence_count" in eval_data:
-            raw_count = int(eval_data.get("raw_evidence_count") or raw_count)
+            raw_count = int(eval_data["raw_evidence_count"])
         if "retained_evidence_count" in eval_data:
-            retained_count = int(
-                eval_data.get("retained_evidence_count") or retained_count
-            )
+            retained_count = int(eval_data["retained_evidence_count"])
         if "record_changed" in eval_data:
             planned_record_changed = bool(eval_data.get("record_changed"))
         if "next_required_item" in eval_data:
@@ -740,6 +805,45 @@ def _replay_attempt(  # noqa: C901
         drop_reasons=tuple(drop_reasons),
         flags=tuple(dict.fromkeys(flags)),
     )
+
+
+def _apply_missing_extraction_matrix(
+    *,
+    eval_data: Mapping[str, Any] | None,
+    pre_turn_next: str | None,
+    flags: list[str],
+) -> tuple[
+    bool | str,
+    str | None | str,
+    PathEvidence,
+    bool,
+]:
+    """Return persisted_record_changed, persisted_next_item, paths, latch_unknown."""
+    if eval_data is None or "record_changed" not in eval_data:
+        flags.append("committed_state_reconstruction_unavailable")
+        return UNKNOWN, UNKNOWN, UNKNOWN, True
+
+    record_changed = bool(eval_data.get("record_changed"))
+    if not record_changed:
+        if "next_required_item" in eval_data:
+            evaluated_next = eval_data.get("next_required_item")
+            evaluated_next_str = (
+                str(evaluated_next) if evaluated_next is not None else None
+            )
+            prior_next_str = str(pre_turn_next) if pre_turn_next is not None else None
+            if evaluated_next_str != prior_next_str:
+                flags.append("evaluated_next_item_conflicts_with_prior_record")
+        return False, pre_turn_next, (), False
+
+    flags.append("missing_accepted_extraction_for_committed_change")
+    if "next_required_item" in eval_data:
+        next_item = eval_data.get("next_required_item")
+        persisted_next: str | None | str = (
+            str(next_item) if next_item is not None else None
+        )
+    else:
+        persisted_next = UNKNOWN
+    return True, persisted_next, UNKNOWN, True
 
 
 def build_intake_turn_reports(  # noqa: C901
@@ -847,9 +951,13 @@ def build_intake_turn_reports(  # noqa: C901
                 commit_status = "uncommitted"
                 persisted_by_request = {None: "no"}
 
-        turn_unknown = state_unknown or commit_status == "committed_ambiguous"
+        is_first_ambiguous = (
+            commit_status == "committed_ambiguous" and not state_unknown
+        )
+        is_latched_turn = state_unknown
         attempt_reports: list[IntakeAttemptReport] = []
         persisted_merge_record: IntakeRecord | None = None
+        latch_from_missing_extraction = False
 
         for index, (request_id, lifecycle_status, outcome, failure_code) in enumerate(
             attempt_meta, start=1
@@ -880,36 +988,74 @@ def build_intake_turn_reports(  # noqa: C901
                 sequence=int(row["sequence"]),
                 eval_data=eval_data,
                 extraction=extraction,
-                state_unknown=turn_unknown,
+                state_unknown=state_unknown,
             )
             persisted_attempt = persisted_by_request.get(request_id, "no")
             flags = list(replay.flags)
             flags.extend(commit_flags)
 
-            if turn_unknown:
+            missing_extraction_committed = (
+                extraction is None and persisted_attempt == "yes" and not state_unknown
+            )
+
+            if is_latched_turn:
                 planned_record_changed: bool | str = UNKNOWN
-                persisted_record_changed: bool | str = UNKNOWN
                 pre_turn_next_item: str | None | str = UNKNOWN
                 planned_next_item: str | None | str = UNKNOWN
-                persisted_next_item: str | None | str = UNKNOWN
                 planned_completeness: bool | str = UNKNOWN
                 planned_blocked: bool | str = UNKNOWN
+                validation_paths: PathEvidence = UNKNOWN
+                materialization_paths: PathEvidence = UNKNOWN
+                merge_paths: PathEvidence = UNKNOWN
+                persisted_record_changed: bool | str = UNKNOWN
+                persisted_next_item: str | None | str = UNKNOWN
+                persisted_paths: PathEvidence = UNKNOWN
+            elif is_first_ambiguous:
+                planned_record_changed = replay.planned_record_changed
+                pre_turn_next_item = pre_turn_next
+                planned_next_item = replay.planned_next_item
+                planned_completeness = replay.planned_completeness_complete
+                planned_blocked = replay.planned_max_turn_completion_blocked
+                validation_paths = replay.validation_retained_paths
+                materialization_paths = replay.materialization_dropped_paths
+                merge_paths = replay.merge_dropped_paths
+                persisted_record_changed = UNKNOWN
+                persisted_next_item = UNKNOWN
+                persisted_paths = UNKNOWN
             else:
                 planned_record_changed = replay.planned_record_changed
                 pre_turn_next_item = pre_turn_next
                 planned_next_item = replay.planned_next_item
                 planned_completeness = replay.planned_completeness_complete
                 planned_blocked = replay.planned_max_turn_completion_blocked
-                if persisted_attempt == "yes":
+                validation_paths = replay.validation_retained_paths
+                materialization_paths = replay.materialization_dropped_paths
+                merge_paths = replay.merge_dropped_paths
+                persisted_record_changed = False
+                persisted_next_item = pre_turn_next
+                persisted_paths = ()
+                persisted_merge_record = None
+
+                if missing_extraction_committed:
+                    (
+                        persisted_record_changed,
+                        persisted_next_item,
+                        persisted_paths,
+                        latch_from_missing_extraction,
+                    ) = _apply_missing_extraction_matrix(
+                        eval_data=eval_data,
+                        pre_turn_next=pre_turn_next,
+                        flags=flags,
+                    )
+                elif persisted_attempt == "yes":
                     persisted_record_changed = replay.planned_record_changed
                     persisted_next_item = replay.planned_next_item
+                    persisted_paths = replay.persisted_changed_paths
                     persisted_merge_record = replay.merged_record
                 elif persisted_attempt == "unknown":
                     persisted_record_changed = UNKNOWN
                     persisted_next_item = UNKNOWN
-                else:
-                    persisted_record_changed = False
-                    persisted_next_item = pre_turn_next
+                    persisted_paths = UNKNOWN
 
             attempt_reports.append(
                 IntakeAttemptReport(
@@ -931,18 +1077,10 @@ def build_intake_turn_reports(  # noqa: C901
                     planned_completeness_complete=planned_completeness,
                     planned_max_turn_completion_blocked=planned_blocked,
                     extraction_rows=replay.extraction_rows,
-                    validation_retained_paths=(
-                        () if turn_unknown else replay.validation_retained_paths
-                    ),
-                    persisted_changed_paths=(
-                        ()
-                        if turn_unknown or persisted_attempt != "yes"
-                        else replay.persisted_changed_paths
-                    ),
-                    materialization_dropped_paths=replay.materialization_dropped_paths,
-                    merge_dropped_paths=(
-                        () if turn_unknown else replay.merge_dropped_paths
-                    ),
+                    validation_retained_paths=validation_paths,
+                    persisted_changed_paths=persisted_paths,
+                    materialization_dropped_paths=materialization_paths,
+                    merge_dropped_paths=merge_paths,
                     drop_reasons=replay.drop_reasons,
                     flags=tuple(dict.fromkeys(flags)),
                 )
@@ -952,10 +1090,11 @@ def build_intake_turn_reports(  # noqa: C901
             commit_status in {"committed_exact", "committed_fallback"}
             and persisted_merge_record is not None
             and not state_unknown
+            and not latch_from_missing_extraction
         ):
             durable_record = persisted_merge_record
 
-        if commit_status == "committed_ambiguous":
+        if commit_status == "committed_ambiguous" or latch_from_missing_extraction:
             ambiguous_seen = True
 
         reports.append(

@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from evals.simulation.intake_forensics import UNKNOWN, build_intake_turn_reports
+from evals.simulation.audit import _format_intake_attempt_detail
+from evals.simulation.intake_forensics import (
+    UNKNOWN,
+    build_intake_turn_reports,
+    format_count_evidence,
+    format_path_evidence,
+)
 from jung.persistence.sqlite_store import SQLiteStore
 
 
@@ -103,6 +109,9 @@ def test_assistant_no_lifecycle_is_committed_ambiguous(tmp_path: Path) -> None:
     assert len(report.attempts) == 1
     assert report.attempts[0].persisted_attempt == "unknown"
     assert report.attempts[0].lifecycle_status == "lifecycle_missing"
+    # First ambiguous turn keeps planned facts visible.
+    assert report.attempts[0].planned_record_changed is False
+    assert report.attempts[0].persisted_record_changed is UNKNOWN
 
 
 def test_assistant_one_failed_attempt_is_committed_ambiguous(tmp_path: Path) -> None:
@@ -252,6 +261,8 @@ def test_multi_attempt_ambiguous_marks_later_turn_unknown(tmp_path: Path) -> Non
     first, second = reports
     assert first.commit_status == "committed_ambiguous"
     assert all(attempt.persisted_attempt == "unknown" for attempt in first.attempts)
+    assert first.attempts[0].planned_record_changed is False
+    assert first.attempts[0].persisted_record_changed is UNKNOWN
     assert second.durable_commit == "yes"
     assert second.commit_status == "committed_exact"
     assert len(second.attempts) == 1
@@ -392,3 +403,202 @@ def test_multiple_matching_completions_correlation_and_ambiguous(
     assert report.commit_status == "committed_ambiguous"
     assert "duplicate_completion_terminals" in report.correlation_findings
     assert all(attempt.persisted_attempt == "unknown" for attempt in report.attempts)
+
+
+def test_missing_extraction_committed_changed_latches_second_turn(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_one = str(uuid4())
+    client_two = str(uuid4())
+    request_one = str(uuid4())
+    request_two = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[
+            (client_one, "About six months", True),
+            (client_two, "No self harm thoughts", True),
+        ],
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=1,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=2,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=3,
+            data={
+                "record_changed": True,
+                "next_required_item": "duration",
+                "merge_status": "applied",
+            },
+        ),
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=4,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=5,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    assert len(reports) == 2
+    turn_one, turn_two = reports
+    assert turn_one.attempts[0].persisted_record_changed is True
+    assert turn_one.attempts[0].persisted_next_item == "duration"
+    assert turn_one.attempts[0].persisted_changed_paths is UNKNOWN
+    assert (
+        "missing_accepted_extraction_for_committed_change" in turn_one.attempts[0].flags
+    )
+    assert turn_two.attempts[0].pre_turn_next_item is UNKNOWN
+    assert turn_two.attempts[0].planned_next_item is UNKNOWN
+
+
+def test_missing_extraction_record_changed_false_retains_prior(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+            data={"record_changed": False, "merge_status": "empty_patch"},
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.persisted_record_changed is False
+    assert attempt.persisted_changed_paths == ()
+    assert attempt.persisted_next_item == attempt.pre_turn_next_item
+
+
+def test_missing_evaluated_record_changed_is_reconstruction_unavailable(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.persisted_record_changed is UNKNOWN
+    assert attempt.persisted_next_item is UNKNOWN
+    assert "committed_state_reconstruction_unavailable" in attempt.flags
+
+
+def test_unknown_scalar_and_path_rendering_not_iterated_as_characters() -> None:
+    assert format_count_evidence(UNKNOWN) == UNKNOWN
+    assert format_path_evidence(UNKNOWN) == UNKNOWN
+    from evals.simulation.intake_forensics import IntakeAttemptReport
+
+    attempt = IntakeAttemptReport(
+        attempt_index=1,
+        request_id="req",
+        lifecycle_status="present",
+        attempt_outcome="completed",
+        persisted_attempt="unknown",
+        failure_code=None,
+        extraction_target=UNKNOWN,
+        raw_count=UNKNOWN,
+        retained_count=UNKNOWN,
+        merge_status=UNKNOWN,
+        planned_record_changed=UNKNOWN,
+        persisted_record_changed=UNKNOWN,
+        pre_turn_next_item=UNKNOWN,
+        planned_next_item=UNKNOWN,
+        persisted_next_item=UNKNOWN,
+        planned_completeness_complete=UNKNOWN,
+        planned_max_turn_completion_blocked=UNKNOWN,
+        extraction_rows=(),
+        validation_retained_paths=UNKNOWN,
+        persisted_changed_paths=UNKNOWN,
+        materialization_dropped_paths=UNKNOWN,
+        merge_dropped_paths=UNKNOWN,
+        drop_reasons=(),
+        flags=(),
+    )
+    lines = _format_intake_attempt_detail(attempt)
+    joined = "\n".join(lines)
+    assert UNKNOWN in joined
+    assert UNKNOWN not in joined.replace(UNKNOWN, "")
+
+
+def test_missing_evaluated_counts_are_unknown_not_zero(tmp_path: Path) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.raw_count is UNKNOWN
+    assert attempt.retained_count is UNKNOWN

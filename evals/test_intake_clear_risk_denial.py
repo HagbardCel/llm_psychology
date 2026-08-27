@@ -9,26 +9,22 @@ import pytest
 
 from evals.harness import request_extra_body, request_timeout_seconds
 from evals.intake_risk_denial_evidence import (
-    AcceptedAttempt,
-    MemoryDiagnosticRecorder,
+    EVIDENCE_INTEGRITY_FAILURE,
     build_category_c_evidence_payload,
-    digests_from_provider_request_event,
-    provider_messages_sha256,
+    build_evidence_stages,
+    canonical_fixture_digests,
+    correlate_intake_patch_call,
+    evaluate_evidence_integrity,
+    provider_attempt_rows,
     resolve_debug_run_dir,
-    structured_request_sha256,
     write_category_c_evidence,
 )
-from jung.diagnostics import sanitize_url
+from jung.diagnostics import sanitize_url, sanitize_value
 from jung.domain.models import Profile
 from jung.domain.text import normalize_content
 from jung.llm.gateway import ChatMessage, ChatRole, LLMTask, StructuredOutputMode
-from jung.llm.openai_compatible import ProviderAttemptEvent
-from jung.llm.structured import (
-    build_prompt_schema_instruction,
-    response_format_for_mode,
-)
 from jung.phases.intake.extraction import IntakeExtraction
-from jung.phases.intake.models import IntakeEvidence, IntakeRecord, IntakeTurnInput
+from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.intake.prompts import PROMPT_VERSION, build_patch_extraction_messages
 from jung.phases.transcript import TranscriptTurn
@@ -51,7 +47,6 @@ def _canonical_fixture_digests(
     *,
     structured_mode: StructuredOutputMode,
 ) -> tuple[str, str]:
-    """Provider-prepared digests for the frozen Category C fixture (initial attempt)."""
     user_turn = TranscriptTurn(
         message_id=uuid4(),
         sequence=2,
@@ -66,86 +61,21 @@ def _canonical_fixture_digests(
     )
     prepared: list[ChatMessage] = list(messages)
     if structured_mode is StructuredOutputMode.PROMPT:
+        from jung.llm.structured import build_prompt_schema_instruction
+
         prepared.append(
             ChatMessage(
                 role=ChatRole.USER,
                 content=build_prompt_schema_instruction(IntakeExtraction),
             )
         )
-    response_format = response_format_for_mode(structured_mode, IntakeExtraction)
     role_content = [
         {"role": message.role.value, "content": message.content} for message in prepared
     ]
-    return (
-        provider_messages_sha256(role_content),
-        structured_request_sha256(
-            structured_mode=structured_mode.value,
-            response_format_or_schema_instruction=response_format,
-        ),
+    return canonical_fixture_digests(
+        structured_mode=structured_mode,
+        messages=role_content,
     )
-
-
-def _accepted_field(
-    path: str, evidence: IntakeEvidence, fixture: str
-) -> dict[str, Any]:
-    quote = evidence.evidence_quote
-    return {
-        "path": path,
-        "status": evidence.response_status,
-        "quote": quote,
-        "quote_valid": bool(
-            quote and normalize_content(quote) in normalize_content(fixture)
-        ),
-    }
-
-
-def _provider_attempts_for_intake_patch(
-    recorder: MemoryDiagnosticRecorder,
-    attempt_events: list[ProviderAttemptEvent],
-) -> list[dict[str, Any]]:
-    request_events = [
-        event
-        for event in recorder.events
-        if event.get("kind") == "llm.provider.request"
-        and isinstance(event.get("data"), dict)
-        and event["data"].get("task") == LLMTask.INTAKE_PATCH.value
-    ]
-    patch_attempts = [
-        event for event in attempt_events if event.task == LLMTask.INTAKE_PATCH.value
-    ]
-    rows: list[dict[str, Any]] = []
-    for index, attempt_event in enumerate(patch_attempts):
-        digests: dict[str, str] = {
-            "provider_messages_sha256": "",
-            "structured_request_sha256": "",
-        }
-        if index < len(request_events):
-            digests = digests_from_provider_request_event(request_events[index]["data"])
-        row: dict[str, Any] = {
-            "attempt": attempt_event.attempt,
-            "provider_messages_sha256": digests["provider_messages_sha256"],
-            "structured_request_sha256": digests["structured_request_sha256"],
-            "status": attempt_event.status,
-        }
-        if attempt_event.correction_trigger is not None:
-            row["correction_trigger"] = attempt_event.correction_trigger
-        rows.append(row)
-    return rows
-
-
-def _accepted_attempt_label(
-    attempts: list[dict[str, Any]],
-) -> AcceptedAttempt | None:
-    if not attempts:
-        return None
-    successes = [row for row in attempts if row.get("status") == "success"]
-    if len(successes) == 1:
-        label = successes[0].get("attempt")
-        if label in {"initial", "correction"}:
-            return label  # type: ignore[return-value]
-    if successes:
-        return "unknown"
-    return "unknown"
 
 
 @pytest.mark.asyncio
@@ -154,11 +84,13 @@ async def test_intake_clear_risk_denial(
 ) -> None:
     """Clear dual safety denial must retain grounded evidence (Category C)."""
     primary_exc: BaseException | None = None
+    integrity_exc: BaseException | None = None
+    from evals.intake_risk_denial_evidence import MemoryDiagnosticRecorder
+
     memory_recorder = MemoryDiagnosticRecorder()
-    attempt_events: list[ProviderAttemptEvent] = []
     extra_body: dict[str, object] | None = None
     plan = None
-    success = False
+    semantic_passed = False
 
     try:
         try:
@@ -175,7 +107,6 @@ async def test_intake_clear_risk_denial(
             eval_environment,
             extra_body=extra_body,
             recorder=memory_recorder,
-            on_provider_attempt=attempt_events.append,
         )
         try:
             processor = IntakeProcessor(
@@ -221,7 +152,7 @@ async def test_intake_clear_risk_denial(
             ):
                 assert quote
                 assert normalize_content(quote) in normalize_content(FROZEN_FIXTURE)
-            success = True
+            semantic_passed = True
         finally:
             await client.aclose()
     except BaseException as exc:
@@ -229,86 +160,106 @@ async def test_intake_clear_risk_denial(
     finally:
         write_exc: BaseException | None = None
         try:
-            provider_attempts = _provider_attempts_for_intake_patch(
-                memory_recorder, attempt_events
-            )
             canonical_messages, canonical_structured = _canonical_fixture_digests(
                 structured_mode=eval_environment.structured_mode,
             )
-            # When the live initial attempt digests are available, prefer them as
-            # the executed canonical reference (same frozen fixture/mode).
-            if provider_attempts:
-                initial = next(
-                    (
-                        row
-                        for row in provider_attempts
-                        if row.get("attempt") == "initial"
-                    ),
-                    provider_attempts[0],
-                )
-                if initial.get("provider_messages_sha256"):
-                    canonical_messages = str(initial["provider_messages_sha256"])
-                if initial.get("structured_request_sha256"):
-                    canonical_structured = str(initial["structured_request_sha256"])
-
-            accepted_fields: list[dict[str, Any]] | None = None
-            validation_retained_paths: list[str] | None = None
-            persisted_changed_paths: list[str] | None = None
-            medical_urgency_absent: bool | None = None
-            merge_status: str | None = None
-            raw_count: int | None = None
-            retained_count: int | None = None
-            dropped_count: int | None = None
-            record_changed: bool | None = None
+            correlation, correlation_errors = correlate_intake_patch_call(
+                memory_recorder
+            )
+            stages: dict[str, Any] | None = None
             extraction_target: str | None = None
-            accepted_attempt: AcceptedAttempt | None = None
-
-            if plan is not None:
+            if correlation is not None:
+                stages = build_evidence_stages(
+                    extraction=correlation.accepted_extraction,
+                    pre_turn_record=IntakeRecord(),
+                    user_turn=TranscriptTurn(
+                        message_id=uuid4(),
+                        sequence=2,
+                        role="user",
+                        content=FROZEN_FIXTURE,
+                    ),
+                    prompted_item="risk_screen",
+                    fixture=FROZEN_FIXTURE,
+                )
+                extraction_target = "risk_screen"
+            elif plan is not None:
                 extraction_target = plan.extraction_target
-                record_changed = plan.record_changed
-                diagnostics = plan.merge_diagnostics
-                if diagnostics is not None:
-                    merge_status = diagnostics.status
-                    raw_count = diagnostics.raw_evidence_count
-                    retained_count = diagnostics.retained_evidence_count
-                    dropped_count = diagnostics.dropped_evidence_count
-                safety = plan.merged_record.safety
-                accepted_fields = []
-                for path, evidence in (
-                    ("safety.self_harm", safety.self_harm),
-                    ("safety.harm_to_others", safety.harm_to_others),
-                ):
-                    if evidence.is_present():
-                        accepted_fields.append(
-                            _accepted_field(path, evidence, FROZEN_FIXTURE)
-                        )
-                validation_retained_paths = [item["path"] for item in accepted_fields]
-                persisted_changed_paths = list(validation_retained_paths)
-                medical_urgency_absent = not safety.medical_urgency.is_present()
-                accepted_attempt = _accepted_attempt_label(provider_attempts)
+
+            integrity_passed, messages_match, structured_match, integrity_errors = (
+                evaluate_evidence_integrity(
+                    correlation=correlation,
+                    correlation_errors=correlation_errors,
+                    canonical_messages_sha256=canonical_messages,
+                    canonical_structured_sha256=canonical_structured,
+                    stages=stages,
+                )
+            )
+
+            sanitized_extra = (
+                sanitize_value(extra_body) if extra_body is not None else None
+            )
+            provider_attempts = (
+                provider_attempt_rows(correlation.provider_attempts)
+                if correlation is not None
+                else []
+            )
+            accepted_attempt = (
+                correlation.accepted_attempt if correlation is not None else None
+            )
+            llm_call_id = correlation.llm_call_id if correlation is not None else None
 
             payload = build_category_c_evidence_payload(
-                success=success,
+                semantic_assertions_passed=semantic_passed,
+                evidence_integrity_passed=integrity_passed,
                 model=eval_environment.model,
                 sanitized_endpoint=sanitize_url(eval_environment.base_url),
                 structured_mode=eval_environment.structured_mode.value,
                 prompt_version=PROMPT_VERSION,
-                extra_body=extra_body,
+                extra_body=sanitized_extra,
                 frozen_fixture=FROZEN_FIXTURE,
                 extraction_target=extraction_target,
-                accepted_fields=accepted_fields,
-                validation_retained_paths=validation_retained_paths,
-                persisted_changed_paths=persisted_changed_paths,
-                medical_urgency_absent=medical_urgency_absent,
-                merge_status=merge_status,
-                raw_evidence_count=raw_count,
-                retained_evidence_count=retained_count,
-                dropped_evidence_count=dropped_count,
-                record_changed=record_changed,
+                llm_call_id=llm_call_id,
+                raw_accepted_fields=(
+                    stages.get("raw_accepted_fields") if stages else None
+                ),
+                validation_retained_paths=(
+                    stages.get("validation_retained_paths") if stages else None
+                ),
+                materialization_dropped_paths=(
+                    stages.get("materialization_dropped_paths") if stages else None
+                ),
+                merge_dropped_paths=(
+                    stages.get("merge_dropped_paths") if stages else None
+                ),
+                merged_changed_paths=(
+                    stages.get("merged_changed_paths") if stages else None
+                ),
+                raw_medical_urgency_absent=(
+                    stages.get("raw_medical_urgency_absent") if stages else None
+                ),
+                validation_medical_urgency_absent=(
+                    stages.get("validation_medical_urgency_absent") if stages else None
+                ),
+                merged_medical_urgency_absent=(
+                    stages.get("merged_medical_urgency_absent") if stages else None
+                ),
+                merge_status=stages.get("merge_status") if stages else None,
+                raw_evidence_count=(
+                    stages.get("raw_evidence_count") if stages else None
+                ),
+                retained_evidence_count=(
+                    stages.get("retained_evidence_count") if stages else None
+                ),
+                dropped_evidence_count=(
+                    stages.get("dropped_evidence_count") if stages else None
+                ),
+                record_changed=stages.get("record_changed") if stages else None,
                 provider_attempts=provider_attempts,
                 accepted_attempt=accepted_attempt,
                 canonical_fixture_provider_messages_sha256=canonical_messages,
                 canonical_fixture_structured_request_sha256=canonical_structured,
+                canonical_matches_executed_messages=messages_match,
+                canonical_matches_executed_structured=structured_match,
                 primary_failure_code=(
                     None
                     if primary_exc is None
@@ -318,10 +269,15 @@ async def test_intake_clear_risk_denial(
                 primary_failure_exception_type=(
                     None if primary_exc is None else type(primary_exc).__name__
                 ),
+                evidence_integrity_errors=integrity_errors,
             )
+
             debug_dir = resolve_debug_run_dir()
             if debug_dir is not None:
                 write_category_c_evidence(run_dir=debug_dir, payload=payload)
+
+            if semantic_passed and not integrity_passed:
+                integrity_exc = AssertionError(EVIDENCE_INTEGRITY_FAILURE)
         except BaseException as exc:
             write_exc = exc
 
@@ -331,6 +287,13 @@ async def test_intake_clear_risk_denial(
                     "category-c evidence write failed after primary failure",
                     [primary_exc, write_exc],
                 )
+            if integrity_exc is not None:
+                raise ExceptionGroup(
+                    "category-c evidence write failed after integrity failure",
+                    [integrity_exc, write_exc],
+                )
             raise write_exc
         if primary_exc is not None:
             raise primary_exc
+        if integrity_exc is not None:
+            raise integrity_exc
