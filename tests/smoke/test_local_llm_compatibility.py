@@ -254,6 +254,12 @@ async def test_smoke_intake_clear_risk_denial(gateway: SmokeGatewayContext) -> N
         response_policy=policies[LLMTask.INTAKE_RESPONSE],
     )
     fixture = "I am not thinking about harming myself or anyone else."
+    prior_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=1,
+        role="user",
+        content="I have been anxious in seminars lately.",
+    )
     user_turn = TranscriptTurn(
         message_id=uuid4(),
         sequence=2,
@@ -266,8 +272,11 @@ async def test_smoke_intake_clear_risk_denial(gateway: SmokeGatewayContext) -> N
             IntakeTurnInput(
                 profile=Profile(name="Alex", primary_language="English"),
                 current_record=IntakeRecord(),
-                transcript=(user_turn,),
+                transcript=(prior_turn, user_turn),
                 latest_user_message=user_turn.content,
+                previous_assistant_message=(
+                    "Are you having thoughts of harming yourself or anyone else?"
+                ),
                 patient_turn_count=2,
             )
         )
@@ -278,14 +287,15 @@ async def test_smoke_intake_clear_risk_denial(gateway: SmokeGatewayContext) -> N
         assert plan.extraction_target == "risk_screen"
         assert plan.record_changed is True
         safety = plan.merged_record.safety
-        assert safety.self_harm.is_present() or safety.harm_to_others.is_present()
+        assert safety.self_harm.is_present()
+        assert safety.harm_to_others.is_present()
         assert not safety.medical_urgency.is_present()
         for quote in (
             safety.self_harm.evidence_quote,
             safety.harm_to_others.evidence_quote,
         ):
-            if quote:
-                assert normalize_content(quote) in normalize_content(fixture)
+            assert quote
+            assert normalize_content(quote) in normalize_content(fixture)
         return SmokeOperationResult(value=plan)
 
     plan = await run_smoke_path(
