@@ -222,8 +222,11 @@ lineage, grounding, briefing→next-prompt under real adapters). Checks are
 **reachability-aware**: missing checkpoints, reviews, or supervisor evidence
 only fail when the corresponding workflow milestone was actually reached.
 Terminal chat failures persist the public API `api_error` envelope in
-`journey.jsonl`, `run.json`, and `audit.md`. Therapeutic quality remains
-human review of the evidence bundle. There is no judge LLM.
+`journey.jsonl`, `run.json`, and `audit.md`. For intake turn-limit diagnosis,
+use per-turn `intake.turn.evaluated` events in `runtime/trace.jsonl` together
+with the mechanical intake sections in `audit.md`; semantic closure belongs in
+the PR summary. Therapeutic quality remains human review of the evidence
+bundle. There is no judge LLM.
 
 Deterministic unit/integration coverage for the harness lives under
 `tests/unit/evals` and `tests/integration/evals` and runs in `make check`.
