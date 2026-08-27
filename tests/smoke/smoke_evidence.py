@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from jung.llm.openai_compatible import ProviderAttemptEvent
@@ -117,6 +118,7 @@ class SmokeEvidenceCollector:
     assessment: SmokePathResult | None = None
     post_session: SmokePathResult | None = None
     intake: SmokePathResult | None = None
+    intake_risk_denial: SmokePathResult | None = None
 
     def to_payload(self) -> dict[str, Any]:
         path_results = [
@@ -146,7 +148,13 @@ class SmokeEvidenceCollector:
         }
         if self.base_url is not None:
             payload["base_url"] = self.base_url
-        for key in ("therapy", "assessment", "post_session", "intake"):
+        for key in (
+            "therapy",
+            "assessment",
+            "post_session",
+            "intake",
+            "intake_risk_denial",
+        ):
             result = getattr(self, key)
             if result is None:
                 continue
@@ -193,8 +201,37 @@ class SmokeEvidenceCollector:
                 self.assessment,
                 self.post_session,
                 self.intake,
+                self.intake_risk_denial,
             )
         )
+
+
+def write_smoke_evidence_markdown(
+    collector: SmokeEvidenceCollector, path: Path
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = collector.to_payload()
+    lines = [
+        "# Local LLM smoke evidence",
+        "",
+        f"server: {collector.server}",
+        f"model: {collector.model}",
+        f"structured_mode: {collector.structured_mode}",
+        "",
+        "## Paths",
+        "",
+        "```json",
+        json.dumps(payload, indent=2, ensure_ascii=True, default=str),
+        "```",
+        "",
+    ]
+    risk = payload.get("intake_risk_denial")
+    if isinstance(risk, Mapping):
+        lines.append(f"intake_risk_denial_status: {risk.get('status')}")
+        lines.append(f"intake_risk_denial_success: {risk.get('success')}")
+        if risk.get("error_type"):
+            lines.append(f"primary_failure: {risk.get('error_type')}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def render_smoke_evidence(collector: SmokeEvidenceCollector) -> str | None:

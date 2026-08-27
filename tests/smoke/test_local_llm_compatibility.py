@@ -13,11 +13,12 @@ import pytest_asyncio
 
 from jung.diagnostics import sanitize_url
 from jung.domain.models import Plan, Profile
+from jung.domain.text import normalize_content
 from jung.llm.gateway import LLMTask
 from jung.llm.tracing import ObservedLLMGateway
-from jung.phases.assessment.models import AssessmentInput, IntakeRecord
+from jung.phases.assessment.models import AssessmentInput
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.intake.models import IntakeTurnInput
+from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import PostSessionInput
 from jung.phases.post_session.processor import PostSessionProcessor
@@ -240,6 +241,62 @@ async def test_smoke_intake_patch(gateway: SmokeGatewayContext) -> None:
     path = COLLECTOR.intake
     assert path is not None
     path.result_shape_valid = True
+
+
+@pytest.mark.real_llm
+@pytest.mark.asyncio
+async def test_smoke_intake_clear_risk_denial(gateway: SmokeGatewayContext) -> None:
+    """Category C smoke: clear dual safety denial must retain grounded evidence."""
+    policies = _policies()
+    processor = IntakeProcessor(
+        gateway.gateway,
+        patch_policy=policies[LLMTask.INTAKE_PATCH],
+        response_policy=policies[LLMTask.INTAKE_RESPONSE],
+    )
+    fixture = "I am not thinking about harming myself or anyone else."
+    user_turn = TranscriptTurn(
+        message_id=uuid4(),
+        sequence=2,
+        role="user",
+        content=fixture,
+    )
+
+    async def operation() -> SmokeOperationResult[object]:
+        plan = await processor.prepare_turn(
+            IntakeTurnInput(
+                profile=Profile(name="Alex", primary_language="English"),
+                current_record=IntakeRecord(),
+                transcript=(user_turn,),
+                latest_user_message=user_turn.content,
+                patient_turn_count=2,
+            )
+        )
+        diagnostics = plan.merge_diagnostics
+        assert diagnostics is not None
+        assert diagnostics.status == "applied"
+        assert diagnostics.retained_evidence_count >= 1
+        assert plan.extraction_target == "risk_screen"
+        assert plan.record_changed is True
+        safety = plan.merged_record.safety
+        assert safety.self_harm.is_present() or safety.harm_to_others.is_present()
+        assert not safety.medical_urgency.is_present()
+        for quote in (
+            safety.self_harm.evidence_quote,
+            safety.harm_to_others.evidence_quote,
+        ):
+            if quote:
+                assert normalize_content(quote) in normalize_content(fixture)
+        return SmokeOperationResult(value=plan)
+
+    plan = await run_smoke_path(
+        collector=COLLECTOR,
+        name="intake_risk_denial",
+        budget_seconds=smoke_path_budget_seconds("intake"),
+        operation=operation,
+        provider_attempts_snapshot=gateway.attempts.snapshot,
+    )
+    assert plan.merge_diagnostics is not None
+    assert plan.merge_diagnostics.status == "applied"
 
 
 @pytest.mark.real_llm

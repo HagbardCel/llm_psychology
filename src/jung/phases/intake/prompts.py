@@ -51,8 +51,16 @@ def build_patch_extraction_messages(
         "Do not infer unsupported facts.",
         "Return only semantic evidence: field, value, evidence_quote, confidence, "
         "and response_status.",
+        "Use response_status informative when the patient supplies a grounded answer, "
+        "including a clear denial of the asked dimension.",
         "Use response_status unknown or unable_to_answer only when the patient "
         f"could not answer the prompted item ({prompted_item or 'none'}).",
+        "When the prompted item is risk_screen, emit only safety.* fields the patient "
+        "explicitly addressed in the latest message; do not infer unaddressed "
+        "safety dimensions.",
+        "When the prompted item is presenting_problem, prefer "
+        "presenting_problem.main_concern for the patient's main concern; do not "
+        "emit unmapped list fields with non-informative status.",
         "Prefer an empty evidence list when the turn adds no grounded evidence.",
         f"Prompted item: {prompted_item or 'none'}",
         f"Current record summary:\n{_record_summary(record, missing_items_from_record(record))}",
