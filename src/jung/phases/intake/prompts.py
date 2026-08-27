@@ -12,7 +12,7 @@ from jung.phases.intake.completion import (
 from jung.phases.intake.models import IntakeRecord
 from jung.phases.transcript import TranscriptTurn
 
-PROMPT_VERSION = "intake-v3"
+PROMPT_VERSION = "intake-v4"
 
 
 def _record_summary(record: IntakeRecord, completeness: IntakeCompleteness) -> str:

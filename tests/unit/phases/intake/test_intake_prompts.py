@@ -17,7 +17,7 @@ from jung.phases.transcript import TranscriptTurn
 
 
 def test_patch_extraction_uses_negative_ownership_boundary() -> None:
-    assert PROMPT_VERSION == "intake-v3"
+    assert PROMPT_VERSION == "intake-v4"
     user_turn = TranscriptTurn(
         message_id=uuid4(),
         sequence=1,

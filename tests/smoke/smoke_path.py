@@ -18,9 +18,7 @@ from tests.smoke.smoke_evidence import (
 
 T = TypeVar("T")
 
-SmokePathName = Literal[
-    "therapy", "assessment", "post_session", "intake", "intake_risk_denial"
-]
+SmokePathName = Literal["therapy", "assessment", "post_session", "intake"]
 
 
 @dataclass(frozen=True, slots=True)

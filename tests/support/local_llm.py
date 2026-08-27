@@ -14,7 +14,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from jung.diagnostics import DiagnosticRecorder
+from jung.diagnostics import DiagnosticSink
 from jung.llm.gateway import (
     AdapterConfig,
     LLMTask,
@@ -113,7 +113,7 @@ def build_local_model_client(
     environment: LocalModelEnvironment,
     *,
     extra_body: dict[str, object] | None = None,
-    recorder: DiagnosticRecorder | None = None,
+    recorder: DiagnosticSink | None = None,
     on_provider_attempt: Callable[[ProviderAttemptEvent], None] | None = None,
 ) -> LocalModelClient:
     raw = OpenAICompatibleLLM(

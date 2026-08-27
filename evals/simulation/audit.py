@@ -14,8 +14,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
 
+from evals.simulation.intake_forensics import (
+    IntakeAttemptReport,
+    IntakeTurnReport,
+    build_intake_turn_reports,
+    fence_markdown,
+)
 from jung.diagnostics import (
     open_private_file,
     sanitize_url,
@@ -25,16 +30,7 @@ from jung.diagnostics import (
 from jung.domain.session_artifacts import SessionAnalysis, SessionReview
 from jung.domain.text import normalize_content
 from jung.phases.context_projection import minimal_session_briefing_projection
-from jung.phases.intake.completion import missing_items_from_record
-from jung.phases.intake.extraction import (
-    IntakeExtraction,
-    materialize_extraction,
-    prompted_item_for_extraction,
-)
-from jung.phases.intake.merge import merge_intake_record_patch_with_diagnostics
-from jung.phases.intake.models import IntakeRecord
 from jung.phases.post_session.models import PostSessionUpdateResult
-from jung.phases.transcript import TranscriptTurn
 
 SimulationStatus = Literal["complete", "failed"]
 RuntimeMechanicalStatus = Literal["RUNTIME_COMPLETE", "RUNTIME_FAILED"]
@@ -1155,245 +1151,6 @@ def _sha256_file(path: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def _excerpt(text: str, *, limit: int = 120) -> str:
-    normalized = text.strip()
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[: limit - 1] + "…"
-
-
-def _quote_valid(quote: str | None, message: str) -> bool:
-    if not quote:
-        return False
-    normalized_quote = normalize_content(quote)
-    normalized_message = normalize_content(message)
-    return bool(normalized_quote) and normalized_quote in normalized_message
-
-
-@dataclass(frozen=True, slots=True)
-class IntakeTurnReport:
-    turn: int
-    session_id: str
-    client_message_id: str
-    request_id: str | None
-    previous_assistant: str
-    patient_message: str
-    extraction_target: str | None
-    raw_count: int
-    retained_count: int
-    merge_status: str | None
-    record_changed: bool
-    prev_next_item: str | None
-    next_item: str | None
-    extraction_rows: tuple[tuple[str, str, str, bool], ...]
-    retained_paths: tuple[str, ...]
-    dropped_paths: tuple[str, ...]
-    drop_reasons: tuple[tuple[str, str], ...]
-    flags: tuple[str, ...]
-
-
-def _intake_evaluated_by_client(
-    trace: Sequence[Mapping[str, Any]],
-) -> dict[str, Mapping[str, Any]]:
-    indexed: dict[str, Mapping[str, Any]] = {}
-    for event in trace:
-        if event.get("kind") != "intake.turn.evaluated":
-            continue
-        context = event.get("context") or {}
-        client_message_id = context.get("client_message_id")
-        if isinstance(client_message_id, str):
-            indexed[client_message_id] = event.get("data") or {}
-    return indexed
-
-
-def _intake_extractions_by_client(
-    trace: Sequence[Mapping[str, Any]],
-) -> dict[str, IntakeExtraction]:
-    indexed: dict[str, IntakeExtraction] = {}
-    for event in trace:
-        if event.get("kind") != "llm.output.accepted":
-            continue
-        context = event.get("context") or {}
-        if context.get("llm_task") != "intake_patch":
-            continue
-        client_message_id = context.get("client_message_id")
-        if not isinstance(client_message_id, str):
-            continue
-        data = event.get("data") or {}
-        if data.get("output_type") != "IntakeExtraction":
-            continue
-        result = data.get("result")
-        if isinstance(result, Mapping):
-            indexed[client_message_id] = IntakeExtraction.model_validate(result)
-    return indexed
-
-
-def build_intake_turn_reports(  # noqa: C901
-    *,
-    trace: Sequence[Mapping[str, Any]],
-    snapshot_path: Path | None,
-) -> tuple[IntakeTurnReport, ...]:
-    if snapshot_path is None or not snapshot_path.is_file():
-        return ()
-    evaluated = _intake_evaluated_by_client(trace)
-    extractions = _intake_extractions_by_client(trace)
-    conn = _connect_readonly(snapshot_path)
-    try:
-        intake_session = conn.execute(
-            "SELECT id FROM sessions WHERE kind = 'intake' ORDER BY started_at LIMIT 1"
-        ).fetchone()
-        if intake_session is None:
-            return ()
-        session_id = str(intake_session["id"])
-        rows = conn.execute(
-            "SELECT id, sequence, role, content, client_message_id "
-            "FROM messages WHERE session_id = ? ORDER BY sequence",
-            (session_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    record = IntakeRecord()
-    reports: list[IntakeTurnReport] = []
-    turn = 0
-    previous_assistant = ""
-    for row in rows:
-        if row["role"] != "user":
-            if row["role"] == "assistant":
-                previous_assistant = str(row["content"])
-            continue
-        turn += 1
-        client_message_id = str(row["client_message_id"])
-        patient_message = str(row["content"])
-        eval_data = evaluated.get(client_message_id, {})
-        extraction_target = eval_data.get("extraction_target")
-        if extraction_target is None:
-            extraction_target = prompted_item_for_extraction(
-                record,
-                patient_turn_count=turn,
-            )
-        prev_next = missing_items_from_record(record).next_required_item
-        extraction = extractions.get(client_message_id)
-        extraction_rows: list[tuple[str, str, str, bool]] = []
-        retained_paths: list[str] = []
-        dropped_paths: list[str] = []
-        drop_reasons: list[tuple[str, str]] = []
-        merge_status: str | None = eval_data.get("merge_status")
-        raw_count = int(eval_data.get("raw_evidence_count") or 0)
-        retained_count = int(eval_data.get("retained_evidence_count") or 0)
-        record_changed = bool(eval_data.get("record_changed"))
-        flags: list[str] = []
-
-        if extraction is not None:
-            raw_count = len(extraction.evidence)
-            for _index, candidate in enumerate(extraction.evidence):
-                field_name = candidate.field.value
-                status = candidate.response_status
-                quote = candidate.evidence_quote
-                valid = _quote_valid(quote, patient_message)
-                extraction_rows.append((field_name, status, quote, valid))
-                if valid:
-                    flags.append("quote_found")
-            turn_model = TranscriptTurn(
-                message_id=UUID(str(row["id"])),
-                sequence=int(row["sequence"]),
-                role="user",
-                content=patient_message,
-            )
-            materialization = materialize_extraction(
-                extraction,
-                latest_user_turn=turn_model,
-                prompted_item=extraction_target,
-            )
-            merge = merge_intake_record_patch_with_diagnostics(
-                record,
-                materialization.patch,
-                latest_user_message=turn_model,
-                source_message_sequence=turn_model.sequence,
-            )
-            if merge.status == "merge_failure":
-                merge_status = "merge_failure"
-            elif raw_count == 0:
-                merge_status = "empty_patch"
-            elif merge.retained_evidence_count == 0:
-                merge_status = "empty_after_validation"
-            else:
-                merge_status = merge.status
-            retained_count = merge.retained_evidence_count
-            record_changed = merge.record_changed
-            record = merge.record
-            for reason in materialization.drop_reasons:
-                dropped_paths.append(reason.get("field_path", ""))
-                drop_reasons.append(
-                    (reason.get("field_path", ""), reason.get("reason", ""))
-                )
-            for reason in merge.drop_reasons:
-                dropped_paths.append(reason.get("field_path", ""))
-                drop_reasons.append(
-                    (reason.get("field_path", ""), reason.get("reason", ""))
-                )
-            if merge.retained_evidence_count > 0:
-                flags.append("evidence_retained")
-            if merge.record_changed:
-                flags.append("record_advanced")
-            if merge_status == "merge_failure":
-                flags.append("merge_failure")
-        elif eval_data:
-            for item in eval_data.get("drop_reasons") or []:
-                if isinstance(item, Mapping):
-                    dropped_paths.append(str(item.get("field_path", "")))
-                    drop_reasons.append(
-                        (
-                            str(item.get("field_path", "")),
-                            str(item.get("reason", "")),
-                        )
-                    )
-
-        next_item = missing_items_from_record(record).next_required_item
-        request_id = None
-        for event in trace:
-            if event.get("kind") != "intake.turn.evaluated":
-                continue
-            context = event.get("context") or {}
-            if context.get("client_message_id") == client_message_id:
-                request_id = context.get("request_id")
-                break
-
-        reports.append(
-            IntakeTurnReport(
-                turn=turn,
-                session_id=session_id,
-                client_message_id=client_message_id,
-                request_id=request_id,
-                previous_assistant=previous_assistant,
-                patient_message=patient_message,
-                extraction_target=extraction_target,
-                raw_count=raw_count,
-                retained_count=retained_count,
-                merge_status=merge_status,
-                record_changed=record_changed,
-                prev_next_item=prev_next,
-                next_item=next_item,
-                extraction_rows=tuple(extraction_rows),
-                retained_paths=tuple(retained_paths),
-                dropped_paths=tuple(dropped_paths),
-                drop_reasons=tuple(drop_reasons),
-                flags=tuple(dict.fromkeys(flags)),
-            )
-        )
-        user_sequence = int(row["sequence"])
-        next_assistant = previous_assistant
-        for candidate in rows:
-            if (
-                candidate["role"] == "assistant"
-                and int(candidate["sequence"]) > user_sequence
-            ):
-                next_assistant = str(candidate["content"])
-                break
-        previous_assistant = next_assistant
-    return tuple(reports)
-
-
 def _immutable_manifest_lines(run_dir: Path) -> list[str]:
     lines = [
         "## Section E — Immutable artifact manifest",
@@ -1423,6 +1180,61 @@ def _immutable_manifest_lines(run_dir: Path) -> list[str]:
             "",
         ]
     )
+    return lines
+
+
+def _format_intake_attempt_detail(attempt: IntakeAttemptReport) -> list[str]:
+    lines = [
+        f"#### Attempt {attempt.attempt_index} "
+        f"(request_id=`{attempt.request_id or 'none'}`)",
+        "",
+        f"- lifecycle_status: `{attempt.lifecycle_status}`",
+        f"- attempt_outcome: `{attempt.attempt_outcome}`",
+        f"- persisted_attempt: `{attempt.persisted_attempt}`",
+        f"- failure_code: `{attempt.failure_code or 'none'}`",
+        f"- extraction_target: `{attempt.extraction_target or 'none'}`",
+        f"- raw_count: {attempt.raw_count}",
+        f"- retained_count: {attempt.retained_count}",
+        f"- merge_status: `{attempt.merge_status or 'none'}`",
+        f"- planned_record_changed: {attempt.planned_record_changed}",
+        f"- persisted_record_changed: {attempt.persisted_record_changed}",
+        f"- pre_turn_next_item: `{attempt.pre_turn_next_item}`",
+        f"- planned_next_item: `{attempt.planned_next_item}`",
+        f"- persisted_next_item: `{attempt.persisted_next_item}`",
+        f"- planned_completeness_complete: {attempt.planned_completeness_complete}",
+        f"- planned_max_turn_completion_blocked: "
+        f"{attempt.planned_max_turn_completion_blocked}",
+        "- validation_retained_paths: "
+        + (
+            ", ".join(f"`{path}`" for path in attempt.validation_retained_paths)
+            or "none"
+        ),
+        "- persisted_changed_paths: "
+        + (
+            ", ".join(f"`{path}`" for path in attempt.persisted_changed_paths) or "none"
+        ),
+        "- materialization_dropped_paths: "
+        + (
+            ", ".join(f"`{path}`" for path in attempt.materialization_dropped_paths)
+            or "none"
+        ),
+        "- merge_dropped_paths: "
+        + (", ".join(f"`{path}`" for path in attempt.merge_dropped_paths) or "none"),
+        f"- deterministic_flags: {', '.join(attempt.flags) or 'none'}",
+        "",
+        "| Field | Status | Grounded quote | Quote valid? |",
+        "| --- | --- | --- | --- |",
+    ]
+    if attempt.extraction_rows:
+        for field_name, stat, quote, valid in attempt.extraction_rows:
+            safe_quote = quote.replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| `{field_name}` | {stat} | {safe_quote!r} | {valid} |")
+    else:
+        lines.append("| (none) | | | |")
+    if attempt.drop_reasons:
+        lines.extend(["", "**Drop reasons:**", ""])
+        for path, reason in attempt.drop_reasons:
+            lines.append(f"- `{path}`: {reason}")
     return lines
 
 
@@ -1471,6 +1283,7 @@ def render_audit_markdown(  # noqa: C901
     run_dir: Path | None = None,
     intake_session_ended_in_intake: bool | None = None,
     workflow_reachability: Mapping[str, str] | None = None,
+    patient_extra_body: Mapping[str, Any] | None = None,
 ) -> str:
     resolved_runtime = runtime_status or (
         "RUNTIME_FAILED" if status == "failed" else "RUNTIME_COMPLETE"
@@ -1516,7 +1329,15 @@ def render_audit_markdown(  # noqa: C901
             "reproducible from git_commit alone."
         )
     lines.extend(["", "## Run configuration", "", "```json"])
-    lines.append(json.dumps(dict(run_config), indent=2, default=str))
+    display_config = {
+        key: value
+        for key, value in dict(run_config).items()
+        if key != "patient_extra_body"
+    }
+    # Preserve None vs {}: omit key when None; emit {} when empty mapping.
+    if patient_extra_body is not None:
+        display_config["patient_extra_body"] = dict(patient_extra_body)
+    lines.append(json.dumps(display_config, indent=2, default=str))
     lines.extend(["```", ""])
     if primary_failure is not None or journey_error_message is not None:
         lines.extend(
@@ -1547,59 +1368,60 @@ def render_audit_markdown(  # noqa: C901
             [
                 "## Section B — Intake overview",
                 "",
-                "| Turn | Prev assistant excerpt | Patient excerpt | "
-                "Extraction target | Raw | Retained | Merge | Record Δ | "
-                "Prev next | Next item | Anchor |",
-                "| ---: | --- | --- | --- | ---: | ---: | --- | --- | "
-                "--- | --- | --- |",
+                "| Turn | Durable | Commit | Attempt | Request | Outcome | "
+                "Persisted | Target | Raw | Retained | "
+                "Planned next | Persisted next | Correlation |",
+                "| ---: | --- | --- | ---: | --- | --- | --- | --- | "
+                "---: | ---: | --- | --- | --- |",
             ]
         )
         for report in intake_reports:
-            anchor = (
-                f"turn-{report.turn} "
-                f"session={report.session_id} "
-                f"client={report.client_message_id}"
-            )
-            lines.append(
-                f"| {report.turn} | {_excerpt(report.previous_assistant)!r} | "
-                f"{_excerpt(report.patient_message)!r} | "
-                f"{report.extraction_target or 'none'} | {report.raw_count} | "
-                f"{report.retained_count} | {report.merge_status or 'none'} | "
-                f"{report.record_changed} | {report.prev_next_item or 'none'} | "
-                f"{report.next_item or 'none'} | `{anchor}` |"
-            )
+            correlation = ", ".join(report.correlation_findings) or "none"
+            for attempt in report.attempts:
+                planned_next = (
+                    "none"
+                    if attempt.planned_next_item is None
+                    else str(attempt.planned_next_item)
+                )
+                persisted_next = (
+                    "none"
+                    if attempt.persisted_next_item is None
+                    else str(attempt.persisted_next_item)
+                )
+                lines.append(
+                    f"| {report.turn} | {report.durable_commit} | "
+                    f"{report.commit_status} | {attempt.attempt_index} | "
+                    f"`{attempt.request_id or 'none'}` | "
+                    f"{attempt.attempt_outcome} | {attempt.persisted_attempt} | "
+                    f"{attempt.extraction_target or 'none'} | "
+                    f"{attempt.raw_count} | {attempt.retained_count} | "
+                    f"{planned_next} | {persisted_next} | {correlation} |"
+                )
         for report in intake_reports:
             lines.extend(
                 [
                     "",
                     f"### Turn {report.turn} detail (`{report.client_message_id}`)",
                     "",
+                    f"- durable_commit: `{report.durable_commit}`",
+                    f"- commit_status: `{report.commit_status}`",
+                    "- correlation_findings: "
+                    f"{', '.join(report.correlation_findings) or 'none'}",
+                    "",
                     "**Previous therapist-visible message:**",
                     "",
-                    report.previous_assistant or "(none)",
+                    fence_markdown(report.previous_assistant or "(none)"),
                     "",
                     "**Patient-visible message:**",
                     "",
-                    report.patient_message,
+                    fence_markdown(report.patient_message),
                     "",
-                    f"**extraction_target:** `{report.extraction_target or 'none'}`",
-                    "",
-                    "| Field | Status | Grounded quote | Quote valid? |",
-                    "| --- | --- | --- | --- |",
                 ]
             )
-            if report.extraction_rows:
-                for field_name, stat, quote, valid in report.extraction_rows:
-                    lines.append(f"| `{field_name}` | {stat} | {quote!r} | {valid} |")
-            else:
-                lines.append("| (none) | | | |")
+            for attempt in report.attempts:
+                lines.extend(_format_intake_attempt_detail(attempt))
             lines.extend(
                 [
-                    "",
-                    f"- merge_status: `{report.merge_status or 'none'}`",
-                    f"- record_changed: {report.record_changed}",
-                    f"- next_required_item: `{report.next_item or 'none'}`",
-                    f"- deterministic_flags: {', '.join(report.flags) or 'none'}",
                     "",
                     "**Questions for reviewer (not answered here):**",
                     "",
@@ -1800,6 +1622,9 @@ def _audit_final_database(
     return resolved
 
 
+_JOURNEY_RECORDS_LOAD = object()
+
+
 def run_mechanical_audit(
     *,
     run_dir: Path,
@@ -1807,8 +1632,16 @@ def run_mechanical_audit(
     configured_sessions: int,
     therapy_sessions: Sequence[Mapping[str, Any]],
     initial_ready_reached: bool,
+    journey_records: Sequence[Mapping[str, Any]] | None | object = (
+        _JOURNEY_RECORDS_LOAD
+    ),
 ) -> AuditResult:
-    """Collect forensic findings from checkpoints, final snapshot, and trace."""
+    """Collect forensic findings from checkpoints, final snapshot, and trace.
+
+    ``journey_records`` is ``None`` when the journey log is unreadable, a
+    (possibly empty) list when loaded successfully, or omitted to load from
+    ``run_dir / journey.jsonl`` (unit-test convenience).
+    """
     audit = AuditResult()
     checkpoints_dir = run_dir / "checkpoints"
     _audit_checkpoints(
@@ -1825,14 +1658,28 @@ def run_mechanical_audit(
         therapy_sessions=therapy_sessions,
     )
 
-    journey = load_jsonl(run_dir / "journey.jsonl")
-    if snapshot is not None and snapshot.is_file():
+    resolved_journey: Sequence[Mapping[str, Any]] | None
+    if journey_records is _JOURNEY_RECORDS_LOAD:
+        try:
+            resolved_journey = load_jsonl(run_dir / "journey.jsonl")
+        except Exception:
+            resolved_journey = None
+    else:
+        resolved_journey = journey_records  # type: ignore[assignment]
+
+    if resolved_journey is None:
+        audit.na(
+            "journey_chat_persistence",
+            "journey-to-SQLite persistence comparisons skipped",
+            reason="journey_log_unreadable",
+        )
+    elif snapshot is not None and snapshot.is_file():
         conn = _connect_readonly(snapshot)
         try:
             with _safe_section(
                 audit, "journey_chat_persistence", "journey_chat_persistence"
             ):
-                audit_journey_chat_persistence(conn, journey, audit)
+                audit_journey_chat_persistence(conn, resolved_journey, audit)
         finally:
             conn.close()
 
@@ -1876,11 +1723,17 @@ def run_mechanical_audit(
                         "missing_llm_call_started",
                         "llm.provider.request without llm.call.started",
                     )
+                elif resolved_journey is None:
+                    audit.na(
+                        "provider_prompt_chains",
+                        "journey-dependent provider prompt-chain checks skipped",
+                        reason="journey_log_unreadable",
+                    )
                 else:
                     _audit_provider_prompt_chains(
                         audit=audit,
                         trace=trace,
-                        journey=journey,
+                        journey=resolved_journey,
                         configured_sessions=configured_sessions,
                         therapy_sessions=therapy_sessions,
                         initial_ready_reached=initial_ready_reached,

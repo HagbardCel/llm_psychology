@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from jung.diagnostics import open_private_file
 from jung.llm.openai_compatible import ProviderAttemptEvent
 
 
@@ -118,7 +119,6 @@ class SmokeEvidenceCollector:
     assessment: SmokePathResult | None = None
     post_session: SmokePathResult | None = None
     intake: SmokePathResult | None = None
-    intake_risk_denial: SmokePathResult | None = None
 
     def to_payload(self) -> dict[str, Any]:
         path_results = [
@@ -153,7 +153,6 @@ class SmokeEvidenceCollector:
             "assessment",
             "post_session",
             "intake",
-            "intake_risk_denial",
         ):
             result = getattr(self, key)
             if result is None:
@@ -201,7 +200,6 @@ class SmokeEvidenceCollector:
                 self.assessment,
                 self.post_session,
                 self.intake,
-                self.intake_risk_denial,
             )
         )
 
@@ -225,13 +223,8 @@ def write_smoke_evidence_markdown(
         "```",
         "",
     ]
-    risk = payload.get("intake_risk_denial")
-    if isinstance(risk, Mapping):
-        lines.append(f"intake_risk_denial_status: {risk.get('status')}")
-        lines.append(f"intake_risk_denial_success: {risk.get('success')}")
-        if risk.get("error_type"):
-            lines.append(f"primary_failure: {risk.get('error_type')}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open_private_file(path, mode="w") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
 def render_smoke_evidence(collector: SmokeEvidenceCollector) -> str | None:

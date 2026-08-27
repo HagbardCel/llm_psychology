@@ -2426,3 +2426,72 @@ def test_fallback_audit_on_runtime_complete_never_emits_simulation_completed(
     assert terminal["data"]["audit_status"] == "FALLBACK"
     fallback = (run_dir / "audit.md").read_text(encoding="utf-8")
     assert "audit_status: FALLBACK" in fallback
+
+
+def test_malformed_journey_still_writes_terminal_artifacts(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-bad-journey")
+    journey = JourneyLog(run_dir / "journey.jsonl")
+    # JourneyLog creates an empty file; overwrite with corrupt content so load fails
+    # while append still works for the terminal line.
+    write_private_text(run_dir / "journey.jsonl", "{not-json\n")
+    result = _finalize_run(
+        config=SimulationConfig(
+            scenario=get_scenario("anxiety_sleep"),
+            sessions=1,
+            turns_per_session=1,
+        ),
+        run_dir=run_dir,
+        journey=journey,
+        run_config={
+            "scenario_id": "anxiety_sleep",
+            "patient_model": "test-model",
+            "patient_endpoint": "http://127.0.0.1:8000/v1",
+        },
+        therapy_records=[],
+        progress=SimulationProgress(),
+        provider_trace_required=False,
+        started_at="2020-01-01T00:00:00Z",
+        journey_error=None,
+        error_code=None,
+        error_message=None,
+        api_error=None,
+        patient_extra_body_provenance=None,
+    )
+    assert result.status == "failed"
+    assert (run_dir / "audit.md").is_file()
+    assert (run_dir / "run.json").is_file()
+    audit_text = (run_dir / "audit.md").read_text(encoding="utf-8")
+    assert "journey_log_read_failed" in audit_text
+    assert "patient_metrics_failed" in audit_text
+    run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert "patient_metrics" not in run_payload
+    physical_lines = [
+        line
+        for line in (run_dir / "journey.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    terminal = json.loads(physical_lines[-1])
+    finding_codes = terminal["data"]["finding_codes"]
+    assert "journey_log_read_failed" in finding_codes
+    assert "patient_metrics_failed" in finding_codes
+    assert "chat_journey_cardinality" not in finding_codes
+    assert "missing_assistant_message" not in finding_codes
+
+
+def test_run_mechanical_audit_skips_journey_checks_when_none(tmp_path: Path) -> None:
+    run_dir = allocate_run_directory(tmp_path / "run-journey-none")
+    audit = run_mechanical_audit(
+        run_dir=run_dir,
+        provider_trace_required=False,
+        configured_sessions=0,
+        initial_ready_reached=False,
+        therapy_sessions=[],
+        journey_records=None,
+    )
+    codes = {finding.code for finding in audit.findings}
+    assert "chat_journey_cardinality" not in codes
+    na_persistence = [
+        item for item in audit.not_applicable if item.code == "journey_chat_persistence"
+    ]
+    assert na_persistence
+    assert na_persistence[0].evidence.get("reason") == "journey_log_unreadable"

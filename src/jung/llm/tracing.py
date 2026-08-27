@@ -11,7 +11,7 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from jung._async_cleanup import close_awaitable_safely
-from jung.diagnostics import DiagnosticRecorder, diagnostic_context
+from jung.diagnostics import DiagnosticSink, diagnostic_context
 from jung.llm.errors import LLMTimeout
 from jung.llm.gateway import (
     ChatMessage,
@@ -35,7 +35,7 @@ class ObservedLLMGateway:
         *,
         role: LLMRole | None = None,
         log_metadata: bool = False,
-        recorder: DiagnosticRecorder | None = None,
+        recorder: DiagnosticSink | None = None,
     ) -> None:
         self._inner = inner
         self._role = role

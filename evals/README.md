@@ -12,6 +12,8 @@ evals/
 ├── harness.py               # Phase execution + citation-integrity verification
 ├── scenarios.py             # Scenario data and transcripts
 ├── test_hard_invariants.py  # make evals       — pass/fail oracles
+├── test_intake_clear_risk_denial.py  # make evals — Category C denial retention
+├── intake_risk_denial_evidence.py   # Category C evidence digests / writer
 ├── behavioral_report.py     # make eval-report — diagnostic report
 ├── phase8b/                 # closed server-scheduling benchmark (archived)
 ├── phase8c/                 # closed parallel-journey experiment (see OUTCOME)
@@ -284,14 +286,23 @@ patient turn is a valid result. So the eval asserts integrity *if emitted* and
 accepts empty citations. It deliberately does not require a therapist turn to
 be selected as an intervention.
 
-The negation eval is the one deliberate exception, transferred here from the
-strict local-model smoke. It requires a specific patient turn to be selected
-via `patient_turn_citation`. That is a *model-behavior* requirement, not a
-production schema requirement: the runtime will accept an empty selection, but a
-model that drops a safety-relevant negation from durable memory is not one we are
-willing to run. Read a failure as "this model is unsuitable", not "the backend
-is broken". Any future requirement of this kind must be documented here with
-the same explicit reasoning.
+Two deliberate exceptions live here alongside schema-faithful oracles:
+
+- **Safety-relevant negation selection** (in `test_hard_invariants.py`),
+  transferred from the strict local-model smoke. It requires a specific patient
+  turn to be selected via `patient_turn_citation`. That is a *model-behavior*
+  requirement, not a production schema requirement: the runtime will accept an
+  empty selection, but a model that drops a safety-relevant negation from
+  durable memory is not one we are willing to run.
+- **Category C clear risk-denial retention**
+  (`test_intake_clear_risk_denial.py`). A clear dual safety denial must retain
+  grounded `safety.self_harm` / `safety.harm_to_others` evidence with valid
+  quotes. Opt-in `JUNG_DEBUG_RUN_DIR` writes a private evidence artifact with
+  provider-request digests; unset means no Category C evidence file.
+
+Read a failure as "this model is unsuitable", not "the backend is broken". Any
+future requirement of this kind must be documented here with the same explicit
+reasoning.
 
 ## This is not therapeutic-quality validation
 
