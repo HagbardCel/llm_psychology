@@ -25,6 +25,7 @@ from evals.simulation.intake_forensics import (
     format_merge_status_evidence,
     format_path_evidence,
     format_target_evidence,
+    intake_evaluated_coverage_findings,
 )
 from jung.diagnostics import (
     open_private_file,
@@ -1221,13 +1222,17 @@ def _format_intake_attempt_detail(attempt: IntakeAttemptReport) -> list[str]:
         "| Field | Status | Grounded quote | Quote valid? |",
         "| --- | --- | --- | --- |",
     ]
-    if attempt.extraction_rows:
+    if attempt.extraction_rows == UNKNOWN:
+        lines.append(f"| {UNKNOWN} | | | |")
+    elif attempt.extraction_rows:
         for field_name, stat, quote, valid in attempt.extraction_rows:
             safe_quote = quote.replace("|", "\\|").replace("\n", " ")
             lines.append(f"| `{field_name}` | {stat} | {safe_quote!r} | {valid} |")
     else:
         lines.append("| (none) | | | |")
-    if attempt.drop_reasons:
+    if attempt.drop_reasons == UNKNOWN:
+        lines.extend(["", "**Drop reasons:**", "", f"- {UNKNOWN}"])
+    elif attempt.drop_reasons:
         lines.extend(["", "**Drop reasons:**", ""])
         for path, reason in attempt.drop_reasons:
             lines.append(f"- `{path}`: {reason}")
@@ -1437,19 +1442,12 @@ def render_audit_markdown(  # noqa: C901
                     "- Was keeping intake open reasonable?",
                 ]
             )
-    if trace is not None:
-        evaluated_count = sum(
-            1 for event in trace if event.get("kind") == "intake.turn.evaluated"
-        )
-        patient_turns = len(intake_reports)
-        if patient_turns and evaluated_count < patient_turns:
-            lines.extend(
-                [
-                    "",
-                    f"WARNING: missing intake.turn.evaluated events "
-                    f"({evaluated_count}/{patient_turns})",
-                ]
-            )
+    if trace is not None and intake_reports:
+        for finding in intake_evaluated_coverage_findings(
+            trace=trace,
+            intake_reports=intake_reports,
+        ):
+            lines.extend(["", finding])
     lines.extend(
         [
             "",

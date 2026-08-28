@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from evals.simulation.audit import _format_intake_attempt_detail
 from evals.simulation.intake_forensics import (
     UNKNOWN,
@@ -793,3 +795,411 @@ def test_null_evaluated_counts_do_not_override_replay_counts(
     attempt = reports[0].attempts[0]
     assert attempt.raw_count == 1
     assert attempt.retained_count == 1
+
+
+def test_latched_turn_preserves_evaluated_metadata_with_extraction(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_one = str(uuid4())
+    client_two = str(uuid4())
+    request_one = str(uuid4())
+    request_two = str(uuid4())
+    patient_text = "I have been anxious in seminars lately."
+    _write_intake_snapshot(
+        snapshot,
+        turns=[
+            (client_one, "About six months", True),
+            (client_two, patient_text, True),
+        ],
+    )
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="anxiety in seminars",
+                evidence_quote="anxious in seminars lately",
+            )
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=1,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=2,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_one,
+            request_id=request_one,
+            sequence=3,
+            data={
+                "record_changed": True,
+                "next_required_item": "duration",
+                "merge_status": "applied",
+            },
+        ),
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=4,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=5,
+            extraction=extraction,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=6,
+            data={
+                "retained_evidence_count": 1,
+                "merge_status": "applied",
+                "drop_reasons": [],
+            },
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_two,
+            request_id=request_two,
+            sequence=7,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    turn_two = reports[1]
+    attempt = turn_two.attempts[0]
+    assert attempt.raw_count == 1
+    assert attempt.retained_count == 1
+    assert attempt.merge_status == "applied"
+    assert attempt.materialization_dropped_paths == ()
+    assert attempt.merge_dropped_paths == ()
+    assert attempt.drop_reasons == ()
+
+
+@pytest.mark.parametrize(
+    ("drop_reasons", "expected_paths", "expected_drops"),
+    [
+        (None, UNKNOWN, UNKNOWN),
+        ([], (), ()),
+        ("not-a-sequence", UNKNOWN, UNKNOWN),
+        (["bad"], UNKNOWN, UNKNOWN),
+        ([{"field_path": ""}], UNKNOWN, UNKNOWN),
+    ],
+)
+def test_drop_reasons_observation_matrix(
+    tmp_path: Path,
+    drop_reasons: object,
+    expected_paths: object,
+    expected_drops: object,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    data: dict[str, Any] = {"merge_status": "applied"}
+    if drop_reasons is not None:
+        data["drop_reasons"] = drop_reasons
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            data=data,
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.materialization_dropped_paths == expected_paths
+    assert attempt.merge_dropped_paths == expected_paths
+    assert attempt.drop_reasons == expected_drops
+
+
+def test_merge_status_null_renders_unknown(tmp_path: Path) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            data={"merge_status": None},
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    assert reports[0].attempts[0].merge_status == UNKNOWN
+
+
+def test_duplicate_evaluated_preserves_extraction_replay(tmp_path: Path) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    patient_text = "I have been anxious in seminars lately."
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, patient_text, True)],
+    )
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="anxiety",
+                evidence_quote="anxious in seminars lately",
+            )
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            extraction=extraction,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+            data={"merge_status": "applied", "retained_evidence_count": 1},
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=4,
+            data={"merge_status": "empty_patch", "retained_evidence_count": 0},
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=5,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert "duplicate_intake_turn_evaluated" in attempt.flags
+    assert len(attempt.extraction_rows) == 1
+    assert attempt.retained_count == UNKNOWN
+    assert attempt.merge_status == UNKNOWN
+
+
+def test_duplicate_extraction_accepted_flags_and_unknown_rows(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    patient_text = "I have been anxious in seminars lately."
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, patient_text, True)],
+    )
+    extraction_a = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="a",
+                evidence_quote="anxious in seminars lately",
+            )
+        ]
+    )
+    extraction_b = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="b",
+                evidence_quote="anxious in seminars lately",
+            )
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            extraction=extraction_a,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+            extraction=extraction_b,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=4,
+            data={"record_changed": True, "next_required_item": "duration"},
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=5,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.extraction_rows == UNKNOWN
+    assert attempt.raw_count == UNKNOWN
+    assert "duplicate_intake_extraction_accepted" in attempt.flags
+    assert "committed_state_reconstruction_unavailable" in attempt.flags
+    assert "missing_accepted_extraction_for_committed_change" not in attempt.flags
+
+
+def test_duplicate_extraction_record_changed_false_emits_single_flag(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="a",
+                evidence_quote="cannot sleep",
+            )
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            extraction=extraction,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+            extraction=extraction,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=4,
+            data={"record_changed": False, "merge_status": "empty_patch"},
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=5,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert "duplicate_intake_extraction_accepted" in attempt.flags
+    assert "committed_state_reconstruction_unavailable" not in attempt.flags
+    assert attempt.persisted_record_changed is False
+
+
+def test_legacy_none_request_id_evaluated_ambiguity(tmp_path: Path) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, "I cannot sleep", True)],
+    )
+    trace = [
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=None,
+            sequence=1,
+            data={"merge_status": "applied", "retained_evidence_count": 1},
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=None,
+            sequence=2,
+            data={"merge_status": "empty_patch", "retained_evidence_count": 0},
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=None,
+            sequence=3,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert "legacy_intake_turn_evaluated_attribution_ambiguous" in attempt.flags
+    assert attempt.retained_count == UNKNOWN
+    assert attempt.merge_status == UNKNOWN

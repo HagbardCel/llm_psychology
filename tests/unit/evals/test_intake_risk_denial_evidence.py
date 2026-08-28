@@ -121,18 +121,23 @@ def _provider_terminal_event(
     provider_attempt_id: str,
     attempt: str,
     status: str = "success",
+    kind: str = "llm.provider.response",
+    error_type: str | None = None,
 ) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "provider_attempt_id": provider_attempt_id,
+        "llm_call_id": llm_call_id,
+        "task": "intake_patch",
+        "attempt": attempt,
+        "status": status,
+    }
+    if error_type is not None:
+        data["error_type"] = error_type
     return {
         "sequence": 2,
-        "kind": "llm.provider.response",
+        "kind": kind,
         "context": {},
-        "data": {
-            "provider_attempt_id": provider_attempt_id,
-            "llm_call_id": llm_call_id,
-            "task": "intake_patch",
-            "attempt": attempt,
-            "status": status,
-        },
+        "data": data,
     }
 
 
@@ -332,7 +337,7 @@ def test_correction_accepted_canonical_uses_initial_request() -> None:
             llm_call_id=llm_call_id,
             provider_attempt_id="pa-initial",
             attempt="initial",
-            status="failed",
+            status="success",
         )["data"],
     )
     recorder.record(
@@ -872,3 +877,235 @@ async def test_intake_clear_risk_denial_preserves_cleanup_failure(
     assert caught.value is cleanup_exc
     assert prepare_turn_calls == 1
     assert fake_client.aclose_calls == 1
+
+
+def _build_correlation_recorder(
+    *,
+    llm_call_id: str = "call-matrix",
+    initial_terminal: dict[str, Any] | None = None,
+    correction_terminal: dict[str, Any] | None = None,
+    include_correction: bool = False,
+    correction_trigger: str | None = "schema_invalid",
+    accepted_in_recorder: bool = True,
+) -> MemoryDiagnosticRecorder:
+    recorder = MemoryDiagnosticRecorder()
+    messages = [{"role": "user", "content": "hello"}]
+    recorder.record(
+        "llm.provider.request",
+        _provider_request_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            messages=messages,
+        )["data"],
+    )
+    init_term = initial_terminal or _provider_terminal_event(
+        llm_call_id=llm_call_id,
+        provider_attempt_id="pa-initial",
+        attempt="initial",
+    )
+    recorder.record(init_term["kind"], init_term["data"])
+    if include_correction:
+        recorder.record(
+            "llm.provider.request",
+            _provider_request_event(
+                llm_call_id=llm_call_id,
+                provider_attempt_id="pa-correction",
+                attempt="correction",
+                messages=[*messages, {"role": "user", "content": "fix"}],
+                correction_trigger=correction_trigger,
+            )["data"],
+        )
+        corr_term = correction_terminal or _provider_terminal_event(
+            llm_call_id=llm_call_id,
+            provider_attempt_id="pa-correction",
+            attempt="correction",
+        )
+        recorder.record(corr_term["kind"], corr_term["data"])
+    if accepted_in_recorder:
+        recorder.record(
+            "llm.output.accepted",
+            {
+                "output_type": "IntakeExtraction",
+                "result": {"evidence": []},
+                "llm_call_id": llm_call_id,
+                "task": "intake_patch",
+            },
+        )
+    return recorder
+
+
+@pytest.mark.parametrize(
+    ("mutator", "error_substring"),
+    [
+        (
+            lambda r: r.events.__setitem__(
+                0,
+                {
+                    **r.events[0],
+                    "data": {
+                        **r.events[0]["data"],
+                        "task": "therapy_response",
+                    },
+                },
+            ),
+            "provider request task mismatch",
+        ),
+        (
+            lambda r: r.events.__setitem__(
+                1,
+                {
+                    **r.events[1],
+                    "data": {
+                        **r.events[1]["data"],
+                        "task": "therapy_response",
+                    },
+                },
+            ),
+            "provider terminal task mismatch",
+        ),
+        (
+            lambda r: r.events.__setitem__(
+                1,
+                {
+                    **r.events[1],
+                    "data": {
+                        **r.events[1]["data"],
+                        "attempt": "correction",
+                    },
+                },
+            ),
+            "provider terminal attempt mismatch",
+        ),
+        (
+            lambda r: r.events.__setitem__(
+                1,
+                {
+                    **r.events[1],
+                    "data": {
+                        **r.events[1]["data"],
+                        "status": "failed",
+                    },
+                },
+            ),
+            "requires status=success",
+        ),
+        (
+            lambda r: r.events.__setitem__(
+                1,
+                {
+                    **r.events[1],
+                    "kind": "llm.provider.error",
+                    "data": {
+                        **r.events[1]["data"],
+                        "status": "success",
+                    },
+                },
+            ),
+            "must not have status=success",
+        ),
+    ],
+)
+def test_correlate_terminal_legality_matrix(
+    mutator: object,
+    error_substring: str,
+) -> None:
+    recorder = _build_correlation_recorder()
+    mutator(recorder)
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert correlation is None
+    assert any(error_substring in err for err in errors)
+
+
+def test_correlate_rejects_correction_without_trigger() -> None:
+    recorder = _build_correlation_recorder(
+        include_correction=True, correction_trigger=None
+    )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert correlation is None
+    assert any("correction_trigger" in err for err in errors)
+
+
+def test_correlate_rejects_illegal_correction_predecessor() -> None:
+    recorder = _build_correlation_recorder(
+        include_correction=True,
+        initial_terminal=_provider_terminal_event(
+            llm_call_id="call-matrix",
+            provider_attempt_id="pa-initial",
+            attempt="initial",
+            kind="llm.provider.error",
+            status="timeout",
+            error_type="LLMTimeout",
+        ),
+    )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert correlation is None
+    assert any("illegal correction predecessor" in err for err in errors)
+
+
+def test_correlate_rejects_accepted_after_final_terminal_error() -> None:
+    recorder = _build_correlation_recorder(
+        include_correction=True,
+        correction_terminal=_provider_terminal_event(
+            llm_call_id="call-matrix",
+            provider_attempt_id="pa-correction",
+            attempt="correction",
+            kind="llm.provider.error",
+            status="failed",
+            error_type="InvalidLLMOutput",
+        ),
+    )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert correlation is None
+    assert any("accepted attempt" in err for err in errors)
+
+
+def test_correlate_accepts_production_shaped_accepted_event() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "call-prod"
+    messages = [{"role": "user", "content": "hello"}]
+    with diagnostic_context(llm_call_id=llm_call_id, llm_task="intake_patch"):
+        recorder.record(
+            "llm.provider.request",
+            _provider_request_event(
+                llm_call_id=llm_call_id,
+                provider_attempt_id="pa-initial",
+                attempt="initial",
+                messages=messages,
+            )["data"],
+        )
+        recorder.record(
+            "llm.provider.response",
+            _provider_terminal_event(
+                llm_call_id=llm_call_id,
+                provider_attempt_id="pa-initial",
+                attempt="initial",
+            )["data"],
+        )
+        recorder.record(
+            "llm.output.accepted",
+            {
+                "output_type": "IntakeExtraction",
+                "result": {"evidence": []},
+            },
+        )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert errors == []
+    assert correlation is not None
+
+
+def test_correlate_rejects_conflicting_accepted_task_sources() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "call-conflict"
+    with diagnostic_context(llm_call_id=llm_call_id, llm_task="intake_patch"):
+        recorder.record(
+            "llm.output.accepted",
+            {
+                "output_type": "IntakeExtraction",
+                "result": {"evidence": []},
+                "task": "therapy_response",
+            },
+        )
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert correlation is None
+    assert any("task conflict" in err for err in errors)

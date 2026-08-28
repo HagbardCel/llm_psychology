@@ -180,6 +180,26 @@ class IntakePatchCorrelation:
     initial_request_data: Mapping[str, Any]
 
 
+def _resolve_accepted_event_task(
+    event: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    context = event.get("context") or {}
+    data = event.get("data") or {}
+    context_task = context.get("llm_task") if isinstance(context, Mapping) else None
+    data_task = data.get("task") if isinstance(data, Mapping) else None
+    context_present = context_task is not None
+    data_present = data_task is not None
+    if context_present and not data_present:
+        return str(context_task), None
+    if not context_present and data_present:
+        return str(data_task), None
+    if context_present and data_present:
+        if str(context_task) != str(data_task):
+            return None, "accepted event context/data task conflict"
+        return str(context_task), None
+    return None, "accepted event missing task"
+
+
 def correlate_intake_patch_call(  # noqa: C901
     recorder: MemoryDiagnosticRecorder,
     *,
@@ -193,51 +213,44 @@ def correlate_intake_patch_call(  # noqa: C901
         "llm.provider.error",
         "llm.output.accepted",
     }
-    scoped = [
+
+    accepted_candidates = [
         event
         for event in recorder.events
-        if event.get("kind") in logical_kinds
+        if event.get("kind") == "llm.output.accepted"
         and isinstance(event.get("data"), Mapping)
-        and (
-            event.get("kind") == "llm.output.accepted"
-            or event["data"].get("task") == task
-            or (event.get("context") or {}).get("llm_task") == task
-        )
+        and event["data"].get("output_type") == "IntakeExtraction"
     ]
-    if not scoped:
-        errors.append(f"{task}: no correlated diagnostic events")
+
+    valid_accepted: list[dict[str, Any]] = []
+    for event in accepted_candidates:
+        resolved_task, task_error = _resolve_accepted_event_task(event)
+        if task_error is not None:
+            errors.append(f"{task}: {task_error}")
+            continue
+        if resolved_task != task:
+            continue
+        valid_accepted.append(dict(event))
+
+    if not valid_accepted:
+        if not errors:
+            errors.append(f"{task}: no accepted IntakeExtraction for expected task")
         return None, errors
 
-    if any(_event_llm_call_id(event) is None for event in scoped):
-        errors.append(f"{task}: provider/accepted event missing llm_call_id")
-        return None, errors
-
-    call_ids = {_event_llm_call_id(event) for event in scoped}
-    if len(call_ids) != 1:
+    if len(valid_accepted) != 1:
         errors.append(
-            f"{task}: expected exactly one llm_call_id, got {sorted(call_ids)!r}"
-        )
-        return None, errors
-    llm_call_id = next(iter(call_ids))
-    assert llm_call_id is not None
-
-    call_events = [
-        event for event in scoped if _event_llm_call_id(event) == llm_call_id
-    ]
-    accepted_events = [
-        event for event in call_events if event.get("kind") == "llm.output.accepted"
-    ]
-    if len(accepted_events) != 1:
-        errors.append(
-            f"{task}: expected exactly one llm.output.accepted, "
-            f"got {len(accepted_events)}"
+            f"{task}: expected exactly one accepted IntakeExtraction, "
+            f"got {len(valid_accepted)}"
         )
         return None, errors
 
-    accepted_data = accepted_events[0].get("data") or {}
-    if accepted_data.get("output_type") != "IntakeExtraction":
-        errors.append(f"{task}: accepted output_type is not IntakeExtraction")
+    accepted_event = valid_accepted[0]
+    llm_call_id = _event_llm_call_id(accepted_event)
+    if llm_call_id is None:
+        errors.append(f"{task}: accepted event missing llm_call_id")
         return None, errors
+
+    accepted_data = accepted_event.get("data") or {}
     raw_result = accepted_data.get("result")
     if not isinstance(raw_result, Mapping):
         errors.append(f"{task}: accepted result is not a mapping")
@@ -246,6 +259,20 @@ def correlate_intake_patch_call(  # noqa: C901
         accepted_extraction = IntakeExtraction.model_validate(raw_result)
     except Exception as exc:
         errors.append(f"{task}: accepted extraction invalid: {exc}")
+        return None, errors
+
+    call_events = [
+        event
+        for event in recorder.events
+        if event.get("kind") in logical_kinds
+        and _event_llm_call_id(event) == llm_call_id
+    ]
+    if not call_events:
+        errors.append(f"{task}: no provider events for llm_call_id {llm_call_id!r}")
+        return None, errors
+
+    if any(_event_llm_call_id(event) is None for event in call_events):
+        errors.append(f"{task}: provider/accepted event missing llm_call_id")
         return None, errors
 
     requests_by_id: dict[str, dict[str, Any]] = {}
@@ -290,12 +317,49 @@ def correlate_intake_patch_call(  # noqa: C901
         if not isinstance(request_data, Mapping):
             errors.append(f"{task}: provider request data invalid")
             continue
+        request_task = request_data.get("task")
+        if request_task != task:
+            errors.append(
+                f"{task}: provider request task mismatch for {attempt_id!r}: "
+                f"expected {task!r}, got {request_task!r}"
+            )
+            continue
         attempt_label = request_data.get("attempt")
         if attempt_label not in {"initial", "correction"}:
             errors.append(
                 f"{task}: illegal attempt label {attempt_label!r} for {attempt_id!r}"
             )
             continue
+        terminal_event = terminals[0]
+        terminal_kind = terminal_event.get("kind")
+        terminal_data = terminal_event.get("data") or {}
+        if not isinstance(terminal_data, Mapping):
+            errors.append(f"{task}: provider terminal data invalid")
+            continue
+        terminal_task = terminal_data.get("task")
+        terminal_attempt = terminal_data.get("attempt")
+        if terminal_task != request_task or terminal_task != task:
+            errors.append(f"{task}: provider terminal task mismatch for {attempt_id!r}")
+            continue
+        if terminal_attempt != attempt_label:
+            errors.append(
+                f"{task}: provider terminal attempt mismatch for {attempt_id!r}: "
+                f"expected {attempt_label!r}, got {terminal_attempt!r}"
+            )
+            continue
+        status = str(terminal_data.get("status", "unknown"))
+        if terminal_kind == "llm.provider.response":
+            if status != "success":
+                errors.append(
+                    f"{task}: provider response for {attempt_id!r} requires "
+                    f"status=success, got {status!r}"
+                )
+        elif terminal_kind == "llm.provider.error":
+            if status == "success":
+                errors.append(
+                    f"{task}: provider error for {attempt_id!r} must not have "
+                    f"status=success"
+                )
         structured_raw = request_data.get("structured_output_mode")
         structured_mode = (
             StructuredOutputMode(structured_raw)
@@ -305,8 +369,6 @@ def correlate_intake_patch_call(  # noqa: C901
         digests = digests_from_provider_request_data(
             request_data, structured_mode=structured_mode
         )
-        terminal_data = terminals[0].get("data") or {}
-        status = str(terminal_data.get("status", "unknown"))
         correction_trigger = request_data.get("correction_trigger")
         if attempt_label == "initial":
             if initial_request_data is not None:
@@ -330,9 +392,43 @@ def correlate_intake_patch_call(  # noqa: C901
     if attempt_sequence not in (["initial"], ["initial", "correction"]):
         errors.append(f"{task}: illegal physical-attempt sequence {attempt_sequence!r}")
 
+    if attempt_sequence == ["initial", "correction"]:
+        correction_row = ordered_rows[1]
+        if not correction_row.correction_trigger:
+            errors.append(
+                f"{task}: correction request missing non-empty correction_trigger"
+            )
+        initial_terminal = terminals_by_id[ordered_rows[0].provider_attempt_id][0]
+        if initial_terminal.get("kind") == "llm.provider.error":
+            initial_error_type = (initial_terminal.get("data") or {}).get("error_type")
+            if initial_error_type != "InvalidLLMOutput":
+                errors.append(
+                    f"{task}: illegal correction predecessor error_type "
+                    f"{initial_error_type!r}"
+                )
+
     if initial_request_data is None:
         errors.append(f"{task}: missing unique initial provider request")
         return None, errors
+
+    if ordered_rows:
+        final_id = ordered_rows[-1].provider_attempt_id
+        final_terminal = terminals_by_id.get(final_id, [None])[0]
+        if final_terminal is None:
+            errors.append(f"{task}: missing terminal for accepted attempt {final_id!r}")
+        else:
+            final_kind = final_terminal.get("kind")
+            final_status = str((final_terminal.get("data") or {}).get("status", ""))
+            if final_kind != "llm.provider.response":
+                errors.append(
+                    f"{task}: accepted attempt must terminate with "
+                    f"llm.provider.response, got {final_kind!r}"
+                )
+            elif final_status != "success":
+                errors.append(
+                    f"{task}: accepted attempt requires status=success, "
+                    f"got {final_status!r}"
+                )
 
     if errors:
         return None, errors

@@ -2495,3 +2495,267 @@ def test_run_mechanical_audit_skips_journey_checks_when_none(tmp_path: Path) -> 
     ]
     assert na_persistence
     assert na_persistence[0].evidence.get("reason") == "journey_log_unreadable"
+
+
+def test_format_intake_attempt_detail_renders_unknown_evidence_unions() -> None:
+    from evals.simulation.intake_forensics import UNKNOWN, IntakeAttemptReport
+
+    attempt = IntakeAttemptReport(
+        attempt_index=1,
+        request_id="req",
+        lifecycle_status="present",
+        attempt_outcome="completed",
+        persisted_attempt="unknown",
+        failure_code=None,
+        extraction_target=UNKNOWN,
+        raw_count=UNKNOWN,
+        retained_count=UNKNOWN,
+        merge_status=UNKNOWN,
+        planned_record_changed=UNKNOWN,
+        persisted_record_changed=UNKNOWN,
+        pre_turn_next_item=UNKNOWN,
+        planned_next_item=UNKNOWN,
+        persisted_next_item=UNKNOWN,
+        planned_completeness_complete=UNKNOWN,
+        planned_max_turn_completion_blocked=UNKNOWN,
+        extraction_rows=UNKNOWN,
+        validation_retained_paths=UNKNOWN,
+        persisted_changed_paths=UNKNOWN,
+        materialization_dropped_paths=UNKNOWN,
+        merge_dropped_paths=UNKNOWN,
+        drop_reasons=UNKNOWN,
+        flags=(),
+    )
+    rendered = "\n".join(audit_mod._format_intake_attempt_detail(attempt))
+    assert rendered.count(UNKNOWN) >= 2
+    for char in UNKNOWN:
+        assert rendered.count(char) <= rendered.count(UNKNOWN) * len(UNKNOWN)
+
+    empty_attempt = IntakeAttemptReport(
+        attempt_index=1,
+        request_id="req",
+        lifecycle_status="present",
+        attempt_outcome="completed",
+        persisted_attempt="yes",
+        failure_code=None,
+        extraction_target="presenting_problem",
+        raw_count=0,
+        retained_count=0,
+        merge_status="empty_patch",
+        planned_record_changed=False,
+        persisted_record_changed=False,
+        pre_turn_next_item="duration",
+        planned_next_item="duration",
+        persisted_next_item="duration",
+        planned_completeness_complete=False,
+        planned_max_turn_completion_blocked=False,
+        extraction_rows=(),
+        validation_retained_paths=(),
+        persisted_changed_paths=(),
+        materialization_dropped_paths=(),
+        merge_dropped_paths=(),
+        drop_reasons=(),
+        flags=(),
+    )
+    empty_rendered = "\n".join(audit_mod._format_intake_attempt_detail(empty_attempt))
+    assert UNKNOWN not in empty_rendered
+    assert "| (none) | | | |" in empty_rendered
+    assert "**Drop reasons:**" not in empty_rendered
+
+
+def test_render_audit_evaluated_coverage_defeats_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    client_one = str(uuid4())
+    client_two = str(uuid4())
+    request_one = str(uuid4())
+    request_two = str(uuid4())
+    run_dir = allocate_run_directory(tmp_path / "run-eval-coverage")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    session_id = str(uuid4())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 1, 'user', ?, ?, '2020-01-01T00:00:01Z')
+            """,
+            (str(uuid4()), session_id, "Turn one", client_one),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 2, 'assistant', ?, ?, '2020-01-01T00:00:02Z')
+            """,
+            (str(uuid4()), session_id, "Reply one", client_one),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 3, 'user', ?, ?, '2020-01-01T00:00:03Z')
+            """,
+            (str(uuid4()), session_id, "Turn two", client_two),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, session_id, sequence, role, content, client_message_id, created_at
+            ) VALUES (?, ?, 4, 'assistant', ?, ?, '2020-01-01T00:00:04Z')
+            """,
+            (str(uuid4()), session_id, "Reply two", client_two),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "client_message_id": client_one,
+                "request_id": request_one,
+            },
+            "data": {"merge_status": "applied", "record_changed": True},
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {
+                "client_message_id": client_one,
+                "request_id": request_one,
+            },
+            "data": {"merge_status": "empty_patch", "record_changed": False},
+        },
+        {
+            "sequence": 3,
+            "kind": "chat.turn.started",
+            "context": {
+                "client_message_id": client_two,
+                "request_id": request_two,
+            },
+            "data": {},
+        },
+        {
+            "sequence": 4,
+            "kind": "chat.turn.completed",
+            "context": {
+                "client_message_id": client_two,
+                "request_id": request_two,
+            },
+            "data": {},
+        },
+    ]
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        run_id="run-eval-coverage",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"git_commit": "abc"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    assert "duplicate intake.turn.evaluated" in rendered
+    assert "missing intake.turn.evaluated" in rendered
+    assert "2/2" not in rendered
+
+
+def test_render_audit_legacy_shell_and_none_request_ambiguity(
+    tmp_path: Path,
+) -> None:
+    client_durable = str(uuid4())
+    client_uncommitted = str(uuid4())
+    client_legacy = str(uuid4())
+
+    run_dir = allocate_run_directory(tmp_path / "run-legacy-shell")
+    snapshot = run_dir / "runtime" / "db_snapshot.sqlite"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(snapshot)
+    store.initialize()
+    session_id = str(uuid4())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, kind, plan_id, started_at, ended_at, review_json
+            ) VALUES (?, 'intake', NULL, '2020-01-01T00:00:00Z', NULL, NULL)
+            """,
+            (session_id,),
+        )
+        for sequence, (text, client_id, role) in enumerate(
+            [
+                ("Durable shell", client_durable, "user"),
+                ("Assistant", client_durable, "assistant"),
+                ("Uncommitted shell", client_uncommitted, "user"),
+                ("Legacy ambiguous", client_legacy, "user"),
+                ("Assistant legacy", client_legacy, "assistant"),
+            ],
+            start=1,
+        ):
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, session_id, sequence, role, content, client_message_id,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, '2020-01-01T00:00:01Z')
+                """,
+                (str(uuid4()), session_id, sequence, role, text, client_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = [
+        {
+            "sequence": 1,
+            "kind": "intake.turn.evaluated",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {"merge_status": "applied", "retained_evidence_count": 1},
+        },
+        {
+            "sequence": 2,
+            "kind": "intake.turn.evaluated",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {"merge_status": "empty_patch", "retained_evidence_count": 0},
+        },
+        {
+            "sequence": 3,
+            "kind": "chat.turn.completed",
+            "context": {"client_message_id": client_legacy, "request_id": None},
+            "data": {},
+        },
+    ]
+    rendered = render_audit_markdown(
+        status="complete",
+        runtime_diagnostics_status="success",
+        run_id="run-legacy-shell",
+        findings=[],
+        warnings=[],
+        not_applicable=[],
+        run_config={"git_commit": "abc"},
+        artifact_index=[],
+        trace=trace,
+        run_dir=run_dir,
+    )
+    assert "evaluated_coverage_unknown_legacy_shell" in rendered
+    assert "legacy intake.turn.evaluated attribution ambiguity" in rendered
+    assert rendered.count("evaluated_coverage_unknown_legacy_shell") == 1
+    assert "retained_count: 1" not in rendered.split("Legacy ambiguous")[1]
