@@ -427,6 +427,40 @@ class ChatRuntime:
             plan = await self._intake.prepare_turn(turn_input)
             intake_record = plan.merged_record
             completeness_complete = plan.completeness_complete
+            if turn_input.latest_user_message is not None:
+                merge = plan.merge_diagnostics
+                with diagnostic_context(
+                    session_id=str(session_id),
+                    client_message_id=str(client_message_id),
+                    request_id=str(request_id) if request_id is not None else None,
+                ):
+                    diag.record(
+                        self._recorder,
+                        "intake.turn.evaluated",
+                        {
+                            "patient_turn_count": turn_input.patient_turn_count,
+                            "extraction_target": plan.extraction_target,
+                            "next_required_item": plan.next_required_item,
+                            "record_changed": plan.record_changed,
+                            "completeness_complete": plan.completeness_complete,
+                            "max_turn_completion_blocked": (
+                                plan.max_turn_completion_blocked
+                            ),
+                            "merge_status": merge.status if merge is not None else None,
+                            "raw_evidence_count": (
+                                merge.raw_evidence_count if merge is not None else 0
+                            ),
+                            "retained_evidence_count": (
+                                merge.retained_evidence_count
+                                if merge is not None
+                                else 0
+                            ),
+                            "dropped_evidence_count": (
+                                merge.dropped_evidence_count if merge is not None else 0
+                            ),
+                            "drop_reasons": list(merge.drop_reasons) if merge else [],
+                        },
+                    )
             chunk_source = self._intake.stream_response(plan)
         elif session.kind is SessionKind.THERAPY:
             turn_input = await self._inputs.build_therapy_turn_input(session_id)

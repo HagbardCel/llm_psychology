@@ -23,6 +23,7 @@ from evals.simulation.audit import (
     git_provenance,
     load_jsonl,
     render_audit_markdown,
+    render_fallback_audit_markdown,
     render_transcript_from_snapshot,
     roll_up_patient_metrics,
     run_mechanical_audit,
@@ -558,6 +559,116 @@ async def run_simulation(
                 pass
 
 
+def _load_journey_records(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    try:
+        return load_jsonl(run_dir / "journey.jsonl"), None
+    except Exception as exc:
+        return None, type(exc).__name__
+
+
+def _workflow_reachability(
+    *,
+    journey_records: list[dict[str, Any]] | None,
+    progress: SimulationProgress,
+    therapy_records: list[TherapySessionRecord],
+) -> dict[str, str]:
+    if journey_records is None:
+        return {
+            "assessment": "reached" if progress.initial_ready_reached else "unknown",
+            "style_selection": "unknown",
+            "therapy": "reached" if therapy_records else "unknown",
+            "post_session": (
+                "reached"
+                if any(record.post_session_entered for record in therapy_records)
+                else "unknown"
+            ),
+        }
+    journey_kinds = {record.get("kind") for record in journey_records}
+    return {
+        "assessment": "reached" if progress.initial_ready_reached else "N/A",
+        "style_selection": "reached"
+        if "style.selected" in journey_kinds
+        else ("N/A" if not progress.initial_ready_reached else "not_observed"),
+        "therapy": "reached" if therapy_records else "N/A",
+        "post_session": "reached"
+        if any(record.post_session_entered for record in therapy_records)
+        else "N/A",
+    }
+
+
+def _append_terminal_and_write_run_json(
+    *,
+    journey: JourneyLog,
+    run_dir: Path,
+    run_config: dict[str, Any],
+    started_at: str,
+    final_status: SimulationStatus,
+    error_code: str | None,
+    error_message: str | None,
+    api_error: dict[str, Any] | None,
+    patient_metrics: dict[str, Any] | None,
+    provider_trace_required: bool,
+    audit: AuditResult,
+    primary_runtime_failure: str | None,
+    primary_runtime_message: str | None,
+    runtime_mechanical_status: str,
+    audit_render_status: str,
+    audit_failure: str | None,
+) -> SimulationStatus:
+    if audit_failure is not None:
+        terminal_kind = "simulation.failed"
+        terminal_error_code = primary_runtime_failure or error_code or audit_failure
+        terminal_error_message = primary_runtime_message or error_message
+    elif runtime_mechanical_status == "RUNTIME_COMPLETE" and audit.ok:
+        terminal_kind = "simulation.completed"
+        terminal_error_code = None
+        terminal_error_message = None
+    else:
+        terminal_kind = "simulation.failed"
+        terminal_error_code = primary_runtime_failure or error_code
+        terminal_error_message = primary_runtime_message or error_message
+
+    terminal_data: dict[str, Any] = {
+        "status": "complete" if terminal_kind == "simulation.completed" else "failed",
+        "error_code": terminal_error_code,
+        "error_message": terminal_error_message,
+        "finding_codes": [item.code for item in audit.findings],
+        "runtime_status": runtime_mechanical_status,
+        "audit_status": audit_render_status,
+        "primary_runtime_failure": primary_runtime_failure,
+    }
+    if api_error is not None:
+        terminal_data["api_error"] = api_error
+    status = final_status
+    try:
+        journey.append(terminal_kind, data=terminal_data)
+    except Exception:
+        status = "failed"
+
+    completed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    run_payload: dict[str, Any] = {
+        **run_config,
+        "run_id": run_dir.name,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "status": status,
+        "error_code": error_code,
+        "error_message": error_message,
+        "provider_trace_required": provider_trace_required,
+    }
+    if api_error is not None:
+        run_payload["api_error"] = api_error
+    if patient_metrics is not None:
+        run_payload["patient_metrics"] = patient_metrics
+    try:
+        write_run_json(run_dir / "run.json", run_payload)
+    except Exception:
+        status = "failed"
+    return status
+
+
 def _finalize_run(
     *,
     config: SimulationConfig,
@@ -574,12 +685,15 @@ def _finalize_run(
     api_error: dict[str, Any] | None,
     patient_extra_body_provenance: dict[str, Any] | None,
 ) -> SimulationResult:
+    journey_records, journey_load_error_type = _load_journey_records(run_dir)
+
     try:
         audit = run_mechanical_audit(
             run_dir=run_dir,
             provider_trace_required=provider_trace_required,
             configured_sessions=config.sessions,
             initial_ready_reached=progress.initial_ready_reached,
+            journey_records=journey_records,
             therapy_sessions=[
                 {
                     "session_id": record.session_id,
@@ -601,6 +715,16 @@ def _finalize_run(
         audit.fail(
             "audit_internal_error",
             f"{type(exc).__name__}: {exc}",
+        )
+
+    if journey_load_error_type is not None:
+        audit.fail(
+            "journey_log_read_failed",
+            f"journey.jsonl unreadable: {journey_load_error_type}",
+        )
+        audit.fail(
+            "patient_metrics_failed",
+            f"patient metrics omitted: journey unreadable ({journey_load_error_type})",
         )
 
     if run_config.get("git_worktree_dirty") is True:
@@ -637,20 +761,26 @@ def _finalize_run(
         error_code = "journey_error"
         error_message = str(journey_error)
 
+    primary_runtime_failure = error_code
+    primary_runtime_message = error_message
+    runtime_mechanical_status = (
+        "RUNTIME_FAILED" if journey_error is not None else "RUNTIME_COMPLETE"
+    )
+
     patient_metrics: dict[str, Any] | None = None
-    try:
-        journey_records = load_jsonl(run_dir / "journey.jsonl")
-        patient_metrics = roll_up_patient_metrics(
-            journey_records,
-            patient_model=str(run_config["patient_model"]),
-            patient_endpoint=str(run_config["patient_endpoint"]),
-            patient_extra_body=patient_extra_body_provenance,
-        )
-    except Exception as exc:
-        audit.fail(
-            "patient_metrics_failed",
-            f"{type(exc).__name__}: {exc}",
-        )
+    if journey_records is not None:
+        try:
+            patient_metrics = roll_up_patient_metrics(
+                journey_records,
+                patient_model=str(run_config["patient_model"]),
+                patient_endpoint=str(run_config["patient_endpoint"]),
+                patient_extra_body=patient_extra_body_provenance,
+            )
+        except Exception as exc:
+            audit.fail(
+                "patient_metrics_failed",
+                f"{type(exc).__name__}: {exc}",
+            )
 
     if journey_error is None and not audit.ok:
         codes = sorted({finding.code for finding in audit.findings})
@@ -661,6 +791,24 @@ def _finalize_run(
         "failed" if journey_error is not None or not audit.ok else "complete"
     )
 
+    trace_events: list[dict[str, Any]] = []
+    try:
+        trace_events = load_jsonl(run_dir / "runtime" / "trace.jsonl")
+    except Exception:
+        trace_events = []
+
+    workflow_reachability = _workflow_reachability(
+        journey_records=journey_records,
+        progress=progress,
+        therapy_records=therapy_records,
+    )
+    intake_session_ended_in_intake = (
+        journey_error is not None
+        and primary_runtime_failure == "intake_turn_limit_exceeded"
+    )
+
+    audit_render_status = "FULL"
+    audit_failure: str | None = None
     try:
         write_private_text(
             run_dir / "audit.md",
@@ -672,57 +820,64 @@ def _finalize_run(
                 not_applicable=audit.not_applicable,
                 run_config=run_config,
                 artifact_index=artifact_relative_paths(run_dir),
-                journey_error_code=error_code,
-                journey_error_message=error_message,
+                journey_error_code=primary_runtime_failure,
+                journey_error_message=primary_runtime_message,
                 journey_api_error=api_error,
+                run_id=run_dir.name,
+                runtime_status=runtime_mechanical_status,
+                audit_status=audit_render_status,
+                primary_runtime_failure=primary_runtime_failure,
+                trace=trace_events,
+                run_dir=run_dir,
+                intake_session_ended_in_intake=intake_session_ended_in_intake,
+                workflow_reachability=workflow_reachability,
+                patient_extra_body=patient_extra_body_provenance,
             ),
         )
     except Exception as exc:
-        final_status = "failed"
+        audit_render_status = "FALLBACK"
+        audit_failure = "audit_write_failed"
         detail = f"{type(exc).__name__}: {exc}"
         audit.fail("audit_write_failed", detail)
+        final_status = "failed"
         if error_code is None:
             error_code = "audit_write_failed"
             error_message = detail
+        try:
+            write_private_text(
+                run_dir / "audit.md",
+                render_fallback_audit_markdown(
+                    run_id=run_dir.name,
+                    primary_runtime_failure=primary_runtime_failure,
+                    audit_exception_type=type(exc).__name__,
+                    artifact_paths=sorted(
+                        str(path.relative_to(run_dir))
+                        for path in run_dir.rglob("*")
+                        if path.is_file() and path.name != "audit.md"
+                    ),
+                ),
+            )
+        except Exception:
+            pass
 
-    terminal_kind = (
-        "simulation.completed" if final_status == "complete" else "simulation.failed"
+    final_status = _append_terminal_and_write_run_json(
+        journey=journey,
+        run_dir=run_dir,
+        run_config=run_config,
+        started_at=started_at,
+        final_status=final_status,
+        error_code=error_code,
+        error_message=error_message,
+        api_error=api_error,
+        patient_metrics=patient_metrics,
+        provider_trace_required=provider_trace_required,
+        audit=audit,
+        primary_runtime_failure=primary_runtime_failure,
+        primary_runtime_message=primary_runtime_message,
+        runtime_mechanical_status=runtime_mechanical_status,
+        audit_render_status=audit_render_status,
+        audit_failure=audit_failure,
     )
-    terminal_data: dict[str, Any] = {
-        "status": final_status,
-        "error_code": error_code,
-        "error_message": error_message,
-        "finding_codes": [item.code for item in audit.findings],
-    }
-    if api_error is not None:
-        terminal_data["api_error"] = api_error
-    try:
-        journey.append(
-            terminal_kind,
-            data=terminal_data,
-        )
-    except Exception:
-        final_status = "failed"
-
-    completed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    run_payload: dict[str, Any] = {
-        **run_config,
-        "run_id": run_dir.name,
-        "started_at": started_at,
-        "completed_at": completed_at,
-        "status": final_status,
-        "error_code": error_code,
-        "error_message": error_message,
-        "provider_trace_required": provider_trace_required,
-    }
-    if api_error is not None:
-        run_payload["api_error"] = api_error
-    if patient_metrics is not None:
-        run_payload["patient_metrics"] = patient_metrics
-    try:
-        write_run_json(run_dir / "run.json", run_payload)
-    except Exception:
-        final_status = "failed"
 
     return SimulationResult(
         status=final_status,

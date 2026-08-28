@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from jung.diagnostics import open_private_file
 from jung.llm.openai_compatible import ProviderAttemptEvent
 
 
@@ -146,7 +148,12 @@ class SmokeEvidenceCollector:
         }
         if self.base_url is not None:
             payload["base_url"] = self.base_url
-        for key in ("therapy", "assessment", "post_session", "intake"):
+        for key in (
+            "therapy",
+            "assessment",
+            "post_session",
+            "intake",
+        ):
             result = getattr(self, key)
             if result is None:
                 continue
@@ -195,6 +202,29 @@ class SmokeEvidenceCollector:
                 self.intake,
             )
         )
+
+
+def write_smoke_evidence_markdown(
+    collector: SmokeEvidenceCollector, path: Path
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = collector.to_payload()
+    lines = [
+        "# Local LLM smoke evidence",
+        "",
+        f"server: {collector.server}",
+        f"model: {collector.model}",
+        f"structured_mode: {collector.structured_mode}",
+        "",
+        "## Paths",
+        "",
+        "```json",
+        json.dumps(payload, indent=2, ensure_ascii=True, default=str),
+        "```",
+        "",
+    ]
+    with open_private_file(path, mode="w") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
 def render_smoke_evidence(collector: SmokeEvidenceCollector) -> str | None:

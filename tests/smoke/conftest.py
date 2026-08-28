@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from jung.diagnostics import DiagnosticRecorder
-from tests.smoke.smoke_evidence import COLLECTOR, render_smoke_evidence
+from tests.smoke.smoke_evidence import (
+    COLLECTOR,
+    render_smoke_evidence,
+    write_smoke_evidence_markdown,
+)
 
 _session_failed = False
 
@@ -42,3 +46,6 @@ def print_smoke_evidence():
     evidence_line = render_smoke_evidence(COLLECTOR)
     if evidence_line is not None:
         print(evidence_line)
+    raw = os.environ.get("JUNG_DEBUG_RUN_DIR", "").strip()
+    if raw and COLLECTOR.has_data():
+        write_smoke_evidence_markdown(COLLECTOR, Path(raw) / "evidence.md")

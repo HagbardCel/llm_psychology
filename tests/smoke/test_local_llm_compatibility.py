@@ -15,9 +15,9 @@ from jung.diagnostics import sanitize_url
 from jung.domain.models import Plan, Profile
 from jung.llm.gateway import LLMTask
 from jung.llm.tracing import ObservedLLMGateway
-from jung.phases.assessment.models import AssessmentInput, IntakeRecord
+from jung.phases.assessment.models import AssessmentInput
 from jung.phases.assessment.processor import AssessmentProcessor
-from jung.phases.intake.models import IntakeTurnInput
+from jung.phases.intake.models import IntakeRecord, IntakeTurnInput
 from jung.phases.intake.processor import IntakeProcessor
 from jung.phases.post_session.models import PostSessionInput
 from jung.phases.post_session.processor import PostSessionProcessor

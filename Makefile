@@ -70,7 +70,7 @@ smoke-local-llm:
 
 # Hard behavioral oracles. Opt-in like the smoke; not part of check.
 evals:
-	uv run --locked pytest evals/test_hard_invariants.py \
+	uv run --locked pytest evals/test_hard_invariants.py evals/test_intake_clear_risk_denial.py \
 		-m "eval and real_llm" --no-mocks -o asyncio_mode=strict
 
 # Diagnostic report for human review; never a gate.

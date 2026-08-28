@@ -24,7 +24,17 @@ from jung.domain.results import ChatCompleted, ChatFailed
 from jung.llm.errors import LLMUnavailable
 from jung.llm.gateway import LLMTask
 from jung.persistence.sqlite_store import SQLiteStore
-from tests.support.fake_llm import FailureExpectation, FakeLLM
+from jung.phases.intake.extraction import (
+    ExtractedIntakeEvidence,
+    IntakeEvidenceField,
+    IntakeExtraction,
+)
+from tests.support.fake_llm import (
+    FailureExpectation,
+    FakeLLM,
+    StreamExpectation,
+    StructuredExpectation,
+)
 
 from .application_fixtures import (
     build_test_application,
@@ -109,6 +119,73 @@ async def test_chat_handoff_correlation_and_provider_events(tmp_path: Path) -> N
         ctx = event["context"]
         assert ctx["run_id"] == str(recorder.run_id)
         assert ctx.get("llm_call_id")
+
+
+async def test_intake_turn_evaluated_metadata_only(tmp_path: Path) -> None:
+    run_dir = tmp_path / "debug-run"
+    db_path = tmp_path / "app.db"
+    sentinel = "INTAKE_DIAGNOSTIC_SENTINEL_XYZ"
+
+    with DiagnosticRecorder(run_dir) as recorder:
+        store = SQLiteStore(db_path)
+        store.initialize()
+        fake = FakeLLM(
+            [
+                StructuredExpectation(
+                    task=LLMTask.INTAKE_PATCH,
+                    output_type=IntakeExtraction,
+                    response=IntakeExtraction(
+                        evidence=(
+                            ExtractedIntakeEvidence(
+                                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                                value="anxiety",
+                                evidence_quote="I feel anxious",
+                                confidence="high",
+                                response_status="informative",
+                            ),
+                        )
+                    ),
+                ),
+                StreamExpectation(
+                    task=LLMTask.INTAKE_RESPONSE,
+                    chunks=("Thanks for sharing.",),
+                ),
+            ]
+        )
+        request_id = uuid4()
+        client_message_id = uuid4()
+        async with build_test_application(store, fake, recorder=recorder) as runtime:
+            await runtime.application.update_profile(
+                UpdateProfile(
+                    profile=Profile(name="Alex", primary_language="English"),
+                )
+            )
+            session = (await runtime.application.get_snapshot()).active_session
+            assert session is not None
+            items = await collect_stream(
+                runtime.application,
+                SendMessage(
+                    session_id=session.id,
+                    client_message_id=client_message_id,
+                    content=f"I feel anxious. {sentinel}",
+                    request_id=request_id,
+                ),
+            )
+            assert isinstance(items[-1], ChatCompleted)
+
+    events = _load_trace(run_dir)
+    evaluated = [e for e in events if e["kind"] == "intake.turn.evaluated"]
+    assert len(evaluated) == 1
+    event = evaluated[0]
+    assert event["context"]["session_id"] == str(session.id)
+    assert event["context"]["client_message_id"] == str(client_message_id)
+    assert event["context"]["request_id"] == str(request_id)
+    data = event["data"]
+    assert data["extraction_target"] == "presenting_problem"
+    assert data["merge_status"] == "applied"
+    assert data["retained_evidence_count"] >= 1
+    payload = json.dumps(data)
+    assert sentinel not in payload
 
 
 async def test_chat_failure_domain_outcome(tmp_path: Path) -> None:
