@@ -9,13 +9,15 @@ import pytest
 
 from evals.harness import request_extra_body, request_timeout_seconds
 from evals.intake_risk_denial_evidence import (
-    EVIDENCE_INTEGRITY_FAILURE,
+    MemoryDiagnosticRecorder,
+    build_category_c_eval_failure,
     build_category_c_evidence_payload,
     build_evidence_stages,
     canonical_fixture_digests,
     correlate_intake_patch_call,
     evaluate_evidence_integrity,
     provider_attempt_rows,
+    raw_medical_urgency_absence,
     resolve_debug_run_dir,
     write_category_c_evidence,
 )
@@ -84,13 +86,10 @@ async def test_intake_clear_risk_denial(
 ) -> None:
     """Clear dual safety denial must retain grounded evidence (Category C)."""
     primary_exc: BaseException | None = None
-    integrity_exc: BaseException | None = None
-    from evals.intake_risk_denial_evidence import MemoryDiagnosticRecorder
-
+    processor_passed = False
     memory_recorder = MemoryDiagnosticRecorder()
     extra_body: dict[str, object] | None = None
     plan = None
-    semantic_passed = False
 
     try:
         try:
@@ -152,148 +151,171 @@ async def test_intake_clear_risk_denial(
             ):
                 assert quote
                 assert normalize_content(quote) in normalize_content(FROZEN_FIXTURE)
-            semantic_passed = True
+            processor_passed = True
         finally:
             await client.aclose()
     except BaseException as exc:
         primary_exc = exc
     finally:
         write_exc: BaseException | None = None
+        raw_absence: bool | None = None
+        effective_integrity_passed = False
+        semantic_passed = False
+        payload: dict[str, Any] | None = None
+        evidence_finalization_exc: BaseException | None = None
+
         try:
             canonical_messages, canonical_structured = _canonical_fixture_digests(
                 structured_mode=eval_environment.structured_mode,
             )
-            correlation, correlation_errors = correlate_intake_patch_call(
-                memory_recorder
-            )
+            correlation = None
+            correlation_errors: list[str] = []
             stages: dict[str, Any] | None = None
             extraction_target: str | None = None
-            if correlation is not None:
-                stages = build_evidence_stages(
-                    extraction=correlation.accepted_extraction,
-                    pre_turn_record=IntakeRecord(),
-                    user_turn=TranscriptTurn(
-                        message_id=uuid4(),
-                        sequence=2,
-                        role="user",
-                        content=FROZEN_FIXTURE,
-                    ),
-                    prompted_item="risk_screen",
-                    fixture=FROZEN_FIXTURE,
-                )
-                extraction_target = "risk_screen"
-            elif plan is not None:
-                extraction_target = plan.extraction_target
+            integrity_passed = False
+            messages_match: bool | None = None
+            structured_match: bool | None = None
+            integrity_errors: list[str] = []
 
-            integrity_passed, messages_match, structured_match, integrity_errors = (
-                evaluate_evidence_integrity(
+            try:
+                correlation, correlation_errors = correlate_intake_patch_call(
+                    memory_recorder
+                )
+                if correlation is not None:
+                    stages = build_evidence_stages(
+                        extraction=correlation.accepted_extraction,
+                        pre_turn_record=IntakeRecord(),
+                        user_turn=TranscriptTurn(
+                            message_id=uuid4(),
+                            sequence=2,
+                            role="user",
+                            content=FROZEN_FIXTURE,
+                        ),
+                        prompted_item="risk_screen",
+                        fixture=FROZEN_FIXTURE,
+                    )
+                    extraction_target = "risk_screen"
+                elif plan is not None:
+                    extraction_target = plan.extraction_target
+
+                (
+                    integrity_passed,
+                    messages_match,
+                    structured_match,
+                    integrity_errors,
+                ) = evaluate_evidence_integrity(
                     correlation=correlation,
                     correlation_errors=correlation_errors,
                     canonical_messages_sha256=canonical_messages,
                     canonical_structured_sha256=canonical_structured,
                     stages=stages,
                 )
-            )
+                raw_absence = raw_medical_urgency_absence(stages)
+                effective_integrity_passed = (
+                    integrity_passed and raw_absence is not None
+                )
+                semantic_passed = processor_passed and raw_absence is True
 
-            sanitized_extra = (
-                sanitize_value(extra_body) if extra_body is not None else None
-            )
-            provider_attempts = (
-                provider_attempt_rows(correlation.provider_attempts)
-                if correlation is not None
-                else []
-            )
-            accepted_attempt = (
-                correlation.accepted_attempt if correlation is not None else None
-            )
-            llm_call_id = correlation.llm_call_id if correlation is not None else None
+                sanitized_extra = (
+                    sanitize_value(extra_body) if extra_body is not None else None
+                )
+                provider_attempts = (
+                    provider_attempt_rows(correlation.provider_attempts)
+                    if correlation is not None
+                    else []
+                )
+                accepted_attempt = (
+                    correlation.accepted_attempt if correlation is not None else None
+                )
+                llm_call_id = (
+                    correlation.llm_call_id if correlation is not None else None
+                )
 
-            payload = build_category_c_evidence_payload(
-                semantic_assertions_passed=semantic_passed,
-                evidence_integrity_passed=integrity_passed,
-                model=eval_environment.model,
-                sanitized_endpoint=sanitize_url(eval_environment.base_url),
-                structured_mode=eval_environment.structured_mode.value,
-                prompt_version=PROMPT_VERSION,
-                extra_body=sanitized_extra,
-                frozen_fixture=FROZEN_FIXTURE,
-                extraction_target=extraction_target,
-                llm_call_id=llm_call_id,
-                raw_accepted_fields=(
-                    stages.get("raw_accepted_fields") if stages else None
-                ),
-                validation_retained_paths=(
-                    stages.get("validation_retained_paths") if stages else None
-                ),
-                materialization_dropped_paths=(
-                    stages.get("materialization_dropped_paths") if stages else None
-                ),
-                merge_dropped_paths=(
-                    stages.get("merge_dropped_paths") if stages else None
-                ),
-                merged_changed_paths=(
-                    stages.get("merged_changed_paths") if stages else None
-                ),
-                raw_medical_urgency_absent=(
-                    stages.get("raw_medical_urgency_absent") if stages else None
-                ),
-                validation_medical_urgency_absent=(
-                    stages.get("validation_medical_urgency_absent") if stages else None
-                ),
-                merged_medical_urgency_absent=(
-                    stages.get("merged_medical_urgency_absent") if stages else None
-                ),
-                merge_status=stages.get("merge_status") if stages else None,
-                raw_evidence_count=(
-                    stages.get("raw_evidence_count") if stages else None
-                ),
-                retained_evidence_count=(
-                    stages.get("retained_evidence_count") if stages else None
-                ),
-                dropped_evidence_count=(
-                    stages.get("dropped_evidence_count") if stages else None
-                ),
-                record_changed=stages.get("record_changed") if stages else None,
-                provider_attempts=provider_attempts,
-                accepted_attempt=accepted_attempt,
-                canonical_fixture_provider_messages_sha256=canonical_messages,
-                canonical_fixture_structured_request_sha256=canonical_structured,
-                canonical_matches_executed_messages=messages_match,
-                canonical_matches_executed_structured=structured_match,
-                primary_failure_code=(
-                    None
-                    if primary_exc is None
-                    else getattr(primary_exc, "code", None)
-                    or type(primary_exc).__name__
-                ),
-                primary_failure_exception_type=(
-                    None if primary_exc is None else type(primary_exc).__name__
-                ),
-                evidence_integrity_errors=integrity_errors,
-            )
+                payload = build_category_c_evidence_payload(
+                    semantic_assertions_passed=semantic_passed,
+                    evidence_integrity_passed=effective_integrity_passed,
+                    model=eval_environment.model,
+                    sanitized_endpoint=sanitize_url(eval_environment.base_url),
+                    structured_mode=eval_environment.structured_mode.value,
+                    prompt_version=PROMPT_VERSION,
+                    extra_body=sanitized_extra,
+                    frozen_fixture=FROZEN_FIXTURE,
+                    extraction_target=extraction_target,
+                    llm_call_id=llm_call_id,
+                    raw_accepted_fields=(
+                        stages.get("raw_accepted_fields") if stages else None
+                    ),
+                    validation_retained_paths=(
+                        stages.get("validation_retained_paths") if stages else None
+                    ),
+                    materialization_dropped_paths=(
+                        stages.get("materialization_dropped_paths") if stages else None
+                    ),
+                    merge_dropped_paths=(
+                        stages.get("merge_dropped_paths") if stages else None
+                    ),
+                    merged_changed_paths=(
+                        stages.get("merged_changed_paths") if stages else None
+                    ),
+                    raw_medical_urgency_absent=(
+                        stages.get("raw_medical_urgency_absent") if stages else None
+                    ),
+                    validation_medical_urgency_absent=(
+                        stages.get("validation_medical_urgency_absent")
+                        if stages
+                        else None
+                    ),
+                    merged_medical_urgency_absent=(
+                        stages.get("merged_medical_urgency_absent") if stages else None
+                    ),
+                    merge_status=stages.get("merge_status") if stages else None,
+                    raw_evidence_count=(
+                        stages.get("raw_evidence_count") if stages else None
+                    ),
+                    retained_evidence_count=(
+                        stages.get("retained_evidence_count") if stages else None
+                    ),
+                    dropped_evidence_count=(
+                        stages.get("dropped_evidence_count") if stages else None
+                    ),
+                    record_changed=stages.get("record_changed") if stages else None,
+                    provider_attempts=provider_attempts,
+                    accepted_attempt=accepted_attempt,
+                    canonical_fixture_provider_messages_sha256=canonical_messages,
+                    canonical_fixture_structured_request_sha256=canonical_structured,
+                    canonical_matches_executed_messages=messages_match,
+                    canonical_matches_executed_structured=structured_match,
+                    primary_failure_code=(
+                        None
+                        if primary_exc is None
+                        else getattr(primary_exc, "code", None)
+                        or type(primary_exc).__name__
+                    ),
+                    primary_failure_exception_type=(
+                        None if primary_exc is None else type(primary_exc).__name__
+                    ),
+                    evidence_integrity_errors=integrity_errors,
+                )
+            except BaseException as exc:
+                evidence_finalization_exc = exc
 
-            debug_dir = resolve_debug_run_dir()
-            if debug_dir is not None:
-                write_category_c_evidence(run_dir=debug_dir, payload=payload)
-
-            if semantic_passed and not integrity_passed:
-                integrity_exc = AssertionError(EVIDENCE_INTEGRITY_FAILURE)
+            if payload is not None:
+                try:
+                    debug_dir = resolve_debug_run_dir()
+                    if debug_dir is not None:
+                        write_category_c_evidence(run_dir=debug_dir, payload=payload)
+                except BaseException as exc:
+                    write_exc = exc
         except BaseException as exc:
-            write_exc = exc
+            evidence_finalization_exc = exc
 
-        if write_exc is not None:
-            if primary_exc is not None:
-                raise ExceptionGroup(
-                    "category-c evidence write failed after primary failure",
-                    [primary_exc, write_exc],
-                )
-            if integrity_exc is not None:
-                raise ExceptionGroup(
-                    "category-c evidence write failed after integrity failure",
-                    [integrity_exc, write_exc],
-                )
-            raise write_exc
-        if primary_exc is not None:
-            raise primary_exc
-        if integrity_exc is not None:
-            raise integrity_exc
+        failure = build_category_c_eval_failure(
+            primary_exc=primary_exc,
+            evidence_finalization_exc=evidence_finalization_exc,
+            processor_passed=processor_passed,
+            raw_absence=raw_absence,
+            effective_integrity_passed=effective_integrity_passed,
+            write_exc=write_exc,
+        )
+        if failure is not None:
+            raise failure

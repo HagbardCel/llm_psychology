@@ -15,6 +15,11 @@ from evals.simulation.intake_forensics import (
     format_path_evidence,
 )
 from jung.persistence.sqlite_store import SQLiteStore
+from jung.phases.intake.extraction import (
+    ExtractedIntakeEvidence,
+    IntakeEvidenceField,
+    IntakeExtraction,
+)
 
 
 def _trace_event(
@@ -602,3 +607,189 @@ def test_missing_evaluated_counts_are_unknown_not_zero(tmp_path: Path) -> None:
     attempt = reports[0].attempts[0]
     assert attempt.raw_count is UNKNOWN
     assert attempt.retained_count is UNKNOWN
+
+
+def _llm_accepted_event(
+    *,
+    client_message_id: str,
+    request_id: str,
+    sequence: int,
+    extraction: IntakeExtraction,
+) -> dict[str, Any]:
+    return {
+        "sequence": sequence,
+        "kind": "llm.output.accepted",
+        "context": {
+            "client_message_id": client_message_id,
+            "request_id": request_id,
+            "llm_task": "intake_patch",
+            "llm_call_id": "llm-1",
+        },
+        "data": {
+            "output_type": "IntakeExtraction",
+            "result": extraction.model_dump(mode="json"),
+        },
+    }
+
+
+def test_committed_first_attempt_survives_later_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_c1 = str(uuid4())
+    client_c2 = str(uuid4())
+    request_r1 = str(uuid4())
+    request_r2 = str(uuid4())
+    patient_turn_one = (
+        "I am not thinking about harming myself or anyone else. "
+        "I have no urgent medical needs. "
+        "I have been anxious in seminars lately."
+    )
+    _write_intake_snapshot(
+        snapshot,
+        turns=[
+            (client_c1, patient_turn_one, True),
+            (client_c2, "Second patient turn.", False),
+        ],
+    )
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.SAFETY_SELF_HARM,
+                response_status="informative",
+                value="denied",
+                evidence_quote="not thinking about harming myself",
+            ),
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.SAFETY_HARM_TO_OTHERS,
+                response_status="informative",
+                value="denied",
+                evidence_quote="not thinking about harming myself or anyone else",
+            ),
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.SAFETY_MEDICAL_URGENCY,
+                response_status="informative",
+                value="none",
+                evidence_quote="no urgent medical needs",
+            ),
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="anxiety in seminars",
+                evidence_quote="anxious in seminars lately",
+            ),
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_c1,
+            request_id=request_r1,
+            sequence=1,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_c1,
+            request_id=request_r1,
+            sequence=2,
+            extraction=extraction,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_c1,
+            request_id=request_r1,
+            sequence=3,
+            data={
+                "merge_status": "applied",
+                "record_changed": True,
+            },
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_c1,
+            request_id=request_r1,
+            sequence=4,
+        ),
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_c1,
+            request_id=request_r2,
+            sequence=5,
+        ),
+        _trace_event(
+            "chat.turn.failed",
+            client_message_id=client_c1,
+            request_id=request_r2,
+            sequence=6,
+            data={"error_code": "chat_invalid_llm_output"},
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    assert len(reports) == 2
+    turn_one, turn_two = reports
+    assert turn_one.commit_status == "committed_exact"
+    by_request = {attempt.request_id: attempt for attempt in turn_one.attempts}
+    committed = by_request[request_r1]
+    failed = by_request[request_r2]
+    assert committed.persisted_attempt == "yes"
+    assert failed.persisted_attempt == "no"
+    assert committed.persisted_next_item == "duration"
+    assert turn_two.attempts[0].pre_turn_next_item == "duration"
+
+
+def test_null_evaluated_counts_do_not_override_replay_counts(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "db_snapshot.sqlite"
+    client_id = str(uuid4())
+    request_id = str(uuid4())
+    patient_text = "I have been anxious in seminars lately."
+    _write_intake_snapshot(
+        snapshot,
+        turns=[(client_id, patient_text, True)],
+    )
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.PRESENTING_PROBLEM_MAIN_CONCERN,
+                response_status="informative",
+                value="anxiety in seminars",
+                evidence_quote="anxious in seminars lately",
+            )
+        ]
+    )
+    trace = [
+        _trace_event(
+            "chat.turn.started",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=1,
+        ),
+        _llm_accepted_event(
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=2,
+            extraction=extraction,
+        ),
+        _trace_event(
+            "intake.turn.evaluated",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=3,
+            data={
+                "merge_status": "applied",
+                "record_changed": True,
+                "raw_evidence_count": None,
+                "retained_evidence_count": None,
+            },
+        ),
+        _trace_event(
+            "chat.turn.completed",
+            client_message_id=client_id,
+            request_id=request_id,
+            sequence=4,
+        ),
+    ]
+    reports = build_intake_turn_reports(trace=trace, snapshot_path=snapshot)
+    attempt = reports[0].attempts[0]
+    assert attempt.raw_count == 1
+    assert attempt.retained_count == 1

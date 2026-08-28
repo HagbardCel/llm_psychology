@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,9 +14,12 @@ import pytest
 from evals.intake_risk_denial_evidence import (
     EVIDENCE_INTEGRITY_FAILURE,
     EVIDENCE_SCHEMA_VERSION,
+    EVIDENCE_SEMANTIC_FAILURE,
     MESSAGE_CANONICALIZATION,
+    PROCESSOR_STATE_INVARIANT,
     STRUCTURED_REQUEST_CANONICALIZATION,
     MemoryDiagnosticRecorder,
+    build_category_c_eval_failure,
     build_category_c_evidence_payload,
     build_evidence_stages,
     correlate_intake_patch_call,
@@ -22,12 +27,18 @@ from evals.intake_risk_denial_evidence import (
     evaluate_evidence_integrity,
     provider_attempt_rows,
     provider_messages_sha256,
+    raw_medical_urgency_absence,
     resolve_debug_run_dir,
     structured_request_sha256,
     write_category_c_evidence,
 )
+from jung.diagnostics import diagnostic_context
 from jung.llm.gateway import StructuredOutputMode
-from jung.phases.intake.extraction import IntakeEvidenceField, IntakeExtraction
+from jung.phases.intake.extraction import (
+    ExtractedIntakeEvidence,
+    IntakeEvidenceField,
+    IntakeExtraction,
+)
 from jung.phases.intake.models import IntakeRecord
 from jung.phases.transcript import TranscriptTurn
 
@@ -437,9 +448,238 @@ def test_integrity_failure_on_digest_mismatch() -> None:
     assert "canonical_messages_digest_mismatch" in errors
 
 
-def test_raw_medical_urgency_invented_then_dropped_fails_semantics() -> None:
-    from jung.phases.intake.extraction import ExtractedIntakeEvidence
+def test_evidence_integrity_failure_constant() -> None:
+    assert EVIDENCE_INTEGRITY_FAILURE == "category_c_evidence_integrity_failed"
+    assert EVIDENCE_SEMANTIC_FAILURE == "category_c_semantic_assertions_failed"
+    assert MESSAGE_CANONICALIZATION
+    assert STRUCTURED_REQUEST_CANONICALIZATION
 
+
+def test_memory_recorder_serializes_intake_extraction_for_correlation() -> None:
+    recorder = MemoryDiagnosticRecorder()
+    llm_call_id = "llm-1"
+    provider_attempt_id = "pa-initial"
+    messages = [{"role": "user", "content": "hello"}]
+    extraction = IntakeExtraction(
+        evidence=[
+            ExtractedIntakeEvidence(
+                field=IntakeEvidenceField.SAFETY_SELF_HARM,
+                response_status="informative",
+                evidence_quote="not thinking about harming myself",
+            )
+        ]
+    )
+
+    with diagnostic_context(llm_call_id=llm_call_id, llm_task="intake_patch"):
+        recorder.record(
+            "llm.provider.request",
+            _provider_request_event(
+                llm_call_id=llm_call_id,
+                provider_attempt_id=provider_attempt_id,
+                attempt="initial",
+                messages=messages,
+            )["data"],
+        )
+        recorder.record(
+            "llm.provider.response",
+            _provider_terminal_event(
+                llm_call_id=llm_call_id,
+                provider_attempt_id=provider_attempt_id,
+                attempt="initial",
+            )["data"],
+        )
+        recorder.record(
+            "llm.output.accepted",
+            {
+                "output_type": "IntakeExtraction",
+                "result": extraction,
+            },
+        )
+
+    accepted_event = next(
+        event for event in recorder.events if event["kind"] == "llm.output.accepted"
+    )
+    assert accepted_event["context"]["llm_call_id"] == llm_call_id
+    assert accepted_event["context"]["llm_task"] == "intake_patch"
+    assert isinstance(accepted_event["data"]["result"], Mapping)
+
+    correlation, errors = correlate_intake_patch_call(recorder)
+    assert errors == []
+    assert correlation is not None
+
+
+def test_raw_medical_urgency_absence_tri_state() -> None:
+    assert raw_medical_urgency_absence(None) is None
+    assert raw_medical_urgency_absence({"raw_medical_urgency_absent": True}) is True
+    assert raw_medical_urgency_absence({"raw_medical_urgency_absent": False}) is False
+    assert raw_medical_urgency_absence({"raw_medical_urgency_absent": None}) is None
+    assert raw_medical_urgency_absence({}) is None
+
+
+@pytest.mark.parametrize(
+    (
+        "primary_exc",
+        "evidence_finalization_exc",
+        "processor_passed",
+        "raw_absence",
+        "effective_integrity_passed",
+        "write_exc",
+        "expected_types",
+    ),
+    [
+        (
+            ValueError("processor"),
+            None,
+            False,
+            None,
+            False,
+            None,
+            (ValueError,),
+        ),
+        (
+            ValueError("processor"),
+            RuntimeError("finalize"),
+            False,
+            None,
+            False,
+            None,
+            (ValueError, RuntimeError),
+        ),
+        (
+            ValueError("processor"),
+            RuntimeError("finalize"),
+            False,
+            None,
+            False,
+            OSError("write"),
+            (ValueError, RuntimeError, OSError),
+        ),
+        (
+            None,
+            RuntimeError("finalize"),
+            True,
+            None,
+            False,
+            None,
+            (RuntimeError,),
+        ),
+        (
+            None,
+            RuntimeError("finalize"),
+            True,
+            None,
+            False,
+            OSError("write"),
+            (RuntimeError, OSError),
+        ),
+        (
+            None,
+            None,
+            True,
+            None,
+            False,
+            None,
+            (AssertionError,),
+        ),
+        (
+            None,
+            None,
+            True,
+            False,
+            True,
+            None,
+            (AssertionError,),
+        ),
+        (
+            None,
+            None,
+            True,
+            False,
+            False,
+            None,
+            (AssertionError, AssertionError),
+        ),
+        (
+            None,
+            None,
+            True,
+            True,
+            False,
+            None,
+            (AssertionError,),
+        ),
+        (
+            None,
+            None,
+            True,
+            True,
+            True,
+            None,
+            (),
+        ),
+    ],
+)
+def test_build_category_c_eval_failure_matrix(
+    primary_exc: BaseException | None,
+    evidence_finalization_exc: BaseException | None,
+    processor_passed: bool,
+    raw_absence: bool | None,
+    effective_integrity_passed: bool,
+    write_exc: BaseException | None,
+    expected_types: tuple[type[BaseException], ...],
+) -> None:
+    failure = build_category_c_eval_failure(
+        primary_exc=primary_exc,
+        evidence_finalization_exc=evidence_finalization_exc,
+        processor_passed=processor_passed,
+        raw_absence=raw_absence,
+        effective_integrity_passed=effective_integrity_passed,
+        write_exc=write_exc,
+    )
+    if not expected_types:
+        assert failure is None
+        return
+    assert failure is not None
+    if len(expected_types) == 1:
+        assert type(failure) is expected_types[0]
+        if expected_types[0] is AssertionError:
+            assert str(failure) in {
+                EVIDENCE_SEMANTIC_FAILURE,
+                EVIDENCE_INTEGRITY_FAILURE,
+                PROCESSOR_STATE_INVARIANT,
+            }
+        return
+    assert isinstance(failure, BaseExceptionGroup)
+    assert tuple(type(item) for item in failure.exceptions) == expected_types
+
+
+def test_build_category_c_eval_failure_processor_state_invariant() -> None:
+    failure = build_category_c_eval_failure(
+        primary_exc=None,
+        processor_passed=False,
+        raw_absence=None,
+        effective_integrity_passed=False,
+    )
+    assert failure is not None
+    assert str(failure) == PROCESSOR_STATE_INVARIANT
+
+
+def test_build_category_c_eval_failure_cancelled_error_groups_with_write() -> None:
+    cancelled = asyncio.CancelledError()
+    write_exc = OSError("write failed")
+    failure = build_category_c_eval_failure(
+        primary_exc=cancelled,
+        processor_passed=False,
+        raw_absence=None,
+        effective_integrity_passed=False,
+        write_exc=write_exc,
+    )
+    assert isinstance(failure, BaseExceptionGroup)
+    assert failure.exceptions[0] is cancelled
+    assert failure.exceptions[1] is write_exc
+
+
+def test_raw_medical_urgency_invented_then_dropped_fails_semantics() -> None:
     extraction = IntakeExtraction(
         evidence=[
             ExtractedIntakeEvidence(
@@ -463,9 +703,38 @@ def test_raw_medical_urgency_invented_then_dropped_fails_semantics() -> None:
         fixture=user_turn.content,
     )
     assert stages["raw_medical_urgency_absent"] is False
+    raw_absence = raw_medical_urgency_absence(stages)
+    assert raw_absence is False
+    semantic_passed = True and raw_absence is True
+    assert semantic_passed is False
+    failure = build_category_c_eval_failure(
+        primary_exc=None,
+        processor_passed=True,
+        raw_absence=raw_absence,
+        effective_integrity_passed=True,
+    )
+    assert failure is not None
+    assert str(failure) == EVIDENCE_SEMANTIC_FAILURE
 
 
-def test_provider_messages_sha256_stable() -> None:
+def test_missing_raw_stage_forces_effective_integrity_failure() -> None:
+    semantic_passed = True and raw_medical_urgency_absence(None) is True
+    effective_integrity_passed = True and raw_medical_urgency_absence(None) is not None
+    assert semantic_passed is False
+    assert effective_integrity_passed is False
+    payload = build_category_c_evidence_payload(
+        semantic_assertions_passed=semantic_passed,
+        evidence_integrity_passed=effective_integrity_passed,
+    )
+    assert payload["success"] is False
+    failure = build_category_c_eval_failure(
+        primary_exc=None,
+        processor_passed=True,
+        raw_absence=None,
+        effective_integrity_passed=effective_integrity_passed,
+    )
+    assert failure is not None
+    assert str(failure) == EVIDENCE_INTEGRITY_FAILURE
     messages = [
         {"role": "system", "content": "Extract JSON."},
         {"role": "user", "content": "I am not thinking about harming myself."},
@@ -496,12 +765,17 @@ def test_digests_from_provider_request_event_prompt_mode_uses_last_message() -> 
     )
 
 
+def test_provider_messages_sha256_stable() -> None:
+    messages = [
+        {"role": "system", "content": "Extract JSON."},
+        {"role": "user", "content": "I am not thinking about harming myself."},
+    ]
+    first = provider_messages_sha256(messages)
+    second = provider_messages_sha256(messages)
+    assert first == second
+    assert len(first) == 64
+
+
 def test_resolve_debug_run_dir_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("JUNG_DEBUG_RUN_DIR", raising=False)
     assert resolve_debug_run_dir() is None
-
-
-def test_evidence_integrity_failure_constant() -> None:
-    assert EVIDENCE_INTEGRITY_FAILURE == "category_c_evidence_integrity_failed"
-    assert MESSAGE_CANONICALIZATION
-    assert STRUCTURED_REQUEST_CANONICALIZATION

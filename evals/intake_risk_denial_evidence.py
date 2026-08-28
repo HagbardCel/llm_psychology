@@ -38,6 +38,8 @@ STRUCTURED_REQUEST_CANONICALIZATION = "structured-request-sorted-json-v1"
 
 AcceptedAttempt = Literal["initial", "correction"]
 EVIDENCE_INTEGRITY_FAILURE = "category_c_evidence_integrity_failed"
+EVIDENCE_SEMANTIC_FAILURE = "category_c_semantic_assertions_failed"
+PROCESSOR_STATE_INVARIANT = "category_c_processor_state_invariant_failed"
 
 
 def provider_messages_sha256(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -90,7 +92,7 @@ class MemoryDiagnosticRecorder:
                 "sequence": self._sequence,
                 "kind": kind,
                 "context": current_diagnostic_context().as_dict(),
-                "data": dict(data or {}),
+                "data": sanitize_value(dict(data or {})),
             }
         )
 
@@ -689,3 +691,66 @@ def evaluate_evidence_integrity(
 
     passed = not errors and messages_match and structured_match and stages is not None
     return passed, messages_match, structured_match, errors
+
+
+def raw_medical_urgency_absence(stages: Mapping[str, Any] | None) -> bool | None:
+    """Tri-state raw medical-urgency absence from evidence stages."""
+    if stages is None:
+        return None
+    value = stages.get("raw_medical_urgency_absent")
+    return value if isinstance(value, bool) else None
+
+
+def _group_failures(
+    failures: list[BaseException],
+    *,
+    message: str,
+) -> BaseException:
+    if len(failures) == 1:
+        return failures[0]
+    return BaseExceptionGroup(message, failures)
+
+
+def build_category_c_eval_failure(
+    *,
+    primary_exc: BaseException | None,
+    evidence_finalization_exc: BaseException | None = None,
+    processor_passed: bool,
+    raw_absence: bool | None,
+    effective_integrity_passed: bool,
+    write_exc: BaseException | None = None,
+) -> BaseException | None:
+    """Return the pytest failure to raise, or None when the eval should pass."""
+    if processor_passed != (primary_exc is None):
+        return AssertionError(PROCESSOR_STATE_INVARIANT)
+
+    if primary_exc is not None:
+        grouped: list[BaseException] = [primary_exc]
+        if evidence_finalization_exc is not None:
+            grouped.append(evidence_finalization_exc)
+        if write_exc is not None:
+            grouped.append(write_exc)
+        return _group_failures(
+            grouped,
+            message="category-c eval failures",
+        )
+
+    if evidence_finalization_exc is not None:
+        grouped = [evidence_finalization_exc]
+        if write_exc is not None:
+            grouped.append(write_exc)
+        return _group_failures(
+            grouped,
+            message="category-c eval failures",
+        )
+
+    failures: list[BaseException] = []
+    if processor_passed and raw_absence is False:
+        failures.append(AssertionError(EVIDENCE_SEMANTIC_FAILURE))
+    if processor_passed and not effective_integrity_passed:
+        failures.append(AssertionError(EVIDENCE_INTEGRITY_FAILURE))
+    if write_exc is not None:
+        failures.append(write_exc)
+    if not failures:
+        return None
+    return _group_failures(failures, message="category-c eval failures")

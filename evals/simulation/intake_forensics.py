@@ -773,10 +773,12 @@ def _replay_attempt(  # noqa: C901
     if eval_data:
         if eval_data.get("merge_status") is not None:
             merge_status = str(eval_data["merge_status"])  # type: ignore[assignment]
-        if "raw_evidence_count" in eval_data:
-            raw_count = int(eval_data["raw_evidence_count"])
-        if "retained_evidence_count" in eval_data:
-            retained_count = int(eval_data["retained_evidence_count"])
+        override_raw = _eval_count(eval_data, "raw_evidence_count")
+        if override_raw != UNKNOWN:
+            raw_count = override_raw
+        override_retained = _eval_count(eval_data, "retained_evidence_count")
+        if override_retained != UNKNOWN:
+            retained_count = override_retained
         if "record_changed" in eval_data:
             planned_record_changed = bool(eval_data.get("record_changed"))
         if "next_required_item" in eval_data:
@@ -1034,7 +1036,6 @@ def build_intake_turn_reports(  # noqa: C901
                 persisted_record_changed = False
                 persisted_next_item = pre_turn_next
                 persisted_paths = ()
-                persisted_merge_record = None
 
                 if missing_extraction_committed:
                     (
