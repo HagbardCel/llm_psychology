@@ -39,8 +39,15 @@ from jung.phases.intake.extraction import (
     IntakeEvidenceField,
     IntakeExtraction,
 )
-from jung.phases.intake.models import IntakeRecord
+from jung.phases.intake.models import (
+    IntakeEvidence,
+    IntakeMergeDiagnostics,
+    IntakeRecord,
+    IntakeTurnPlan,
+    SafetyRecord,
+)
 from jung.phases.transcript import TranscriptTurn
+from tests.support.local_llm import LocalModelEnvironment
 
 _MANDATORY_KEYS = frozenset(
     {
@@ -779,3 +786,89 @@ def test_provider_messages_sha256_stable() -> None:
 def test_resolve_debug_run_dir_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("JUNG_DEBUG_RUN_DIR", raising=False)
     assert resolve_debug_run_dir() is None
+
+
+_CATEGORY_C_FROZEN_FIXTURE = "I am not thinking about harming myself or anyone else."
+
+
+def _category_c_valid_plan() -> IntakeTurnPlan:
+    quote = "not thinking about harming myself or anyone else"
+    denial = IntakeEvidence(
+        value="denied",
+        evidence_quote=quote,
+        source_role="user",
+        source_message_sequence=2,
+        direct_ask=True,
+        response_status="informative",
+    )
+    return IntakeTurnPlan(
+        merged_record=IntakeRecord(
+            safety=SafetyRecord(
+                self_harm=denial,
+                harm_to_others=denial,
+            ),
+        ),
+        record_changed=True,
+        completeness_complete=False,
+        extraction_target="risk_screen",
+        merge_diagnostics=IntakeMergeDiagnostics(
+            status="applied",
+            applied=True,
+            record_changed=True,
+            retained_evidence_count=2,
+        ),
+    )
+
+
+class _FailingCloseClient:
+    def __init__(self, cleanup_exc: RuntimeError) -> None:
+        self.gateway = object()
+        self.aclose_calls = 0
+        self._cleanup_exc = cleanup_exc
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+        raise self._cleanup_exc
+
+
+@pytest.mark.asyncio
+async def test_intake_clear_risk_denial_preserves_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.test_intake_clear_risk_denial as category_c_eval
+
+    prepare_turn_calls = 0
+    cleanup_exc = RuntimeError("cleanup failed")
+    fake_client = _FailingCloseClient(cleanup_exc)
+    environment = LocalModelEnvironment(
+        base_url="http://127.0.0.1:1234/v1",
+        model="fake/model",
+        api_key="not-needed",
+        structured_mode=StructuredOutputMode.JSON_SCHEMA,
+    )
+
+    async def fake_prepare_turn(self, turn_input: object) -> IntakeTurnPlan:
+        nonlocal prepare_turn_calls
+        prepare_turn_calls += 1
+        return _category_c_valid_plan()
+
+    monkeypatch.delenv("JUNG_DEBUG_RUN_DIR", raising=False)
+    monkeypatch.setattr(category_c_eval, "request_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(category_c_eval, "request_extra_body", lambda: None)
+    monkeypatch.setattr(
+        category_c_eval.IntakeProcessor,
+        "prepare_turn",
+        fake_prepare_turn,
+    )
+    monkeypatch.setattr(
+        category_c_eval,
+        "build_local_model_client",
+        lambda *args, **kwargs: fake_client,
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed") as caught:
+        await category_c_eval.test_intake_clear_risk_denial(environment)
+
+    assert caught.value is cleanup_exc
+    assert prepare_turn_calls == 1
+    assert fake_client.aclose_calls == 1

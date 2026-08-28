@@ -151,9 +151,9 @@ async def test_intake_clear_risk_denial(
             ):
                 assert quote
                 assert normalize_content(quote) in normalize_content(FROZEN_FIXTURE)
-            processor_passed = True
         finally:
             await client.aclose()
+        processor_passed = True
     except BaseException as exc:
         primary_exc = exc
     finally:
