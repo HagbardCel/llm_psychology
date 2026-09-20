@@ -19,7 +19,7 @@ Five tables are sufficient. Review is a session-owned document, not another tabl
 
 | Owner | Represents / creator | Source or derived | Mutability and reason to exist |
 |---|---|---|---|
-| `profile` | Singleton identity/preferences explicitly entered by user; current-plan pointer set by application | User input plus application pointer | Editable while idle; the one owner of current preferences |
+| `profile` | Singleton identity/preferences, initialized defaults editable by user; current-plan pointer set by application | Product defaults or explicit user input plus application pointer | Editable while idle; the one owner of current preferences |
 | `sessions` | Session identity, type, starting plan, frozen session preferences, lifecycle and review | Application metadata; review is derived | Opening/ending and work status change; completed review immutable; binds a review to its source conversation |
 | `messages` | Actual patient input and completed assistant response, ordered in session | Patient source or model utterance; role stays explicit | Append-only; sole durable exact-wording owner; unanswered patient input remains valid history |
 | `plans` | Applied therapeutic strategy produced by accepted review | Derived strategy, never patient fact | Immutable revisions; historical sessions remain linked to their starting strategy |
@@ -29,9 +29,9 @@ Five tables are sufficient. Review is a session-owned document, not another tabl
 
 This is a schema specification to implement, not executable DDL for the current schema.
 
-**Profile:** `singleton_id=1`, optional display name, primary language and preferred style (unset until setup submission), current plan ID, created/updated timestamps. The current pointer is application-authored. Identity/preferences do not become the destination for model-generated biography. Preserve session-specific preference snapshots so later edits do not change the interpretation of old work.
+**Profile:** `singleton_id=1`, optional display name, primary language and preferred style initialized to English/supportive, current plan ID, created/updated timestamps. Initialize profile and intake atomically, with no SETUP flag or required confirmation. Defaults are not evidence of explicit user choice. The current pointer is application-authored. Identity/preferences do not become the destination for model-generated biography. Session preference snapshots remain editable before first accepted input and frozen thereafter, so later edits do not change old work.
 
-**Session:** ID, kind (`intake|therapy`), starting plan ID (null only for initial intake), preferences JSON, start/end timestamps; review status (`none|pending|running|complete|failed`), monotonic attempt count, safe last error code, review start/completion timestamps, nullable review JSON. Store a small application-authored `capacity_json` containing the admitted review input-byte envelope, assistant response-byte ceiling, and runtime profile identifier used for admission, without credentials or full configuration. A failed attempt has no committed review or plan changes. A complete review has a document. An open session has review status `none`. At most one open session and at most one closed unfinished review globally. Store acceptance prevents these two states coexisting.
+**Session:** ID, kind (`intake|therapy`), starting plan ID (null only for initial intake), preferences JSON, start/end timestamps; review status (`none|pending|running|complete|failed`), monotonic attempt count, safe last error code, review start/completion timestamps, nullable review JSON. No `capacity_json` or session-frozen runtime profile: every admitted review endpoint must fit the same product envelope. A failed attempt has no committed review or plan changes. A complete review has a document. An open session has review status `none`. At most one open session and at most one closed unfinished review globally. Store acceptance prevents these two states coexisting. Review work needs no worker identity, lease, or attempt-history table.
 
 **Message:** ID, session ID, sequence, role, text, client message ID, created timestamp, nullable `input_metadata_json`, nullable generation metadata. Input metadata contains only explicitly submitted self-report choices and validated user-selected recall message IDs; both participate in idempotency equality. Unique `(session_id,sequence)` and `(session_id,client_message_id,role)`. The store enforces that an assistant completion matches the latest unanswered user. Input metadata is allowed only on a patient message and only from explicit API input. Generation metadata is allowed only on generated assistant messages. Neither is model-authored provenance.
 
@@ -43,17 +43,16 @@ Memory selection output is ephemeral. After validation, `memory_refs` is its sol
 
 ### Compact document shapes
 
-All generated strings and lists have explicit size limits. Start with a small shape; add a field only if a consumer uses it. Example limits below are implementation defaults to test, not a clinical ontology.
+All generated strings and lists have explicit size limits. This is the candidate for R0 admission, before production restructuring; add a field only if a consumer uses it. Example limits below are implementation defaults to test, not a clinical ontology. Source chronology is backend-owned, so the draft has no model-authored `scope` field.
 
 ```text
 ReviewDraft (LLM output; no IDs, status, model name, or timestamps):
   note:
     summary: short text (up to 1,200 characters)
-    observations: up to 5 {text, kind, scope, source_handles[]}
+    observations: up to 5 {text, kind, source_handles[]}
       kind = observation | hypothesis | uncertainty
-      scope = current_session | longitudinal
-    unresolved_questions: up to 3 {text, scope, source_handles[]}
-    boundary_notes: up to 3 {text, scope, source_handles[]}
+    unresolved_questions: up to 3 {text, source_handles[]}
+    boundary_notes: up to 3 {text, source_handles[]}
   handoff:
     opening_focus: short text
     carry_forward: up to 3 short questions/directions
@@ -72,24 +71,34 @@ PlanContent:
 
 Each observation/question/boundary item is at most 400 characters and has at most 3 source handles. Handoff text/items and plan fields/items are at most 400 characters. A whole-document output budget also applies. These limits avoid the current proliferation of themes, affects, insights, progress lists, recommendations, and repeated unresolved-topic fields. Progress belongs in the dated review note. A handoff's carry-forward instruction is a prospective action, not a second summary of that progress.
 
+| Field | Consumer / reason to retain |
+|---|---|
+| Note summary and observations | History inspection and bounded prior-note context; `kind` distinguishes claims, hypotheses, and uncertainty |
+| Unresolved questions and boundary notes | History inspection of unknowns and safety/boundary interpretation; optional lists, with no completeness gate |
+| Handoff | Next conversation's opening, questions, restrictions, and mandatory exact-source anchors |
+| Remember | Inserts current-session patient references as future context candidates; not a duplicate durable note field |
+| Replacement plan and change reason | Applied strategy and inspectable explanation of its revision |
+
+This consumer inventory is part of R0: remove unused or duplicative fields before freezing the schema. Do not restore scope tags merely to create more semantic-validator branches. Safety interpretation may remain uncertain; field population is not proof of clinical assessment.
+
 Goals in the plan are **proposed strategy**. If the patient requested or accepted a goal, its source wording is linked from the review and available as a patient source. Do not add a model-controlled `patient_confirmed=true`. A future explicit goal-acceptance UI would be a user-authored input, not another inferred status.
 
 After validation, the application constructs `SessionReview` with:
 
 - the note and handoff, resolving handles to message IDs;
 - the plan-change reason and resulting plan ID, or null when unchanged;
-- generation metadata: origin (`model|deterministic`), model ID/runtime profile identifier, prompt version, schema version, application revision, and completion timestamp;
+- generation metadata: origin (`model|deterministic`), model ID and endpoint role for generated reviews, prompt version, schema version, application revision, and completion timestamp;
 - a simple coverage declaration authored by Jung: full source session used, or deterministic no-conversation handling.
 
 Plan content is stored only in `plans`. The accepted draft's replacement plan is consumed by the transaction and removed from the stored review. The review's resulting plan link makes the relationship inspectable. Plan generation provenance comes from its source review; do not duplicate the same generation block on every linked object.
 
-Assistant messages carry smaller provenance: model ID, prompt version, runtime profile fingerprint, and application revision. This tells the user what generated an utterance without storing full prompts in the clinical record. Exact call input is a diagnostic capture concern.
+Assistant messages carry smaller provenance: model ID, prompt version, endpoint role, and application revision. This tells the user what generated an utterance without storing full prompts in the clinical record. Review provenance may likewise name the configured endpoint role/model; neither artifact needs a capacity fingerprint or persisted configuration registry. Exact call input/configuration is an opt-in diagnostic or test-evidence concern.
 
 ### Source handles and trust
 
 Prompts identify visible sources with short request-local handles such as `C7` (current-session message) or `H2` (historical message), plus role and date. A context object holds `handle → message ID, session ID, sequence, scope`. Models can select these handles; they do not author durable identifiers.
 
-Validation rejects unknown/omitted handles, invalid roles, duplicate selections, and historical handles on items labeled `current_session`. A `longitudinal` item may cite current and historical sources together. Scope is a model-authored description of its interpretation, not trusted event provenance. An observation must have support, or be explicitly an uncertainty/question; hypotheses remain hypotheses even with a valid citation. Summary prose is derived and is not deterministically checked for entailment. The UI must say “model interpretation with cited source,” not “verified fact.”
+Validation rejects unknown/omitted handles, invalid roles, duplicate selections, and historical sources used for current-session-only archive selections. Note items may cite current and historical sources together; the backend resolves and labels each source's actual session/date. There is no model-authored scope to validate. Observations and hypotheses require cited support; explicit uncertainty/questions may have no source. Hypotheses remain hypotheses even with a valid citation. Prose is derived and is not deterministically checked for entailment or correct temporal interpretation; targeted model cases cover those limitations. The UI must say “model interpretation with cited source,” not “verified fact.”
 
 No quote substring extraction is needed. Fetch the complete authoritative message for display or prompt inclusion. Exact text is stored without normalization; whitespace normalization can be used for deduplication/search comparisons but never overwrites source text. Source handles are transport conveniences, not durable identity.
 
@@ -126,18 +135,18 @@ Static behavioral and method instructions go in the system message. Patient pref
 
 ### Bounded selection algorithm
 
-1. Before a new message is accepted, read plan, latest useful handoff, recent message range, and source candidates through one store read operation/transaction. Check mandatory conversation context as well as prospective review capacity while mutation/generation ownership prevents conflicting changes. Stop loading and sorting every full `SessionReview` for each patient turn.
+1. Before a new message is accepted, read plan, latest useful handoff, recent message range, source-byte count, and source candidates through one store read operation/transaction. Check mandatory conversation context and the fixed session-source limit while mutation/generation ownership prevents conflicting changes. Resolve duplicate/retry input first so an already accepted patient message is not counted twice. Stop loading and sorting every full `SessionReview` for each patient turn.
 2. Establish the **whole-request budget** for the selected runtime/task: instructions + contextual metadata + transcript + schema when applicable + correction margin + output/reasoning reserve + template margin.
-3. Include mandatory core: method/language, complete compact plan and handoff, current patient input, source messages referenced by active handoff, and the immediately preceding session's unresponded patient message when applicable. Deduplicate by message ID.
+3. Include mandatory core: method/language, complete compact plan and handoff, current patient input, source messages referenced by active handoff, explicitly selected recall sources, and the immediately preceding session's unresponded patient message when applicable. Deduplicate by message ID. No priority rule silently drops one mandatory source to fit another.
 4. Allocate remaining live context to the newest **contiguous complete exchanges**. Never create an apparent immediate response by joining across an omitted middle exchange. Include an omission marker at the start. Do not truncate a patient message mid-negation.
-5. Reserve a small historical-evidence allocation before filling recent dialogue, so memory is not perpetually starved. Initial defaults: up to two active handoff sources plus two retrieved sources; recent conversation gets most remaining space. These are caps, not requirements to fill every slot.
-6. Historical candidates are selected with a simple priority tuple: explicit user-selected recall IDs; active handoff references; textual matches to the current message/focus; recent selected sources. Use bounded plain-text query terms and parameterized SQL. Do not execute model-generated SQL or FTS expressions.
-7. Retrieve at most 30 candidates per query. Rank with deterministic term overlap and recency; deduplicate. Fetch full source messages only for selected candidates. Dates/roles/session identity accompany every source. At hundreds of sessions an indexed reference join plus modest text search is acceptable; measure before adding FTS.
+5. Reserve a small historical-evidence allocation before filling recent dialogue, so memory is not perpetually starved. Initial defaults: up to two active handoff sources and two optional recent selections, in addition to explicit recall and preceding unanswered input. Recent conversation gets most remaining space. Optional caps never displace mandatory sources and are not requirements to fill every slot.
+6. After active handoff anchors and explicit recall, retrieve up to 30 recent distinct `memory_refs` as optional candidates. No term extraction, lexical matching, or model-generated query is needed. Order the recent candidate window by purpose (`correction`, `unanswered`, `safety`, `goal`, `continuity`), then source timestamp descending, then message ID for stable ties. Purpose expresses selection relevance, never assessed risk or factual authority.
+7. Fetch full source messages for selected candidates; include dates, roles, and session identity. At roughly five selections per review, a 100-session fixture has about 500 references. Measure the baseline's recall and query costs before a separately justified lexical follow-up; FTS and embeddings remain further deferred.
 8. Pack whole optional items until they fit. If an optional source does not fit, omit it with a reason. Mandatory sources that do not fit cause a context-capacity error; do not silently remove a promised handoff anchor. Validate handoff-source capacity when accepting the review to avoid creating an unusable next session.
 
 `context.py` returns messages plus a small debug manifest (source IDs, counts, estimated/observed costs, omissions). That manifest is not another durable prompt-context table. DEBUG logs may contain its IDs and counts; full prompt capture is separately enabled.
 
-This is deliberately not semantic search. Word overlap will miss some related concepts, and it is weaker across languages. The user can search session history and explicitly include up to two sources in the next message using `source_message_ids`. Those IDs are validated against this database; their metadata is part of chat idempotency and resolved by the backend. If these mandatory sources do not fit, reject before acceptance and explain the capacity issue. Local source inspection is authorized by the single user's normal application access, not by model instructions.
+Recency cannot automatically retrieve arbitrary older relevant events, regardless of language. The user can browse session history and explicitly include up to two sources in the next message using `source_message_ids`. Those IDs are validated against this database; their metadata is part of chat idempotency and resolved by the backend. If these mandatory sources do not fit, reject before acceptance and explain the capacity issue. Measure unanchored historical misses separately from anchor/explicit-recall correctness. Local source inspection is authorized by the single user's normal application access, not by model instructions.
 
 Self-report choice metadata travels beside the complete patient wording, with its date and label “explicit patient input.” A historical denial is never represented as a current safety status. If new text conflicts, preserve both sources and tell the model the newer wording is a new report, not proof the older record was false.
 
@@ -145,19 +154,32 @@ Self-report choice metadata travels beside the complete patient wording, with it
 
 There is no portable exact tokenizer behind the OpenAI-compatible protocol. Do not use a tokenizer for an unrelated model and call the result exact.
 
-Implement one small deterministic budget estimator over UTF-8 request bytes, including serialized context/schema and overhead. The initial conservative mode charges roughly one token per byte plus a template margin; label this an estimate, not a tokenizer theorem. Allow a larger calibrated byte allowance only for an admitted runtime profile with observed prompt-token measurements. Keep actual provider context errors as explicit failures. Runtime-specific tokenization may be used by `check-model` to calibrate/verify a profile; adding it to every production request is unnecessary initially.
+Use one small deterministic byte-budget helper for bounded conversation packing. The review contract instead has one fixed product envelope: maximum serialized session sources plus bounded non-session input, template/correction allowance, and output/reasoning reserve. R0 chooses and freezes its concrete limits against representative multilingual, long-message, and many-short-message fixtures on the intended endpoints. Use documented server settings and observed token usage or server tokenization during admission; byte counting is not an exact tokenizer or a universal bytes-to-tokens theorem.
 
-The illustrative 32k-token profile in the runtime document therefore admits a conservative input envelope, not a promise to use all 32k tokens. A larger review context may be useful before a larger review model. Admission uses representative multilingual and long-message fixtures, not English character ratios alone. Usage absent from a provider is “unknown,” not zero.
+There is no per-runtime calibrated production envelope or per-session fingerprint. Startup checks that the configured review context/output limits meet the admitted fixed envelope; a changed endpoint requires renewed admission. Do not add tokenization calls to every patient turn. A larger review context may be useful before a larger review model. Usage absent from a provider is “unknown,” not zero.
 
 Generated plan/handoff fields are bounded at creation, so packing need not search hundreds of progressively truncated variants. Count complete documents, then append whole items. A provider rejecting an already accepted message despite the estimate leaves a retryable unanswered message and an actionable capacity error. It never causes transcript deletion or automatic provider switching.
 
 ### Full-session review and capacity
 
-The review must see every completed-session message, including a trailing unanswered user, and must be able to emit its bounded output. Historical extras are optional; the current session is not.
+The review must see every completed-session message, including a trailing unanswered user, and must be able to emit its bounded output. Historical extras beyond required handoff/recall anchors and preceding unanswered input are optional; the current session is not.
 
-Before accepting each new patient message, calculate a prospective review request with the complete session, candidate input, and the maximum allowed assistant-output reserve. Freeze the review runtime profile for that active session's capacity accounting. Include maximum bounded plan/handoff/header cost, so a later optional section cannot invalidate the guarantee. If the known envelope cannot fit, reject before persistence, keep the draft in the console, and offer to end/review the current session and submit that draft to the next session with a new message ID.
+Before accepting each new patient message, enforce:
 
-Warn around 80% of the session envelope. Do not automatically call a model at the warning threshold. A newly configured smaller review context does not silently take over active work: finish with the admitted profile or explicitly fix configuration and retry. The actual server may still disagree with the estimate; show the error and require adequate capacity. The target has no automatic chunking or tail-only “complete” review.
+```text
+current_session_source_bytes
+  + candidate_patient_source_bytes
+  + max_assistant_source_bytes
+  <= MAX_SESSION_SOURCE_BYTES
+```
+
+Count the serialized source representation, including complete wording, explicit input metadata, and per-message labels/formatting overhead. The assistant reserve includes its bounded text and source overhead. This prevents many short turns or metadata from escaping a text-only limit. Compute the count from authoritative messages; do not persist another capacity projection or rebuild a hypothetical review request. Same-ID retries count the existing patient source once.
+
+Admission reserves bounded instructions, schema, plan, handoff, mandatory historical sources (including a preceding unanswered patient message), correction feedback, and output outside this source allowance. Optional historical extras use only remaining space. Validate mandatory handoff-source fit before accepting a review; a reference to an oversized source cannot promise an unusable next context. Retain pre-acceptance checks for mandatory conversation context as well.
+
+Warn at 80% of the source limit. Reject overflow before persistence, retain the console draft, and offer explicit end/review followed by submission to the next session with a new message ID. Do not automatically close the session or call a model at the warning threshold. An input too large even for an empty session must be shortened by the user; do not loop across empty sessions or truncate it silently.
+
+Any endpoint used later, including for retry, must fit the same product envelope. No original runtime must stay frozen on the session. If the server nevertheless rejects actual capacity, preserve failed work and require adequate configuration/admission; never silently review a tail, chunk automatically, or delete history.
 
 ## Several sessions in practice
 
@@ -181,7 +203,7 @@ If the user now says “Actually, that wasn't the issue; I was exhausted,” `m2
 
 ### Session 5
 
-The plan and latest handoff remain compact. The latest relevant correction is an active source; unrelated intervening material stays in the database. If the user returns to “the team meeting,” lexical selection or explicit recall can bring `m12` back with its date and link. Historical wording is presented as something reported then, alongside the correction, not as a fresh event.
+The plan and latest handoff remain compact. The latest relevant correction is an active source; unrelated intervening material stays in the database. If the user returns to “the team meeting,” `m12` appears only if it remains an anchor/recent selection or the user explicitly recalls it. Mentioning the phrase alone does not promise automatic retrieval. Historical wording is presented as something reported then, alongside the correction when included, not as a fresh event.
 
 The user can open the source message from a review interpretation or plan origin. If a semantic inference was poor, the source comparison makes that apparent. Future interpretation can change while the history remains intact.
 
@@ -191,7 +213,7 @@ Ordinary requests still load a bounded transcript range, latest handoff, one pla
 
 Suppose session 100's review times out. The session stays closed with review status failed; `p99` and its handoff remain the last successful state, visibly so. The user fixes the model configuration and retries the same session. Successful atomic completion creates at most one new plan. Session 101 begins only after that outcome is resolved.
 
-If an old event is relevant but neither lexical selection nor active anchors finds it, the system may miss it. It must not invent continuity. Source search/explicit recall is the immediate remedy; measured misses determine whether FTS or semantic retrieval should be added later.
+If an old event is relevant but neither active anchors nor recent selections includes it, the system may miss it. It must not invent continuity. History inspection/explicit recall is the immediate remedy. R6 measures such misses before a separate lexical-retrieval change; FTS and semantic retrieval require further evidence.
 
 ## Source inspection and editing boundaries
 

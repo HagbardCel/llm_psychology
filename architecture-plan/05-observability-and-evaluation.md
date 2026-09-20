@@ -10,6 +10,8 @@
 
 A log line should not determine whether a session completed. A session's full interpretation should not live only in a log. A hard evaluation should not assume an ordinary log is a complete, ordered, permanent event ledger.
 
+**No operational log consumer may become a correctness dependency.** Relationships needed to establish product semantics belong in SQLite or in the owning test's direct evidence. A return to joining ordinary log events to decide whether a hard contract held is a design regression. Missing logs never change acceptance, completion, recovery, or test-owned evidence outcomes.
+
 ## Operational logging
 
 Use Python `logging`, a small JSON formatter, `contextvars`, and standard rotating handlers. The standard library already provides the underlying mechanisms; do not implement a diagnostic recorder lifecycle or sequence protocol merely to serialize JSON. [Python logging cookbook](https://docs.python.org/3/howto/logging-cookbook.html)
@@ -77,7 +79,7 @@ This proposal makes no claim that a single model, two models, or a particular th
 
 - No LLM write access to profile fields, IDs, work status, or source metadata.
 - Whole source messages retained; quote boundaries cannot reverse negation by persisted substring extraction.
-- Source type and chronology preserved; current-session citations cannot point at historical-only context.
+- Source type and chronology resolved from message identity; historical sources cannot become current-session archive selections. Model prose remains interpretation and needs separate attribution checks.
 - All successful review artifacts commit together; failures never produce an apparently applied partial plan.
 - Loopback binding by default; a non-loopback bind remains an explicit operator choice with external protection required.
 - Explicit remote endpoint configuration shows what categories of data that role receives. Never silently route local conversations to a remote fallback.
@@ -92,6 +94,7 @@ Synthetic runs must allocate isolated data directories before composing the appl
 | Surface | Failure detected that cheaper layers cannot | Gate or aid | Expected cost |
 |---|---|---|---|
 | Deterministic unit/integration | Broken state transitions, SQL invariants, cancellation, duplicate acceptance, bounds, provenance, selection, error mapping | Pre-merge product gate: `make check` | No model calls; typically seconds/minutes |
+| R0 compact-review admission | Whether one bounded review can replace the two-pass result on matched completed sessions | Architecture gate before production restructuring; hard checks plus human comparison | 6–10 frozen cases, at most one correction each; baseline calls only if applicable matched output is missing |
 | Runtime compatibility admission | Actual server schema/stream/finish/reasoning/timeout behavior and wire support | Gate for a newly admitted endpoint profile | Roughly 3–5 small synthetic requests, plus a bounded cancellation probe |
 | Targeted model contracts | Whether the configured model can produce valid source selections and resist specific instruction attacks | Gate for that model/prompt configuration on the named cases | About 6–10 cases; one correction max per structured case |
 | Qualitative replay | Misattunement, harmful advice, unsupported certainty, stale-history attribution, inappropriate method use | Human-review aid; explicit reviewer sign-off for changed behavior | A selected 4–8 cases normally; expand only for a reason |
@@ -107,8 +110,8 @@ Keep one exhaustive owner for each invariant, plus a few cross-boundary examples
 - SQL integration: message uniqueness/order, one open session, one unfinished review, source roles, plan lineage, all-or-nothing commit, failed attempt fencing.
 - Application integration: identical retry, input metadata conflict, disconnect-before/after commit, interrupted review recovery, scheduling failure, new-session blocking.
 - Adapter unit/HTTP mock: exact physical attempts, total deadlines including correction, length/refusal/EOF/blank handling, stream close, credentials, actual serialized schema/options.
-- Context unit/store integration: mandatory source reservation, complete exchanges, no current-message duplication, temporal labels, 100-session fixture, irrelevant recent material versus relevant old source, capacity rejection before acceptance.
-- API/console: one happy path and a small interrupted-stream/retry path; all required DTO/error changes; source inspection.
+- Context unit/store integration: mandatory source reservation, complete exchanges, no current-message duplication, temporal labels, fixed-envelope multilingual/metadata/many-short-turn boundaries, same-ID byte counting, and capacity rejection before acceptance. At 100 sessions, old anchored/explicitly recalled sources must survive irrelevant recent material; unanchored recall misses are measured separately.
+- API/console: default-initialized intake, preference edits before first input and freezing afterward, one happy path and a small interrupted-stream/retry path; required DTO/error changes, source inspection, capacity warning and draft preservation.
 - Eval harness: fixture isolation, patient information boundary, nonzero failure outcome, cancellation/capture failure, and no evidence-success on missing files.
 
 Prefer behavioral assertions over snapshots of whole prompts, private helper names, or every diagnostic log field. Preserve import-boundary tests that enforce real ownership; remove filename freezes when modules change.
@@ -134,7 +137,9 @@ For a hard live test, capture at the boundary the test actually asserts: exact s
 
 This capture belongs to the eval harness. Do not route it through a general trace-replay engine. Do not independently reimplement the production merge/packing algorithm and call agreement proof. If a test promises exact intermediate evidence, assert its completeness directly; failure to capture is nonzero even if the model response looked good. Preserve a primary product failure when cleanup/evidence writing also fails, and report both.
 
-During the migration, existing Category C remains valid until intake replacement lands. Replace its complicated correlation reader first with test-local direct capture, while keeping its current assertions. Only later retire the obsolete extraction-stage assertions with the product change. This sequencing prevents “delete the tests, then hope the replacement works.”
+During R1, existing Category C remains valid and unchanged unless a narrowly necessary boundary fix requires an adjustment. Make only dependency cuts needed to prevent new trace-v5 consumers; do not replace its correlation reader or broadly refactor simulation audits ahead of deletion. R2 retires extraction-specific assertions and their owning forensic machinery with extraction itself, while landing source-retention, explicit-dimension, live negation-selection, and next-context replacements in the same integration unit. R3 removes residual obsolete imports/helpers; it is not permission to postpone surviving correctness tests.
+
+Preserve frozen Phase-10 evidence and its revision/run references as historical evidence. That work resolved actual attempt/provenance/completeness problems under the old contract. Deleting the product mechanism changes future proof obligations; it does not invalidate old findings or justify copying their success claims into R0 admission.
 
 ### Reports and simulations
 

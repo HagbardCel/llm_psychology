@@ -53,17 +53,16 @@ Do not reorganize unaffected API/client files simply to match this picture. A se
 
 ## Workflow state and concurrency
 
-Five displayed stages are enough: **SETUP, INTAKE, REVIEW, READY, THERAPY**. Review has pending/running/failed status, shown alongside the stage. It is not a second mutable stage field.
+Four displayed stages are enough: **INTAKE, REVIEW, READY, THERAPY**. Review has pending/running/failed status, shown alongside the stage. It is not a second mutable stage field. Preferences do not require a SETUP stage.
 
 Derivation order:
 
-1. Missing required setup preferences and no progress → `SETUP`.
-2. A closed session with unfinished review → `REVIEW`.
-3. An open intake or therapy session → corresponding active stage.
-4. An applied current plan and no unfinished work → `READY`.
-5. Any other combination → an invariant error, not a default stage.
+1. A closed session with unfinished review → `REVIEW`.
+2. An open intake or therapy session → corresponding active stage.
+3. An applied current plan and no unfinished work → `READY`.
+4. Any other combination → an invariant error, not a default stage.
 
-Once setup is submitted, one intake session is created. Setup needs language and a style preference; display name is optional. Seed these required choices as unset until explicit submission; English and a small supportive-style entry can be displayed defaults, but are not evidence that setup occurred. Date of birth and free-form profile notes are removed from this minimal target because they have no demonstrated use in the current live prompt path. Patient narrative belongs in messages. These omissions are a product scope choice, not a prohibition on later age-appropriate requirements.
+Fresh-database initialization atomically creates the singleton profile and one intake session with English and a small supportive-style entry as defaults. Display those editable defaults without implying that the patient explicitly chose them. Display name is optional. Initialization is idempotent and never manufactures a new intake to hide an inconsistent existing database. Date of birth and free-form profile notes are removed from this minimal target because they have no demonstrated use in the current live prompt path. Patient narrative belongs in messages. These omissions are a product scope choice, not a prohibition on later age-appropriate requirements.
 
 Keep the mutation lock around command acceptance/commit, and a generation reservation across a chat attempt. One review task runs while the stage is `REVIEW`; another session cannot begin against an unfinished review. Reads remain available. Never hold a SQLite transaction across a model await.
 
@@ -71,18 +70,17 @@ The backend also takes an OS advisory lock for the configured data directory at 
 
 | Stage | Commands |
 |---|---|
-| SETUP | Set profile/preferences; begin intake atomically when valid |
 | INTAKE | Chat; finish intake after at least one nonblank patient message; edit preferences while idle |
 | REVIEW | Read state/history; retry a failed or unscheduled review when idle; stop the application |
 | READY | Start therapy; edit preferences |
 | THERAPY | Chat; end session; edit preferences only between turns |
 
-Profile/style edits during an active session affect the next session and its review, not an in-flight request or the active session's review. Freeze the session's language and chosen method in its small `preferences_json` at creation; review uses that method. A later preference change is visible as pending until a new session uses it. Plans record the method under which they were authored. When a new session chooses another method, the conversation receives that method's instructions and the earlier plan as explicitly labeled prior strategy; it does not have to apply incompatible old techniques. Its review must produce an updated plan for the new method. No extra preference-transition workflow is needed.
+Create each session with a small `preferences_json` snapshot. Before its first accepted patient message, idle profile language/style edits update that snapshot atomically. The first accepted message freezes the snapshot, including when its assistant response fails; no separate setup/submitted flag is needed. Later preference edits affect future sessions and their reviews, not the active session or an in-flight request. Show those edits as pending. Plans record the method under which they were authored. When a new session chooses another method, the conversation receives that method's instructions and the earlier plan as explicitly labeled prior strategy; it does not have to apply incompatible old techniques. Its review must produce an updated plan for the new method. No extra preference-transition workflow is needed.
 
 ## Intake
 
-1. Console displays a short orientation: concerns, impact/time course, goals, coping, and safety can be discussed; unknowns and declining to answer are acceptable.
-2. Create intake with preferences and no initial plan. A static welcome invites the first patient contribution; it is UI guidance, not fabricated therapist dialogue.
+1. Console displays the initialized language/style defaults and a short orientation: concerns, impact/time course, goals, coping, and safety can be discussed; unknowns and declining to answer are acceptable.
+2. Intake already exists with editable preferences and no initial plan. A static welcome invites the first patient contribution; it is UI guidance, not fabricated therapist dialogue. No explicit preference confirmation is required to begin.
 3. Patient text uses the ordinary durable chat path. The conversation task in intake mode asks concise follow-ups based on the recent transcript. There is no extraction call and no durable inferred intake record.
 4. Keep an always-available help action. Optional direct self-report controls let the user explicitly submit `self_harm`, `harm_to_others`, or `medical_urgency` with `yes/no/unsure/decline` and optional text. These are user input, never automatic classification of free text. Their exact submitted values and wording are stored with their message. A `no` for one dimension says nothing about another.
 5. **Finish intake** is an explicit user command. It does not certify clinical completeness or safety. Accept it after one patient message, even if questions remain. It closes the session and queues its review in one transaction. A trailing unanswered message remains source material for that review.
@@ -100,7 +98,7 @@ sequenceDiagram
     participant D as SQLite
     participant L as Conversation model
     U->>A: Chat(session, client message ID, text, optional self-report)
-    A->>D: Resolve duplicate; verify open session and both prompt capacities
+    A->>D: Resolve duplicate; check live context and fixed session-source limit
     A->>D: Commit patient message
     A->>A: Select and budget context from consistent source reads
     A->>L: Instructions + labeled context + recent exchanges + current input
@@ -127,7 +125,7 @@ Output sections are:
 - **Memory selections:** source handles for patient statements worth retaining as retrieval candidates, with a small selection-purpose label.
 - **Replacement plan or null:** full bounded strategy when change is warranted. No sparse patch language.
 
-Validate fields, references, visible-source membership, current/historical scope, and plan requirements separately. Then one transaction writes the review, selected references, optional new plan/current pointer, and review completion. Application code resolves prompt-local handles to real IDs and authors provenance. No intermediate generated analysis is called source truth.
+Validate fields, references, visible-source membership, source roles/session membership, and plan requirements separately. Current/historical labels come from resolved sources, not a model-authored scope field. Then one transaction writes the review, selected references, optional new plan/current pointer, and review completion. Application code resolves prompt-local handles to real IDs and authors provenance. No intermediate generated analysis is called source truth. The compact schema and one-call decision must pass R0 before this production cutover is implemented.
 
 Empty therapy sessions take a deterministic no-change path. Therapy with only an unanswered patient contribution also takes a deterministic review indicating that it was not explored; its source is retained and presented at the next session. Do not infer disengagement. Intake with patient text still needs the initial review even if no assistant completed, because it must establish a provisional plan. Empty intake cannot finish.
 
@@ -149,13 +147,15 @@ stateDiagram-v2
 
 Use conditional SQL updates on `(session_id, review_status, review_attempt)` to fence a late worker. The attempt is monotonic per session; it is not a workflow revision token sent by the client. Completed review content is immutable in the supported command surface. Retrying a failed review does not create another session or duplicate plan/reference rows.
 
+Keep this lifecycle to status, attempt, bounded error metadata, and the single owned asyncio task. Do not add worker identities, leases, attempt-provenance tables, or recovery machinery for hypothetical parallel workers.
+
 On startup, pending accepted work is scheduled. Stale running work becomes failed/interrupted and requires an explicit retry; do not repeatedly call a failing model on every application restart. This deliberately changes today's automatic running → pending recovery. A lost worker-scheduling attempt leaves visible, resumable pending work; retry/resume can schedule it without pretending it ran. Shutdown waits up to its configured grace period, then cancels/drains the owned task. It does not manufacture successful review.
 
 Allow explicit retry for invalid output and endpoint/configuration failures after the operator changes the relevant settings, as well as transient outages. A retry is a new deliberate logical call with at most one correction. Eligibility is derived from a closed failed/pending session and currently valid workflow preconditions, not a permanently stored `retryable=false` bit. Corruption/invariant failures require repair and fail those preconditions until repaired; there is no “skip review and silently advance” command.
 
 ## Model topology and configuration
 
-Two task policies and at most two resolved endpoint profiles:
+Two small types, `CallPolicy` and `EndpointProfile`, represent two task policies and at most two resolved endpoints. Capability fields belong to the endpoint profile; the rows below describe ownership, not a registry or extra configuration hierarchy:
 
 | Concern | Owns | Does not own |
 |---|---|---|
@@ -166,30 +166,9 @@ Two task policies and at most two resolved endpoint profiles:
 
 Default review profile is the **same profile object** as conversation. One HTTP client can be shared for an identical endpoint credential set. If a separate review profile is specified, its URL/model and credentials are explicit; missing credentials do not inherit across origins. A single server serving multiple admitted model IDs can share transport while choosing the configured model. Avoid “inherit each nullable field independently” semantics.
 
-Retain one `load_settings()` owner. A small TOML file is appropriate for nested endpoint/capability/task settings; `.env` supplies secret references and simple startup overrides. Use `tomllib` already in Python, validated with existing Pydantic models. Do not maintain two equivalent configuration languages: after cutover, remove the old six-task JSON/environment override surface and document one precedence order: defaults → optional TOML → a small set of explicit environment overrides. Unknown keys fail startup.
+Retain one `load_settings()` owner using existing `pydantic-settings` and `.env`. Environment values override dotenv values, which override defaults. Do not introduce TOML, secret-name indirection, or another configuration parser. Once six tasks have become two, R5 removes obsolete task overrides and reduces settings to the endpoint/call-policy fields that still have consumers. Cross-origin credential isolation is an earlier R1 correctness fix, not dependent on this redesign. Unknown endpoint/policy keys fail validation.
 
-Conceptual example, not the final variable inventory:
-
-```toml
-[conversation]
-endpoint = "http://127.0.0.1:8080/v1"
-model = "operator-selected-model"
-context_tokens = 32768
-structured_mode = "json_schema"  # relevant when this profile also serves review
-api_key_env = "JUNG_MODEL_KEY"
-
-# Omit [review] to use the exact conversation profile.
-
-[tasks.conversation]
-max_output_tokens = 768
-deadline_seconds = 120
-
-[tasks.review]
-max_output_tokens = 3072
-deadline_seconds = 300
-```
-
-Numbers are initial engineering defaults to validate on the intended fixture, not claims about all local models. Bound every output and reserve reasoning tokens within the provider's total completion budget. Also enforce a finite response-byte limit (initially 8 KiB for conversation) so prospective review capacity can reserve an actual maximum assistant message size. Exceeding it interrupts the attempt without a completed assistant row. If a server distinguishes visible-output and total-output limits, its runtime profile must name the supported behavior; do not assume all APIs share it.
+Initial engineering defaults to test in R0 are 768 completion tokens / 120 seconds for conversation and 3,072 completion tokens / 300 seconds for review; they are not promises about all local models. Bound every output and reserve reasoning within the provider's total completion budget. Also enforce a finite response-byte limit (initially 8 KiB for conversation), so acceptance can reserve an actual maximum assistant source size within the fixed product envelope. Exceeding it interrupts the attempt without a completed assistant row. If a server distinguishes visible-output and total-output limits, its endpoint profile must name the supported behavior; do not assume all APIs share it. R0 freezes suitable limits before cutover, including the session-source maximum and bounded non-session review allowance.
 
 ### Runtime-specific guidance
 
@@ -197,7 +176,7 @@ Use OpenAI-compatible Chat Completions as the only production wire protocol. lla
 
 MTPLX also exposes an OpenAI-compatible server and manages model/runtime acceleration. Its upstream changelog describes schema constraints using llguidance, but that does not establish that an arbitrary installed build or launch configuration enforces Jung's schema. The repository's older missing-llguidance failure illustrates why admission should be version/configuration-specific. Jung should neither install llguidance nor manage MTP/KV caches inside its runtime. [MTPLX server documentation](https://github.com/youssofal/MTPLX/blob/main/README.md), [MTPLX changelog](https://github.com/youssofal/MTPLX/blob/main/CHANGELOG.md)
 
-`/v1/models` can check a configured served ID. It is not a universal capability negotiation protocol: context and constrained-generation behavior require documented settings plus a small real request. A manual `check-model` command may print observed/configured capabilities and run synthetic probes. Normal application startup should validate local configuration without making therapeutic or expensive test calls.
+`/v1/models` can check a configured served ID. It is not a universal capability negotiation protocol: context and constrained-generation behavior require documented settings plus real admission requests. A manual `check-model` command may print observed/configured capabilities and run synthetic probes. Admission must exercise the actual review schema and full product envelope, including multilingual source and bounded correction/output. Normal startup validates the configured endpoint's capacity against that fixed envelope without therapeutic or expensive test calls. Re-admit a changed server/model configuration; do not add a profile registry or persisted per-session capacity fingerprint.
 
 One resident model is the operational baseline. If two models do not fit comfortably, configure runtime-managed loading at session boundaries or manually run review later on the appropriate server, then retry the pending session. Jung does not become an inference supervisor. No silent fallback to a cloud endpoint or another model is allowed. Hot model switching mid-stream is unsupported; finish/cancel work and reload validated configuration.
 
@@ -205,7 +184,7 @@ One resident model is the operational baseline. If two models do not fit comfort
 
 Natural text is right for conversation: no JSON wrapper, action parser, or model-authored stage transition. Review needs structure because references and plan changes become durable data.
 
-Prefer admitted schema-constrained generation with the SDK's public Pydantic parse path. This constrains structure, not truth. JSON-object mode also receives explicit schema instructions. Prompt mode is an operator-selected compatibility option, not an automatic downgrade. Parse a complete JSON object; do not adopt partial JSON recovery or infer missing fields. Pydantic provides strict JSON validation, while also offering partial parsing facilities that this commit boundary deliberately does not use. [Pydantic JSON documentation](https://pydantic.dev/docs/validation/latest/concepts/json/)
+Target `json_schema` as the sole production review mode if R0 admits both intended llama.cpp and MTPLX configurations with the actual compact schema. Any alternative mode requires a named required endpoint and measured need, with explicit schema instructions and the same validation; it is not retained for hypothetical compatibility or used as an automatic downgrade. R5 separately tests the SDK's public Pydantic parse path to remove bespoke schema processing. Structure is not truth. Parse a complete JSON object; do not adopt partial JSON recovery or infer missing fields. Pydantic provides strict JSON validation, while also offering partial parsing facilities that this commit boundary deliberately does not use. [Pydantic JSON documentation](https://pydantic.dev/docs/validation/latest/concepts/json/)
 
 One logical review call:
 
